@@ -2788,6 +2788,8 @@ options 	HBSD_DEBUG
 # and is required by zfs if statically linked.
 options 	ZSTDIO
 
+options		HBSD_PLEDGE	# Enable pledge(2) syscall whitelisting mechanism
+
 # BHND(4) drivers
 options		BHND_LOGLEVEL	# Logging threshold level
 

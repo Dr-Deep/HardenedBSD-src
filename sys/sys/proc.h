@@ -344,6 +344,7 @@ struct thread {
 	void		*td_sigblock_ptr; /* (k) uptr for fast sigblock. */
 	uint32_t	td_sigblock_val;  /* (k) fast sigblock value read at
 					     td_sigblock_ptr on kern entry */
+	uint64_t	td_pledge;	/* (k*) pledge(2) syscall whitelist bitmap.*/
 #define	td_endcopy td_pcb
 
 /*
