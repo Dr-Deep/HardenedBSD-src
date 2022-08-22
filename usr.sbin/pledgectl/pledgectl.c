@@ -500,7 +500,7 @@ int main(int argc, char *argv[])
 	/* pledge privs to assign to extattr: */
 	uint64_t new_extattr_mask = PLEDGE_NONE;
 
-	while ((ch = getopt(argc, argv, "chLls:v")) != -1) {
+	while (argc && (ch = getopt(argc, argv, "chLls:v")) != -1) {
 
 		/*
 		 * Only permit ONE action:
