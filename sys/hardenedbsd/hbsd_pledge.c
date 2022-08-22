@@ -97,22 +97,14 @@ static void pledge_learning_init(const void *_unused);
 static void pledge_learning_record(const struct thread *,
     const uint64_t, const uint64_t);
 
+static PLEDGE_LEARNING_COMPARE_PROTOTYPE
+
 /* see pledge.h for:
  * - splay element type learning_splay_t
  */
 
-/* second: comparison function */
-static int learning_tree_compare(
-	const pledge_splay_t *_a,
-	const pledge_splay_t *_b);
-static int
-learning_tree_compare(
-	const struct pledge_splay_t *a,
-	const struct pledge_splay_t *b)
-{
-	const ino_t i_diff = a->inode - b->inode;
-	return (i_diff || (a->fs_id - b->fs_id));
-}
+/* comparison function */
+static PLEDGE_LEARNING_COMPARE_IMPL
 
 /*
  * DPCPU(9)-sized array of tree root structs

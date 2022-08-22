@@ -50,13 +50,23 @@ typedef struct pledge_splay_t {
 } pledge_splay_t;
 
 /*
- * TODO provide this + implementation as macro?
+ * Macros for defining the comparison function used for the RB tree
  */
-/* TODO
-static int learning_splay_compare(
-	const pledge_splay_t *_a,
-	const pledge_splay_t *_b);
-*/
+#define PLEDGE_LEARNING_COMPARE_PROTOTYPE int learning_tree_compare(const pledge_splay_t *_a, const pledge_splay_t *_b);
+#define PLEDGE_LEARNING_COMPARE_IMPL	\
+  int learning_tree_compare(				\
+	const struct pledge_splay_t *a, \
+	const struct pledge_splay_t *b) 	\
+  {					\
+	int res = 0; \
+	res = (a->inode > b->inode); \
+	res -= (a->inode < b->inode); \
+	if (res) return res; \
+	res += (a->fs_id > b->fs_id); \
+	res -= (a->fs_id < b->fs_id); \
+	return res; \
+  }
+
 /* kernel functions: */
 #ifdef _KERNEL
 

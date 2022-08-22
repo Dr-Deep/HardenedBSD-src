@@ -147,18 +147,9 @@ pledgectl_set_extattr(const char *filename, const uint64_t new_extattr_mask)
 	}
 }
 
-static int
-learning_tree_compare(const pledge_splay_t *const _a,
-    const pledge_splay_t *const _b);
 
-static int
-learning_tree_compare(
-	const struct pledge_splay_t *const a,
-	const struct pledge_splay_t *const b)
-{
-	const ino_t i_diff = a->inode - b->inode;
-	return (i_diff || (a->fs_id - b->fs_id));
-}
+static PLEDGE_LEARNING_COMPARE_PROTOTYPE
+static PLEDGE_LEARNING_COMPARE_IMPL
 
 typedef RB_HEAD(learning_tree, pledge_splay_t) learning_tree_t;
 static learning_tree_t learning_tree;
@@ -230,6 +221,8 @@ tree_build(const size_t entry_count,
 			 */
 			++merged;
 			free(new_el);
+			assert(el->fs_id == entry->fsid);
+			assert(el->inode == entry->inode);
 		} else {
 			++cardinality;
 			el = new_el;
@@ -241,7 +234,17 @@ tree_build(const size_t entry_count,
 	if (verbose)
 		xo_warnx("Merged learning entries from kernel: %zd "
 		    "unpopulated: %zd merged: %zd", cardinality, unpopulated, merged);
-
+	if (verbose > 2) {
+	  xo_open_instance("learning_tree");
+	  struct pledge_splay_t *tel=NULL;
+	  RB_FOREACH(tel, learning_tree, &learning_tree) {
+	    xo_emit_f(XOEF_RETAIN,
+		      "{[:}{c:fs_id/%18#lx}/{c:ide/%18#lx}{]:}{P:\n}",
+		      tel->fs_id, tel->inode
+		      );
+	  }
+	  xo_close_instance("learning_tree");
+	}
 	return (0);
 }
 
@@ -378,6 +381,7 @@ pledgectl_dump_all()
 
 	struct statfs *statfs_array = NULL;
 	size_t filesystem_count = getmntinfo(&statfs_array, MNT_WAIT);
+	/* statfs.f_fsid */
 
 	if (!filesystem_count) {
 		xo_warn("Unable to obtain information about "
@@ -426,10 +430,11 @@ pledgectl_dump_all()
 			const pledge_splay_t *const entry =
 			    tree_lookup_learning_entry(file_stat.st_dev,
 				file_stat.st_ino);
+			_Static_assert(sizeof(entry->fs_id) == sizeof(file_stat.st_ino), "fsid/devt not compatible");
 			if (NULL == entry) {
 				if (verbose >= 2) {
-					xo_warnx("%s/%s: no learning data",
-					    dir_path, dirent->d_name);
+					xo_warnx("%s/%s: no learning data for %lx:%lx",
+						 dir_path, dirent->d_name, file_stat.st_dev, file_stat.st_ino);
 				}
 			}
 			else switch (print_learning_entry(entry, dir_path,
