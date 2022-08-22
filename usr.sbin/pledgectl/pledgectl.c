@@ -543,7 +543,7 @@ int main(int argc, char *argv[])
 				xo_errx(15,
 				    "error: Unable to parse -s argument '"
 				    "%.*s\033[4m%c\033[0m%s'"
-				    " error at offset %d,".
+				    " error at offset %d.",
 				    (int)res, optarg,
 				    *(optarg + res), optarg + res + 1,
 				    (int)res);
