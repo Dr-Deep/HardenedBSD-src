@@ -951,8 +951,8 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_rfork]	= PLEDGE_PROC | PLEDGE_STDIO,
 	[SYS_issetugid]	= PLEDGE_STDIO,
 	[SYS_lchown]	= PLEDGE_CHOWN, // chown
-	[SYS_aio_read]	= PLEDGE_STDIO, // TODO
-	[SYS_aio_write]	= PLEDGE_STDIO, // TODO
+	[SYS_aio_read]	= PLEDGE_AND | PLEDGE_AIO | PLEDGE_STDIO, // TODO
+	[SYS_aio_write]	= PLEDGE_AND | PLEDGE_AIO | PLEDGE_STDIO, // TODO
 	[SYS_lio_listio]	= PLEDGE_STDIO, // TODO
 	/* 272 */
 	[SYS_freebsd11_getdents]	= PLEDGE_RPATH,
@@ -988,10 +988,10 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_getsid]	= PLEDGE_STDIO,
 	[SYS_setresuid]	= PLEDGE_ID,
 	[SYS_setresgid]	= PLEDGE_ID,
-	[SYS_aio_return]	= PLEDGE_STDIO,
-	[SYS_aio_suspend]	= PLEDGE_STDIO,
-	[SYS_aio_cancel]	= PLEDGE_STDIO,
-	[SYS_aio_error]	= PLEDGE_STDIO,
+	[SYS_aio_return]	= PLEDGE_AND | PLEDGE_AIO | PLEDGE_STDIO,
+	[SYS_aio_suspend]	= PLEDGE_AND | PLEDGE_AIO | PLEDGE_STDIO,
+	[SYS_aio_cancel]	= PLEDGE_AND | PLEDGE_AIO | PLEDGE_STDIO,
+	[SYS_aio_error]	= PLEDGE_AND | PLEDGE_AIO | PLEDGE_STDIO,
 	[SYS_yield]	= PLEDGE_NONE,
 	[SYS_mlockall]	= PLEDGE_STDIO,
 	[SYS_munlockall]	= PLEDGE_STDIO,
@@ -1028,7 +1028,7 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_extattr_set_file]	= PLEDGE_AND | PLEDGE_STDIO | PLEDGE_FATTR,
 	[SYS_extattr_get_file]	= PLEDGE_AND | PLEDGE_STDIO | PLEDGE_RPATH,
 	[SYS_extattr_delete_file]	= PLEDGE_CPATH,
-	[SYS_aio_waitcomplete]	= PLEDGE_STDIO,
+	[SYS_aio_waitcomplete]	= PLEDGE_AND | PLEDGE_AIO | PLEDGE_STDIO,
 	/* 360: */
 	[SYS_getresuid]	= PLEDGE_STDIO,
 	[SYS_getresgid]	= PLEDGE_STDIO,
@@ -1120,7 +1120,7 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_kmq_unlink]	= PLEDGE_STDIO,
 	[SYS_abort2]	= PLEDGE_STDIO,
 	[SYS_thr_set_name]	= PLEDGE_STDIO,
-	[SYS_aio_fsync]	= PLEDGE_STDIO,
+	[SYS_aio_fsync]	= PLEDGE_AND | PLEDGE_AIO | PLEDGE_STDIO,
 	[SYS_rtprio_thread]	= PLEDGE_STDIO,
 	[SYS_sctp_peeloff]	= PLEDGE_INET, /* TODO ... */
 	[SYS_sctp_generic_sendmsg]	= PLEDGE_INET,
@@ -1214,7 +1214,7 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_chflagsat]	= PLEDGE_FATTR,
 	[SYS_accept4]		= PLEDGE_INET | PLEDGE_UNIX,
 	[SYS_pipe2]		= PLEDGE_STDIO,
-	[SYS_aio_mlock]	= PLEDGE_STDIO,
+	[SYS_aio_mlock]	= PLEDGE_AND | PLEDGE_AIO | PLEDGE_STDIO,
 	[SYS_procctl]		= PLEDGE_PROC,
 	[SYS_ppoll]		= PLEDGE_STDIO,
 	[SYS_futimens]		= PLEDGE_FATTR,
@@ -1307,10 +1307,10 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS___specialfd] = PLEDGE_STDIO, /* 577 */
 #endif
 #ifdef SYS_aio_writev
-	[SYS_aio_writev] = PLEDGE_STDIO, /* 578 */
+	[SYS_aio_writev] = PLEDGE_AND | PLEDGE_AIO | PLEDGE_STDIO, /* 578 */
 #endif
 #ifdef SYS_aio_readv
-	[SYS_aio_readv] = PLEDGE_STDIO, /* 579 */
+	[SYS_aio_readv] = PLEDGE_AND |  PLEDGE_AIO | PLEDGE_STDIO, /* 579 */
 #endif
 #ifdef SYS_sched_getcpu
 	[SYS_sched_getcpu] = PLEDGE_STDIO, /* 581 */

@@ -151,6 +151,7 @@ int pledge_apply_extattr(struct thread *td, struct vnode *ni_vp);
  */
 #define PLEDGE_DEVICE	(1ULL << 45)	/* modify devices, mount, unmount */
 #define PLEDGE_KLD	(1ULL << 46)	/* things to do with loadable modules */
+#define PLEDGE_AIO	(1ULL << 47)	/* aio (asynchronous io) related */
 
 #define PLEDGE_WILDCARD	((~0ULL) ^ \
 	    (PLEDGE_AND | PLEDGE_SOFTFAIL))	/* match any flag */
@@ -207,6 +208,7 @@ struct {
 	{ PLEDGE_BPF,		"bpf" },
 	{ PLEDGE_DEVICE,	"device" },
 	{ PLEDGE_KLD,		"kld" },
+	{ PLEDGE_AIO,		"aio" },
 	{ PLEDGE_SOFTFAIL,	"softfail" },
 	{ PLEDGE_NONE,		"none"}
 };
