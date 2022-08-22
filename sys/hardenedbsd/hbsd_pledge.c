@@ -40,7 +40,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/lock.h>
 #include <sys/rmlock.h>
 #include <machine/atomic.h>
-#include <security/mac/mac_policy.h>
+//#include <security/mac/mac_policy.h> // TODO this requires some additional includes for module_t etc
 
 FEATURE(hbsd_hardening, "Pledge sandbox mechanism");
 
@@ -351,7 +351,7 @@ pledge_learning_insert(const struct thread*thread,
 	rm_wlock(rm);
 
 	pledge_splay_t * const inserted = learning_tree_RB_INSERT(tree, el);
-	if (__builtin_expect(inserted, false)) {
+	if (__builtin_expect((long)inserted, false)) {
 		/* while we were busy malloc'ing,
 		 * we were preempted, and the same
 		 * element was inserted into this tree.
@@ -1088,7 +1088,6 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_getcontext]	= PLEDGE_STDIO,
 	[SYS_setcontext]	= PLEDGE_STDIO,
 	[SYS_swapcontext]	= PLEDGE_STDIO,
-	[SYS_swapoff]		= PLEDGE_STDIO,
 	[SYS___acl_get_link]	= PLEDGE_FATTR,
 	[SYS___acl_set_link]	= PLEDGE_FATTR,
 	[SYS___acl_delete_link]	= PLEDGE_FATTR,
@@ -1185,7 +1184,9 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_jail_get]	= PLEDGE_PROC, // TODO consider pledge flag for this
 	[SYS_jail_set]	= PLEDGE_PROC,
 	[SYS_jail_remove]	= PLEDGE_PROC,
+#ifdef SYS_closefrom
 	[SYS_closefrom]	= PLEDGE_STDIO,
+#endif
 	/* 510: */
 	[SYS___semctl]	= PLEDGE_STDIO,
 	[SYS_msgctl]	= PLEDGE_STDIO,
@@ -1304,8 +1305,29 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 #ifdef SYS___realpathat
 	[SYS___realpathat] = PLEDGE_STDIO, /* 574 */
 #endif
+#ifdef SYS_close_range
+	[SYS_close_range] = PLEDGE_STDIO, /* 575 */
+#endif
+#ifdef SYS_rpctls_syscall
+	[SYS_rpctls_syscall] = PLEDGE_STDIO, /* 576 */
+#endif
+#ifdef SYS___specialfd
+	[SYS___specialfd] = PLEDGE_STDIO, /* 577 */
+#endif
+#ifdef SYS_aio_writev
+	[SYS_aio_writev] = PLEDGE_STDIO, /* 578 */
+#endif
+#ifdef SYS_aio_readv
+	[SYS_aio_readv] = PLEDGE_STDIO, /* 579 */
+#endif
+#ifdef SYS_sched_getcpu
+	[SYS_sched_getcpu] = PLEDGE_STDIO, /* 581 */
+#endif
+#ifdef SYS_swapoff
+	[SYS_swapoff] = PLEDGE_STDIO, /* 582 */
+#endif
 };
-_Static_assert(575 == SYS_MAXSYSCALL, "new syscalls added, hbsd_pledge.c needs to be updated. TODO would it make sense to remove this static assertion and instead display a helpful message on boot + allow the operator to declare/override the defaults via tunables to prevent situations where people can't boot after upgrading?");
+_Static_assert(583 == SYS_MAXSYSCALL, "new syscalls added to sys/sys/syscall.h, hbsd_pledge.c needs to be updated. TODO would it make sense to remove this static assertion and instead display a helpful message on boot + allow the operator to declare/override the defaults via tunables to prevent situations where people can't boot after upgrading?");
 /*
  * Hook used to determine whether a given syscall should be called or not.
  */
@@ -1325,6 +1347,8 @@ pledge_syscall(struct thread * thread, const int syscall_no)
 	return (pledge_check_bitmap(thread, pledge_permission_map[syscall_no]));
 }
 
+#ifdef HBSD_PLEDGE_MAC
+// HBSD_PLEDGE_MAC is not defined, this is commented out because the MAC stuff is rean't really implemented yety
 /*
  * TODO here we define hooks for the mac framework, which alleviates
  * the need to add hooks manually everywhere.
@@ -1344,5 +1368,6 @@ static struct mac_policy_ops mac_pledge_ops =
 
 MAC_POLICY_SET(&mac_pledge_ops, mac_pledge, "HardenedBSD MAC/pledge",
     MPC_LOADTIME_FLAG_NOTLATE, NULL);
+#endif /* HBSD_PLEDGE_MAC */
 
 #endif /* ifdef HBSD_PLEDGE */
