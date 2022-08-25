@@ -1323,6 +1323,7 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 _Static_assert(583 == SYS_MAXSYSCALL, "new syscalls added to sys/sys/syscall.h, hbsd_pledge.c needs to be updated. TODO would it make sense to remove this static assertion and instead display a helpful message on boot + allow the operator to declare/override the defaults via tunables to prevent situations where people can't boot after upgrading?");
 /*
  * Hook used to determine whether a given syscall should be called or not.
+ * Main caller is sys/kern/subr_syscall.c:syscallenter
  */
 int inline
 pledge_syscall(struct thread * thread, const int syscall_no)

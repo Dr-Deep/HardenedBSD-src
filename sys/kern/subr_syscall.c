@@ -131,6 +131,15 @@ syscallenter(struct thread *td)
 	}
 #endif
 
+#ifdef HBSD_PLEDGE
+	/* when pledge is active*/
+	error = pledge_syscall(td, sa->code);
+	if (error != 0) {
+		td->td_errno = error; // TODO should we override the error value here?
+		goto retval;
+	}
+#endif
+
 	/*
 	 * Fetch fast sigblock value at the time of syscall entry to
 	 * handle sleepqueue primitives which might call cursig().
@@ -148,16 +157,6 @@ syscallenter(struct thread *td)
 	    AUDIT_SYSCALL_ENTER(sa->code, td) ||
 	    !sy_thr_static)) {
 		if (!sy_thr_static) {
-
-#ifdef HBSD_PLEDGE
-			/* when pledge is active*/
-			error = pledge_syscall(td, sa->code);
-			if (error != 0) {
-				td->td_errno = error;
-				goto retval;
-			}
-#endif
-
 			error = syscall_thread_enter(td, se);
 			if (error != 0) {
 				td->td_errno = error;
