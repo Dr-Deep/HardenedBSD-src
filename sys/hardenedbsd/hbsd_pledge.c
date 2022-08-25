@@ -384,6 +384,7 @@ pledge_learning_record(const struct thread *thread,
 	/* locks: thread->td_proc (*) not yet protected
 	 * td_proc->p_textvp (b) created at fork, never changes
 	 */
+	PROC_LOCK(thread->td_proc);
 	struct vnode * const exec_vnode = thread->td_proc->p_textvp;
 
 	/* assert that we have a vnode, and that it is a regular file: */
@@ -391,12 +392,14 @@ pledge_learning_record(const struct thread *thread,
 		/* in this case should probably have an ERROR entry
 		 * that contains the appropriate mask for things we
 		 * failed to look up? */
+	  printf("pledge not exec_vnode OR not vreg TODO\n");
 		goto proc_unlock_and_return;
 	}
 
 	struct vattr exec_vattr = {0};
 	err = VOP_GETATTR(exec_vnode, &exec_vattr, NOCRED);
 	if (__builtin_expect(err, 0)) {
+	  printf("pledge VOP_GETATTR failed, locked:%d\n", VOP_ISLOCKED(exec_vnode));
 		goto proc_unlock_and_return;
 	}
 
@@ -416,10 +419,12 @@ pledge_learning_record(const struct thread *thread,
 	pledge_learning_insert(thread, exec_fsid, exec_fileid,
 	    used_mask, violated_mask);
 
-	return; /* no fall-through */
+	goto proc_unlock_and_return;
 
-proc_unlock_and_return:
+
 	printf("pledge TODO proc_unlock_and_return: not good.\n");
+proc_unlock_and_return:
+	PROC_UNLOCK(thread->td_proc);
 	return;
 }
 
