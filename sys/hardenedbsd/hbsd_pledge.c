@@ -636,7 +636,6 @@ pledge_apply_extattr(struct thread *td, struct vnode *ni_vp)
 	uint64_t retrieved_mask = PLEDGE_NONE;
 
 	/* initialize size to non-zero to verify it got changed later: */
-	size_t attr_total = ~0ULL;
 	struct uio uio = {0};
 	struct iovec iov = {0};
 
@@ -655,7 +654,9 @@ pledge_apply_extattr(struct thread *td, struct vnode *ni_vp)
 	uio.uio_resid = sizeof(retrieved_mask);
 
 	err = VOP_GETEXTATTR(ni_vp, EXTATTR_NAMESPACE_SYSTEM, "pledge",
-	    &uio, &attr_total, NOCRED, td);
+	    &uio, NULL, NOCRED, td);
+
+	// uio.uio_resid holds "remaining" counter, this should drop to 0 once read?
 
 
 	/* TODO maybe this should be EXTATTR_NAMESPACE_USER to permit
@@ -677,7 +678,7 @@ pledge_apply_extattr(struct thread *td, struct vnode *ni_vp)
 		    "for attribute system:'pledge' failed with error (%d)\n",
 		    ni_vp, err);
 		return 1;
-	} else if (sizeof(retrieved_mask) == attr_total) {
+	} else if (0 == err && 0 == uio.uio_resid) {
 		/*
 		 * TODO excellent place for a DTrace probe
 		 */
@@ -691,7 +692,7 @@ pledge_apply_extattr(struct thread *td, struct vnode *ni_vp)
 		 */
 		tprintf(td->td_proc, 0, "pledge_getmask_extattr: "
 		    "size of system.pledge extattr is %zd, expected == %zd\n",
-		    attr_total, sizeof(retrieved_mask));
+			uio.uio_resid, sizeof(retrieved_mask));
 		return 1;
 	}
 }
