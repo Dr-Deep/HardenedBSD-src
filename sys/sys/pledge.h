@@ -180,7 +180,7 @@ struct {
 	{ PLEDGE_TMPPATH,	"tmppath" },
 	{ PLEDGE_DNS,		"dns" },
 	{ PLEDGE_INET,		"inet" },
-	{ PLEDGE_FLOCK,	"dns" },
+	{ PLEDGE_FLOCK,	"flock" },
 	{ PLEDGE_UNIX,		"unix" },
 	{ PLEDGE_ID,		"id" },
 	{ PLEDGE_TAPE,		"tape" },
