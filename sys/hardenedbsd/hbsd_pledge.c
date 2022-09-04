@@ -38,10 +38,13 @@ __FBSDID("$FreeBSD$");
 #include <sys/smp.h>
 #include <sys/tree.h>
 #include <sys/counter.h>
+#include <sys/mount.h>
 #include <sys/lock.h>
 #include <sys/rmlock.h>
 #include <machine/atomic.h>
 //#include <security/mac/mac_policy.h> // TODO this requires some additional includes for module_t etc
+#include <sys/jail.h>
+#include <sys/osd.h>
 
 FEATURE(hbsd_hardening, "Pledge sandbox mechanism");
 
@@ -93,6 +96,10 @@ bool pledge_enforcing = 0; /* TODO: = HBSD_PLEDGE; */
 
 static int sysctl_pledge_flags(SYSCTL_HANDLER_ARGS);
 static int sysctl_pledge_learning_data(SYSCTL_HANDLER_ARGS);
+
+static unsigned int pledge_jail_osd_slot;
+static int pledge_jail_osd_create(void *_obj, void *_data);
+static int pledge_jail_osd_remove(void *_obj, void *_data);
 
 static void pledge_learning_init(const void *_unused);
 static void pledge_learning_record(const struct thread *,
@@ -148,6 +155,9 @@ SYSINIT(pledge_sysinit_learning, SI_SUB_AUDIT, SI_ORDER_ANY,
 
 SYSCTL_NODE(_security, OID_AUTO, pledge, 0, 0,
     "pledge policy controls");
+
+SYSCTL_NODE(_security_pledge, OID_AUTO, jail, 0, 0,
+    "jail-specific pledge policy controls");
 
 SYSCTL_BOOL(_security_pledge, OID_AUTO, learning,
 #ifdef CTLFLAG_ROOTONLY
@@ -239,6 +249,73 @@ sysctl_pledge_flags(SYSCTL_HANDLER_ARGS)
 	return error;
 }
 
+static int
+pledge_jail_osd_create(void *obj, void *data)
+{
+	struct prison *pr = obj;
+	struct vfsoptlist *vfsopts = (struct vfsoptlist *)data;
+	struct pledge_prison_data *pjd = NULL;
+
+	/* vfsopts contains jail options in case we want to do
+	 * something with those. TODO. */
+
+	/*
+	 * TODO we could walk
+	 * while ((parent = pr->pr_parent)) {
+	 *   inherit from parent
+	 * }
+	 */
+
+	pjd = malloc(sizeof(struct pledge_prison_data), M_PLEDGE, M_WAITOK);
+
+	sysctl_ctx_init(&pjd->sysctl_ctx);
+
+	char jail_id_str[16] = {0};
+	snprintf(myjail, 16, "%u", pr->pr_id);
+	/* add under security.pledge: */
+	oidp = SYSCTL_ADD_NODE(&pjd->sysctl_ctx,
+	    SYSCTL_STATIC_CHILDREN(_security_pledge_jail),
+	    jail_id_str, CTLFLAG_RW, 0, "controls for this jid");
+	/* add under oidp */
+	SYSCTL_ADD_BOOL(&pjd->sysctl_ctx, SYSCTL_CHILDREN(oidp),
+	    "enforcing", CTLFLAG_RW, &pjd->is_enforcing, 0,
+	    "enforcing for this jail");
+
+	void **rsv = osd_reserve(pledge_jail_osd_slot);
+	for (int retry = 1; retry;)
+	{
+		prison_lock(pr);
+		retry = osd_jail_set_reserved(pr,
+		    pledge_jail_osd_slot, rsv, pjd);
+		prison_unlock(pr);
+	}
+
+	return 0;
+}
+
+static int
+pledge_jail_osd_remove(void *obj, void *data)
+{
+	struct prison *pr = obj;
+	struct vfsoptlist *vfsopts = data;
+
+	prison_lock(pr);
+	struct pledge_jail_data *pjd = osd_jail_get(pr, pledge_os_jail_slot);
+	prison_unlock(pr);
+
+	if (NULL == pjd) {
+		printf("pledge_jail_remove: pjd == NULL (pr == prison0: %d)\n",
+		    (pr == prison0));
+		return 0; /* TODO shouldn't happen? */
+	}
+
+	/* Cleanup sysctls: */
+	sysctl_ctx_free(&pjd->sysctl_ctx);
+	free(pjd, M_PLEDGE);
+
+	return 0;
+}
+
 /*
  * Learning mode
  * pledge_learning_init() - allocate table
@@ -280,6 +357,31 @@ pledge_learning_init(const void *_unused)
 	    TODOTODO  CTLFLAG_RWTUN | CTLFLAG_SECURE | CTLFLAG_RD
 		);
 	*/
+
+	/*
+	 * Install per-jail osd.h hooks.
+	 * The PR_* constants are from jail.h
+	 */
+	os_method_t osdmethods[PR_MAXMETHOD] = {NULL};
+	osdmethods[PR_METHOD_CREATE] = pledge_jail_osd_create;
+	osdmethods[PR_METHOD_REMOVE] = pledge_jail_osd_remove;
+	pledge_jail_osd_slot = osd_jail_register(NULL, osdmethods);
+	/*
+	 * Go through existing jails
+	 */
+	struct prison *pr = NULL;
+	sx_slock(&allprison_lock);
+	TAILQ_FOREACH(pr, &allprison, pr_list) {
+		void **rsv = osd_reserve(pledge_jail_osd_slot);
+		for (int retry = 1; retry;)
+		{
+			prison_lock(pr);
+			retry = osd_jail_set_reserved(pr,
+			    pledge_jail_osd_slot, rsv, &prison0);
+			prison_unlock(pr);
+		}
+	}
+	sx_sunlock(&allprison_lock);
 }
 
 /*

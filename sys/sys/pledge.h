@@ -74,6 +74,11 @@ typedef struct pledge_splay_t {
 #include <sys/sysproto.h>
 #include <sys/vnode.h>
 
+typedef struct pledge_jail_data {
+	int is_enforcing;
+	struct sysctl_ctx_list sysctl_ctx;
+} pledge_jail_data;
+
 /* TODO document that most of these may crash the thread if
  * PLEDGE_SOFTFAIL is not set */
 
