@@ -12,6 +12,7 @@ __FBSDID("$FreeBSD$");
   probably be priv_check()/priv_check_cred()
 */
 
+#include <sys/endian.h>
 #include <sys/sysent.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
@@ -628,10 +629,13 @@ kern_pledge(struct thread *td, const uint64_t mask)
 }
 
 /*
- * Look up pledge bitmask for binary stored in the "system:pledge" extattr
- * (using the context of a userspace thread), and if it exists
- * applying the associated mask to the thread's current pledge mask.
- * Returns 0 if nd does not have the "pledge" extattr.
+ * Look up pledge bitmask for binary stored in the
+ * "system:pledge" and "user:pledge" extattrs,
+ * applying the associated masks (if they exist) to the
+ * thread's current pledge mask.
+ * The bitmasks are always stored in little-endian byte order.
+ * Returns 0 on success (including if the extattrs do not exist),
+ * and nonzero on error.
  */
 int
 pledge_apply_extattr(struct thread *td, struct vnode *ni_vp)
@@ -640,66 +644,74 @@ pledge_apply_extattr(struct thread *td, struct vnode *ni_vp)
 
 	uint64_t retrieved_mask = PLEDGE_NONE;
 
-	/* initialize size to non-zero to verify it got changed later: */
-	struct uio uio = {0};
-	struct iovec iov = {0};
+	for (int namespace = 0; namespace < 2; ++namespace) {
+		struct uio uio = {0};
+		struct iovec iov = {0};
 
-	/*
-	 * Read the system:pledge extattr on the file in question.
-	 */
-
-	iov.iov_base = &retrieved_mask;
-	iov.iov_len = sizeof(retrieved_mask);
-	uio.uio_iov = &iov;
-	uio.uio_iovcnt = 1;
-	uio.uio_offset = 0;
-	uio.uio_rw = UIO_READ;
-	uio.uio_segflg = UIO_SYSSPACE;
-	uio.uio_td = td;
-	uio.uio_resid = sizeof(retrieved_mask);
-
-	err = VOP_GETEXTATTR(ni_vp, EXTATTR_NAMESPACE_SYSTEM, "pledge",
-	    &uio, NULL, NOCRED, td);
-
-	// uio.uio_resid holds "remaining" counter, this should drop to 0 once read?
-
-
-	/* TODO maybe this should be EXTATTR_NAMESPACE_USER to permit
-	   people to pledge their own binaries */
-
-	/* TODO I guess we need to bypass read permissions iff (td->ucred) has
-	 * execute permission to the binary seeing as execution has gotten
-	 * this far, we assume this is the case.
-	 * Using td->td_ucred resulted in EPERM errors.
-	 * Need to evaluate NOCRED vs td->td_ucred, also in other VOP_ ops
-	 * in hbsd_pledge.c
-	 */
-
-	if (ENOATTR == err || EOPNOTSUPP == err) {
-		/* it doesn't have a "pledge" extattr: */
-		return 0;
-	} else if (err) {
-		printf("pledge_getmask_extattr: VOP_GETEXTATTR on  vnode %p "
-		    "for attribute system:'pledge' failed with error (%d)\n",
-		    ni_vp, err);
-		return 1;
-	} else if (0 == err && 0 == uio.uio_resid) {
 		/*
-		 * TODO excellent place for a DTrace probe
+		 * Read the system:pledge extattr on the file in question.
 		 */
-		printf("pledge_getmask_extattr: vnode %p pledgemask 0x%lx\n",
-		    ni_vp, retrieved_mask);
-		return (kern_pledge(td, retrieved_mask));
-	}
-	else {
-		/*
-		 * If there's more data in here, something is wrong.
+
+		iov.iov_base = &retrieved_mask;
+		iov.iov_len = sizeof(retrieved_mask);
+		uio.uio_iov = &iov;
+		uio.uio_iovcnt = 1;
+		uio.uio_offset = 0;
+		uio.uio_rw = UIO_READ;
+		uio.uio_segflg = UIO_SYSSPACE;
+		uio.uio_td = td;
+		uio.uio_resid = sizeof(retrieved_mask);
+
+		err = VOP_GETEXTATTR(ni_vp,
+		    (namespace == 0
+			? EXTATTR_NAMESPACE_SYSTEM
+			: EXTATTR_NAMESPACE_USER),
+		    "pledge",
+		    &uio, NULL, NOCRED, td);
+
+		// uio.uio_resid holds "remaining" counter, this should drop to 0 once read?
+
+
+		/* TODO maybe this should be EXTATTR_NAMESPACE_USER to permit
+		   people to pledge their own binaries */
+
+		/* TODO I guess we need to bypass read permissions iff (td->ucred) has
+		 * execute permission to the binary seeing as execution has gotten
+		 * this far, we assume this is the case.
+		 * Using td->td_ucred resulted in EPERM errors.
+		 * Need to evaluate NOCRED vs td->td_ucred, also in other VOP_ ops
+		 * in hbsd_pledge.c
 		 */
-		tprintf(td->td_proc, 0, "pledge_getmask_extattr: "
-		    "size of system.pledge extattr is %zd, expected == %zd\n",
-			uio.uio_resid, sizeof(retrieved_mask));
-		return 1;
+
+		if (ENOATTR == err || EOPNOTSUPP == err) {
+			/* it doesn't have a "pledge" extattr: */
+			continue;
+		} else if (err) {
+			printf("pledge_getmask_extattr: VOP_GETEXTATTR on  vnode %p "
+			    "for attribute system:'pledge' failed with error (%d)\n",
+			    ni_vp, err);
+			return 1;
+		} else if (0 == uio.uio_resid) {
+			/*
+			 * TODO excellent place for a DTrace probe
+			 */
+			printf("pledge_getmask_extattr: vnode %p pledgemask 0x%lx\n",
+			    ni_vp, retrieved_mask);
+			retrieved_mask = le64toh(retrieved_mask);
+			int err = kern_pledge(td, retrieved_mask);
+			if (err) return err;
+		}
+		else {
+			/*
+			 * If there's more data in here, something is wrong.
+			 */
+			tprintf(td->td_proc, 0, "pledge_getmask_extattr: "
+			    "size of system.pledge extattr is %zd, expected == %zd\n",
+			    uio.uio_resid, sizeof(retrieved_mask));
+			return 1;
+		}
 	}
+	return 0;
 }
 
 /*

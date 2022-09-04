@@ -19,6 +19,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <sys/ucred.h>
+#include <sys/endian.h>
 
 #include <assert.h>
 #include <dirent.h>
@@ -99,9 +100,12 @@ pledgectl_list_extattr(const char *filename)
 		return (2);
 	}
 
+	/* TODO: list EXTATTR_NAMESPACE_USER too */
 	if (sizeof(pledge_mask) == extattr_get_file(filename,
 		EXTATTR_NAMESPACE_SYSTEM, "pledge",
 		&pledge_mask, sizeof(pledge_mask))) {
+
+		pledge_mask = le64toh(pledge_mask);
 
 		char *mask_str = pledge_bitmask_to_string(pledge_mask);
 		if (!mask_str) {
@@ -127,6 +131,8 @@ pledgectl_list_extattr(const char *filename)
 static int
 pledgectl_set_extattr(const char *filename, const uint64_t new_extattr_mask)
 {
+	/* TODO support setting the userspace */
+	new_extattr_mask = htole64(new_extattr_mask);
 	if (sizeof(new_extattr_mask) == extattr_set_file(filename,
 		EXTATTR_NAMESPACE_SYSTEM, "pledge",
 		&new_extattr_mask, sizeof(new_extattr_mask))) {
