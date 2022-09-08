@@ -278,7 +278,7 @@ pledge_jail_osd_create(void *obj, void *data __unused)
 	    jail_id_str, CTLFLAG_RW, NULL, "controls for this jid");
 	/* add under oidp */
 	SYSCTL_ADD_BOOL(&pjd->sysctl_ctx, SYSCTL_CHILDREN(oidp), OID_AUTO,
-	    "enforcing", CTLFLAG_RW, &pjd->is_enforcing, NULL,
+	    "enforcing", CTLFLAG_RW, &pjd->is_enforcing, 0,
 	    "enforcing for this jail");
 
 	void **rsv = osd_reserve(pledge_jail_osd_slot);
@@ -294,10 +294,10 @@ pledge_jail_osd_create(void *obj, void *data __unused)
 }
 
 static int
-pledge_jail_osd_remove(void *obj, void *data)
+pledge_jail_osd_remove(void *obj, void *data __unused)
 {
 	struct prison *pr = obj;
-	struct vfsoptlist *vfsopts = data;
+	//struct vfsoptlist *vfsopts = data;
 
 	prison_lock(pr);
 	struct pledge_jail_data *pjd = osd_jail_get(pr, pledge_jail_osd_slot);
