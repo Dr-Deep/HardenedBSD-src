@@ -228,7 +228,6 @@ SYSCTL_PROC(_security_pledge, OID_AUTO, flags,
 SYSCTL_NODE(_security_pledge, OID_AUTO, override, 0, 0,
     "Override required flags for a given syscall.");
 
-
 /*
  * sysctl proc node for applying a new pledge mask to the calling thread.
  * The supplied mask is AND'ed with the thread's current mask, permitting
@@ -266,7 +265,7 @@ pledge_jail_osd_create(void *obj, void *data)
 	 * }
 	 */
 
-	pjd = malloc(sizeof(struct pledge_prison_data), M_PLEDGE, M_WAITOK);
+	pjd = malloc(sizeof(struct pledge_prison_data), M_PRISON, M_WAITOK);
 
 	sysctl_ctx_init(&pjd->sysctl_ctx);
 
@@ -300,18 +299,18 @@ pledge_jail_osd_remove(void *obj, void *data)
 	struct vfsoptlist *vfsopts = data;
 
 	prison_lock(pr);
-	struct pledge_jail_data *pjd = osd_jail_get(pr, pledge_os_jail_slot);
+	struct pledge_jail_data *pjd = osd_jail_get(pr, pledge_jail_osd_slot);
 	prison_unlock(pr);
 
 	if (NULL == pjd) {
 		printf("pledge_jail_remove: pjd == NULL (pr == prison0: %d)\n",
-		    (pr == prison0));
+		    (pr == &prison0));
 		return 0; /* TODO shouldn't happen? */
 	}
 
 	/* Cleanup sysctls: */
 	sysctl_ctx_free(&pjd->sysctl_ctx);
-	free(pjd, M_PLEDGE);
+	free(pjd, M_PRISON);
 
 	return 0;
 }
