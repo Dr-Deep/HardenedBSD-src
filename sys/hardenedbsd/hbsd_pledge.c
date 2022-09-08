@@ -266,6 +266,8 @@ pledge_jail_osd_create(void *obj, void *data __unused)
 	 */
 
 	pjd = malloc(sizeof(struct pledge_jail_data), M_PRISON, M_WAITOK);
+	pjd->is_enforcing = pledge_enforcing; /* inherit from global */
+	pjd->violations = counter_u64_alloc(M_WAITOK);
 
 	sysctl_ctx_init(&pjd->sysctl_ctx);
 
@@ -280,6 +282,10 @@ pledge_jail_osd_create(void *obj, void *data __unused)
 	SYSCTL_ADD_BOOL(&pjd->sysctl_ctx, SYSCTL_CHILDREN(oidp), OID_AUTO,
 	    "enforcing", CTLFLAG_RW, &pjd->is_enforcing, 0,
 	    "enforcing for this jail");
+	SYSCTL_ADD_COUNTER_U64(&pjd->sysctl_ctx, SYSCTL_CHILDREN(oidp),
+	    OID_AUTO,
+	    "violations", CTLFLAG_RW, &pjd->violations,
+	    "violation count for this jail");
 
 	void **rsv = osd_reserve(pledge_jail_osd_slot);
 	for (int retry = 1; retry;)
@@ -311,6 +317,7 @@ pledge_jail_osd_remove(void *obj, void *data __unused)
 
 	/* Cleanup sysctls: */
 	sysctl_ctx_free(&pjd->sysctl_ctx);
+	counter_u64_free(pjd->violations);
 	free(pjd, M_PRISON);
 
 	return 0;
@@ -365,21 +372,21 @@ pledge_learning_init(const void *_unused)
 	osd_method_t osdmethods[PR_MAXMETHOD] = {NULL};
 	osdmethods[PR_METHOD_CREATE] = pledge_jail_osd_create;
 	osdmethods[PR_METHOD_REMOVE] = pledge_jail_osd_remove;
-	pledge_jail_osd_slot = osd_jail_register(NULL, osdmethods);
+
 	/*
-	 * Go through existing jails
+	 * Go through existing jails, taking the allprison_lock before
+	 * registering our slot to ensure we don't trigger two calls
+	 * to pledge_jail_osd_create for any given jail (one from osd,
+	 * and one here).
+	 * That might be overly careful, not sure how realistic jails
+	 * being spawned at this point is.
 	 */
-	struct prison *pr = NULL;
 	sx_slock(&allprison_lock);
+	pledge_jail_osd_slot = osd_jail_register(NULL, osdmethods);
+	struct prison *pr = &prison0;
+	(void)pledge_jail_osd_create(pr, NULL);
 	TAILQ_FOREACH(pr, &allprison, pr_list) {
-		void **rsv = osd_reserve(pledge_jail_osd_slot);
-		for (int retry = 1; retry;)
-		{
-			prison_lock(pr);
-			retry = osd_jail_set_reserved(pr,
-			    pledge_jail_osd_slot, rsv, &prison0);
-			prison_unlock(pr);
-		}
+		(void)pledge_jail_osd_create(pr, NULL);
 	}
 	sx_sunlock(&allprison_lock);
 }
@@ -683,8 +690,28 @@ pledge_check_bitmap(struct thread * const thread, const uint64_t flags)
 	if (violated & PLEDGE_WILDCARD)
 		counter_u64_add(violation_count, 1);
 
-	/* Fall through if the sysctl for enforcement is not enabled:*/
-	if (violated && pledge_enforcing) {
+	if (violated) {
+		/* Consult the jail-specific entry.*/
+		/* TODO: is (thread) always (curthread) here? */
+		struct prison *pr = thread->td_ucred->cr_prison;
+		prison_lock(pr);
+		struct pledge_jail_data *pjd = osd_jail_get(pr,
+		    pledge_jail_osd_slot);
+		if (pjd) {
+			if (violated) {
+				counter_u64_add(pjd->violations, 1);
+			}
+			if ( !(pledge_enforcing || pjd->is_enforcing) ) {
+				violated = 0;
+			}
+		} else {
+			// TODO just assert that pjd != NULL
+			counter_u64_add(softfail_count, 10);
+		}
+		prison_unlock(pr);
+	}
+
+	if (violated) {
 		/* return a permission error if the wanted syscall_no is not
 		 * permitted by the thread's current pledge bitmap: */
 
