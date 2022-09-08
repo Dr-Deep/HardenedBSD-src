@@ -73,9 +73,11 @@ typedef struct pledge_splay_t {
 #include "opt_pledge.h"
 #include <sys/sysproto.h>
 #include <sys/vnode.h>
+#include <sys/param.h>
+#include <sys/sysctl.h>
 
 typedef struct pledge_jail_data {
-	int is_enforcing;
+	bool is_enforcing;
 	struct sysctl_ctx_list sysctl_ctx;
 } pledge_jail_data;
 

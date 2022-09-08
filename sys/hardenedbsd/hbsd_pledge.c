@@ -249,10 +249,10 @@ sysctl_pledge_flags(SYSCTL_HANDLER_ARGS)
 }
 
 static int
-pledge_jail_osd_create(void *obj, void *data)
+pledge_jail_osd_create(void *obj, void *data __unused)
 {
 	struct prison *pr = obj;
-	struct vfsoptlist *vfsopts = (struct vfsoptlist *)data;
+	//struct vfsoptlist *vfsopts = (struct vfsoptlist *)data;
 	struct pledge_jail_data *pjd = NULL;
 
 	/* vfsopts contains jail options in case we want to do
