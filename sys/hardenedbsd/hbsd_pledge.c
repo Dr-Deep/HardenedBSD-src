@@ -271,7 +271,7 @@ pledge_jail_osd_create(void *obj, void *data)
 	sysctl_ctx_init(&pjd->sysctl_ctx);
 
 	char jail_id_str[16] = {0};
-	snprintf(myjail, 16, "%u", pr->pr_id);
+	snprintf(myjail, sizeof(jail_id_str), "%u", pr->pr_id);
 	/* add under security.pledge: */
 	oidp = SYSCTL_ADD_NODE(&pjd->sysctl_ctx,
 	    SYSCTL_STATIC_CHILDREN(_security_pledge_jail),
@@ -362,7 +362,7 @@ pledge_learning_init(const void *_unused)
 	 * Install per-jail osd.h hooks.
 	 * The PR_* constants are from jail.h
 	 */
-	os_method_t osdmethods[PR_MAXMETHOD] = {NULL};
+	osd_method_t osdmethods[PR_MAXMETHOD] = {NULL};
 	osdmethods[PR_METHOD_CREATE] = pledge_jail_osd_create;
 	osdmethods[PR_METHOD_REMOVE] = pledge_jail_osd_remove;
 	pledge_jail_osd_slot = osd_jail_register(NULL, osdmethods);
