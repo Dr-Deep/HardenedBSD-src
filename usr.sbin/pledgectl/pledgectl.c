@@ -129,7 +129,7 @@ pledgectl_list_extattr(const char *filename)
 }
 
 static int
-pledgectl_set_extattr(const char *filename, const uint64_t new_extattr_mask)
+pledgectl_set_extattr(const char *filename, uint64_t new_extattr_mask)
 {
 	/* TODO support setting the userspace */
 	new_extattr_mask = htole64(new_extattr_mask);
