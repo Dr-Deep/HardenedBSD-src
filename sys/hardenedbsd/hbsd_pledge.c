@@ -253,7 +253,7 @@ pledge_jail_osd_create(void *obj, void *data)
 {
 	struct prison *pr = obj;
 	struct vfsoptlist *vfsopts = (struct vfsoptlist *)data;
-	struct pledge_prison_data *pjd = NULL;
+	struct pledge_jail_data *pjd = NULL;
 
 	/* vfsopts contains jail options in case we want to do
 	 * something with those. TODO. */
@@ -265,19 +265,20 @@ pledge_jail_osd_create(void *obj, void *data)
 	 * }
 	 */
 
-	pjd = malloc(sizeof(struct pledge_prison_data), M_PRISON, M_WAITOK);
+	pjd = malloc(sizeof(struct pledge_jail_data), M_PRISON, M_WAITOK);
 
 	sysctl_ctx_init(&pjd->sysctl_ctx);
 
 	char jail_id_str[16] = {0};
-	snprintf(myjail, sizeof(jail_id_str), "%u", pr->pr_id);
+	snprintf(jail_id_str, sizeof(jail_id_str), "%u", pr->pr_id);
 	/* add under security.pledge: */
-	oidp = SYSCTL_ADD_NODE(&pjd->sysctl_ctx,
+	struct sysctl_oid *oidp = SYSCTL_ADD_NODE(&pjd->sysctl_ctx,
 	    SYSCTL_STATIC_CHILDREN(_security_pledge_jail),
-	    jail_id_str, CTLFLAG_RW, 0, "controls for this jid");
+	    OID_AUTO,
+	    jail_id_str, CTLFLAG_RW, NULL, "controls for this jid");
 	/* add under oidp */
-	SYSCTL_ADD_BOOL(&pjd->sysctl_ctx, SYSCTL_CHILDREN(oidp),
-	    "enforcing", CTLFLAG_RW, &pjd->is_enforcing, 0,
+	SYSCTL_ADD_BOOL(&pjd->sysctl_ctx, SYSCTL_CHILDREN(oidp), OID_AUTO,
+	    "enforcing", CTLFLAG_RW, &pjd->is_enforcing, NULL,
 	    "enforcing for this jail");
 
 	void **rsv = osd_reserve(pledge_jail_osd_slot);
