@@ -117,7 +117,9 @@ int pledge_apply_extattr(struct thread *td, struct vnode *ni_vp);
 #define PLEDGE_SOFTFAIL	(1ULL <<  1)	/* return EPERM instead of crashing */
 
 /* These names (not the constants) are copied from OpenBSD,
- * maybe we can have some interopability to easy porting: */
+ * maybe we can have some interopability to easy porting:
+ * Note that the descriptions are most likely off.
+ */
 
 #define PLEDGE_RPATH		(1ULL <<  2)	/* allow open for read */
 #define PLEDGE_WPATH		(1ULL <<  3)	/* allow open for write */
@@ -138,7 +140,7 @@ int pledge_apply_extattr(struct thread *td, struct vnode *ni_vp);
 #define PLEDGE_TTY		(1ULL << 18)	/* tty setting */
 #define PLEDGE_SENDFD		(1ULL << 19)	/* AF_UNIX CMSG fd sending */
 #define PLEDGE_RECVFD		(1ULL << 20)	/* AF_UNIX CMSG fd receiving */
-#define PLEDGE_EXEC		(1ULL << 21)	/* execve, child is free of pledge */
+#define PLEDGE_EXEC		(1ULL << 21)	/* execve (etc) other programs*/
 #define PLEDGE_ROUTE		(1ULL << 22)	/* routing lookups */
 #define PLEDGE_MCAST		(1ULL << 23)	/* multicast joins */
 #define PLEDGE_VMINFO		(1ULL << 24)	/* vminfo listings */
@@ -162,6 +164,9 @@ int pledge_apply_extattr(struct thread *td, struct vnode *ni_vp);
 #define PLEDGE_DEVICE	(1ULL << 45)	/* modify devices, mount, unmount */
 #define PLEDGE_KLD	(1ULL << 46)	/* things to do with loadable modules */
 #define PLEDGE_AIO	(1ULL << 47)	/* aio (asynchronous io) related */
+#define PLEDGE_SYSCTL	(1ULL << 48)	/* wildcard sysctl permissions */
+#define PLEDGE_IOCTL	(1ULL << 49)	/* wildcard ioctl permissions, potentially an overlap with cap_ioctls_limit etc?  */
+#define PLEDGE_CAPSICUM	(1ULL << 50)	/* man 4 capsicum */
 
 #define PLEDGE_NOLEARN	(1ULL << 63)	/* don't record this in learning mode */
 #define PLEDGE_WILDCARD	((~0ULL) ^ \
@@ -223,6 +228,9 @@ struct {
 	{ PLEDGE_AIO,		"aio" },
 	{ PLEDGE_SOFTFAIL,	"softfail" },
 	{ PLEDGE_NOLEARN,	"nolearn" },
+	{ PLEDGE_SYSCTL,	"sysctl" },
+	{ PLEDGE_IOCTL,	"ioctl" },
+	{ PLEDGE_CAPSICUM,	"capsicum" },
 	{ PLEDGE_NONE,		"none"}
 };
 
