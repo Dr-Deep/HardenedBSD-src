@@ -496,6 +496,7 @@ pledge_learning_record(const struct thread *thread,
 	 */
 	PROC_LOCK(thread->td_proc);
 	struct vnode * const exec_vnode = thread->td_proc->p_textvp;
+	PROC_UNLOCK(thread->td_proc);
 
 	/* assert that we have a vnode, and that it is a regular file: */
 	if (!exec_vnode || VREG != exec_vnode->v_type) {
@@ -534,7 +535,7 @@ pledge_learning_record(const struct thread *thread,
 
 	printf("pledge TODO proc_unlock_and_return: not good.\n");
 proc_unlock_and_return:
-	PROC_UNLOCK(thread->td_proc);
+	//PROC_UNLOCK(thread->td_proc);
 	return;
 }
 
