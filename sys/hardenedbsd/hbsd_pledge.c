@@ -672,19 +672,12 @@ pledge_check_bitmap(struct thread * const thread, const uint64_t flags)
 	    !!( (PLEDGE_AND & flags)
 		| !used_mask);
 
-	/* Record the lacking permissions.
-	 * When there is a violation, and the PLEDGE_AND flag was NOT set
-	 * record this bit. This signals to userspace that not all the
-	 * "violated" flags may actually be required, since a subset
-	 * would have sufficed.
-	 * TODO flipping the logic here and having PLEDGE_OR would make this cleaner, but make the table uglier.
+	/* Record the lacking permissions unless there is no violation
+	 * and PLEDGE_NOLEARN was supplied in (flags).
 	 * TODO document this in the manpages
 	 * TODO document in pledgectl
 	 */
-	if (violated && !( PLEDGE_AND & flags)) {
-		pledge_learning_record(thread, used_mask,
-		    PLEDGE_AND | violated);
-	} else {
+	if (violated || !(PLEDGE_NOLEARN & flags)) {
 		pledge_learning_record(thread, used_mask, violated);
 	}
 
@@ -913,7 +906,7 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_fork]	= PLEDGE_PROC,
 	[SYS_read]	= PLEDGE_STDIO,
 	[SYS_write]	= PLEDGE_STDIO,
-	[SYS_open]	= PLEDGE_RPATH | PLEDGE_WPATH | PLEDGE_CPATH,
+	[SYS_open]	= PLEDGE_RPATH | PLEDGE_WPATH | PLEDGE_CPATH | PLEDGE_NOLEARN, /* NOLEARN: handled in pledge_openat */
 	[SYS_close]	= PLEDGE_STDIO,
 	[SYS_wait4]	= PLEDGE_PROC,
 	[SYS_link]	= PLEDGE_CPATH,
@@ -1293,7 +1286,7 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_cpuset_getid]	= PLEDGE_STDIO,
 	[SYS_cpuset_getaffinity]	= PLEDGE_STDIO,
 	[SYS_cpuset_setaffinity]	= PLEDGE_STDIO,
-	[SYS_faccessat]	= PLEDGE_RPATH | PLEDGE_WPATH | PLEDGE_CPATH,
+	[SYS_faccessat]	= PLEDGE_RPATH | PLEDGE_WPATH | PLEDGE_CPATH | PLEDGE_NOLEARN, // TODO this should probably softfail?
 	/* 490: */
 	[SYS_fchmodat]	= PLEDGE_FATTR,
 	[SYS_fchownat]	= PLEDGE_CHOWN, // chown
@@ -1313,9 +1306,9 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 #else
 	[SYS_mknodat]	= PLEDGE_AND | PLEDGE_CPATH | PLEDGE_DEVICE,
 #endif
-	[SYS_openat]	= PLEDGE_RPATH | PLEDGE_WPATH,
+	[SYS_openat]	= PLEDGE_RPATH | PLEDGE_WPATH | PLEDGE_CPATH | PLEDGE_NOLEARN,
 	/* 500: */
-	[SYS_readlinkat]	= PLEDGE_RPATH | PLEDGE_WPATH | PLEDGE_CPATH, // TODO
+	[SYS_readlinkat]	= PLEDGE_RPATH,
 	[SYS_renameat]	= PLEDGE_CPATH,
 	[SYS_symlinkat]	= PLEDGE_CPATH,
 	[SYS_unlinkat]	= PLEDGE_CPATH,

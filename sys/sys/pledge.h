@@ -163,8 +163,10 @@ int pledge_apply_extattr(struct thread *td, struct vnode *ni_vp);
 #define PLEDGE_KLD	(1ULL << 46)	/* things to do with loadable modules */
 #define PLEDGE_AIO	(1ULL << 47)	/* aio (asynchronous io) related */
 
+#define PLEDGE_NOLEARN	(1ULL << 63)	/* don't record this in learning mode */
 #define PLEDGE_WILDCARD	((~0ULL) ^ \
-	    (PLEDGE_AND | PLEDGE_SOFTFAIL))	/* match any flag */
+	    (PLEDGE_AND | PLEDGE_SOFTFAIL \
+		| PLEDGE_NOLEARN))	/* match any flag */
 
 
 /*
@@ -220,6 +222,7 @@ struct {
 	{ PLEDGE_KLD,		"kld" },
 	{ PLEDGE_AIO,		"aio" },
 	{ PLEDGE_SOFTFAIL,	"softfail" },
+	{ PLEDGE_NOLEARN,	"nolearn" },
 	{ PLEDGE_NONE,		"none"}
 };
 
