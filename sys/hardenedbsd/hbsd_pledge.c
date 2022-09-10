@@ -171,7 +171,7 @@ SYSCTL_PROC(_security_pledge, OID_AUTO, learning_data,
 #ifdef CTLFLAG_ROOTONLY
     CTLFLAG_ROOTONLY |
 #endif
-    CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_MPSAFE,
+    CTLTYPE_STRUCT | CTLFLAG_RW | CTLFLAG_MPSAFE,
     NULL, 0, /* TODO args ??? */
     sysctl_pledge_learning_data, "S,pledge_learning_entry_t",
     "Retrieve the learning data entries");
@@ -265,7 +265,7 @@ pledge_jail_osd_create(void *obj, void *data __unused)
 	 * }
 	 */
 
-	pjd = malloc(sizeof(struct pledge_jail_data), M_PRISON, M_WAITOK);
+	pjd = malloc(sizeof(struct pledge_jail_data), M_PRISON, M_ZERO|M_WAITOK);
 	pjd->is_enforcing = pledge_enforcing; /* inherit from global */
 	pjd->violations = counter_u64_alloc(M_WAITOK);
 
@@ -392,6 +392,30 @@ pledge_learning_init(const void *_unused)
 }
 
 /*
+ * Erase learning entries.
+ * Returns the number of bytes the erased entries would have required to dump
+ * to userspace, in multiples of sizeof(pledge_learning_entry_t).
+ */
+size_t
+kern_pledge_learning_data_erase(void)
+{
+	size_t erased_bytes = 0;
+	u_int cpu = 0;
+	CPU_FOREACH(cpu) {
+		struct rmlock * const rm = DPCPU_ID_PTR(cpu, learning_rm_lock);
+		rm_wlock(rm);
+		learning_tree_t * const tree = DPCPU_ID_PTR(cpu, learning_tree);
+		pledge_splay_t *el = NULL, *el_tmp = NULL;
+		RB_FOREACH_SAFE(el, learning_tree, tree, el_tmp) {
+			learning_tree_RB_REMOVE(tree, el);
+			free(el, M_PLEDGE_LEARNING);
+			erased_bytes += sizeof(pledge_learning_entry_t);
+		}
+		rm_wunlock(rm)
+	}
+}
+
+/*
  * Records the utilized and violated pledge privileges for a given executable
  * as identified by (fsid,inode) tuple.
  */
@@ -446,8 +470,9 @@ pledge_learning_insert(const struct thread*thread,
 
 	/* drop lock so we can malloc our new entry: */
 	rm_runlock(rm, &rm_tracker);
+	/* would it make sense to use malloc_domainset here? */
 	el = malloc(sizeof(stack_el),
-	    M_PLEDGE_LEARNING, M_WAITOK);
+	    M_PLEDGE_LEARNING, M_WAITOK | M_ZERO);
 	memcpy(el, &stack_el, sizeof(stack_el));
 
 	rm_wlock(rm);
@@ -539,35 +564,46 @@ proc_unlock_and_return:
 	return;
 }
 
-
 /*
  * sysctl proc node that copies (to userspace) the learning data.
+ * newptr newlen oldptr oldlen  outcome
+ *      *     !0      *      *  EINVAL, reserved
+ *  !NULL      0  !NULL      *  EINVAL, reserved
+ *  !NULL      0   NULL      *  Erase learning data
+ *   NULL      0  !NULL      *  Put learning data in oldptr (up to oldlen bytes)
+ *   NULL      0   NULL      *  Retrieve bufsize required for learning entries
  */
 static int
 sysctl_pledge_learning_data(SYSCTL_HANDLER_ARGS)
 {
-	if (req->newptr || req->newlen) {
-		printf("pledge: trying to set learning data, "
-		    "this sysctl should be RD only\n");
-		return EINVAL;
-	}
-
 	/* TODO it's unfortunate that only sum(dpcpu counter array) is exposed;
 	 * being able to retrieve max(dpcpu counter array) would be useful. */
 	const uint64_t entries_num_max = counter_u64_fetch(learning_count);
 	const uint64_t entries_bytes_max =
 	    entries_num_max * sizeof(pledge_learning_entry_t);
 
-	if (!req->oldptr) {
-		/* userspace did not provide pointer; only interested in space
-		 * required to dump data. We estimate: */
+	if (req->newlen) {
+		/* rew->newlen is reserved for now. */
+		printf("pledge: trying to set learning data,"
+		    " not implemented.\n");
+		return EINVAL;
+	}
+
+	if (NULL == req->oldptr) {
+		if (NULL != req->newptr) {
+			entries_bytes_max = kern_pledge_learning_data_erase();
+		}
+		/* if userspace provided req->newptr, we returned the space
+		 * required by the erased entries.
+		 * Otherwise, userspace did not provide a place to put entries;
+		 * and is only interested in space required to dump data.
+		 */
 		return SYSCTL_OUT(req, NULL, entries_bytes_max);
 	}
 
-	if (!req->oldlen) {
-		/* TODO userland asked for 0 bytes, having a special case
-		 * in kernel-land for that seems a bit stupid */
-		return SYSCTL_OUT(req, NULL, 0);
+	if (req->newptr) {
+		printf("sysctl_pledge_learning_data: newptr && oldptr\n");
+		return EINVAL;
 	}
 
 	const size_t idx_max = req->oldlen / sizeof(pledge_learning_entry_t);
@@ -591,13 +627,7 @@ sysctl_pledge_learning_data(SYSCTL_HANDLER_ARGS)
 	 * synced upper bound to compare against).
 	 * It seemed unclean, so I did not include that here. */
 	pledge_learning_entry_t * const entry_arr =
-	    malloc(req->oldlen, M_PLEDGE_LEARNING, M_ZERO | M_NOWAIT);
-
-	/* If system is low on memory, it's a bad time to dump learning data: */
-	if (!entry_arr) {
-		printf("kern:pledge:not enough memory for ldata\n");
-		return (ENOSPC);
-	}
+	    malloc(req->oldlen, M_PLEDGE_LEARNING, M_ZERO | M_WAIT);
 
 	size_t idx = 0;
 	int err = 0;

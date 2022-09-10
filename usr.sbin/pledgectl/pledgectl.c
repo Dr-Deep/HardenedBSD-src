@@ -54,11 +54,11 @@ print_learning_entry(const pledge_splay_t *const entry,
 static void
 usage()
 {
-	xo_warnx("usage: clear:      pledgectl [--libxo] [-v] -c\n"
+	xo_warnx("usage: erase:      pledgectl [--libxo] [-v] -E\n"
 	    "       list-all:   pledgectl [--libxo] [-v] -L\n"
 	    "       list-attr:  pledgectl [--libxo] [-v] -l FILE ...\n"
 	    "       set-attr:   pledgectl [--libxo] [-v] -s MASK [FILE ...]\n"
-	    "       show usage: pledgectl [--libxo] [-v] -h"
+	    "       show usage: pledgectl [--libxo] [-v] -h\n"
 	    "TODO 'local learning mode'/'trace'/'profile' for a given execution\n"
 	    "TODO remove extattr from file(s)\n"
 	    "TODO -l default to stuff in PATH\n"
@@ -80,11 +80,22 @@ usage()
 
 
 static int
-pledgectl_clear_learning()
+pledgectl_erase_learning()
 {
-	xo_errx(2,
-	    "TODO Clearing/erasing learning data not currently implemented.\n");
-	return (-1);
+	size_t freed_bytes = 0 ;
+	pledge_learning_entry_t unused_entry;
+	int err = sysctlbyname("security.pledge.learning_data",
+	    NULL, &freed_bytes, &unused_entry, 0);
+
+	if (err) {
+		xo_warnx("Unable to erase learning data.");
+		return (18);
+	}
+
+	xo_emit("{Lwc:Erased entries}{:erased-entries/%zu}",
+	    freed_bytes / sizeof(pledge_learning_entry_t));
+
+	return (0);
 }
 
 static int
@@ -479,7 +490,10 @@ int main(int argc, char *argv[])
 	 * Drop unneeded privileges:
 	 */
 	err = pledge(PLEDGE_STDIO | PLEDGE_RPATH | PLEDGE_FATTR
-	    | PLEDGE_DEVICE);
+	    | PLEDGE_DEVICE | PLEDGE_SYSCTL
+	    | PLEDGE_CAPSICUM /* We don't actually use capsicum,
+			       * need to investigate that.*/
+		);
 
 	xo_set_flags(NULL, XOF_WARN | XOF_COLUMNS);
 	argc = xo_parse_args(argc, argv);
@@ -498,7 +512,7 @@ int main(int argc, char *argv[])
 	 * Parse command-line options:
 	 */
 
-	enum { UNSET, CLEAR_LEARNING, DUMP_ALL, LIST_EXTATTR,
+	enum { UNSET, ERASE_LEARNING, DUMP_ALL, LIST_EXTATTR,
 	       SET_EXTATTR } action = UNSET;
 
 	int ch = (-1); /* getopt variable */
@@ -512,7 +526,7 @@ int main(int argc, char *argv[])
 		 * Only permit ONE action:
 		 */
 		switch (ch) {
-		case 'c':
+		case 'E':
 		case 'L':
 		case 'l':
 		case 's':
@@ -528,8 +542,8 @@ int main(int argc, char *argv[])
 		}
 
 		switch (ch) {
-		case 'c':
-			action = CLEAR_LEARNING; break;
+		case 'E':
+			action = ERASE_LEARNING; break;
 		case 'L':
 			action = DUMP_ALL; break;
 		case 'l':
@@ -591,11 +605,11 @@ int main(int argc, char *argv[])
 	case LIST_EXTATTR:
 		action_mask |= PLEDGE_RPATH; break;
 	case DUMP_ALL:
-		action_mask |= PLEDGE_RPATH | PLEDGE_DEVICE; break;
+		action_mask |= PLEDGE_RPATH | PLEDGE_SYSCTL; break;
 	case SET_EXTATTR:
 		action_mask |= PLEDGE_FATTR; break;
-	case CLEAR_LEARNING:
-		action_mask |= PLEDGE_DEVICE; break;
+	case ERASE_LEARNING:
+		action_mask |= PLEDGE_SYSCTL; break;
 	default: break;
 	}
 
@@ -609,8 +623,8 @@ int main(int argc, char *argv[])
 	 * Perform requested actions:
 	 */
 	switch (action) {
-	case CLEAR_LEARNING:	/* Erase learning data in kernel with sysctl */
-		err = pledgectl_clear_learning();
+	case ERASE_LEARNING:	/* Erase learning data in kernel with sysctl */
+		err = pledgectl_erase_learning();
 		break;
 
 	case DUMP_ALL:		/* Dump from kernel with sysctl */

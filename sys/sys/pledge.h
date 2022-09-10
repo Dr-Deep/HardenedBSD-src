@@ -93,6 +93,13 @@ int pledge_check_bitmap(struct thread *thread, const uint64_t flags);
 /* kernel-land function to restrict pledge permission mask for thread: */
 int kern_pledge(struct thread *thread, const uint64_t mask);
 
+/*
+ * free all entries in the learning data tree,
+ * returning the number of bytes the erased entries would have required to dump
+ * to userspace, in multiples of sizeof(pledge_learning_entry_t).
+ */
+size_t kern_pledge_learning_data_erase(void);
+
 /* syscall to restrict pledge permission mask for thread: */
 /*int sys_pledge(struct thread *thread, struct pledge_args *args); TODO */
 
