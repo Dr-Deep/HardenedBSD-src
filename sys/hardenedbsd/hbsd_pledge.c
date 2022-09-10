@@ -411,7 +411,7 @@ kern_pledge_learning_data_erase(void)
 			free(el, M_PLEDGE_LEARNING);
 			erased_bytes += sizeof(pledge_learning_entry_t);
 		}
-		rm_wunlock(rm)
+		rm_wunlock(rm);
 	}
 }
 
@@ -579,7 +579,7 @@ sysctl_pledge_learning_data(SYSCTL_HANDLER_ARGS)
 	/* TODO it's unfortunate that only sum(dpcpu counter array) is exposed;
 	 * being able to retrieve max(dpcpu counter array) would be useful. */
 	const uint64_t entries_num_max = counter_u64_fetch(learning_count);
-	const uint64_t entries_bytes_max =
+	uint64_t entries_bytes_max =
 	    entries_num_max * sizeof(pledge_learning_entry_t);
 
 	if (req->newlen) {
