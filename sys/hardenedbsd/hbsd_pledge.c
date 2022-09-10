@@ -413,6 +413,7 @@ kern_pledge_learning_data_erase(void)
 		}
 		rm_wunlock(rm);
 	}
+	return erased_bytes;
 }
 
 /*
