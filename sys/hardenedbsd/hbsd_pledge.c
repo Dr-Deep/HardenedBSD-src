@@ -627,7 +627,7 @@ sysctl_pledge_learning_data(SYSCTL_HANDLER_ARGS)
 	 * synced upper bound to compare against).
 	 * It seemed unclean, so I did not include that here. */
 	pledge_learning_entry_t * const entry_arr =
-	    malloc(req->oldlen, M_PLEDGE_LEARNING, M_ZERO | M_WAIT);
+	    malloc(req->oldlen, M_PLEDGE_LEARNING, M_ZERO | M_WAITOK);
 
 	size_t idx = 0;
 	int err = 0;
