@@ -92,7 +92,7 @@ pledgectl_erase_learning()
 		return (18);
 	}
 
-	xo_emit("{Lwc:Erased entries}{:erased-entries/%zu}",
+	xo_emit("{Lwc:Erased entries}{:erased-entries/%zu}\n",
 	    freed_bytes / sizeof(pledge_learning_entry_t));
 
 	return (0);
@@ -520,7 +520,7 @@ int main(int argc, char *argv[])
 	/* pledge privs to assign to extattr: */
 	uint64_t new_extattr_mask = PLEDGE_NONE;
 
-	while (argc && (ch = getopt(argc, argv, "chLls:v")) != -1) {
+	while (argc && (ch = getopt(argc, argv, "EhLls:v")) != -1) {
 
 		/*
 		 * Only permit ONE action:
