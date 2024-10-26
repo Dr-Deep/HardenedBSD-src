@@ -77,11 +77,9 @@ struct vt9p_softc {
 static STAILQ_HEAD( ,vt9p_softc) global_chan_list =
     STAILQ_HEAD_INITIALIZER(global_chan_list);
 struct mtx global_chan_list_mtx;
-<<<<<<< HEAD
 int __insecure_kmod = 1;
-=======
+
 MTX_SYSINIT(global_chan_list_mtx, &global_chan_list_mtx, "9pglobal", MTX_DEF);
->>>>>>> internal/freebsd/current/main
 
 static struct virtio_feature_desc virtio_9p_feature_desc[] = {
 	{ VIRTIO_9PNET_F_MOUNT_TAG,	"9PMountTag" },
