@@ -47,7 +47,11 @@ BSARGS= 	DESTDIR= \
 		MK_CLANG_FULL=no \
 		MK_HTML=no \
 		MK_MAN=no \
+<<<<<<< HEAD
 		MK_PROFILE=no \
+=======
+		MK_RETPOLINE=no \
+>>>>>>> internal/freebsd/current/main
 		MK_SSP=no \
 		MK_TESTS=no \
 		MK_WERROR=no \

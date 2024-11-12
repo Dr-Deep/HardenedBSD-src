@@ -10,8 +10,11 @@ LIBDIR=		${SANITIZER_LIBDIR}
 SHLIBDIR=	${LIBDIR}
 
 NO_PIC=
+<<<<<<< HEAD
 MK_PROFILE=	no
 MK_LTOLIB=	no
+=======
+>>>>>>> internal/freebsd/current/main
 MK_ASAN:=	no
 MK_SSP=		no
 MK_UBSAN:=	no
