@@ -353,9 +353,6 @@ kern_execve(struct thread *td, struct image_args *args, struct mac *mac_p,
 	    exec_args_get_begin_envv(args) - args->begin_argv);
 	AUDIT_ARG_ENVV(exec_args_get_begin_envv(args), args->envc,
 	    args->endp - exec_args_get_begin_envv(args));
-<<<<<<< HEAD
-
-=======
 #ifdef KTRACE
 	if (KTRPOINT(td, KTR_ARGS)) {
 		ktrdata(KTR_ARGS, args->begin_argv,
@@ -371,7 +368,6 @@ kern_execve(struct thread *td, struct image_args *args, struct mac *mac_p,
 		exec_free_args(args);
 		return (EINVAL);
 	}
->>>>>>> internal/freebsd/current/main
 	return (do_execve(td, args, mac_p, oldvmspace));
 }
 
