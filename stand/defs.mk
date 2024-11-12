@@ -10,12 +10,8 @@ FORTIFY_SOURCE=	0
 
 MK_CTF=		no
 MK_SSP=		no
-<<<<<<< HEAD
-MK_PROFILE=	no
 MK_SPECTREV1_FIX=	no
 MK_LTOLIB=		no
-=======
->>>>>>> internal/freebsd/current/main
 MK_PIE=		no
 MAN=
 .if !defined(PIC)

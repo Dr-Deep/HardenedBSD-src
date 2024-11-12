@@ -62,13 +62,6 @@ zfs/zfs_defs.o: .PHONY
 	@cd ${.CURDIR}/zfs && ${MAKE} zfs_defs.o
 zfs/zfs_defs.pico: .PHONY
 	@cd ${.CURDIR}/zfs && ${MAKE} zfs_defs.pico
-<<<<<<< HEAD
-zfs/zfs_defs.po: .PHONY
-	@cd ${.CURDIR}/zfs && ${MAKE} zfs_defs.po
-=======
-zfs/zfs_defs.pieo: .PHONY
-	@cd ${.CURDIR}/zfs && ${MAKE} zfs_defs.pieo
->>>>>>> internal/freebsd/current/main
 .endif
 
 .include <bsd.lib.mk>
