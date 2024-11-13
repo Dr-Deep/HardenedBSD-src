@@ -20,11 +20,8 @@ SRCS+=	vmm.c			\
 	vmm_stat.c
 
 .if ${MACHINE_CPUARCH} == "aarch64"
-<<<<<<< HEAD
 KERN_SSP_CFLAG=	-fstack-protector
-=======
 CFLAGS+= -I${SRCTOP}/sys/${MACHINE}/vmm/io
->>>>>>> internal/freebsd/current/main
 DPSRCS+=	assym.inc
 
 # TODO: Add the new EL2 code
@@ -79,13 +76,11 @@ DPSRCS+=	vmx_genassym.c svm_genassym.c offset.inc
 CFLAGS+= -I${SRCTOP}/sys/amd64/vmm/intel
 CFLAGS+= -I${SRCTOP}/sys/amd64/vmm/amd
 
-<<<<<<< HEAD
 TRIVIAL_VAR_AUTO_INIT_ZERO_SAFE=	yes
-=======
+
 SRCS+=	opt_acpi.h		\
 	opt_bhyve_snapshot.h	\
 	opt_ddb.h
->>>>>>> internal/freebsd/current/main
 
 SRCS+=	vmm_host.c	\
 	vmm_ioport.c	\
