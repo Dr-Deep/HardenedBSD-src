@@ -59,9 +59,9 @@
 
 #ifdef HBSD_NOTYET
 /*
- * Enable the experimental block cloning feature.  If this setting is 0, then
- * even if feature@block_cloning is enabled, attempts to clone blocks will act
- * as though the feature is disabled.
+ * Enables access to the block cloning feature. If this setting is 0, then even
+ * if feature@block_cloning is enabled, using functions and system calls that
+ * attempt to clone blocks will act as though the feature is disabled.
  */
 int zfs_bclone_enabled = 1;
 #else
