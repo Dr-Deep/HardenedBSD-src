@@ -26,10 +26,12 @@
  * OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/extattr.h>
 #include <libutil.h>
 
@@ -639,6 +641,20 @@ hbsdctrl_feature_state_t *
 hbsdctrl_feature_state_new(int fd, hbsdctrl_flag_t flags)
 {
 	hbsdctrl_feature_state_t *state;
+	struct stat sb;
+
+	if (fd >= 0) {
+		memset(&sb, 0, sizeof(sb));
+		if (fstat(fd, &sb)) {
+			perror("fstat");
+			return (NULL);
+		}
+
+		if (!S_ISREG(sb.st_mode)) {
+			fprintf(stderr, "[-] Not a regular file\n");
+			return (NULL);
+		}
+	}
 
 	state = calloc(1, sizeof(*state));
 	if (state == NULL) {
