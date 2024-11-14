@@ -39,6 +39,7 @@
 #include <libhbsdcontrol.h>
 
 static int verbose = 0;
+static uint64_t open_flags = O_PATH | O_CLOEXEC | O_NOFOLLOW;
 static const char *prog;
 
 static void
@@ -48,7 +49,8 @@ usage(bool list_features)
 	hbsdctrl_ctx_t *ctx;
 
 	ctx = NULL;
-	fprintf(stderr, "USAGE: %s pax <state> <feature> <file>\n", prog);
+	fprintf(stderr, "USAGE: %s [-f] pax <state> <feature> <file>\n", prog);
+	fprintf(stderr, "    -f: follow symlinks\n");
 	if (list_features) {
 		ctx = hbsdctrl_ctx_new(0, LIBHBSDCONTROL_DEFAULT_NAMESPACE);
 		if (ctx == NULL) {
@@ -74,14 +76,14 @@ open_file(const char *path)
 	cap_rights_t rights;
 	int fd;
 
-	fd = open(path, O_PATH | O_CLOEXEC);
+	fd = open(path, open_flags);
 	if (fd == -1) {
 		return (-1);
 	}
 
 	memset(&rights, 0, sizeof(rights));
 	cap_rights_init(&rights, CAP_EXTATTR_DELETE, CAP_EXTATTR_GET,
-	    CAP_EXTATTR_LIST, CAP_EXTATTR_SET);
+	    CAP_EXTATTR_LIST, CAP_EXTATTR_SET, CAP_FSTAT, CAP_LOOKUP);
 	cap_rights_limit(fd, &rights);
 
 	return (fd);
@@ -249,10 +251,13 @@ main(int argc, char *argv[])
 	res = 0;
 	prog = argv[0];
 	ns = LIBHBSDCONTROL_DEFAULT_NAMESPACE;
-	while ((ch = getopt(argc, argv, "dn:")) != -1) {
+	while ((ch = getopt(argc, argv, "dfn:")) != -1) {
 		switch (ch) {
 		case 'd':
 			verbose++;
+			break;
+		case 'f':
+			open_flags ^= O_NOFOLLOW;
 			break;
 		case 'n':
 			ns = optarg;
