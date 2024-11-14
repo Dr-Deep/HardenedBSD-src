@@ -49,8 +49,8 @@ usage(bool list_features)
 	hbsdctrl_ctx_t *ctx;
 
 	ctx = NULL;
-	fprintf(stderr, "USAGE: %s [-f] pax <state> <feature> <file>\n", prog);
-	fprintf(stderr, "    -f: follow symlinks\n");
+	fprintf(stderr, "USAGE: %s [-H] pax <state> <feature> <file>\n", prog);
+	fprintf(stderr, "    -H: follow symlinks\n");
 	if (list_features) {
 		ctx = hbsdctrl_ctx_new(0, LIBHBSDCONTROL_DEFAULT_NAMESPACE);
 		if (ctx == NULL) {
@@ -251,13 +251,13 @@ main(int argc, char *argv[])
 	res = 0;
 	prog = argv[0];
 	ns = LIBHBSDCONTROL_DEFAULT_NAMESPACE;
-	while ((ch = getopt(argc, argv, "dfn:")) != -1) {
+	while ((ch = getopt(argc, argv, "Hdn:")) != -1) {
 		switch (ch) {
+		case 'H':
+			open_flags ^= O_NOFOLLOW;
+			break;
 		case 'd':
 			verbose++;
-			break;
-		case 'f':
-			open_flags ^= O_NOFOLLOW;
 			break;
 		case 'n':
 			ns = optarg;
