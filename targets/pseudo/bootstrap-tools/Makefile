@@ -50,8 +50,11 @@ BSARGS= 	DESTDIR= \
 		MK_CLANG_FULL=no \
 		MK_HTML=no \
 		MK_MAN=no \
+<<<<<<< HEAD
 		MK_PROFILE=no \
 		MK_SAFESTACK=no \
+=======
+>>>>>>> internal/hardened/current/master
 		MK_SSP=no \
 		MK_TESTS=no \
 		MK_WERROR=no \
