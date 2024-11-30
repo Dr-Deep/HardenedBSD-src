@@ -114,6 +114,7 @@ struct snprintf_arg {
 };
 
 extern	int log_open;
+extern	int cn_mute;
 
 static void  msglogchar(int c, int pri);
 static void  msglogstr(char *str, int pri, int filter_cr);
@@ -470,7 +471,7 @@ prf_putchar(int c, int flags, int pri)
 		msgbuftrigger = 1;
 	}
 
-	if (flags & TOCONS) {
+	if ((flags & TOCONS) && !cn_mute) {
 		if ((!KERNEL_PANICKED()) && (constty != NULL))
 			msgbuf_addchar(&consmsgbuf, c);
 
@@ -488,7 +489,7 @@ prf_putbuf(char *bufr, int flags, int pri)
 		msgbuftrigger = 1;
 	}
 
-	if (flags & TOCONS) {
+	if ((flags & TOCONS) && !cn_mute) {
 		if ((!KERNEL_PANICKED()) && (constty != NULL))
 			msgbuf_addstr(&consmsgbuf, -1,
 			    bufr, /*filter_cr*/ 0);
@@ -555,6 +556,11 @@ putchar(int c, void *arg)
 
 	if ((flags & TOTTY) && tp != NULL && !KERNEL_PANICKED())
 		tty_putchar(tp, c);
+
+	if ((flags & TOCONS) && cn_mute) {
+		flags &= ~TOCONS;
+		ap->flags = flags;
+	}
 
 	if ((flags & (TOCONS | TOLOG)) && c != '\0')
 		putbuf(c, ap);
