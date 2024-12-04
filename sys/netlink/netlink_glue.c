@@ -135,12 +135,8 @@ nlmsg_ignore_limit_stub(struct nl_writer *nw __unused)
 }
 
 static bool
-<<<<<<< HEAD
-nlmsg_refill_buffer_stub(struct nl_writer *nw __unused, u_int required_len __unused)
-=======
 nlmsg_refill_buffer_stub(struct nl_writer *nw __unused,
     size_t required_len __unused)
->>>>>>> internal/freebsd/current/main
 {
 	return (false);
 }

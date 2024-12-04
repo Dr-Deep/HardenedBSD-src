@@ -179,11 +179,7 @@ struct nl_pstate;
 struct nl_function_wrapper {
 	bool (*nlmsg_add)(struct nl_writer *nw, uint32_t portid, uint32_t seq, uint16_t type,
 	    uint16_t flags, uint32_t len);
-<<<<<<< HEAD
-	bool (*nlmsg_refill_buffer)(struct nl_writer *nw, u_int required_len);
-=======
 	bool (*nlmsg_refill_buffer)(struct nl_writer *nw, size_t required_len);
->>>>>>> internal/freebsd/current/main
 	bool (*nlmsg_flush)(struct nl_writer *nw);
 	bool (*nlmsg_end)(struct nl_writer *nw);
 	void (*nlmsg_abort)(struct nl_writer *nw);
