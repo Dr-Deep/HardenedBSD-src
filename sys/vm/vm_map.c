@@ -2876,16 +2876,11 @@ again:
 		if ((entry->eflags & (MAP_ENTRY_GUARD |
 		    MAP_ENTRY_STACK_GAP)) == MAP_ENTRY_GUARD)
 			continue;
-<<<<<<< HEAD
 		if ((new_prot & entry->max_protection) != new_prot) {
 			vm_map_unlock(map);
 			return (KERN_PROTECTION_FAILURE);
 		}
-		max_prot = (entry->eflags & (MAP_ENTRY_STACK_GAP_DN |
-		    MAP_ENTRY_STACK_GAP_UP)) != 0 ?
-=======
 		max_prot = (entry->eflags & MAP_ENTRY_STACK_GAP) != 0 ?
->>>>>>> internal/freebsd/current/main
 		    PROT_MAX_EXTRACT(entry->offset) : entry->max_protection;
 		if (!CONTAINS_BITS(max_prot, check_prot)) {
 			vm_map_unlock(map);
