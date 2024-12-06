@@ -1319,6 +1319,7 @@ exec_map_stack(struct image_params *imgp)
 	stack_addr -= ssiz;
 	stack_prot = sv->sv_shared_page_obj != NULL && imgp->stack_prot != 0 ?
 	    imgp->stack_prot : sv->sv_stackprot;
+<<<<<<< HEAD
 	stackmaxprot = VM_PROT_ALL;
 #ifdef PAX_NOEXEC
 	PROC_LOCK(p);
@@ -1330,6 +1331,19 @@ exec_map_stack(struct image_params *imgp)
 		imgp->stack_sz = ssiz;
 	error = vm_map_stack(map, stack_addr, (vm_size_t)ssiz,
 	    stack_prot, stackmaxprot, MAP_STACK_GROWS_DOWN);
+=======
+	if ((map->flags & MAP_ASLR_STACK) != 0) {
+		stack_addr = round_page((vm_offset_t)p->p_vmspace->vm_daddr +
+		    lim_max(curthread, RLIMIT_DATA));
+		find_space = VMFS_ANY_SPACE;
+	} else {
+		stack_addr = sv->sv_usrstack - ssiz;
+		find_space = VMFS_NO_SPACE;
+	}
+	error = vm_map_find(map, NULL, 0, &stack_addr, (vm_size_t)ssiz,
+	    sv->sv_usrstack, find_space, stack_prot, VM_PROT_ALL,
+	    MAP_STACK_AREA);
+>>>>>>> internal/freebsd/current/main
 	if (error != KERN_SUCCESS) {
 #ifdef PAX_ASLR
 		pax_log_aslr(p, PAX_LOG_DEFAULT,
