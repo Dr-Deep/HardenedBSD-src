@@ -1328,8 +1328,9 @@ exec_map_stack(struct image_params *imgp)
 	imgp->stack_sz = lim_cur(curthread, RLIMIT_STACK);
 	if (ssiz < imgp->stack_sz)
 		imgp->stack_sz = ssiz;
-	error = vm_map_stack(map, stack_addr, (vm_size_t)ssiz,
-	    stack_prot, stackmaxprot, MAP_STACK_GROWS_DOWN);
+	error = vm_map_find(map, NULL, 0, &stack_addr, (vm_size_t)ssiz,
+	    sv->sv_usrstack, VMFS_ANY_SPACE, stack_prot, stackmaxprot,
+	    MAP_STACK_AREA);
 	if (error != KERN_SUCCESS) {
 #ifdef PAX_ASLR
 		pax_log_aslr(p, PAX_LOG_DEFAULT,
