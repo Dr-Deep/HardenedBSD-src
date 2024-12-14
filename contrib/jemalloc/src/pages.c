@@ -440,6 +440,13 @@ static bool
 os_overcommits_sysctl(void) {
 	int vm_overcommit;
 	size_t sz;
+<<<<<<< HEAD
+=======
+	int bsdflags;
+
+	if (_elf_aux_info(AT_BSDFLAGS, &bsdflags, sizeof(bsdflags)) == 0)
+		return ((bsdflags & ELF_BSDF_VMNOOVERCOMMIT) == 0);
+>>>>>>> origin/freebsd/current/main
 
 	sz = sizeof(vm_overcommit);
 #if defined(__FreeBSD__) && defined(VM_OVERCOMMIT)
@@ -456,7 +463,10 @@ os_overcommits_sysctl(void) {
 	}
 #endif
 
+<<<<<<< HEAD
 #ifdef SWAP_RESERVE_FORCE_ON
+=======
+>>>>>>> origin/freebsd/current/main
 	return ((vm_overcommit & (SWAP_RESERVE_FORCE_ON |
 	    SWAP_RESERVE_RLIMIT_ON)) == 0);
 #endif
