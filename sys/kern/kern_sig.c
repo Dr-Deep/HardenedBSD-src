@@ -3612,11 +3612,17 @@ sigexit(struct thread *td, int sig)
 	struct proc *p = td->td_proc;
 	const char *coreinfo;
 	int rv;
+	bool logexit;
 
 	PROC_LOCK_ASSERT(p, MA_OWNED);
 	proc_set_p2_wexit(p);
 
 	p->p_acflag |= AXSIG;
+	if ((p->p_flag2 & P2_LOGSIGEXIT_CTL) == 0)
+		logexit = kern_logsigexit != 0;
+	else
+		logexit = (p->p_flag2 & P2_LOGSIGEXIT_ENABLE) != 0;
+
 	/*
 	 * We must be single-threading to generate a core dump.  This
 	 * ensures that the registers in the core file are up-to-date.
@@ -3658,7 +3664,7 @@ sigexit(struct thread *td, int sig)
 #ifdef PAX_SEGVGUARD
 		pax_segvguard_segfault(curthread, p->p_comm);
 #endif
-		if (kern_logsigexit)
+		if (logexit)
 			pax_log_internal(p, PAX_LOG_DEFAULT,
 			    "%s (jid %d, uid %d) exited on "
 			    "signal %d%s", p->p_comm,
