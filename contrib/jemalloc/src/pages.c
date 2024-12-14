@@ -456,10 +456,8 @@ os_overcommits_sysctl(void) {
 	}
 #endif
 
-#ifdef SWAP_RESERVE_FORCE_ON
 	return ((vm_overcommit & (SWAP_RESERVE_FORCE_ON |
 	    SWAP_RESERVE_RLIMIT_ON)) == 0);
-#endif
 }
 #endif
 
