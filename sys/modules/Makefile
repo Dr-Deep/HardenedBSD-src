@@ -197,7 +197,6 @@ SUBDIR=	\
 	${_iwlwifi} \
 	${_iwlwififw} \
 	${_iwm} \
-	${_iwmfw} \
 	${_iwn} \
 	${_iwnfw} \
 	${_ix} \
@@ -799,7 +798,6 @@ _iwn=		iwn
 .if ${MK_SOURCELESS_UCODE} != "no"
 _ipwfw=		ipwfw
 _iwifw=		iwifw
-_iwmfw=		iwmfw
 _iwnfw=		iwnfw
 .endif
 _nfe=		nfe
