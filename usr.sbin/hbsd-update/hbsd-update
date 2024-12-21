@@ -82,6 +82,7 @@ PWD_MKDB="/usr/sbin/pwd_mkdb"
 SED="/usr/bin/sed"
 SHA256="/sbin/sha256"
 SHA512="/sbin/sha512"
+SYSCTL="/sbin/sysctl"
 TAIL="/usr/bin/tail"
 TAR="/usr/bin/tar"
 UNBOUND_HOST="/usr/sbin/unbound-host"
@@ -418,6 +419,15 @@ fetch_update() {
 	res=${?}
 	if [ ${res} -gt 0 ]; then
 		return ${res}
+	fi
+
+	return 0
+}
+
+check_securelevel() {
+	local securelevel="$(${SYSCTL} -n kern.securelevel)"
+	if [ "${securelevel}" -gt "0" ]; then
+    		return 1
 	fi
 
 	return 0
@@ -1334,6 +1344,14 @@ main() {
 
 	if [ -f ${tmpdir}/script.sh ]; then
 		. ${tmpdir}/script.sh
+	fi
+
+	check_securelevel
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		debug_print "[-] Error: System securelevel may not be higher than 0."
+		cleanup
+		exit 1
 	fi
 
 	pre_install_hook
