@@ -37,6 +37,7 @@
 #include "opt_capsicum.h"
 #include "opt_ktrace.h"
 #include "opt_pax.h"
+#include "opt_vm.h"
 
 #include <sys/param.h>
 #include <sys/capsicum.h>
@@ -85,13 +86,21 @@
 #include <sys/unistd.h>
 #include <sys/vmmeter.h>
 #include <sys/wait.h>
+#include <vm/pmap.h>
 #include <vm/vm.h>
 #include <vm/vm_extern.h>
+#include <vm/vm_map.h>
+#include <vm/vm_object.h>
+#include <vm/vm_page.h>
+#include <vm/vm_extern.h>
+#include <vm/vm_page.h>
 #include <vm/uma.h>
 
 #include <machine/cpu.h>
 
 #include <security/audit/audit.h>
+
+#define	CONTAINS_BITS(set, bits)	((~(set) & (bits)) == 0)
 
 #define	ONSIG	32		/* NSIG for osig* syscalls.  XXX. */
 
@@ -117,6 +126,7 @@ static int	filt_signal(struct knote *kn, long hint);
 static struct thread *sigtd(struct proc *p, int sig, bool fast_sigblock);
 static void	sigqueue_start(void);
 static void	sigfastblock_setpend(struct thread *td, bool resched);
+static bool	stack_address_grows_down(struct proc *, vm_offset_t);
 
 static uma_zone_t	ksiginfo_zone = NULL;
 const struct filterops sig_filtops = {
@@ -1775,6 +1785,10 @@ kern_sigaltstack(struct thread *td, stack_t *ss, stack_t *oss)
 		if ((ss->ss_flags & ~SS_DISABLE) != 0)
 			return (EINVAL);
 		if (!(ss->ss_flags & SS_DISABLE)) {
+			if (!stack_address_grows_down(p,
+			    (vm_offset_t)ss->ss_sp + ss->ss_size)) {
+				return (EFAULT);
+			}
 			if (ss->ss_size < p->p_sysent->sv_minsigstksz)
 				return (ENOMEM);
 
@@ -1785,6 +1799,29 @@ kern_sigaltstack(struct thread *td, stack_t *ss, stack_t *oss)
 		}
 	}
 	return (0);
+}
+
+static bool
+stack_address_grows_down(struct proc *p, vm_offset_t addr)
+{
+	vm_map_entry_t entry;
+	bool res;
+
+	if (p == NULL) {
+		return (false);
+	}
+
+	res = false;
+	vm_map_lock(&p->p_vmspace->vm_map);
+	if (!vm_map_lookup_entry(&p->p_vmspace->vm_map, addr, &entry)) {
+		goto end;
+	}
+
+	res = CONTAINS_BITS(entry->eflags, MAP_ENTRY_GROWS_DOWN);
+
+end:
+	vm_map_unlock(&p->p_vmspace->vm_map);
+	return (res);
 }
 
 struct killpg1_ctx {
