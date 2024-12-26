@@ -152,6 +152,13 @@ LDFLAGS+=	-flto
 CFLAGS+=	-mspeculative-load-hardening
 .endif
 
+.if defined(MK_ZERO_REGS) && ${MK_ZERO_REGS} != "no"
+ZERO_REG_TYPE?=	all
+ZERO_REG_FLAG?=	-fzero-call-used-regs=${ZERO_REG_TYPE}
+CFLAGS+=	${ZERO_REG_FLAG}
+CXXFLAGS+=	${ZERO_REG_FLAG}
+.endif
+
 .if defined(MK_CPP_HARDENING) && ${MK_CPP_HARDENING} != "no"
 CPP_HARDENING_FLAG?=	_LIBCPP_HARDENING_MODE_EXTENSIVE
 CXXFLAGS+=	-D_LIBCPP_HARDENING_MODE=${CPP_HARDENING_FLAG}
