@@ -126,7 +126,9 @@ static int	filt_signal(struct knote *kn, long hint);
 static struct thread *sigtd(struct proc *p, int sig, bool fast_sigblock);
 static void	sigqueue_start(void);
 static void	sigfastblock_setpend(struct thread *td, bool resched);
+#ifdef HBSD_EXPERIMENTAL
 static bool	stack_address_grows_down(struct proc *, vm_offset_t);
+#endif
 
 static uma_zone_t	ksiginfo_zone = NULL;
 const struct filterops sig_filtops = {
@@ -1785,10 +1787,12 @@ kern_sigaltstack(struct thread *td, stack_t *ss, stack_t *oss)
 		if ((ss->ss_flags & ~SS_DISABLE) != 0)
 			return (EINVAL);
 		if (!(ss->ss_flags & SS_DISABLE)) {
+#ifdef HBSD_EXPERIMENTAL
 			if (!stack_address_grows_down(p,
 			    (vm_offset_t)ss->ss_sp + ss->ss_size)) {
 				return (EFAULT);
 			}
+#endif
 			if (ss->ss_size < p->p_sysent->sv_minsigstksz)
 				return (ENOMEM);
 
@@ -1801,6 +1805,7 @@ kern_sigaltstack(struct thread *td, stack_t *ss, stack_t *oss)
 	return (0);
 }
 
+#ifdef HBSD_EXPERIMENTAL
 static bool
 stack_address_grows_down(struct proc *p, vm_offset_t addr)
 {
@@ -1823,6 +1828,7 @@ end:
 	vm_map_unlock(&p->p_vmspace->vm_map);
 	return (res);
 }
+#endif
 
 struct killpg1_ctx {
 	struct thread *td;
