@@ -76,7 +76,11 @@ FLUALIB?=	${SRCTOP}/libexec/flua
 
 MK_SAFESTACK=	no
 MK_CFI=		no
+<<<<<<< HEAD
 MK_CROSS_DSO_CFI=	no
+=======
+MK_ZERO_REGS=	no
+>>>>>>> internal/hardened/current/master
 
 LIBSA=		${BOOTOBJ}/libsa/libsa.a
 .if ${MACHINE} == "i386"

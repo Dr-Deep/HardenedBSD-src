@@ -1,7 +1,10 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * Copyright (C) 1992-2025 The FreeBSD Project. All rights reserved.
+ * Copyright (c) 2009-2013 The FreeBSD Foundation
+ *
+ * This software was developed by Pawel Jakub Dawidek under sponsorship from
+ * the FreeBSD Foundation.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -12,10 +15,10 @@
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHORS AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHORS OR CONTRIBUTORS BE LIABLE
  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
  * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
@@ -25,28 +28,18 @@
  * SUCH DAMAGE.
  */
 
-/* Copyrights macros  */
+#ifndef	__NV_H_
+#define	__NV_H_
 
-/* Add a FreeBSD vendor copyright here - or via CFLAGS */
-#ifndef COPYRIGHT_Vendor
-#define	COPYRIGHT_Vendor \
-	""
+#ifndef _KERNEL
+#include <sys/nv_namespace.h>
 #endif
 
-#define COPYRIGHT_HardenedBSD \
-	"Copyright (c) 2013-2024 The HardenedBSD Project.\n"
+#ifndef	_NVLIST_T_DECLARED
+#define	_NVLIST_T_DECLARED
+struct nvlist;
 
-/* FreeBSD */
-#define COPYRIGHT_FreeBSD \
-	"Copyright (c) 1992-2025 The FreeBSD Project.\n"
+typedef struct nvlist nvlist_t;
+#endif
 
-/* Foundation */
-#define	TRADEMARK_Foundation \
-	"FreeBSD is a registered trademark of The FreeBSD Foundation.\n"
-
-/* Berkeley */
-#define COPYRIGHT_UCB \
-	"Copyright (c) 1979, 1980, 1983, 1986, 1988, 1989, 1991, 1992, 1993, 1994\n\tThe Regents of the University of California. All rights reserved.\n"
-
-const char copyright[] = COPYRIGHT_Vendor COPYRIGHT_HardenedBSD COPYRIGHT_FreeBSD COPYRIGHT_UCB;
-const char trademark[] = TRADEMARK_Foundation;
+#endif	/* !__NV_H_ */

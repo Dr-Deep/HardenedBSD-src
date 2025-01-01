@@ -642,6 +642,7 @@ rack_swap_beta_values(struct tcp_rack *rack, uint8_t flex8)
 		failed = 2;
 		goto out;
 	}
+	old.newreno_flags = CC_NEWRENO_BETA_ECN_ENABLED;
 	/* Get the current values out */
 	sopt.sopt_valsize = sizeof(struct cc_newreno_opts);
 	sopt.sopt_dir = SOPT_GET;
@@ -22444,6 +22445,7 @@ nomore:
 			return (error);
 		case ENETUNREACH:
 			counter_u64_add(rack_saw_enetunreach, 1);
+			/* FALLTHROUGH */
 		case EHOSTDOWN:
 		case EHOSTUNREACH:
 		case ENETDOWN:
@@ -22978,7 +22980,7 @@ rack_process_option(struct tcpcb *tp, struct tcp_rack *rack, int sopt_name,
 
 	switch (sopt_name) {
 	case TCP_RACK_SET_RXT_OPTIONS:
-		if ((optval >= 0) && (optval <= 2)) {
+		if (optval <= 2) {
 			rack_init_retransmit_value(rack, optval);
 		} else {
 			/*
