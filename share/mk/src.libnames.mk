@@ -44,6 +44,7 @@ _INTERNALLIBS=	\
 		bsnmptools \
 		c_nossp_pic \
 		cron \
+		der \
 		diff \
 		elftc \
 		fdt \
@@ -63,6 +64,7 @@ _INTERNALLIBS=	\
 		parse \
 		pe \
 		pfctl \
+		pkgecc \
 		pmcstat \
 		sl \
 		sm \
@@ -618,6 +620,9 @@ LIBTELNET?=	${LIBTELNETDIR}/libtelnet.a
 LIBCRONDIR=	${_LIB_OBJTOP}/usr.sbin/cron/lib
 LIBCRON?=	${LIBCRONDIR}/libcron.a
 
+LIBDERDIR=	${_LIB_OBJTOP}/lib/libder
+LIBDER?=	${LIBDERDIR}/libder${PIE_SUFFIX}.a
+
 LIBNTPDIR=	${_LIB_OBJTOP}/usr.sbin/ntp/libntp
 LIBNTP?=	${LIBNTPDIR}/libntp.a
 
@@ -646,6 +651,9 @@ LIBBE?=		${LIBBEDIR}/libbe.a
 
 LIBLATTZFSDIR=	${_LIB_OBJTOP}/lib/liblattzfs
 LIBLATTZFS?=	${LIBLATTZFSDIR}/liblattzfs.a
+
+LIBPKGECCDIR=	${_LIB_OBJTOP}/secure/lib/libpkgecc
+LIBPKGECC?=	${LIBPKGECCDIR}/libpkgecc${PIE_SUFFIX}.a
 
 LIBPMCSTATDIR=	${_LIB_OBJTOP}/lib/libpmcstat
 LIBPMCSTAT?=	${LIBPMCSTATDIR}/libpmcstat.a
