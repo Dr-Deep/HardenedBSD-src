@@ -13,7 +13,8 @@ FILES=	\
 	${_BSD.sendmail.dist} \
 	${_BSD.tests.dist} \
 	BSD.usr.dist \
-	BSD.var.dist
+	BSD.var.dist \
+	BSD.hardened.dist
 
 .for LIBCOMPAT libcompat in ${_ALL_LIBCOMPATS_libcompats}
 .if ${MK_LIB${LIBCOMPAT}} != "no"
