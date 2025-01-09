@@ -482,13 +482,8 @@ logodefs = {
 	},
 }
 
-<<<<<<< HEAD
 brand_position = {x = 7, y = 1}
 logo_position = {x = 46, y = 4}
-=======
-brand_position = {x = 2, y = 1}
-logo_position = {x = 40, y = 10}
->>>>>>> internal/freebsd/current/main
 menu_position = {x = 5, y = 10}
 frame_size = {w = 39, h = 14}
 default_shift = {x = 0, y = 0}
