@@ -103,26 +103,6 @@ map_object(int fd, const char *path, const struct stat *sb)
 	if (hdr == NULL)
 		return (NULL);
 
-<<<<<<< HEAD
-    /*
-     * Scan the program header entries, and save key information.
-     * We expect that the loadable segments are ordered by load address.
-     */
-    phsize  = hdr->e_phnum * sizeof(phdr[0]);
-    phlimit = phdr + hdr->e_phnum;
-    nsegs = -1;
-    phdyn = phinterp = phtls = NULL;
-    phdr_vaddr = 0;
-    note_start = 0;
-    note_end = 0;
-    note_map = NULL;
-    note_map_len = 0;
-    segs = alloca(sizeof(segs[0]) * hdr->e_phnum);
-    stack_flags = PF_R | PF_W;
-    text_end = 0;
-    while (phdr < phlimit) {
-	switch (phdr->p_type) {
-=======
 	/*
 	 * Scan the program header entries, and save key information.
 	 * We expect that the loadable segments are ordered by load address.
@@ -137,14 +117,13 @@ map_object(int fd, const char *path, const struct stat *sb)
 	note_map = NULL;
 	note_map_len = 0;
 	segs = alloca(sizeof(segs[0]) * hdr->e_phnum);
-	stack_flags = PF_X | PF_R | PF_W;
+	stack_flags = PF_R | PF_W;
 	text_end = 0;
 	while (phdr < phlimit) {
 		switch (phdr->p_type) {
 		case PT_INTERP:
 			phinterp = phdr;
 			break;
->>>>>>> origin/freebsd/current/main
 
 		case PT_LOAD:
 			segs[++nsegs] = phdr;
@@ -175,7 +154,7 @@ map_object(int fd, const char *path, const struct stat *sb)
 			break;
 
 		case PT_GNU_STACK:
-			stack_flags = phdr->p_flags;
+			stack_flags = phdr->p_flags & ~(PF_X);
 			break;
 
 		case PT_NOTE:

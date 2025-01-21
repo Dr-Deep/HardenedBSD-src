@@ -41,13 +41,10 @@
 #include <sys/param.h>
 #include <sys/ktrace.h>
 #include <sys/mman.h>
-<<<<<<< HEAD
+#include <sys/mount.h>
 #ifdef HARDENEDBSD
 #include <sys/pax.h>
 #endif
-=======
-#include <sys/mount.h>
->>>>>>> origin/freebsd/current/main
 #include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <sys/uio.h>
@@ -76,8 +73,7 @@
 
 /* Types. */
 typedef void (*func_ptr_type)(void);
-<<<<<<< HEAD
-typedef void * (*path_enum_proc) (const char *path, size_t len, void *arg);
+typedef void *(*path_enum_proc)(const char *path, size_t len, void *arg);
 
 #ifdef HARDENEDBSD
 struct integriforce_so_check {
@@ -85,9 +81,6 @@ struct integriforce_so_check {
 	int	 isc_result;
 };
 #endif
-=======
-typedef void *(*path_enum_proc)(const char *path, size_t len, void *arg);
->>>>>>> origin/freebsd/current/main
 
 /* Variables that cannot be static: */
 extern struct r_debug r_debug; /* For GDB */
@@ -251,26 +244,17 @@ static unsigned int obj_loads;	    /* Number of loads of objects (gen count) */
 size_t ld_static_tls_extra =	    /* Static TLS extra space (bytes) */
     RTLD_STATIC_TLS_EXTRA;
 
-<<<<<<< HEAD
 #ifdef HARDENEDBSD
 static Elf_Word pax_flags = 0;	/* PaX / HardenedBSD flags */
 static bool harden_rtld = true;
 #endif
 
-static Objlist list_global =	/* Objects dlopened with RTLD_GLOBAL */
-  STAILQ_HEAD_INITIALIZER(list_global);
-static Objlist list_main =	/* Objects loaded at program startup */
-  STAILQ_HEAD_INITIALIZER(list_main);
-static Objlist list_fini =	/* Objects needing fini() calls */
-  STAILQ_HEAD_INITIALIZER(list_fini);
-=======
 static Objlist list_global = /* Objects dlopened with RTLD_GLOBAL */
     STAILQ_HEAD_INITIALIZER(list_global);
 static Objlist list_main = /* Objects loaded at program startup */
     STAILQ_HEAD_INITIALIZER(list_main);
 static Objlist list_fini = /* Objects needing fini() calls */
     STAILQ_HEAD_INITIALIZER(list_fini);
->>>>>>> origin/freebsd/current/main
 
 Elf_Sym sym_zero; /* For resolving undefined weak refs. */
 
@@ -587,167 +571,21 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 		;
 	aux = (Elf_Auxinfo *)sp;
 
-<<<<<<< HEAD
-    /* Digest the auxiliary vector. */
-    for (i = 0;  i < AT_COUNT;  i++)
-	aux_info[i] = NULL;
-    for (auxp = aux;  auxp->a_type != AT_NULL;  auxp++) {
-	if (auxp->a_type < AT_COUNT)
-	    aux_info[auxp->a_type] = auxp;
-#ifdef __powerpc__
-	if (auxp->a_type == 23) /* AT_STACKPROT */
-	    old_auxv_format = 0;
-#endif
-    }
-
-#ifdef __powerpc__
-    if (old_auxv_format) {
-	/* Remap from old-style auxv numbers. */
-	aux_info[23] = aux_info[21];	/* AT_STACKPROT */
-	aux_info[21] = aux_info[19];	/* AT_PAGESIZESLEN */
-	aux_info[19] = aux_info[17];	/* AT_NCPUS */
-	aux_info[17] = aux_info[15];	/* AT_CANARYLEN */
-	aux_info[15] = aux_info[13];	/* AT_EXECPATH */
-	aux_info[13] = NULL;		/* AT_GID */
-
-	aux_info[20] = aux_info[18];	/* AT_PAGESIZES */
-	aux_info[18] = aux_info[16];	/* AT_OSRELDATE */
-	aux_info[16] = aux_info[14];	/* AT_CANARY */
-	aux_info[14] = NULL;		/* AT_EGID */
-    }
-#endif
-
-    /* Initialize and relocate ourselves. */
-    assert(aux_info[AT_BASE] != NULL);
-    init_rtld((caddr_t) aux_info[AT_BASE]->a_un.a_ptr, aux_info);
-
-    dlerror_dflt_init();
-
-    __progname = obj_rtld.path;
-    argv0 = argv[0] != NULL ? argv[0] : "(null)";
-    environ = env;
-    main_argc = argc;
-    main_argv = argv;
-
-    if (aux_info[AT_BSDFLAGS] != NULL &&
-	(aux_info[AT_BSDFLAGS]->a_un.a_val & ELF_BSDF_SIGFASTBLK) != 0)
-	    ld_fast_sigblock = true;
 
 #ifdef HARDENEDBSD
-    /* Load PaX flags */
-    if (aux_info[AT_PAXFLAGS] != NULL) {
-        pax_flags = aux_info[AT_PAXFLAGS]->a_un.a_val;
-        aux_info[AT_PAXFLAGS]->a_un.a_val = 0;
-    }
+	/* Load PaX flags */
+	if (aux_info[AT_PAXFLAGS] != NULL) {
+		pax_flags = aux_info[AT_PAXFLAGS]->a_un.a_val;
+		aux_info[AT_PAXFLAGS]->a_un.a_val = 0;
+	}
 
-    cache_harden_rtld();
+	cache_harden_rtld();
 #endif
-
-    trust = !issetugid();
-    direct_exec = false;
-
-#ifdef HARDENEDBSD
-    if (trust && harden_rtld) {
-	    trust = false;
-    }
-#endif
-
-    md_abi_variant_hook(aux_info);
-    rtld_init_env_vars(env);
-
-    fd = -1;
-    if (aux_info[AT_EXECFD] != NULL) {
-	fd = aux_info[AT_EXECFD]->a_un.a_val;
-    } else {
-	assert(aux_info[AT_PHDR] != NULL);
-	phdr = (const Elf_Phdr *)aux_info[AT_PHDR]->a_un.a_ptr;
-	if (phdr == obj_rtld.phdr) {
-	    if (!trust) {
-		_rtld_error("Tainted process refusing to run binary %s",
-		    argv0);
-		rtld_die();
-	    }
-	    direct_exec = true;
-
-	    dbg("opening main program in direct exec mode");
-	    if (argc >= 2) {
-		rtld_argc = parse_args(argv, argc, &search_in_path, &fd,
-		  &argv0, &dir_ignore);
-		explicit_fd = (fd != -1);
-		binpath = NULL;
-		if (!explicit_fd)
-		    fd = open_binary_fd(argv0, search_in_path, &binpath);
-		if (fstat(fd, &st) == -1) {
-		    _rtld_error("Failed to fstat FD %d (%s): %s", fd,
-		      explicit_fd ? "user-provided descriptor" : argv0,
-		      rtld_strerror(errno));
-		    rtld_die();
-		}
-
-		/*
-		 * Rough emulation of the permission checks done by
-		 * execve(2), only Unix DACs are checked, ACLs are
-		 * ignored.  Preserve the semantic of disabling owner
-		 * to execute if owner x bit is cleared, even if
-		 * others x bit is enabled.
-		 * mmap(2) does not allow to mmap with PROT_EXEC if
-		 * binary' file comes from noexec mount.  We cannot
-		 * set a text reference on the binary.
-		 */
-		dir_enable = false;
-		if (st.st_uid == geteuid()) {
-		    if ((st.st_mode & S_IXUSR) != 0)
-			dir_enable = true;
-		} else if (st.st_gid == getegid()) {
-		    if ((st.st_mode & S_IXGRP) != 0)
-			dir_enable = true;
-		} else if ((st.st_mode & S_IXOTH) != 0) {
-		    dir_enable = true;
-		}
-		if (!dir_enable && !dir_ignore) {
-		    _rtld_error("No execute permission for binary %s",
-		        argv0);
-		    rtld_die();
-		}
-
-		/*
-		 * For direct exec mode, argv[0] is the interpreter
-		 * name, we must remove it and shift arguments left
-		 * before invoking binary main.  Since stack layout
-		 * places environment pointers and aux vectors right
-		 * after the terminating NULL, we must shift
-		 * environment and aux as well.
-		 */
-		main_argc = argc - rtld_argc;
-		for (i = 0; i <= main_argc; i++)
-		    argv[i] = argv[i + rtld_argc];
-		*argcp -= rtld_argc;
-		environ = env = envp = argv + main_argc + 1;
-		dbg("move env from %p to %p", envp + rtld_argc, envp);
-		do {
-		    *envp = *(envp + rtld_argc);
-		}  while (*envp++ != NULL);
-		aux = auxp = (Elf_Auxinfo *)envp;
-		auxpf = (Elf_Auxinfo *)(envp + rtld_argc);
-		dbg("move aux from %p to %p", auxpf, aux);
-		/* XXXKIB insert place for AT_EXECPATH if not present */
-		for (;; auxp++, auxpf++) {
-		    *auxp = *auxpf;
-		    if (auxp->a_type == AT_NULL)
-			    break;
-		}
-		/* Since the auxiliary vector has moved, redigest it. */
-		for (i = 0;  i < AT_COUNT;  i++)
-		    aux_info[i] = NULL;
-		for (auxp = aux;  auxp->a_type != AT_NULL;  auxp++) {
-		    if (auxp->a_type < AT_COUNT)
-=======
 	/* Digest the auxiliary vector. */
 	for (i = 0; i < AT_COUNT; i++)
 		aux_info[i] = NULL;
 	for (auxp = aux; auxp->a_type != AT_NULL; auxp++) {
 		if (auxp->a_type < AT_COUNT)
->>>>>>> origin/freebsd/current/main
 			aux_info[auxp->a_type] = auxp;
 #ifdef __powerpc__
 		if (auxp->a_type == 23) /* AT_STACKPROT */
@@ -776,23 +614,13 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 	assert(aux_info[AT_BASE] != NULL);
 	init_rtld((caddr_t)aux_info[AT_BASE]->a_un.a_ptr, aux_info);
 
-<<<<<<< HEAD
 #ifdef HARDENEDBSD
-    if (harden_rtld) {
-        dangerous_ld_env = harden_rtld;
-    }
+	if (harden_rtld) {
+		dangerous_ld_env = harden_rtld;
+	}
 #endif
 
-    set_ld_elf_hints_path();
-    if (ld_debug != NULL && *ld_debug != '\0')
-	debug = 1;
-    dbg("%s is initialized, base address = %p", __progname,
-	(caddr_t) aux_info[AT_BASE]->a_un.a_ptr);
-    dbg("RTLD dynamic = %p", obj_rtld.dynamic);
-    dbg("RTLD pltgot  = %p", obj_rtld.pltgot);
-=======
 	dlerror_dflt_init();
->>>>>>> origin/freebsd/current/main
 
 	__progname = obj_rtld.path;
 	argv0 = argv[0] != NULL ? argv[0] : "(null)";
@@ -800,65 +628,19 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 	main_argc = argc;
 	main_argv = argv;
 
-<<<<<<< HEAD
-    if (aux_info[AT_STACKPROT] != NULL &&
-      aux_info[AT_STACKPROT]->a_un.a_val != 0)
-	    stack_prot = aux_info[AT_STACKPROT]->a_un.a_val;
-
-    /*
-     * Load the main program, or process its program header if it is
-     * already loaded.
-     */
-    if (fd != -1) {	/* Load the main program. */
-	dbg("loading main program");
-	obj_main = map_object(fd, argv0, NULL);
-	close(fd);
-	if (obj_main == NULL)
-	    rtld_die();
-	max_stack_flags = obj_main->stack_flags;
-	if ((max_stack_flags & PF_X) == PF_X)
-	    if ((stack_prot & PROT_EXEC) == 0)
-	        max_stack_flags &= ~(PF_X);
-    } else {				/* Main program already loaded. */
-	dbg("processing main program's program header");
-	assert(aux_info[AT_PHDR] != NULL);
-	phdr = (const Elf_Phdr *) aux_info[AT_PHDR]->a_un.a_ptr;
-	assert(aux_info[AT_PHNUM] != NULL);
-	phnum = aux_info[AT_PHNUM]->a_un.a_val;
-	assert(aux_info[AT_PHENT] != NULL);
-	assert(aux_info[AT_PHENT]->a_un.a_val == sizeof(Elf_Phdr));
-	assert(aux_info[AT_ENTRY] != NULL);
-	imgentry = (caddr_t) aux_info[AT_ENTRY]->a_un.a_ptr;
-	if ((obj_main = digest_phdr(phdr, phnum, imgentry, argv0)) == NULL)
-	    rtld_die();
-    }
-=======
 	if (aux_info[AT_BSDFLAGS] != NULL &&
 	    (aux_info[AT_BSDFLAGS]->a_un.a_val & ELF_BSDF_SIGFASTBLK) != 0)
 		ld_fast_sigblock = true;
->>>>>>> origin/freebsd/current/main
 
 	trust = !issetugid();
 	direct_exec = false;
 
-<<<<<<< HEAD
-#ifndef COMPAT_libcompat
-    if (aux_info[AT_STACKPROT] != NULL &&
-      aux_info[AT_STACKPROT]->a_un.a_val != 0)
-	    stack_prot = aux_info[AT_STACKPROT]->a_un.a_val;
-    /*
-     * Get the actual dynamic linker pathname from the executable if
-     * possible.  (It should always be possible.)  That ensures that
-     * gdb will find the right dynamic linker even if a non-standard
-     * one is being used.
-     */
-    if (obj_main->interp != NULL &&
-      strcmp(obj_main->interp, obj_rtld.path) != 0) {
-	free(obj_rtld.path);
-	obj_rtld.path = xstrdup(obj_main->interp);
-        __progname = obj_rtld.path;
-    }
-=======
+#ifdef HARDENEDBSD
+	if (trust && harden_rtld) {
+		trust = false;
+	}
+#endif
+
 	md_abi_variant_hook(aux_info);
 	rtld_init_env_vars(env);
 
@@ -1106,7 +888,6 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 		obj_rtld.path = xstrdup(obj_main->interp);
 		__progname = obj_rtld.path;
 	}
->>>>>>> origin/freebsd/current/main
 #endif
 
 	if (!digest_dynamic(obj_main, 0))
@@ -1540,17 +1321,6 @@ static void
 digest_dynamic1(Obj_Entry *obj, int early, const Elf_Dyn **dyn_rpath,
     const Elf_Dyn **dyn_soname, const Elf_Dyn **dyn_runpath)
 {
-<<<<<<< HEAD
-    const Elf_Dyn *dynp;
-    Needed_Entry **needed_tail = &obj->needed;
-    Needed_Entry **needed_filtees_tail = &obj->needed_filtees;
-    Needed_Entry **needed_aux_filtees_tail = &obj->needed_aux_filtees;
-    const Elf_Hashelt *hashtab;
-    const Elf32_Word *hashval;
-    Elf32_Word bkt, nmaskwords;
-    unsigned int bloom_size32;
-    int plttype = DT_REL;
-=======
 	const Elf_Dyn *dynp;
 	Needed_Entry **needed_tail = &obj->needed;
 	Needed_Entry **needed_filtees_tail = &obj->needed_filtees;
@@ -1560,7 +1330,6 @@ digest_dynamic1(Obj_Entry *obj, int early, const Elf_Dyn **dyn_rpath,
 	Elf32_Word bkt, nmaskwords;
 	int bloom_size32;
 	int plttype = DT_REL;
->>>>>>> origin/freebsd/current/main
 
 	*dyn_rpath = NULL;
 	*dyn_soname = NULL;
@@ -1950,64 +1719,13 @@ digest_phdr(const Elf_Phdr *phdr, int phnum, caddr_t entry, const char *path)
 		if (ph->p_type != PT_PHDR)
 			continue;
 
-<<<<<<< HEAD
-	obj->phdr = phdr;
-	obj->phsize = ph->p_memsz;
-	obj->relocbase = __DECONST(char *, phdr) - ph->p_vaddr;
-	break;
-    }
-
-    obj->stack_flags = PF_R | PF_W;
-
-    for (ph = phdr;  ph < phlimit;  ph++) {
-	switch (ph->p_type) {
-
-	case PT_INTERP:
-	    obj->interp = (const char *)(ph->p_vaddr + obj->relocbase);
-	    break;
-
-	case PT_LOAD:
-	    if (nsegs == 0) {	/* First load segment */
-		obj->vaddrbase = rtld_trunc_page(ph->p_vaddr);
-		obj->mapbase = obj->vaddrbase + obj->relocbase;
-	    } else {		/* Last load segment */
-		obj->mapsize = rtld_round_page(ph->p_vaddr + ph->p_memsz) -
-		  obj->vaddrbase;
-	    }
-	    nsegs++;
-	    break;
-
-	case PT_DYNAMIC:
-	    obj->dynamic = (const Elf_Dyn *)(ph->p_vaddr + obj->relocbase);
-	    break;
-
-	case PT_TLS:
-	    obj->tlsindex = 1;
-	    obj->tlssize = ph->p_memsz;
-	    obj->tlsalign = ph->p_align;
-	    obj->tlsinitsize = ph->p_filesz;
-	    obj->tlsinit = (void*)(ph->p_vaddr + obj->relocbase);
-	    obj->tlspoffset = ph->p_offset;
-	    break;
-
-	case PT_GNU_STACK:
-	    obj->stack_flags = ph->p_flags;
-	    break;
-
-	case PT_NOTE:
-	    note_start = (Elf_Addr)obj->relocbase + ph->p_vaddr;
-	    note_end = note_start + ph->p_filesz;
-	    digest_notes(obj, note_start, note_end);
-	    break;
-=======
 		obj->phdr = phdr;
 		obj->phsize = ph->p_memsz;
 		obj->relocbase = __DECONST(char *, phdr) - ph->p_vaddr;
 		break;
->>>>>>> origin/freebsd/current/main
 	}
 
-	obj->stack_flags = PF_X | PF_R | PF_W;
+	obj->stack_flags = PF_R | PF_W;
 
 	for (ph = phdr; ph < phlimit; ph++) {
 		switch (ph->p_type) {
@@ -2740,14 +2458,9 @@ parse_rtld_phdr(Obj_Entry *obj)
 	obj->stack_flags = PF_R | PF_W;
 #else
 	obj->stack_flags = PF_X | PF_R | PF_W;
-<<<<<<< HEAD
 #endif
-	for (ph = obj->phdr;  (const char *)ph < (const char *)obj->phdr +
-	    obj->phsize; ph++) {
-=======
 	for (ph = obj->phdr;
 	    (const char *)ph < (const char *)obj->phdr + obj->phsize; ph++) {
->>>>>>> origin/freebsd/current/main
 		switch (ph->p_type) {
 		case PT_GNU_STACK:
 			obj->stack_flags = ph->p_flags;
@@ -3072,28 +2785,20 @@ load_needed_objects(Obj_Entry *first, int flags)
 {
 	Obj_Entry *obj;
 
-<<<<<<< HEAD
-    for (obj = first; obj != NULL; obj = TAILQ_NEXT(obj, next)) {
-	if (obj->marker)
-	    continue;
-#if defined(HARDENEDBSD) && defined(SHLIBRANDOM)
-        if ((pax_flags & (PAX_HARDENING_NOSHLIBRANDOM | PAX_HARDENING_SHLIBRANDOM)) !=
-	  PAX_HARDENING_NOSHLIBRANDOM)
-            randomize_neededs(obj, flags);
-#endif
-	if (process_needed(obj, obj->needed, flags) == -1)
-	    return (-1);
-    }
-    return (0);
-=======
 	for (obj = first; obj != NULL; obj = TAILQ_NEXT(obj, next)) {
 		if (obj->marker)
 			continue;
+#if defined(HARDENEDBSD) && defined(SHLIBRANDOM)
+		if ((pax_flags &
+		    (PAX_HARDENING_NOSHLIBRANDOM | PAX_HARDENING_SHLIBRANDOM)) !=
+		    PAX_HARDENING_NOSHLIBRANDOM) {
+			randomize_neededs(obj, flags);
+		}
+#endif
 		if (process_needed(obj, obj->needed, flags) == -1)
 			return (-1);
 	}
 	return (0);
->>>>>>> origin/freebsd/current/main
 }
 
 static int
@@ -3254,47 +2959,13 @@ static Obj_Entry *
 do_load_object(int fd, const char *name, char *path, struct stat *sbp,
     int flags)
 {
-<<<<<<< HEAD
-    Obj_Entry *obj;
-    struct statfs fs;
-#ifdef HARDENEDBSD
-    struct integriforce_so_check check;
-    int res, err;
-    size_t sz;
-#endif
-
-    /*
-     * First, make sure that environment variables haven't been
-     * used to circumvent the noexec flag on a filesystem.
-     * We ignore fstatfs(2) failures, since fd might reference
-     * not a file, e.g. shmfd.
-     */
-    if (dangerous_ld_env && fstatfs(fd, &fs) == 0 &&
-	(fs.f_flags & MNT_NOEXEC) != 0) {
-	    _rtld_error("Cannot execute objects on %s", fs.f_mntonname);
-	    return (NULL);
-    }
-#ifdef HARDENEDBSD
-    if (path != NULL) {
-	    sz = sizeof(int);
-	    err = sysctlbyname("kern.features.integriforce",
-		&res, &sz, NULL, 0);
-	    if (err == 0 && res == 1) {
-		    strlcpy(check.isc_path, path, MAXPATHLEN);
-		    check.isc_result = 0;
-		    sz = sizeof(struct integriforce_so_check);
-		    err = sysctlbyname("hardening.secadm.integriforce_so",
-			&check, &sz, &check, sizeof(struct integriforce_so_check));
-		    if (err == 0 && check.isc_result != 0) {
-			    _rtld_error("Integriforce validation failed on %s. Aborting.\n", path);
-			    return (NULL);
-		    }
-	    }
-    }
-#endif
-=======
 	Obj_Entry *obj;
 	struct statfs fs;
+#ifdef HARDENEDBSD
+	struct integriforce_so_check check;
+	int res, err;
+	size_t sz;
+#endif
 
 	/*
 	 * First, make sure that environment variables haven't been
@@ -3307,7 +2978,24 @@ do_load_object(int fd, const char *name, char *path, struct stat *sbp,
 		_rtld_error("Cannot execute objects on %s", fs.f_mntonname);
 		return (NULL);
 	}
->>>>>>> origin/freebsd/current/main
+#ifdef HARDENEDBSD
+	if (path != NULL) {
+		sz = sizeof(int);
+		err = sysctlbyname("kern.features.integriforce",
+			&res, &sz, NULL, 0);
+		if (err == 0 && res == 1) {
+			strlcpy(check.isc_path, path, MAXPATHLEN);
+			check.isc_result = 0;
+			sz = sizeof(struct integriforce_so_check);
+			err = sysctlbyname("hardening.secadm.integriforce_so",
+				&check, &sz, &check, sizeof(struct integriforce_so_check));
+			if (err == 0 && check.isc_result != 0) {
+				_rtld_error("Integriforce validation failed on %s. Aborting.\n", path);
+				return (NULL);
+			}
+		}
+	}
+#endif
 
 	dbg("loading \"%s\"", printable_path(path));
 	obj = map_object(fd, printable_path(path), sbp);
@@ -3337,24 +3025,13 @@ do_load_object(int fd, const char *name, char *path, struct stat *sbp,
 		goto errp;
 	}
 
-<<<<<<< HEAD
-    obj->dlopened = (flags & RTLD_LO_DLOPEN) != 0;
-    TAILQ_INSERT_TAIL(&obj_list, obj, next);
-    obj_count++;
-    obj_loads++;
-    linkmap_add(obj);	/* for GDB & dlinfo() */
-    max_stack_flags |= obj->stack_flags;
-    if ((max_stack_flags & PF_X) == PF_X)
-        if ((stack_prot & PROT_EXEC) == 0)
-            max_stack_flags &= ~(PF_X);
-=======
 	obj->dlopened = (flags & RTLD_LO_DLOPEN) != 0;
 	TAILQ_INSERT_TAIL(&obj_list, obj, next);
 	obj_count++;
 	obj_loads++;
 	linkmap_add(obj); /* for GDB & dlinfo() */
 	max_stack_flags |= obj->stack_flags;
->>>>>>> origin/freebsd/current/main
+	max_stack_flags &= ~(PF_X);
 
 	dbg("  %p .. %p: %s", obj->mapbase, obj->mapbase + obj->mapsize - 1,
 	    obj->path);
@@ -4222,9 +3899,8 @@ fdlopen(int fd, int mode)
 static void *
 rtld_dlopen(const char *name, int fd, int mode)
 {
-<<<<<<< HEAD
-    RtldLockState lockstate;
-    int lo_flags;
+	RtldLockState lockstate;
+	int lo_flags;
 #ifdef HARDENEDBSD
 	struct statfs sbuf;
 
@@ -4242,10 +3918,6 @@ rtld_dlopen(const char *name, int fd, int mode)
 		}
 	}
 #endif
-=======
-	RtldLockState lockstate;
-	int lo_flags;
->>>>>>> origin/freebsd/current/main
 
 	LD_UTRACE(UTRACE_DLOPEN_START, NULL, NULL, 0, mode, name);
 	ld_tracing = (mode & RTLD_TRACE) == 0 ? NULL : "1";
