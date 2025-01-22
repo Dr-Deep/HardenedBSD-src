@@ -1043,6 +1043,7 @@ MAN+=	\
 	uled.4 \
 	ulpt.4 \
 	umass.4 \
+	umb.4 \
 	umcs.4 \
 	umct.4 \
 	umodem.4 \
