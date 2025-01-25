@@ -423,7 +423,6 @@ initarm(struct arm_boot_params *abp)
 	vm_paddr_t lastaddr;
 	vm_offset_t dtbp, kernelstack, dpcpu;
 	char *env;
-	void *kmdp;
 	int err_devmap, mem_regions_sz;
 	phandle_t root;
 	char dts_version[255];
@@ -441,8 +440,7 @@ initarm(struct arm_boot_params *abp)
 	/*
 	 * Find the dtb passed in by the boot loader.
 	 */
-	kmdp = preload_search_by_type("elf kernel");
-	dtbp = MD_FETCH(kmdp, MODINFOMD_DTBP, vm_offset_t);
+	dtbp = MD_FETCH(preload_kmdp, MODINFOMD_DTBP, vm_offset_t);
 #if defined(FDT_DTB_STATIC)
 	/*
 	 * In case the device tree blob was not retrieved (from metadata) try
@@ -463,7 +461,7 @@ initarm(struct arm_boot_params *abp)
 #endif
 
 #ifdef EFI
-	efihdr = (struct efi_map_header *)preload_search_info(kmdp,
+	efihdr = (struct efi_map_header *)preload_search_info(preload_kmdp,
 	    MODINFO_METADATA | MODINFOMD_EFI_MAP);
 	if (efihdr != NULL) {
 		arm_add_efi_map_entries(efihdr, mem_regions, &mem_regions_sz);
@@ -573,7 +571,7 @@ initarm(struct arm_boot_params *abp)
 #endif
 
 	debugf("initarm: console initialized\n");
-	debugf(" arg1 kmdp = 0x%08x\n", (uint32_t)kmdp);
+	debugf(" arg1 kmdp = 0x%08x\n", (uint32_t)preload_kmdp);
 	debugf(" boothowto = 0x%08x\n", boothowto);
 	debugf(" dtbp = 0x%08x\n", (uint32_t)dtbp);
 	debugf(" lastaddr1: 0x%08x\n", lastaddr);
