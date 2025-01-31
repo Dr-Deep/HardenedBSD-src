@@ -1,16 +1,17 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * Copyright (c) 2023 Serenity Cyber Security, LLC.
+ * Copyright (c) 2025 Jean-Sébastien Pédron <dumbbell@FreeBSD.org>
  *
  * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
+ * modification, are permitted provided that the following conditions are
+ * met:
  * 1. Redistributions of source code must retain the above copyright
  *    notice, this list of conditions and the following disclaimer.
  * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
+ *    notice, this list of conditions and the following disclaimer in
+ *    the documentation and/or other materials provided with the
+ *    distribution.
  *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -25,22 +26,9 @@
  * SUCH DAMAGE.
  */
 
-#ifndef _LINUXKPI_LINUX_NODEMASK_H_
-#define	_LINUXKPI_LINUX_NODEMASK_H_
+#ifndef _LINUXKPI_LINUX_CGROUP_H_
+#define _LINUXKPI_LINUX_CGROUP_H_
 
-#include <linux/kernel.h>	/* pr_debug */
+#include <linux/kernel_stat.h>
 
-static inline int
-num_online_nodes(void)
-{
-	return (1);
-}
-
-static inline int
-num_possible_nodes(void)
-{
-	pr_debug("%s: TODO\n", __func__);
-	return (1);
-}
-
-#endif /* _LINUXKPI_LINUX_NODEMASK_H_ */
+#endif	/* _LINUXKPI_LINUX_CGROUP_H_ */
