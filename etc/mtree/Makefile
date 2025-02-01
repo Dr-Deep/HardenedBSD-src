@@ -7,14 +7,14 @@ PACKAGE=	mtree
 # NOTE: BSD.debug.dist is unconditionally installed for developer ease-of-use.
 FILES=	\
 	BSD.debug.dist \
+	BSD.hardened.dist \
 	BSD.include.dist \
 	BSD.root.dist \
 	${_BSD.libcompats.dist} \
 	${_BSD.sendmail.dist} \
 	${_BSD.tests.dist} \
 	BSD.usr.dist \
-	BSD.var.dist \
-	BSD.hardened.dist
+	BSD.var.dist
 
 .for LIBCOMPAT libcompat in ${_ALL_LIBCOMPATS_libcompats}
 .if ${MK_LIB${LIBCOMPAT}} != "no"
