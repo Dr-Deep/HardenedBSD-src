@@ -301,7 +301,11 @@ CXXFLAGS.clang+=	 -Wno-c++11-extensions
 
 .if ${MK_SSP} != "no"
 # Don't use -Wstack-protector as it breaks world with -Werror.
+.if ${COMPILER_FEATURES:Mstackclash}
 SSP_CFLAGS?=	-fstack-protector-strong -fstack-clash-protection
+.else
+SSP_CFLAGS?=	-fstack-protector-strong
+.endif
 CFLAGS+=	${SSP_CFLAGS}
 FORTIFY_SOURCE?=	2
 .else
