@@ -7,6 +7,7 @@ PACKAGE=	mtree
 # NOTE: BSD.debug.dist is unconditionally installed for developer ease-of-use.
 FILES=	\
 	BSD.debug.dist \
+	BSD.hardened.dist \
 	BSD.include.dist \
 	BSD.root.dist \
 	${_BSD.libcompats.dist} \

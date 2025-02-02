@@ -1,7 +1,7 @@
 /*-
- * Copyright (c) 2008 Isilon Inc http://www.isilon.com/
- * Authors: Doug Rabson <dfr@rabson.org>
- * Developed with Red Inc: Alfred Perlstein <alfred@freebsd.org>
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Copyright (c) 2025 Gleb Smirnoff <glebius@FreeBSD.org>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -25,45 +25,18 @@
  * SUCH DAMAGE.
  */
 
-/* Modified from gssd.x for the client side of RPC-over-TLS. */
+#ifndef _RPC_CLNT_NL_H
+#define _RPC_CLNT_NL_H
 
-
-struct rpctlscd_connect_arg {
-	uint64_t socookie;
-	char certname<>;
+enum rpcnl_cmds_t {
+	RPCNL_REQUEST = 1,	/* mcast: kernel -> userland */
+	RPCNL_REPLY,		/* unicast: userland -> kernel */
 };
 
-struct rpctlscd_connect_res {
-	uint32_t reterr;
+enum rpcnl_attr_t {
+	RPCNL_REQUEST_GROUP = 1,
+	RPCNL_REQUEST_BODY,
+	RPCNL_REPLY_GROUP,
+	RPCNL_REPLY_BODY,
 };
-
-struct rpctlscd_handlerecord_arg {
-	uint64_t socookie;
-};
-
-struct rpctlscd_handlerecord_res {
-	uint32_t reterr;
-};
-
-struct rpctlscd_disconnect_arg {
-	uint64_t socookie;
-};
-
-struct rpctlscd_disconnect_res {
-	uint32_t reterr;
-};
-
-program RPCTLSCD {
-	version RPCTLSCDVERS {
-		void RPCTLSCD_NULL(void) = 0;
-
-		rpctlscd_connect_res
-		RPCTLSCD_CONNECT(rpctlscd_connect_arg) = 1;
-
-		rpctlscd_handlerecord_res
-		RPCTLSCD_HANDLERECORD(rpctlscd_handlerecord_arg) = 2;
-
-		rpctlscd_disconnect_res
-		RPCTLSCD_DISCONNECT(rpctlscd_disconnect_arg) = 3;
-	} = 2;
-} = 0x40677374;
+#endif /* _RPC_CLNT_NL_H */
