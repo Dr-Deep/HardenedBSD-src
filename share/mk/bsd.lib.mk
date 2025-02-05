@@ -105,10 +105,15 @@ CFLAGS += -mno-relax
 
 .include <bsd.libnames.mk>
 
-# prefer .s to a .c, add .po, remove stuff not used in the BSD libraries
+# prefer .s to a .c, remove stuff not used in the BSD libraries
 # .pico used for PIC object files
 # .nossppico used for NOSSP PIC object files
+<<<<<<< HEAD
 .SUFFIXES: .out .o .bc .ll .po .pico .nossppico .S .asm .s .c .cc .cpp .cxx .C .f .y .l .ln
+=======
+# .pieo used for PIE object files
+.SUFFIXES: .out .o .bc .ll .pico .nossppico .pieo .S .asm .s .c .cc .cpp .cxx .C .f .y .l .ln
+>>>>>>> internal/freebsd/current/main
 
 .if !defined(PICFLAG)
 PICFLAG=-fPIC
@@ -164,12 +169,6 @@ CPP_HARDENING_FLAG?=	_LIBCPP_HARDENING_MODE_EXTENSIVE
 CXXFLAGS+=	-D_LIBCPP_HARDENING_MODE=${CPP_HARDENING_FLAG}
 .endif
 
-PO_FLAG=-pg
-
-.c.po:
-	${CC} ${PO_FLAG} ${STATIC_CFLAGS} ${PO_CFLAGS} -c ${.IMPSRC} -o ${.TARGET}
-	${CTFCONVERT_CMD}
-
 .c.pico:
 	${CC} ${PICFLAG} -DPIC ${SHARED_CFLAGS} ${CFLAGS} -c ${.IMPSRC} -o ${.TARGET}
 	${CTFCONVERT_CMD}
@@ -178,8 +177,14 @@ PO_FLAG=-pg
 	${CC} ${PICFLAG} -DPIC ${SHARED_CFLAGS:C/^-fstack-protector.*$//:C/^-fstack-clash-protection.*$//:C/^-fsanitize.*$//} ${CFLAGS:C/^-fstack-protector.*$//:C/^-fstack-clash-protection.*$//:C/^-fsanitize.*$//} -c ${.IMPSRC} -o ${.TARGET}
 	${CTFCONVERT_CMD}
 
+<<<<<<< HEAD
 .cc.po .C.po .cpp.po .cxx.po:
 	${CXX} ${PO_FLAG} ${STATIC_CXXFLAGS} ${PO_CXXFLAGS} -c ${.IMPSRC} -o ${.TARGET}
+=======
+.c.pieo:
+	${CC} ${PIEFLAG} -DPIC ${SHARED_CFLAGS} ${CFLAGS} -c ${.IMPSRC} -o ${.TARGET}
+	${CTFCONVERT_CMD}
+>>>>>>> internal/freebsd/current/main
 
 .cc.pico .C.pico .cpp.pico .cxx.pico:
 	${CXX} ${PICFLAG} -DPIC ${SHARED_CXXFLAGS} ${CXXFLAGS} -c ${.IMPSRC} -o ${.TARGET}
@@ -187,9 +192,14 @@ PO_FLAG=-pg
 .cc.nossppico .C.nossppico .cpp.nossppico .cxx.nossppico:
 	${CXX} ${PICFLAG} -DPIC ${SHARED_CXXFLAGS:C/^-fstack-protector.*$//:C/^-fstack-clash-protection.*$//:C/^-fsanitize.*$//} ${CXXFLAGS:C/^-fstack-protector.*$//:C/^-fstack-clash-protection.*$//:C/^-fsanitize.*$//} -c ${.IMPSRC} -o ${.TARGET}
 
+<<<<<<< HEAD
 .f.po:
 	${FC} -pg ${FFLAGS} -o ${.TARGET} -c ${.IMPSRC}
 	${CTFCONVERT_CMD}
+=======
+.cc.pieo .C.pieo .cpp.pieo .cxx.pieo:
+	${CXX} ${PIEFLAG} ${SHARED_CXXFLAGS} ${CXXFLAGS} -c ${.IMPSRC} -o ${.TARGET}
+>>>>>>> internal/freebsd/current/main
 
 .f.pico:
 	${FC} ${PICFLAG} -DPIC ${FFLAGS} -o ${.TARGET} -c ${.IMPSRC}
@@ -199,13 +209,12 @@ PO_FLAG=-pg
 	${FC} ${PICFLAG} -DPIC ${FFLAGS:C/^-fstack-protector.*$//:C/^-fstack-clash-protection.*$//} -o ${.TARGET} -c ${.IMPSRC}
 	${CTFCONVERT_CMD}
 
+<<<<<<< HEAD
 .s.po .s.pico .s.nossppico:
+=======
+.s.pico .s.nossppico .s.pieo:
+>>>>>>> internal/freebsd/current/main
 	${CC:N${CCACHE_BIN}} -x assembler ${ACFLAGS} -c ${.IMPSRC} -o ${.TARGET}
-	${CTFCONVERT_CMD}
-
-.asm.po:
-	${CC:N${CCACHE_BIN}} -x assembler-with-cpp -DPROF ${PO_CFLAGS} \
-	    ${ACFLAGS} -c ${.IMPSRC} -o ${.TARGET}
 	${CTFCONVERT_CMD}
 
 .asm.pico:
@@ -218,9 +227,15 @@ PO_FLAG=-pg
 	    ${CFLAGS:C/^-fstack-protector.*$//:C/^-fstack-clash-protection.*$//} ${ACFLAGS} -c ${.IMPSRC} -o ${.TARGET}
 	${CTFCONVERT_CMD}
 
+<<<<<<< HEAD
 .S.po:
 	${CC:N${CCACHE_BIN}} -DPROF ${PO_CFLAGS} ${ACFLAGS} -c ${.IMPSRC} \
 	    -o ${.TARGET}
+=======
+.asm.pieo:
+	${CC:N${CCACHE_BIN}} -x assembler-with-cpp ${PIEFLAG} -DPIC \
+	    ${CFLAGS} ${ACFLAGS} -c ${.IMPSRC} -o ${.TARGET}
+>>>>>>> internal/freebsd/current/main
 	${CTFCONVERT_CMD}
 
 .S.pico:
@@ -552,9 +567,6 @@ realinstall: maninstall
 
 .if defined(LIB) && !empty(LIB)
 OBJS_DEPEND_GUESS+= ${SRCS:M*.h}
-.for _S in ${SRCS:N*.[hly]}
-OBJS_DEPEND_GUESS.${_S:${OBJS_SRCS_FILTER:ts:}}.po+=	${_S}
-.endfor
 .endif
 .if defined(SHLIB_NAME) || \
     defined(INSTALL_PIC_ARCHIVE) && defined(LIB) && !empty(LIB)
