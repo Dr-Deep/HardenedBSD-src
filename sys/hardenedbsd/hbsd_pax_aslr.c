@@ -229,6 +229,7 @@ static int pax_aslr_stack_len = PAX_ASLR_DELTA_STACK_DEF_LEN;
 static int pax_aslr_thr_stack_len = PAX_ASLR_DELTA_THR_STACK_DEF_LEN;
 static int pax_aslr_exec_len = PAX_ASLR_DELTA_EXEC_DEF_LEN;
 static int pax_aslr_vdso_len = PAX_ASLR_DELTA_VDSO_DEF_LEN;
+static int elf_pie_only_global= PAX_FEATURE_SIMPLE_DISABLED;
 #ifdef MAP_32BIT
 static int pax_aslr_map32bit_len = PAX_ASLR_DELTA_MAP32BIT_DEF_LEN;
 #ifdef PAX_HARDENING
@@ -265,6 +266,7 @@ TUNABLE_INT("hardening.pax.aslr.compat.stack_len", &pax_aslr_compat_stack_len);
 TUNABLE_INT("hardening.pax.aslr.compat.exec_len", &pax_aslr_compat_exec_len);
 TUNABLE_INT("hardening.pax.aslr.compat.vdso_len", &pax_aslr_compat_vdso_len);
 #endif
+TUNABLE_INT("hardening.elf_pie_only", &elf_pie_only_global);
 
 #ifdef PAX_SYSCTLS
 SYSCTL_DECL(_hardening_pax);
@@ -292,15 +294,25 @@ SYSCTL_HBSD_4STATE(pax_disallow_map32bit_status_global, pr_hbsd.aslr.disallow_ma
     CTLTYPE_INT|CTLFLAG_RWTUN|CTLFLAG_PRISON|CTLFLAG_SECURE);
 #endif	/* MAP_32BIT */
 
+SYSCTL_HBSD_2STATE(elf_pie_only_global,
+    pr_hbsd.hardening.elf_pie_only,
+    _hardening, elf_pie_only,
+    CTLTYPE_INT|CTLFLAG_RWTUN|CTLFLAG_PRISON|CTLFLAG_SECURE,
+    "Only permit execution of ELF PIE applications.");
 #endif /* PAX_SYSCTLS */
 
 #ifdef PAX_JAIL_SUPPORT
+SYSCTL_DECL(_security_jail_param_hardening);
 SYSCTL_DECL(_security_jail_param_hardening_pax);
 
 SYSCTL_JAIL_PARAM_SUBNODE(hardening_pax, aslr, "ASLR");
 SYSCTL_JAIL_PARAM(_hardening_pax_aslr, status,
     CTLTYPE_INT | CTLFLAG_RD, "I",
     "ASLR status");
+
+SYSCTL_JAIL_PARAM(_hardening, elf_pie_only,
+    CTLTYPE_INT | CTLFLAG_RD, "I",
+    "Only permit execution of ELF PIE applications");
 #ifdef COMPAT_FREEBSD32
 SYSCTL_JAIL_PARAM_SUBNODE(hardening_pax_aslr, compat, "ASLR (compat)");
 SYSCTL_JAIL_PARAM(_hardening_pax_aslr_compat, status,
@@ -553,6 +565,7 @@ pax_aslr_init_prison(struct prison *pr, struct vfsoptlist *opts)
 	if (pr == &prison0) {
 		/* prison0 has no parent, use globals */
 		pr->pr_hbsd.aslr.status = pax_aslr_status;
+		pr->pr_hbsd.hardening.elf_pie_only = elf_pie_only_global;
 #ifdef MAP_32BIT
 		pr->pr_hbsd.aslr.disallow_map32bit_status =
 		    pax_disallow_map32bit_status_global;
@@ -565,6 +578,11 @@ pax_aslr_init_prison(struct prison *pr, struct vfsoptlist *opts)
 		pr->pr_hbsd.aslr.status = pr_p->pr_hbsd.aslr.status;
 		error = pax_handle_prison_param(opts, "hardening.pax.aslr.status",
 		    &pr->pr_hbsd.aslr.status);
+		if (error != 0)
+			return (error);
+
+		error = pax_handle_prison_param(opts, "hardening.elf_pie_only",
+		   &(pr->pr_hbsd.hardening.elf_pie_only));
 		if (error != 0)
 			return (error);
 #ifdef MAP_32BIT
