@@ -500,13 +500,9 @@ LDADD_${_l}_L+=		-L${LIB${_l:tu}DIR}
 .endif
 DPADD_${_l}?=	${LIB${_l:tu}}
 .if ${_PRIVATELIBS:M${_l}}
-<<<<<<< HEAD
-LDADD_${_l}?=	-lprivate${_l}
-=======
 LDADD_${_l}?=	${LDADD_${_l}_L} -lprivate${_l}
 .elif ${_INTERNALLIBS:M${_l}}
 LDADD_${_l}?=	${LDADD_${_l}_L} -l${_l:S/${PIE_SUFFIX}//}${PIE_SUFFIX}
->>>>>>> internal/freebsd/current/main
 .else
 LDADD_${_l}?=	${LDADD_${_l}_L} -l${_l}
 .endif
