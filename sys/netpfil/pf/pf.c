@@ -5778,7 +5778,8 @@ pf_test_rule(struct pf_krule **rm, struct pf_kstate **sm,
 		PF_TEST_ATTRIB(r->match_tag && !pf_match_tag(pd->m, r, &tag,
 		    pd->pf_mtag ? pd->pf_mtag->tag : 0),
 			TAILQ_NEXT(r, entries));
-		PF_TEST_ATTRIB(r->rcv_kif && !pf_match_rcvif(pd->m, r),
+		PF_TEST_ATTRIB((r->rcv_kif && pf_match_rcvif(pd->m, r) ==
+		   r->rcvifnot),
 			TAILQ_NEXT(r, entries));
 		PF_TEST_ATTRIB((r->rule_flag & PFRULE_FRAGMENT &&
 		    pd->virtual_proto != PF_VPROTO_FRAGMENT),
@@ -5825,7 +5826,7 @@ pf_test_rule(struct pf_krule **rm, struct pf_kstate **sm,
 					PFLOG_PACKET(r->action, PFRES_MATCH, r,
 					    a, ruleset, pd, 1);
 			}
-			if ((*rm)->quick)
+			if (r->quick)
 				break;
 			r = TAILQ_NEXT(r, entries);
 		} else
@@ -7972,8 +7973,12 @@ pf_test_state_icmp(struct pf_kstate **state, struct pf_pdesc *pd,
 						pd->proto = IPPROTO_ICMP;
 					else
 						pd->proto = IPPROTO_ICMPV6;
-					th.th_sport = nk->port[sidx];
-					th.th_dport = nk->port[didx];
+					pf_change_ap(pd->m, pd2.src, &th.th_sport,
+					    pd->ip_sum, &th.th_sum, &nk->addr[pd2.sidx],
+					    nk->port[sidx], 1, pd->af, nk->af);
+					pf_change_ap(pd->m, pd2.dst, &th.th_dport,
+					    pd->ip_sum, &th.th_sum, &nk->addr[pd2.didx],
+					    nk->port[didx], 1, pd->af, nk->af);
 					m_copyback(pd2.m, pd2.off, 8, (c_caddr_t)&th);
 					PF_ACPY(pd->src,
 					    &nk->addr[pd2.sidx], nk->af);
@@ -9580,7 +9585,7 @@ pf_walk_header6(struct pf_pdesc *pd, struct ip6_hdr *h, u_short *reason)
 	struct ip6_ext		 ext;
 	struct ip6_rthdr	 rthdr;
 	uint32_t		 end;
-	int			 rthdr_cnt = 0;
+	int			 fraghdr_cnt = 0, rthdr_cnt = 0;
 
 	pd->off += sizeof(struct ip6_hdr);
 	end = pd->off + ntohs(h->ip6_plen);
@@ -9589,7 +9594,7 @@ pf_walk_header6(struct pf_pdesc *pd, struct ip6_hdr *h, u_short *reason)
 	for (;;) {
 		switch (pd->proto) {
 		case IPPROTO_FRAGMENT:
-			if (pd->fragoff != 0) {
+			if (fraghdr_cnt++) {
 				DPFPRINTF(PF_DEBUG_MISC, ("IPv6 multiple fragment"));
 				REASON_SET(reason, PFRES_FRAG);
 				return (PF_DROP);
@@ -9605,10 +9610,14 @@ pf_walk_header6(struct pf_pdesc *pd, struct ip6_hdr *h, u_short *reason)
 				DPFPRINTF(PF_DEBUG_MISC, ("IPv6 short fragment"));
 				return (PF_DROP);
 			}
-			pd->fragoff = pd->off;
 			/* stop walking over non initial fragments */
-			if (htons((frag.ip6f_offlg & IP6F_OFF_MASK)) != 0)
+			if (ntohs((frag.ip6f_offlg & IP6F_OFF_MASK)) != 0) {
+				pd->fragoff = pd->off;
 				return (PF_PASS);
+			}
+			/* RFC6946:  reassemble only non atomic fragments */
+			if (frag.ip6f_offlg & IP6F_MORE_FRAG)
+				pd->fragoff = pd->off;
 			pd->off += sizeof(frag);
 			pd->proto = frag.ip6f_nxt;
 			break;
