@@ -100,7 +100,9 @@ struct ieee80211_mmie_16 {
 #define	IEEE80211_QOS_CTL_ACK_POLICY_NOACK	0x0020
 #define	IEEE80211_QOS_CTL_MESH_CONTROL_PRESENT	0x0100
 
-#define	IEEE80211_RATE_SHORT_PREAMBLE		BIT(0)
+enum ieee80211_rate_flags {
+	IEEE80211_RATE_SHORT_PREAMBLE		= BIT(0),
+};
 
 enum ieee80211_rate_control_changed_flags {
 	IEEE80211_RC_BW_CHANGED			= BIT(0),
@@ -411,7 +413,7 @@ enum ieee80211_tx_info_flags {
 	IEEE80211_TX_CTL_RATE_CTRL_PROBE	= BIT(18),
 	IEEE80211_TX_CTL_LDPC			= BIT(19),
 	IEEE80211_TX_CTL_STBC			= BIT(20),
-};
+} __packed;
 
 enum ieee80211_tx_status_flags {
 	IEEE80211_TX_STATUS_ACK_SIGNAL_VALID	= BIT(0),
