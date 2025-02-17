@@ -600,8 +600,10 @@ enum ieee80211_rx_status_flags {
 	RX_FLAG_DUP_VALIDATED		= BIT(5),
 	RX_FLAG_FAILED_FCS_CRC		= BIT(6),
 	RX_FLAG_ICV_STRIPPED		= BIT(7),
-	RX_FLAG_MACTIME_PLCP_START	= BIT(8),
-	RX_FLAG_MACTIME_START		= BIT(9),
+	RX_FLAG_MACTIME			= BIT(8) | BIT(9),
+	RX_FLAG_MACTIME_PLCP_START	= 1 << 8,
+	RX_FLAG_MACTIME_START		= 2 << 8,
+	RX_FLAG_MACTIME_END		= 3 << 8,
 	RX_FLAG_MIC_STRIPPED		= BIT(10),
 	RX_FLAG_MMIC_ERROR		= BIT(11),
 	RX_FLAG_MMIC_STRIPPED		= BIT(12),
@@ -616,12 +618,12 @@ enum ieee80211_rx_status_flags {
 	RX_FLAG_AMPDU_IS_LAST		= BIT(21),
 	RX_FLAG_AMPDU_LAST_KNOWN	= BIT(22),
 	RX_FLAG_AMSDU_MORE		= BIT(23),
-	RX_FLAG_MACTIME_END		= BIT(24),
+				/*	= BIT(24), */
 	RX_FLAG_ONLY_MONITOR		= BIT(25),
 	RX_FLAG_SKIP_MONITOR		= BIT(26),
 	RX_FLAG_8023			= BIT(27),
 	RX_FLAG_RADIOTAP_TLV_AT_END	= BIT(28),
-	RX_FLAG_MACTIME			= BIT(29),
+				/*	= BIT(29), */
 	RX_FLAG_MACTIME_IS_RTAP_TS64	= BIT(30),
 	RX_FLAG_FAILED_PLCP_CRC		= BIT(31),
 };
@@ -877,11 +879,11 @@ struct ieee80211_prep_tx_info {
 /* XXX-BZ too big, over-reduce size to u8, and array sizes to minuimum to fit in skb->cb. */
 /* Also warning: some sizes change by pointer size!  This is 64bit only. */
 struct ieee80211_tx_info {
-	enum ieee80211_tx_info_flags		flags;
+	enum ieee80211_tx_info_flags		flags;		/* 32 bits */
 	/* TODO FIXME */
-	u8		band;
-	u8		hw_queue;
-	bool		tx_time_est;
+	enum nl80211_band			band;		/* 3 bits */
+	uint16_t	hw_queue:4,				/* 4 bits */
+			tx_time_est:10;				/* 10 bits */
 	union {
 		struct {
 			struct ieee80211_tx_rate	rates[4];
@@ -2537,8 +2539,8 @@ ieee80211_get_eht_iftype_cap_vif(const struct ieee80211_supported_band *band,
 static inline uint32_t
 ieee80211_vif_usable_links(const struct ieee80211_vif *vif)
 {
-	TODO();
-	return (1);
+	IMPROVE("MLO usable links likely are not just valid");
+	return (vif->valid_links);
 }
 
 static inline bool
