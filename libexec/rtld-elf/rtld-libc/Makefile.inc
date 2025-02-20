@@ -60,8 +60,13 @@ _libc_other_objects= sigsetjmp lstat stat fstat fstatat fstatfs syscall \
     sysarch __sysctl issetugid __getcwd utrace getpid \
     thr_self thr_kill pread mmap lseek _exit \
     getdirentries _close _fcntl _open _openat _read \
+<<<<<<< HEAD
     _sigprocmask _write readlink __realpathat _setjmp setjmp setjmperr \
     __sysctlbyname
+=======
+    _sigprocmask _write readlink ___realpathat _setjmp setjmp setjmperr
+
+>>>>>>> internal/freebsd/current/main
 
 # Finally add additional architecture-dependent libc dependencies
 .if ${LIBC_ARCH} == "arm"

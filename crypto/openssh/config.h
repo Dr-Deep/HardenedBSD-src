@@ -518,6 +518,12 @@
 /* Define to 1 if you have the 'EVP_DigestInit_ex' function. */
 #define HAVE_EVP_DIGESTINIT_EX 1
 
+/* Define to 1 if you have the 'EVP_DigestSign' function. */
+#define HAVE_EVP_DIGESTSIGN 1
+
+/* Define to 1 if you have the 'EVP_DigestVerify' function. */
+#define HAVE_EVP_DIGESTVERIFY 1
+
 /* Define to 1 if you have the 'EVP_MD_CTX_cleanup' function. */
 /* #undef HAVE_EVP_MD_CTX_CLEANUP */
 
@@ -1399,9 +1405,6 @@
 
 /* define if you have struct timeval */
 #define HAVE_STRUCT_TIMEVAL 1
-
-/* Define to 1 if you have the 'swap32' function. */
-/* #undef HAVE_SWAP32 */
 
 /* Define to 1 if you have the 'sysconf' function. */
 #define HAVE_SYSCONF 1
