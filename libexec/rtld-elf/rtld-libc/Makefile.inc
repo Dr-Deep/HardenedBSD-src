@@ -60,8 +60,10 @@ _libc_other_objects= sigsetjmp lstat stat fstat fstatat fstatfs syscall \
     sysarch __sysctl issetugid __getcwd utrace getpid \
     thr_self thr_kill pread mmap lseek _exit \
     getdirentries _close _fcntl _open _openat _read \
-    _sigprocmask _write readlink __realpathat _setjmp setjmp setjmperr \
-    __sysctlbyname
+    _sigprocmask _write readlink ___realpathat _setjmp setjmp setjmperr
+
+# HBSD: We need __sysctlbyname
+_libc_other_objects+=	__sysctlbyname
 
 # Finally add additional architecture-dependent libc dependencies
 .if ${LIBC_ARCH} == "arm"
