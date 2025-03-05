@@ -99,17 +99,13 @@
  * user wants to, we can turn on random ID generation.
  */
 VNET_DEFINE_STATIC(int, ip_rfc6864) = 1;
-<<<<<<< HEAD
-#ifdef PAX_HARDENING
-VNET_DEFINE_STATIC(int, ip_do_randomid) = 1;
-#else
-VNET_DEFINE_STATIC(int, ip_do_randomid) = 0;
-#endif
-=======
->>>>>>> origin/freebsd/current/main
 #define	V_ip_rfc6864		VNET(ip_rfc6864)
 
+#ifdef PAX_HARDENING
+VNET_DEFINE(int, ip_random_id) = 1;
+#else
 VNET_DEFINE(int, ip_random_id) = 0;
+#endif
 
 /*
  * Random ID state engine.
@@ -293,7 +289,7 @@ ipid_sysinit(void)
 		arc4rand(zpcpu_get_cpu(V_ip_id, i), sizeof(uint64_t), 0);
 
 #ifdef PAX_HARDENING
-	if (V_ip_do_randomid)
+	if (V_ip_random_id)
 		ip_initid(8192);
 #endif
 }
