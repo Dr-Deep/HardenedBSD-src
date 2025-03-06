@@ -290,7 +290,7 @@ ipid_sysinit(void)
 
 #ifdef PAX_HARDENING
 	if (V_ip_random_id)
-		ip_initid(8192);
+		ip_initid(32768);
 #endif
 }
 VNET_SYSINIT(ip_id, SI_SUB_PROTO_DOMAIN, SI_ORDER_ANY, ipid_sysinit, NULL);
