@@ -233,7 +233,7 @@ CFLAGS+=	-ffreestanding
 CFLAGS+=	-fwrapv
 
 #
-# GCC SSP support
+# Stack Smashing Protection (SSP) support
 #
 .if ${MK_SSP} != "no"
 KERN_SSP_CFLAG?=	-fstack-protector-strong
