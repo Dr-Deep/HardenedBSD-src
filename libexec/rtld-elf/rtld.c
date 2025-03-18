@@ -728,15 +728,19 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 				aux = auxp = (Elf_Auxinfo *)envp;
 				auxpf = (Elf_Auxinfo *)(envp + rtld_argc);
 				dbg("move aux from %p to %p", auxpf, aux);
-				/* XXXKIB insert place for AT_EXECPATH if not
-				 * present */
+				/*
+				 * XXXKIB insert place for AT_EXECPATH if not
+				 * present
+				 */
 				for (;; auxp++, auxpf++) {
 					*auxp = *auxpf;
 					if (auxp->a_type == AT_NULL)
 						break;
 				}
-				/* Since the auxiliary vector has moved,
-				 * redigest it. */
+				/*
+				 * Since the auxiliary vector has moved,
+				 * redigest it.
+				 */
 				for (i = 0; i < AT_COUNT; i++)
 					aux_info[i] = NULL;
 				for (auxp = aux; auxp->a_type != AT_NULL;
@@ -745,8 +749,10 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 						aux_info[auxp->a_type] = auxp;
 				}
 
-				/* Point AT_EXECPATH auxv and aux_info to the
-				 * binary path. */
+				/*
+				 * Point AT_EXECPATH auxv and aux_info to the
+				 * binary path.
+				 */
 				if (binpath == NULL) {
 					aux_info[AT_EXECPATH] = NULL;
 				} else {
@@ -1740,7 +1746,7 @@ digest_phdr(const Elf_Phdr *phdr, int phnum, caddr_t entry, const char *path)
 				obj->mapbase = obj->vaddrbase + obj->relocbase;
 			} else { /* Last load segment */
 				obj->mapsize = rtld_round_page(
-						   ph->p_vaddr + ph->p_memsz) -
+				    ph->p_vaddr + ph->p_memsz) -
 				    obj->vaddrbase;
 			}
 			nsegs++;
@@ -1940,8 +1946,8 @@ find_library(const char *xname, const Obj_Entry *refobj, int *fdp)
 
 	if (strchr(name, '/') != NULL) { /* Hard coded pathname */
 		if (name[0] != '/' && !trust) {
-			_rtld_error("Absolute pathname required "
-				    "for shared object \"%s\"",
+			_rtld_error(
+		    "Absolute pathname required for shared object \"%s\"",
 			    name);
 			return (NULL);
 		}
@@ -2020,8 +2026,8 @@ find_library(const char *xname, const Obj_Entry *refobj, int *fdp)
 	}
 
 	if (objgiven && refobj->path != NULL) {
-		_rtld_error("Shared object \"%s\" not found, "
-			    "required by \"%s\"",
+		_rtld_error(
+	    "Shared object \"%s\" not found, required by \"%s\"",
 		    name, basename(refobj->path));
 	} else {
 		_rtld_error("Shared object \"%s\" not found", name);
@@ -2103,8 +2109,10 @@ find_symdef(unsigned long symnum, const Obj_Entry *refobj,
 
 	if (def != NULL) {
 		*defobj_out = defobj;
-		/* Record the information in the cache to avoid subsequent
-		 * lookups. */
+		/*
+		 * Record the information in the cache to avoid subsequent
+		 * lookups.
+		 */
 		if (cache != NULL) {
 			cache[symnum].sym = def;
 			cache[symnum].obj = defobj;
@@ -2173,7 +2181,7 @@ gethints(bool nostdlib)
 		if (read(fd, &hdr, sizeof hdr) != sizeof hdr) {
 			dbg("failed to read %lu bytes from hints file \"%s\"",
 			    (u_long)sizeof hdr, ld_elf_hints_path);
-		cleanup1:
+cleanup1:
 			close(fd);
 			hdr.dirlistlen = 0;
 			return (NULL);
@@ -2227,10 +2235,10 @@ gethints(bool nostdlib)
 		}
 		p = xmalloc(dirlistlen + 1);
 		if (pread(fd, p, dirlistlen + 1, strtab + dirlist) !=
-			(ssize_t)dirlistlen + 1 ||
-		    p[dirlistlen] != '\0') {
+		    (ssize_t)dirlistlen + 1 || p[dirlistlen] != '\0') {
 			free(p);
-	dbg("failed to read %d bytes starting at %d from hints file \"%s\"",
+			dbg(
+	    "failed to read %d bytes starting at %d from hints file \"%s\"",
 			    dirlistlen + 1, strtab + dirlist,
 			    ld_elf_hints_path);
 			goto cleanup1;
@@ -2690,10 +2698,8 @@ load_filtee1(Obj_Entry *obj, Needed_Entry *needed, int flags,
 {
 	for (; needed != NULL; needed = needed->next) {
 		needed->obj = dlopen_object(obj->strtab + needed->name, -1, obj,
-		    flags,
-		    ((ld_loadfltr || obj->z_loadfltr) ? RTLD_NOW : RTLD_LAZY) |
-			RTLD_LOCAL,
-		    lockstate);
+		    flags, ((ld_loadfltr || obj->z_loadfltr) ? RTLD_NOW :
+		    RTLD_LAZY) | RTLD_LOCAL, lockstate);
 	}
 }
 
