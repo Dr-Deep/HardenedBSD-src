@@ -1,5 +1,3 @@
 #
 
-MK_LTOLIB=	no
-
 CFLAGS+=	-DCRT_IRELOC_RELA
