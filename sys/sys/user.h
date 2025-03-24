@@ -674,9 +674,11 @@ struct kinfo_vm_layout {
 #define	KNOTE_EXTDATA_PIPE		2
 
 struct kinfo_knote {
+	int		knt_kq_fd;
 	struct kevent	knt_event;
 	int		knt_status;
 	int		knt_extdata;
+	uint64_t	knt_spare0[4];
 	union {
 		struct {
 			int		knt_vnode_type;
@@ -717,6 +719,8 @@ int	kern_proc_cwd_out(struct proc *p, struct sbuf *sb, ssize_t maxlen);
 int	kern_proc_out(struct proc *p, struct sbuf *sb, int flags);
 int	kern_proc_vmmap_out(struct proc *p, struct sbuf *sb, ssize_t maxlen,
 	int flags);
+int	kern_proc_kqueues_out(struct proc *p, struct sbuf *s, size_t maxlen,
+	bool compat32);
 
 int	vntype_to_kinfo(int vtype);
 void	pack_kinfo(struct kinfo_file *kif);
