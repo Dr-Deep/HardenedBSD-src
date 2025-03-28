@@ -2921,32 +2921,24 @@ _dtrace_tools= cddl/lib/libctf cddl/lib/libspl cddl/usr.bin/ctfconvert \
 # PE32+, which is required for EFI boot programs.
 _elftctools=	lib/libelftc \
 		lib/libpe \
-<<<<<<< HEAD
-		usr.bin/objcopy \
-		usr.bin/nm \
-=======
 		usr.bin/elfctl \
 		usr.bin/elfdump \
 		usr.bin/objcopy
 # If we're given an XNM we don't need to build standard binary utilities.
 .if ${XNM:M/*} == ""
 _elftctools+=	usr.bin/nm \
->>>>>>> origin/freebsd/current/main
 		usr.bin/size \
 		usr.bin/strings
 # These are not required by the build, but can be useful for developers who
 # cross-build on a FreeBSD 10 host:
 _elftctools+=	usr.bin/addr2line
 .endif
-<<<<<<< HEAD
 .elif ${TARGET_ARCH} != ${MACHINE_ARCH} && ${MK_ELFTOOLCHAIN_BOOTSTRAP} != "no"
 # If cross-building with an external binutils we still need to build strip for
 # the target (for at least crunchide).
 _elftctools=	lib/libelftc \
 		lib/libpe \
 		usr.bin/objcopy
-=======
->>>>>>> origin/freebsd/current/main
 .endif
 
 .if ${MK_CLANG_BOOTSTRAP} != "no"
