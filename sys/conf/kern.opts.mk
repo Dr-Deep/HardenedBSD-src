@@ -80,8 +80,8 @@ __DEFAULT_YES_OPTIONS+=	RETPOLINE
 __DEFAULT_NO_OPTIONS+=	RETPOLINE
 .endif
 
-# EFI doesn't exist on powerpc or riscv and is broken on i386
-.if ${MACHINE:Mpowerpc} || ${MACHINE:Mriscv} || ${MACHINE} == "i386"
+# EFI doesn't exist on powerpc and is broken on i386
+.if ${MACHINE:Mpowerpc} || ${MACHINE} == "i386"
 BROKEN_OPTIONS+=EFI
 .endif
 
