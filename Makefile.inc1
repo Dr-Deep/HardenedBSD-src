@@ -1497,6 +1497,8 @@ distributeworld installworld stageworld: _installcheck_world .PHONY
 	    -p ${DESTDIR}/${DISTDIR}/${dist}/usr >/dev/null
 	${DESTDIR_MTREE} -f ${.CURDIR}/etc/mtree/BSD.include.dist \
 	    -p ${DESTDIR}/${DISTDIR}/${dist}/usr/include >/dev/null
+	${DESTDIR_MTREE} -f ${.CURDIR}/etc/mtree/BSD.hardened.dist \
+	    -p ${DESTDIR}/${DISTDIR}/${dist} >/dev/null
 .for d in ${LIBCOMPAT_INCLUDE_DIRS}
 	-mkdir ${DESTDIR}/${DISTDIR}/${dist}/usr/include/${d}
 .endfor
@@ -1527,6 +1529,8 @@ distributeworld installworld stageworld: _installcheck_world .PHONY
 	    sed -e 's#^\./#./${dist}/usr/#' >> ${METALOG}
 	${IMAKEENV} ${DISTR_MTREE} -C -f ${.CURDIR}/etc/mtree/BSD.include.dist | \
 	    sed -e 's#^\./#./${dist}/usr/include/#' >> ${METALOG}
+	${IMAKEENV} ${DISTR_MTREE} -C -f ${.CURDIR}/etc/mtree/BSD.hardened.dist | \
+	    sed -e 's#^\./#./${dist}/#' >> ${METALOG}
 .for d in ${LIBCOMPAT_INCLUDE_DIRS}
 	echo "./${dist}/usr/include/${d} type=dir uname=root gname=wheel mode=0755" >> ${METALOG}
 .endfor
@@ -3858,6 +3862,8 @@ _xi-mtree: .PHONY
 	    -p ${XDDESTDIR}/usr >/dev/null
 	${DESTDIR_MTREE} -f ${.CURDIR}/etc/mtree/BSD.include.dist \
 	    -p ${XDDESTDIR}/usr/include >/dev/null
+	${DESTDIR_MTREE} -f ${.CURDIR}/etc/mtree/BSD.hardened.dist \
+	    -p ${XDDESTDIR} >/dev/null
 .for d in ${LIBCOMPAT_INCLUDE_DIRS}
 	mkdir -p ${XDDESTDIR}/usr/include/${d}
 .endfor
