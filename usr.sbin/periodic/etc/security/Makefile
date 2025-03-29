@@ -6,7 +6,7 @@ CONFGROUPS=	CONFS DATA
 
 CONFS=	100.chksetuid \
 	110.neggrpperm \
-	120.chkfileperm \
+	120.hardenedmtree \
 	200.chkmounts \
 	300.chkuid0 \
 	400.passwdless \
