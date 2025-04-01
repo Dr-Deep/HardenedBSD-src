@@ -51,6 +51,9 @@
 #   xargs -n1 | sort | uniq -d;
 # done
 
+# 20250331: removal of TCPPCAP
+OLD_FILES+=usr/include/netinet/tcp_pcap.h
+
 # 20250328: renamed to etc/periodic/security/120.hardenedmtree
 OLD_FILES+=etc/periodic/security/120.chkfileperm
 
