@@ -43,27 +43,45 @@ static uint64_t open_flags = O_PATH | O_CLOEXEC | O_NOFOLLOW;
 static const char *prog;
 
 static void
-usage(bool list_features)
+usage(const char *feature_name)
 {
-	hbsdctrl_feature_t *feature, *tfeature;
 	hbsdctrl_ctx_t *ctx;
+	hbsdctrl_feature_t *feature, *tfeature;
+	unsigned short int i;
 
-	ctx = NULL;
-	fprintf(stderr, "USAGE: %s [-H] pax <state> <feature> <file>\n", prog);
-	fprintf(stderr, "    -H: follow symlinks\n");
-	if (list_features) {
-		ctx = hbsdctrl_ctx_new(0, LIBHBSDCONTROL_DEFAULT_NAMESPACE);
-		if (ctx == NULL) {
-			goto end;
+	ctx = hbsdctrl_ctx_new(0, LIBHBSDCONTROL_DEFAULT_NAMESPACE);
+	i = 0;
+	if (ctx == NULL) {
+		goto end;
+	} else if (feature_name == NULL) {
+		fprintf(stderr, "USAGE\n\n");
+		fprintf(stderr, "    %s [-Hhdn] pax enable|disable|sysdef <feature> <file>\n", prog);
+		fprintf(stderr, "    %s [-Hhdn] pax list <file>\n\n", prog);
+		fprintf(stderr, "OPTIONS\n\n");
+		fprintf(stderr, "    -H: follow symlinks\n");
+		fprintf(stderr, "    -d: enable verbose output\n");
+		fprintf(stderr, "    -n namespace: set extended attribute namespace\n");
+		fprintf(stderr, "    -h [feature]: show general help or feature-specific help\n\n");
+		fprintf(stderr, "FEATURES\n");
+		LIST_FOREACH_SAFE(feature, &(ctx->hc_features), hf_entry, tfeature) {
+			if (i % 3 == 0) {
+				fprintf(stderr, "\n");
+				fprintf(stderr, "    ");
+			}
+			fprintf(stderr, "%-20s\t", feature->hf_name);
+			i++;
 		}
-
-		LIST_FOREACH_SAFE(feature, &(ctx->hc_features), hf_entry,
-		    tfeature) {
-			printf("==> Feature: %s\n",
-			    hbsdctrl_feature_get_name(feature));
-			hbsdctrl_feature_call_cb(feature, "help", "    ",
-			    stderr);
+		fprintf(stderr, "\n");
+		goto end;
+	} else {
+		LIST_FOREACH_SAFE(feature, &(ctx->hc_features), hf_entry, tfeature) {
+			if (!strcmp(feature->hf_name, feature_name)) {
+				hbsdctrl_feature_call_cb(feature, "help", "", stderr);
+				goto end;
+			}
 		}
+		fprintf(stderr, "[-] Unknown feature: %s\n", feature_name);
+		goto end;
 	}
 end:
 	hbsdctrl_ctx_free(&ctx);
@@ -151,16 +169,16 @@ set_state(hbsdctrl_ctx_t *ctx, const char *feature_name,
 	int fd, ret;
 
 	if (feature_name == NULL || path == NULL) {
-		usage(true);
+		usage(NULL);
 	}
 
 	if (!hbsdctrl_feature_state_value_valid(state_value)) {
-		usage(true);
+		usage(NULL);
 	}
 
 	feature = hbsdctrl_ctx_find_feature_by_name(ctx, feature_name);
 	if (feature == NULL) {
-		usage(true);
+		usage(NULL);
 	}
 
 	ret = 0;
@@ -210,7 +228,7 @@ reset(hbsdctrl_ctx_t *ctx, const char *feature_name, const char *path)
 	int fd, ret;
 
 	if (feature_name == NULL || path == NULL) {
-		usage(true);
+		usage(NULL);
 	}
 
 	feature = hbsdctrl_ctx_find_feature_by_name(ctx, feature_name);
@@ -246,12 +264,12 @@ main(int argc, char *argv[])
 {
 	hbsdctrl_ctx_t *ctx;
 	int ch, res;
-	const char *ns, *verb;
+	const char *ns, *verb, *feature_name;
 
 	res = 0;
 	prog = argv[0];
 	ns = LIBHBSDCONTROL_DEFAULT_NAMESPACE;
-	while ((ch = getopt(argc, argv, "Hdn:")) != -1) {
+	while ((ch = getopt(argc, argv, "Hhdn:")) != -1) {
 		switch (ch) {
 		case 'H':
 			open_flags ^= O_NOFOLLOW;
@@ -262,13 +280,17 @@ main(int argc, char *argv[])
 		case 'n':
 			ns = optarg;
 			break;
+		case 'h':
+			feature_name = argv[optind];
+			usage(feature_name);
+			break;
 		default:
-			usage(true);
+			usage(NULL);
 		}
 	}
 
 	if (optind == 0 || argc - optind < 3) {
-		usage(true);
+		usage(NULL);
 	}
 
 	if (strcmp(argv[optind], "pax")) {
@@ -289,7 +311,7 @@ main(int argc, char *argv[])
 	}
 	if (!strcmp(verb, "enable")) {
 		if (argc - optind < 4) {
-			usage(true);
+			usage(NULL);
 		}
 
 		res = set_state(ctx, argv[optind + 2], HBSDCTRL_STATE_ENABLED,
@@ -298,7 +320,7 @@ main(int argc, char *argv[])
 	}
 	if (!strcmp(verb, "disable")) {
 		if (argc - optind < 4) {
-			usage(true);
+			usage(NULL);
 		}
 
 		res = set_state(ctx, argv[optind + 2], HBSDCTRL_STATE_DISABLED,
@@ -307,7 +329,7 @@ main(int argc, char *argv[])
 	}
 	if (!strcmp(verb, "reset") || !strcmp(verb, "sysdef")) {
 		if (argc - optind < 4) {
-			usage(true);
+			usage(NULL);
 		}
 
 		res = reset(ctx, argv[optind + 2], argv[optind + 3]);
