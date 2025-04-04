@@ -103,8 +103,7 @@ MTREES=		mtree/BSD.root.dist		/		\
 		mtree/BSD.var.dist		/var		\
 		mtree/BSD.usr.dist		/usr		\
 		mtree/BSD.include.dist		/usr/include	\
-		mtree/BSD.debug.dist		/usr/lib \
-		mtree/BSD.hardened.dist		/
+		mtree/BSD.debug.dist		/usr/lib
 .for LIBCOMPAT libcompat in ${_ALL_LIBCOMPATS_libcompats}
 .if ${MK_LIB${LIBCOMPAT}} != "no"
 MTREES+=	mtree/BSD.lib${libcompat}.dist	/usr
