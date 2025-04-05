@@ -228,7 +228,7 @@ reset(hbsdctrl_ctx_t *ctx, const char *feature_name, const char *path)
 	cap_enter();
 #endif
 
-	res = hbsdctrl_feature_call_cb(feature, "apply", &fd, NULL);
+	res = hbsdctrl_feature_call_cb(feature, "unapply", &fd, NULL);
 	switch (res) {
 	case RES_SUCCESS:
 		ret = 0;
