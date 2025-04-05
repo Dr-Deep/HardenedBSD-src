@@ -341,7 +341,7 @@ main(int argc, char *argv[])
 		goto end;
 	}
 
-	res = 1;
+	res = RES_FAIL;
 	fprintf(stderr, "[-] Unknown verb: %s - did you mean enable|disable|list|sysdef ?\n", verb);
 	goto end;
 
