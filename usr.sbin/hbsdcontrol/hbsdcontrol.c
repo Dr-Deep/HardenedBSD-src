@@ -314,7 +314,11 @@ main(int argc, char *argv[])
 		goto end;
 	}
 
-end:
+	res = 1;
+	fprintf(stderr, "[-] Unknown verb: %s - did you mean enable|disable|list|sysdef ?\n", verb);
+	goto end;
+
+ end:
 	hbsdctrl_ctx_free(&ctx);
 	return (res);
 }
