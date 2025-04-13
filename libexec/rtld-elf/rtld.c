@@ -2933,6 +2933,16 @@ load_object(const char *name, int fd_u, const Obj_Entry *refobj, int flags)
 		free(path);
 		return (NULL);
 	}
+
+	/*
+	 * HBSD: Do not allow fdlopen of a named attribute file descriptor.
+	 */
+	if ((sb.st_bsdflags & SFBSD_NAMEDATTR) == SFBSD_NAMEDATTR) {
+		close(fd);
+		free(path);
+		return (NULL);
+	}
+
 	TAILQ_FOREACH(obj, &obj_list, next) {
 		if (obj->marker || obj->doomed)
 			continue;
@@ -3923,10 +3933,12 @@ rtld_dlopen(const char *name, int fd, int mode)
 	int lo_flags;
 #ifdef HARDENEDBSD
 	struct statfs sbuf;
+	int err;
 
 	if (harden_rtld && fd != -1) {
 		memset(&sbuf, 0, sizeof(sbuf));
-		if (fstatfs(fd, &sbuf) < 0 && errno == EINVAL) {
+		err = fstatfs(fd, &sbuf);
+		if (err < 0 && errno == EINVAL) {
 			/*
 			 * HBSD: fstatfs will fail if a memory-backed file
 			 * descriptor is used. This closes a gap in which a
