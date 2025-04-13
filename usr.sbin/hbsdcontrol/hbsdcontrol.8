@@ -33,43 +33,45 @@
 .Nd "HardenedBSD's feature state control utility"
 .Sh SYNOPSIS
 .Nm
-.Op Fl Hdn
+.Op Fl Hdnh
 .Cm pax
 .Cm enable
 .Ar feature
 .Ar file
 .Nm
-.Op Fl Hdn
+.Op Fl Hdnh
 .Cm pax
 .Cm disable
 .Ar feature
 .Ar file
 .Nm
-.Op Fl Hdn
+.Op Fl Hdnh
 .Cm pax
 .Cm reset
 .Ar feature
 .Ar file
 .Nm
-.Op Fl Hdn
+.Op Fl Hdnh
 .Cm pax
 .Cm sysdef
 .Ar feature
 .Ar file
 .Nm
-.Op Fl Hdn
+.Op Fl Hdnh
 .Cm pax
 .Cm list
 .Ar file
 .Sh DESCRIPTION
 The hbsdcontrol utility can enable or disable security features that are
-managed by the HardenedBSD kernel. Each feature can be managed on a per-file
-basis, or globally by setting the system default setting via sysctl(8).
+managed by the HardenedBSD kernel.
+Each feature can be managed on a per-file basis, or globally by setting
+the system default setting via sysctl(8).
 
 A file will generally have one of three states for any given feature: enabled,
-disabled, or sysdef. The sysdef state implies that a file is configured
-to use the system default setting, and an enabled or disabled state overrides
-the system default setting for a given file.
+disabled, or sysdef.
+The sysdef state implies that a file is configured to use the system default setting,
+and an enabled or disabled state overrides the system default setting for a
+given file.
 
 The utility uses extended attributes to store feature state for each file, and
 by default the attributes are stored using the system namespace but the namespace
@@ -85,6 +87,8 @@ Follow symbolic links.
 Enable verbose output.
 .It Fl n Ar namespace
 Set extended attribute namespace.
+.It Fl h Ar feature
+Show general help or feature-specific help.
 
 .Sh EXIT STATUS
 Exit status is 0 on success, or 1 if the command fails.
