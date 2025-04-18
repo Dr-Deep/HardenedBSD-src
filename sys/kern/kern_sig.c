@@ -126,14 +126,11 @@ static int	filt_signal(struct knote *kn, long hint);
 static struct thread *sigtd(struct proc *p, int sig, bool fast_sigblock);
 static void	sigqueue_start(void);
 static void	sigfastblock_setpend(struct thread *td, bool resched);
-<<<<<<< HEAD
+static void	sig_handle_first_stop(struct thread *td, struct proc *p,
+    int sig, bool ext);
 #ifdef HBSD_EXPERIMENTAL
 static bool	stack_address_grows_down(struct proc *, vm_offset_t);
 #endif
-=======
-static void	sig_handle_first_stop(struct thread *td, struct proc *p,
-    int sig, bool ext);
->>>>>>> origin/freebsd/current/main
 
 static uma_zone_t	ksiginfo_zone = NULL;
 const struct filterops sig_filtops = {

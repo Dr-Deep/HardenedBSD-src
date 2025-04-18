@@ -20,12 +20,7 @@ configtest_cmd="sshd_configtest"
 pidfile="/var/run/${name}.pid"
 extra_commands="configtest keygen reload"
 
-<<<<<<< HEAD
 : ${sshd_rsa_enable:="no"}
-: ${sshd_dsa_enable:="no"}
-=======
-: ${sshd_rsa_enable:="yes"}
->>>>>>> origin/freebsd/current/main
 : ${sshd_ecdsa_enable:="yes"}
 : ${sshd_ed25519_enable:="yes"}
 
