@@ -2943,12 +2943,8 @@ _elftctools=	lib/libelftc \
 .endif
 
 .if ${MK_CLANG_BOOTSTRAP} != "no"
-<<<<<<< HEAD
-_clang=		usr.bin/clang
-_ar=		usr.bin/clang/llvm-ar
-=======
 _clang=		usr.bin/clang/clang
->>>>>>> origin/freebsd/current/main
+_ar=		usr.bin/clang/llvm-ar
 .endif
 .if ${MK_LLD_BOOTSTRAP} != "no"
 _lld=		usr.bin/clang/lld
