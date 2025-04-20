@@ -7,7 +7,7 @@
 
 .include <bsd.init.mk>
 
-__<bsd.test.mk>__:
+__<bsd.test.mk>__:	.NOTMAIN
 
 # HBSDTODO: Research why compiling the tests fail with SafeStack.
 NOSAFESTACK=	yes
