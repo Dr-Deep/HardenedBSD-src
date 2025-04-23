@@ -263,7 +263,11 @@ _posix_spawn_thr(void *data)
 		psa->envp = fake_envp;
 	}
 	if (psa->use_env_path)
+<<<<<<< HEAD
 		execvpe(psa->path, psa->argv, psa->envp);
+=======
+		__libc_execvpe(psa->path, psa->argv, envp);
+>>>>>>> internal/freebsd/current/main
 	else
 		_execve(psa->path, psa->argv, psa->envp);
 	psa->error = errno;
