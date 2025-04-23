@@ -10,16 +10,8 @@ LIBADD=	util crypt
 CONFTTYSNAME=	ttys
 CONFTTYS+=	ttys
 
-<<<<<<< HEAD
 NOCFI=	yes
 
-# Needed for getmntopts.c
-MOUNT=	${SRCTOP}/sbin/mount
-CFLAGS+=-I${MOUNT}
-.PATH:	${MOUNT}
-
-=======
->>>>>>> internal/freebsd/current/main
 NO_SHARED?=	YES
 
 .include <bsd.prog.mk>

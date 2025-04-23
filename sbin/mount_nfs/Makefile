@@ -7,12 +7,8 @@ LIBADD=	util
 UMNTALL= ${SRCTOP}/usr.sbin/rpc.umntall
 CFLAGS+= -DNFS -I${UMNTALL}
 
-<<<<<<< HEAD
 CFI_OVERRIDE=	-fno-sanitize=cfi-icall
 
-.PATH: ${MOUNT} ${UMNTALL}
-=======
 .PATH: ${UMNTALL}
->>>>>>> internal/freebsd/current/main
 
 .include <bsd.prog.mk>
