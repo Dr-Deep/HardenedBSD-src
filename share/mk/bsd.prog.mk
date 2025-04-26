@@ -36,41 +36,6 @@ PROG=	${PROG_CXX}
 MK_DEBUG_FILES=	no
 .endif
 
-<<<<<<< HEAD
-=======
-# ELF hardening knobs
-.if ${MK_BIND_NOW} != "no"
-LDFLAGS+= -Wl,-znow
-.endif
-.if ${LINKER_TYPE} != "mac"
-.if ${MK_RELRO} == "no"
-LDFLAGS+= -Wl,-znorelro
-.else
-LDFLAGS+= -Wl,-zrelro
-.endif
-.endif
-# Static PIE is not yet supported/tested.
-.if ${MK_PIE} != "no" && (!defined(NO_SHARED) || ${NO_SHARED:tl} == "no")
-CFLAGS+= -fPIE
-CXXFLAGS+= -fPIE
-LDFLAGS+= -pie
-OBJ_EXT=pieo
-.else
-OBJ_EXT=o
-.endif
-.if ${MK_RETPOLINE} != "no"
-.if ${COMPILER_FEATURES:Mretpoline} && ${LINKER_FEATURES:Mretpoline}
-CFLAGS+= -mretpoline
-CXXFLAGS+= -mretpoline
-# retpolineplt is broken with static linking (PR 233336)
-.if !defined(NO_SHARED) || ${NO_SHARED:tl} == "no"
-LDFLAGS+= -Wl,-zretpolineplt
-.endif
-.else
-.warning Retpoline requested but not supported by compiler or linker
-.endif
-.endif
->>>>>>> origin/freebsd/current/main
 # LLD sensibly defaults to -znoexecstack, so do the same for BFD
 LDFLAGS.bfd+= -Wl,-znoexecstack
 .if ${MK_BRANCH_PROTECTION} != "no"

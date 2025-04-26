@@ -1043,11 +1043,7 @@ SRCS_MIN+=	Object/RelocationResolver.cpp
 SRCS_MIW+=	Object/SymbolSize.cpp
 SRCS_MIN+=	Object/SymbolicFile.cpp
 SRCS_MIN+=	Object/TapiFile.cpp
-<<<<<<< HEAD
-SRCS_MIW+=	Object/TapiUniversal.cpp
-=======
 SRCS_MIN+=	Object/TapiUniversal.cpp
->>>>>>> origin/freebsd/current/main
 SRCS_MIN+=	Object/WasmObjectFile.cpp
 SRCS_MIW+=	Object/WindowsMachineFlag.cpp
 SRCS_MIN+=	Object/WindowsResource.cpp
