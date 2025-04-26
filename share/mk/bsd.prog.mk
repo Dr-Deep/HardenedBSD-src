@@ -4,7 +4,7 @@
 .include <bsd.compiler.mk>
 .include <bsd.linker.mk>
 
-.SUFFIXES: .out .o .bc .c .cc .cpp .cxx .C .m .y .l .ll .ln .s .S .asm
+.include <bsd.suffixes-extra.mk>
 
 # XXX The use of COPTS in modern makefiles is discouraged.
 .if defined(COPTS)
@@ -36,6 +36,41 @@ PROG=	${PROG_CXX}
 MK_DEBUG_FILES=	no
 .endif
 
+<<<<<<< HEAD
+=======
+# ELF hardening knobs
+.if ${MK_BIND_NOW} != "no"
+LDFLAGS+= -Wl,-znow
+.endif
+.if ${LINKER_TYPE} != "mac"
+.if ${MK_RELRO} == "no"
+LDFLAGS+= -Wl,-znorelro
+.else
+LDFLAGS+= -Wl,-zrelro
+.endif
+.endif
+# Static PIE is not yet supported/tested.
+.if ${MK_PIE} != "no" && (!defined(NO_SHARED) || ${NO_SHARED:tl} == "no")
+CFLAGS+= -fPIE
+CXXFLAGS+= -fPIE
+LDFLAGS+= -pie
+OBJ_EXT=pieo
+.else
+OBJ_EXT=o
+.endif
+.if ${MK_RETPOLINE} != "no"
+.if ${COMPILER_FEATURES:Mretpoline} && ${LINKER_FEATURES:Mretpoline}
+CFLAGS+= -mretpoline
+CXXFLAGS+= -mretpoline
+# retpolineplt is broken with static linking (PR 233336)
+.if !defined(NO_SHARED) || ${NO_SHARED:tl} == "no"
+LDFLAGS+= -Wl,-zretpolineplt
+.endif
+.else
+.warning Retpoline requested but not supported by compiler or linker
+.endif
+.endif
+>>>>>>> origin/freebsd/current/main
 # LLD sensibly defaults to -znoexecstack, so do the same for BFD
 LDFLAGS.bfd+= -Wl,-znoexecstack
 .if ${MK_BRANCH_PROTECTION} != "no"
@@ -176,7 +211,7 @@ PROGNAME?=	${PROG}
 
 .if defined(SRCS)
 
-OBJS+=  ${SRCS:N*.h:${OBJS_SRCS_FILTER:ts:}:S/$/.o/g}
+OBJS+=  ${SRCS:N*.h:${OBJS_SRCS_FILTER:ts:}:S/$/.${OBJ_EXT}/g}
 
 # LLVM bitcode / textual IR representations of the program
 BCOBJS+=${SRCS:N*.[hsS]:N*.asm:${OBJS_SRCS_FILTER:ts:}:S/$/.bco/g}
@@ -212,10 +247,10 @@ SRCS=	${PROG}.c
 # - the name of the object gets put into the executable symbol table instead of
 #   the name of a variable temporary object.
 # - it's useful to keep objects around for crunching.
-OBJS+=		${PROG}.o
+OBJS+=		${PROG}.${OBJ_EXT}
 BCOBJS+=	${PROG}.bc
 LLOBJS+=	${PROG}.ll
-CLEANFILES+=	${PROG}.o ${PROG}.bc ${PROG}.ll
+CLEANFILES+=	${PROG}.${OBJ_EXT} ${PROG}.bc ${PROG}.ll
 
 .if target(beforelinking)
 beforelinking: ${OBJS}
