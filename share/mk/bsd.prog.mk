@@ -176,7 +176,7 @@ PROGNAME?=	${PROG}
 
 .if defined(SRCS)
 
-OBJS+=  ${SRCS:N*.h:${OBJS_SRCS_FILTER:ts:}:S/$/.${OBJ_EXT}/g}
+OBJS+=  ${SRCS:N*.h:${OBJS_SRCS_FILTER:ts:}:S/$/.o/g}
 
 # LLVM bitcode / textual IR representations of the program
 BCOBJS+=${SRCS:N*.[hsS]:N*.asm:${OBJS_SRCS_FILTER:ts:}:S/$/.bco/g}
@@ -212,10 +212,10 @@ SRCS=	${PROG}.c
 # - the name of the object gets put into the executable symbol table instead of
 #   the name of a variable temporary object.
 # - it's useful to keep objects around for crunching.
-OBJS+=		${PROG}.${OBJ_EXT}
+OBJS+=		${PROG}.o
 BCOBJS+=	${PROG}.bc
 LLOBJS+=	${PROG}.ll
-CLEANFILES+=	${PROG}.${OBJ_EXT} ${PROG}.bc ${PROG}.ll
+CLEANFILES+=	${PROG}.o ${PROG}.bc ${PROG}.ll
 
 .if target(beforelinking)
 beforelinking: ${OBJS}
