@@ -12,11 +12,8 @@ export ROOTDIR="$PWD/dvd"
 export PKGCMD="/usr/sbin/pkg -d --rootdir ${ROOTDIR}"
 export PORTSDIR="${PORTSDIR:-/usr/ports}"
 
-<<<<<<< HEAD
-_DVD_PACKAGES="archivers/unzip
-=======
 _DVD_PACKAGES="
->>>>>>> internal/freebsd/current/main
+archivers/unzip
 devel/git@lite
 graphics/drm-kmod
 graphics/drm-510-kmod
