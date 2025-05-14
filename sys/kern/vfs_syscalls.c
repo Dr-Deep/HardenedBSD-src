@@ -68,16 +68,7 @@
 #include <sys/sdt.h>
 #include <sys/stat.h>
 #include <sys/sx.h>
-<<<<<<< HEAD
-#include <sys/unistd.h>
-#include <sys/vnode.h>
 #include <sys/pax.h>
-#include <sys/priv.h>
-#include <sys/proc.h>
-#include <sys/dirent.h>
-#include <sys/jail.h>
-=======
->>>>>>> internal/freebsd/current/main
 #include <sys/syscallsubr.h>
 #include <sys/sysctl.h>
 #include <sys/sysproto.h>

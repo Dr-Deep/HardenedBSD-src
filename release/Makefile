@@ -290,14 +290,10 @@ dvd: packagesystem
 	echo kernels_autodetect=\"NO\" >> ${.TARGET}/boot/loader.conf
 	echo loader_menu_multi_user_prompt=\"Installer\" >> ${.TARGET}/boot/loader.conf
 	cp ${.CURDIR}/rc.local ${.TARGET}/etc
-<<<<<<< HEAD
 	# XXXOP - try to work around installer lockup on random dev in a virtual machine
 	dd if=/dev/random of=${.TARGET}/boot/entropy bs=4k count=1
 	chown 0:0 ${.TARGET}/boot/entropy
 	chmod 0600 ${.TARGET}/boot/entropy
-.if defined(NO_ROOT)
-=======
->>>>>>> internal/freebsd/current/main
 	echo "./etc/resolv.conf type=link uname=root gname=wheel mode=0644 link=/tmp/bsdinstall_etc/resolv.conf" >> ${.TARGET}/METALOG
 	echo "./etc/rc.conf type=file uname=root gname=wheel mode=0644" >> ${.TARGET}/METALOG
 	echo "./etc/sysctl.conf type=file uname=root gname=wheel mode=0644" >> ${.TARGET}/METALOG
