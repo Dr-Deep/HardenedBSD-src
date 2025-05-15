@@ -757,18 +757,17 @@ vntblinit(void *dummy __unused)
 	int cpu, physvnodes, virtvnodes;
 
 	/*
-	 * Desiredvnodes is a function of the physical memory size and the
-	 * kernel's heap size.  Generally speaking, it scales with the
-	 * physical memory size.  The ratio of desiredvnodes to the physical
-	 * memory size is 1:16 until desiredvnodes exceeds 98,304.
-	 * Thereafter, the
-	 * marginal ratio of desiredvnodes to the physical memory size is
-	 * 1:64.  However, desiredvnodes is limited by the kernel's heap
-	 * size.  The memory required by desiredvnodes vnodes and vm objects
-	 * must not exceed 1/10th of the kernel's heap size.
+	 * 'desiredvnodes' is the minimum of a function of the physical memory
+	 * size and another of the kernel heap size (UMA limit, a portion of the
+	 * KVA).
+	 *
+	 * Currently, on 64-bit platforms, 'desiredvnodes' is set to
+	 * 'virtvnodes' up to a physical memory cutoff of ~1722MB, after which
+	 * 'physvnodes' applies instead.  With the current automatic tuning for
+	 * 'maxfiles' (32 files/MB), 'desiredvnodes' is always greater than it.
 	 */
-	physvnodes = maxproc + pgtok(vm_cnt.v_page_count) / 64 +
-	    3 * min(98304 * 16, pgtok(vm_cnt.v_page_count)) / 64;
+	physvnodes = maxproc + pgtok(vm_cnt.v_page_count) / 32 +
+	    min(98304 * 16, pgtok(vm_cnt.v_page_count)) / 32;
 	virtvnodes = vm_kmem_size / (10 * (sizeof(struct vm_object) +
 	    sizeof(struct vnode) + NC_SZ * ncsizefactor + NFS_NCLNODE_SZ));
 	desiredvnodes = min(physvnodes, virtvnodes);
