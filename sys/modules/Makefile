@@ -426,6 +426,7 @@ SUBDIR=	\
 	wlan_xauth \
 	${_wpi} \
 	${_wpifw} \
+	wtap \
 	${_x86bios} \
 	xdr \
 	xl \
