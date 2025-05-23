@@ -55,8 +55,8 @@ usage(const char *feature_name)
 		goto end;
 	} else if (feature_name == NULL) {
 		fprintf(stderr, "USAGE\n\n");
-		fprintf(stderr, "    %s [-Hhdn] pax enable|disable|sysdef <feature> <file>\n", prog);
-		fprintf(stderr, "    %s [-Hhdn] pax list <file>\n\n", prog);
+		fprintf(stderr, "    %s [-Hdnh] pax enable|disable|sysdef <feature> <file>\n", prog);
+		fprintf(stderr, "    %s [-Hdnh] pax list <file>\n\n", prog);
 		fprintf(stderr, "OPTIONS\n\n");
 		fprintf(stderr, "    -H: follow symlinks\n");
 		fprintf(stderr, "    -d: enable verbose output\n");
