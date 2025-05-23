@@ -264,4 +264,6 @@ ${_ILINKS}: .NOMETA
 	${ECHO} ${.TARGET} "->" $$path ; \
 	ln -fns $$path ${.TARGET}
 .endif # !NO_OBJ
+
+.-include "local.defs.mk"
 .endif # __BOOT_DEFS_MK__
