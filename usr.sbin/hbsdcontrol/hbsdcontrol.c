@@ -41,6 +41,7 @@
 static int verbose = 0;
 static uint64_t open_flags = O_PATH | O_CLOEXEC | O_NOFOLLOW;
 static const char *prog;
+static const char *admin_privs_required = "[-] Administrative privileges are required for the \"system\" namespace\n";
 
 static void
 usage(const char *feature_name)
@@ -55,8 +56,8 @@ usage(const char *feature_name)
 		goto end;
 	} else if (feature_name == NULL) {
 		fprintf(stderr, "USAGE\n\n");
-		fprintf(stderr, "    %s [-Hhdn] pax enable|disable|sysdef <feature> <file>\n", prog);
-		fprintf(stderr, "    %s [-Hhdn] pax list <file>\n\n", prog);
+		fprintf(stderr, "    %s [-Hdnh] pax enable|disable|sysdef <feature> <file>\n", prog);
+		fprintf(stderr, "    %s [-Hdnh] pax list <file>\n\n", prog);
 		fprintf(stderr, "OPTIONS\n\n");
 		fprintf(stderr, "    -H: follow symlinks\n");
 		fprintf(stderr, "    -d: enable verbose output\n");
@@ -306,37 +307,63 @@ main(int argc, char *argv[])
 	verb = argv[optind + 1];
 
 	if (!strcmp(verb, "list")) {
-		res = do_list(ctx, argv[optind + 2]);
+		if (geteuid() && !strcmp(ns, "system")) {
+			res = RES_FAIL;
+			fprintf(stderr, "%s", admin_privs_required);
+		} else {
+			res = do_list(ctx, argv[optind + 2]);
+		}
 		goto end;
 	}
 	if (!strcmp(verb, "enable")) {
 		if (argc - optind < 4) {
 			usage(NULL);
+		} else if (geteuid() && !strcmp(ns, "system")) {
+			res = RES_FAIL;
+			fprintf(stderr, "%s", admin_privs_required);
+		} else {
+			errno = 0;
+			res = set_state(ctx, argv[optind + 2], HBSDCTRL_STATE_ENABLED,
+					argv[optind + 3]);
+			if (res) {
+				fprintf(stderr, "[-] Failed to enable feature (%s)\n", strerror(errno));
+			}
 		}
-
-		res = set_state(ctx, argv[optind + 2], HBSDCTRL_STATE_ENABLED,
-		    argv[optind + 3]);
 		goto end;
 	}
 	if (!strcmp(verb, "disable")) {
 		if (argc - optind < 4) {
 			usage(NULL);
+		} else if (geteuid() && !strcmp(ns, "system")) {
+			res = RES_FAIL;
+			fprintf(stderr, "%s", admin_privs_required);
+		} else {
+			errno = 0;
+			res = set_state(ctx, argv[optind + 2], HBSDCTRL_STATE_DISABLED,
+					argv[optind + 3]);
+			if (res) {
+				fprintf(stderr, "[-] Failed to disable feature (%s)\n", strerror(errno));
+			}
 		}
-
-		res = set_state(ctx, argv[optind + 2], HBSDCTRL_STATE_DISABLED,
-		    argv[optind + 3]);
 		goto end;
 	}
 	if (!strcmp(verb, "reset") || !strcmp(verb, "sysdef")) {
 		if (argc - optind < 4) {
 			usage(NULL);
+		} else if (geteuid() && !strcmp(ns, "system")) {
+			res = RES_FAIL;
+			fprintf(stderr, "%s", admin_privs_required);
+		} else {
+			errno = 0;
+			res = reset(ctx, argv[optind + 2], argv[optind + 3]);
+			if (res) {
+				fprintf(stderr, "[-] Failed to %s feature (%s)\n", verb, strerror(errno));
+			}
 		}
-
-		res = reset(ctx, argv[optind + 2], argv[optind + 3]);
 		goto end;
 	}
 
-	res = 1;
+	res = RES_FAIL;
 	fprintf(stderr, "[-] Unknown verb: %s - did you mean enable|disable|list|sysdef ?\n", verb);
 	goto end;
 
