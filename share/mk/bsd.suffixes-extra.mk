@@ -22,15 +22,6 @@ PIEFLAG?=-fpie
 	    -c ${.IMPSRC} -o ${.TARGET}
 	${CTFCONVERT_CMD}
 
-<<<<<<< HEAD
-=======
-.c.pieo:
-	${CC} ${PIEFLAG} -DPIC \
-	    ${SHARED_CFLAGS} ${CFLAGS} \
-	    -c ${.IMPSRC} -o ${.TARGET}
-	${CTFCONVERT_CMD}
-
->>>>>>> internal/freebsd/current/main
 .cc.pico .C.pico .cpp.pico .cxx.pico:
 	${CXX} ${PICFLAG} -DPIC \
 	    ${SHARED_CXXFLAGS} ${CXXFLAGS} \
@@ -42,13 +33,6 @@ PIEFLAG?=-fpie
 	    ${CXXFLAGS:C/^-fstack-protector.*$//:C/^-fstack-clash-protection.*$//:C/^-fsanitize.*$//} \
 	    -c ${.IMPSRC} -o ${.TARGET}
 
-<<<<<<< HEAD
-=======
-.cc.pieo .C.pieo .cpp.pieo .cxx.pieo:
-	${CXX} ${PIEFLAG} ${SHARED_CXXFLAGS} ${CXXFLAGS} \
-	    -c ${.IMPSRC} -o ${.TARGET}
-
->>>>>>> internal/freebsd/current/main
 .f.pico:
 	${FC} ${PICFLAG} -DPIC ${FFLAGS} -o ${.TARGET} -c ${.IMPSRC}
 	${CTFCONVERT_CMD}
@@ -77,15 +61,6 @@ PIEFLAG?=-fpie
 	    -c ${.IMPSRC} -o ${.TARGET}
 	${CTFCONVERT_CMD}
 
-<<<<<<< HEAD
-=======
-.asm.pieo:
-	${CC:N${CCACHE_BIN}} -x assembler-with-cpp ${PIEFLAG} -DPIC \
-	    ${SHARED_CFLAGS} ${CFLAGS} ${ACFLAGS} \
-	    -c ${.IMPSRC} -o ${.TARGET}
-	${CTFCONVERT_CMD}
-
->>>>>>> internal/freebsd/current/main
 .S.pico:
 	${CC:N${CCACHE_BIN}} ${PICFLAG} -DPIC \
 	    ${SHARED_CFLAGS} ${CFLAGS} ${ACFLAGS} \
@@ -100,13 +75,4 @@ PIEFLAG?=-fpie
 	    -c ${.IMPSRC} -o ${.TARGET}
 	${CTFCONVERT_CMD}
 
-<<<<<<< HEAD
-=======
-.S.pieo:
-	${CC:N${CCACHE_BIN}} ${PIEFLAG} -DPIC \
-	    ${SHARED_CFLAGS} ${CFLAGS} ${ACFLAGS} \
-	    -c ${.IMPSRC} -o ${.TARGET}
-	${CTFCONVERT_CMD}
-
->>>>>>> internal/freebsd/current/main
 .endif	# !target(__<bsd.suffixes-extra.mk>__)

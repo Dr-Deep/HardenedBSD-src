@@ -64,14 +64,10 @@ _libsys_other_objects= fstat fstatat fstatfs syscall \
 # A few other bits from libc_nossp_pic:
 _libc_other_objects= sigsetjmp lstat stat _setjmp setjmp setjmperr
 
-<<<<<<< HEAD
 # HBSD: We need __sysctlbyname
 _libc_other_objects+=	__sysctlbyname
 
-# Finally add additional architecture-dependent libc dependencies
-=======
 # Finally add additional architecture-dependent libc and libsys dependencies
->>>>>>> internal/freebsd/current/main
 .if ${LIBC_ARCH} == "arm"
 # ARM needs aeabi_unwind_cpp for _setjmp
 _libc_other_objects+=aeabi_unwind_cpp
