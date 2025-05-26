@@ -236,15 +236,7 @@ VNET_SYSINIT(in_pcbhashseed_init, SI_SUB_PROTO_DOMAIN, SI_ORDER_FIRST,
     in_pcbhashseed_init, NULL);
 
 #ifdef INET
-<<<<<<< HEAD
-#ifdef PAX_HARDENING
 VNET_DEFINE_STATIC(int, connect_inaddr_wild) = 0;
-#else
-VNET_DEFINE_STATIC(int, connect_inaddr_wild) = 1;
-#endif
-=======
-VNET_DEFINE_STATIC(int, connect_inaddr_wild) = 0;
->>>>>>> internal/freebsd/current/main
 #define	V_connect_inaddr_wild	VNET(connect_inaddr_wild)
 SYSCTL_INT(_net_inet_ip, OID_AUTO, connect_inaddr_wild,
     CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(connect_inaddr_wild), 0,
