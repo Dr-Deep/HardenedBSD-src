@@ -134,7 +134,10 @@ beforeclean:
 .include <bsd.obj.mk>
 clean: beforeclean
 
-base.txz:
+#
+# Legacy distribution tarballs
+#
+base.txz: # Also (if enabled) tests, compat libs, and -dbg variants for all.
 	mkdir -p ${DISTDIR}
 	( cd ${WORLDDIR} && ${IMAKE} -DNO_ROOT distributeworld DISTDIR=${.OBJDIR}/${DISTDIR} )
 	# Bootstrap etcupdate(8) database.
@@ -151,7 +154,7 @@ base.txz:
 	( cd ${WORLDDIR} && ${IMAKE} -DNO_ROOT packageworld DISTDIR=${.OBJDIR}/${DISTDIR} )
 	mv ${DISTDIR}/*.txz .
 
-kernel.txz:
+kernel.txz: # Also (if enabled) kernel-dbg.txz.
 	mkdir -p ${DISTDIR}
 	( cd ${WORLDDIR} && ${IMAKE} -DNO_ROOT distributekernel DISTDIR=${.OBJDIR}/${DISTDIR} KERNCONF=${KERNCONF} )
 	( cd ${WORLDDIR} && ${IMAKE} -DNO_ROOT packagekernel DISTDIR=${.OBJDIR}/${DISTDIR} KERNCONF=${KERNCONF} )
@@ -172,6 +175,10 @@ ports.txz:
 	    --exclude .git --exclude .svn \
 	    --exclude usr/ports/distfiles --exclude usr/ports/packages \
 	    --exclude 'usr/ports/INDEX*' --exclude work usr/ports )
+
+packagesystem: ${DISTRIBUTIONS}
+	sh ${.CURDIR}/scripts/make-manifest.sh $$(ls *.txz | grep -v container) > MANIFEST
+	touch ${.TARGET}
 
 .if defined(PKGBASE)
 PKGBASE_REPO=	pkgbase-repo
@@ -376,10 +383,6 @@ memstick.img: disc1-memstick
 mini-memstick: mini-memstick.img
 mini-memstick.img: bootonly-memstick
 	cd bootonly-memstick && sh ${.CURDIR}/${TARGET}/make-memstick.sh ./METALOG ../${.TARGET}
-
-packagesystem: ${DISTRIBUTIONS}
-	sh ${.CURDIR}/scripts/make-manifest.sh $$(ls *.txz | grep -v container) > MANIFEST
-	touch ${.TARGET}
 
 pkg-stage: dvd
 .if !defined(NOPKG) || empty(NOPKG)
