@@ -1,6 +1,11 @@
 /*-
- * Copyright (c) 2003 Peter Wemm
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Copyright (c) 2025 The FreeBSD Foundation
  * All rights reserved.
+ *
+ * This software was developed by Konstantin Belousov
+ * under sponsorship from the FreeBSD Foundation.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -24,52 +29,23 @@
  * SUCH DAMAGE.
  */
 
-#include <machine/asmacros.h>
+#define _WANT_P_OSREL
+#include <sys/param.h>
+#include <machine/cpufunc.h>
+#include <machine/specialreg.h>
+#include <machine/sysarch.h>
+#include <x86/ifunc.h>
+#include "libc_private.h"
 
-#include "assym.inc"
+static int
+amd64_set_tlsbase_syscall(void *addr)
+{
+	return (sysarch(AMD64_SET_TLSBASE, &addr));
+}
 
-	.text
-/*
- * Call gate entry for FreeBSD ELF and Linux/NetBSD syscall (int 0x80)
- *
- * This is a SDT_SYSIDT entry point (unlike the i386 port) so that we
- * can do a swapgs before enabling interrupts.  This is critical because
- * if we took an interrupt before swapgs, the interrupt code would see
- * that it originated in supervisor mode and skip the swapgs.
- */
-	SUPERALIGN_TEXT
-IDTVEC(int0x80_syscall_pti)
-	PTI_UENTRY has_err=0
-	jmp	int0x80_syscall_common
-	SUPERALIGN_TEXT
-IDTVEC(int0x80_syscall)
-	swapgs
-int0x80_syscall_common:
-	pushq	$2			/* sizeof "int 0x80" */
-	subq	$TF_ERR,%rsp		/* skip over tf_trapno */
-	movq	%rdi,TF_RDI(%rsp)
-	movq	PCPU(CURPCB),%rdi
-	andl	$~PCB_FULL_IRET,PCB_FLAGS(%rdi)
-	SAVE_SEGS
-	movq	%rax,TF_RAX(%rsp)
-	movq	%rdx,TF_RDX(%rsp)
-	movq	%rcx,TF_RCX(%rsp)
-	movq	%r15,TF_R15(%rsp)
-	call	handle_ibrs_entry
-	sti
-	movq	%rsi,TF_RSI(%rsp)
-	movq	%r9,TF_R9(%rsp)
-	movq	%rbx,TF_RBX(%rsp)
-	movq	%rbp,TF_RBP(%rsp)
-	movq	%r10,TF_R10(%rsp)
-	movq	%r11,TF_R11(%rsp)
-	movq	%r12,TF_R12(%rsp)
-	movq	%r13,TF_R13(%rsp)
-	movq	%r14,TF_R14(%rsp)
-	movl	$TF_HASSEGS,TF_FLAGS(%rsp)
-	pushfq
-	andq	$~(PSL_D | PSL_AC),(%rsp)
-	popfq
-	movq	%rsp, %rdi
-	call	ia32_syscall
-	jmp	doreti
+DEFINE_UIFUNC(, int, amd64_set_tlsbase, (void *))
+{
+	if (__getosreldate() >= P_OSREL_TLSBASE)
+		return (amd64_set_tlsbase_syscall);
+	return (amd64_set_fsbase);
+}
