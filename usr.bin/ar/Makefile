@@ -1,11 +1,7 @@
 .include <src.opts.mk>
 
-<<<<<<< HEAD
-PROG=	elftc-ar
-=======
 PACKAGE= toolchain
-PROG=	ar
->>>>>>> internal/freebsd/current/main
+PROG=	elftc-ar
 SRCS=	ar.c acplex.l acpyacc.y read.c util.c write.c y.tab.h
 MAN=	ar.1
 

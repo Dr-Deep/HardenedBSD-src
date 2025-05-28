@@ -157,13 +157,8 @@ base.txz: # Also (if enabled) tests, compat libs, and -dbg variants for all.
 
 kernel.txz: # Also (if enabled) kernel-dbg.txz.
 	mkdir -p ${DISTDIR}
-<<<<<<< HEAD
-	( cd ${WORLDDIR} && ${IMAKE} -DNO_ROOT distributekernel DISTDIR=${.OBJDIR}/${DISTDIR} KERNCONF=${KERNCONF} )
-	( cd ${WORLDDIR} && ${IMAKE} -DNO_ROOT packagekernel DISTDIR=${.OBJDIR}/${DISTDIR} KERNCONF=${KERNCONF} )
-=======
-	( cd ${WORLDDIR} && ${IMAKE} distributekernel DISTDIR=${.OBJDIR}/${DISTDIR} )
-	( cd ${WORLDDIR} && ${IMAKE} packagekernel DISTDIR=${.OBJDIR}/${DISTDIR} )
->>>>>>> internal/freebsd/current/main
+	( cd ${WORLDDIR} && ${IMAKE} distributekernel DISTDIR=${.OBJDIR}/${DISTDIR} KERNCONF=${KERNCONF} )
+	( cd ${WORLDDIR} && ${IMAKE} packagekernel DISTDIR=${.OBJDIR}/${DISTDIR} KERNCONF=${KERNCONF} )
 	mv ${DISTDIR}/kernel*.txz .
 
 src.txz:
