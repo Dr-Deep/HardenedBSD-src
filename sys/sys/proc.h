@@ -42,6 +42,7 @@
 #ifdef _KERNEL
 #include <sys/_eventhandler.h>
 #endif
+#include <sys/_exterr.h>
 #include <sys/condvar.h>
 #ifndef _KERNEL
 #include <sys/filedesc.h>
@@ -322,6 +323,7 @@ struct thread {
 	size_t		td_vslock_sz;	/* (k) amount of vslock-ed space */
 	struct kcov_info *td_kcov_info;	/* (*) Kernel code coverage data */
 	long		td_ucredref;	/* (k) references on td_realucred */
+	struct kexterr	td_kexterr;
 #define	td_endzero td_sigmask
 
 /* Copied during fork1(), thread_create(), or kthread_add(). */
@@ -342,6 +344,7 @@ struct thread {
 	void		*td_sigblock_ptr; /* (k) uptr for fast sigblock. */
 	uint32_t	td_sigblock_val;  /* (k) fast sigblock value read at
 					     td_sigblock_ptr on kern entry */
+	void		*td_exterr_ptr;
 #define	td_endcopy td_pcb
 
 /*
@@ -570,6 +573,8 @@ enum {
 #define	TDP2_COMPAT32RB	0x00000002 /* compat32 ABI for robust lists */
 #define	TDP2_ACCT	0x00000004 /* Doing accounting */
 #define	TDP2_SAN_QUIET	0x00000008 /* Disable warnings from K(A|M)SAN */
+#define	TDP2_EXTERR	0x00000010 /* Kernel reported ext error */
+#define	TDP2_UEXTERR	0x00000020 /* User set ext error reporting ptr */
 
 /*
  * Reasons that the current thread can not be run yet.
