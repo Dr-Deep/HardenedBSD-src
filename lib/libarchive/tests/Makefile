@@ -21,6 +21,8 @@ CFLAGS+= -I${SRCTOP}/sys/contrib/zstd/lib
 
 CFLAGS.test_utils.c+=	-Wno-cast-align
 
+FORTIFY_SOURCE=		0
+
 # Uncomment to link against dmalloc
 #LDADD+= -L/usr/local/lib -ldmalloc
 #CFLAGS+= -I/usr/local/include -DUSE_DMALLOC
