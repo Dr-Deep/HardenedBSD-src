@@ -216,13 +216,10 @@ __DEFAULT_NO_OPTIONS = \
     LOADER_VERIEXEC_PASS_MANIFEST \
     LLVM_FULL_DEBUGINFO \
     MALLOC_PRODUCTION \
-<<<<<<< HEAD
     NETLINK \
     NETLINK_SUPPORT \
-    OFED \
-=======
     MITKRB5 \
->>>>>>> internal/freebsd/current/main
+    OFED \
     OFED_EXTRA \
     OPENLDAP \
     PORTSNAP \
