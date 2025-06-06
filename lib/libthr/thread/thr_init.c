@@ -33,6 +33,7 @@
  * SUCH DAMAGE.
  */
 
+#define _WANT_P_OSREL
 #include "namespace.h"
 #include <sys/param.h>
 #include <sys/signalvar.h>
@@ -58,6 +59,7 @@
 #include "libc_private.h"
 #include "thr_private.h"
 
+int		__getosreldate(void);
 char		*_usrstack;
 struct pthread	*_thr_initial;
 int		_libthr_debug;
@@ -433,7 +435,8 @@ init_main_thread(struct pthread *thread)
 #endif
 
 	thread->uexterr.ver = UEXTERROR_VER;
-	exterrctl(EXTERRCTL_ENABLE, EXTERRCTLF_FORCE, &thread->uexterr);
+	if (__getosreldate() >= P_OSREL_EXTERRCTL)
+		exterrctl(EXTERRCTL_ENABLE, EXTERRCTLF_FORCE, &thread->uexterr);
 
 	/* Others cleared to zero by thr_alloc() */
 }
