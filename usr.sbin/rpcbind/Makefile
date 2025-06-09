@@ -10,6 +10,8 @@ CFI_OVERRIDE=	-fno-sanitize=cfi-icall
 
 CFLAGS+= -DPORTMAP
 
+LIBADD=	util
+
 .if ${MK_INET6_SUPPORT} != "no"
 CFLAGS+= -DINET6
 .endif
