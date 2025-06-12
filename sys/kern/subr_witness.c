@@ -105,6 +105,7 @@
 #include <sys/sbuf.h>
 #include <sys/sched.h>
 #include <sys/stack.h>
+#include <sys/stdarg.h>
 #include <sys/sysctl.h>
 #include <sys/syslog.h>
 #include <sys/systm.h>
@@ -113,10 +114,13 @@
 #include <ddb/ddb.h>
 #endif
 
+<<<<<<< HEAD
 #include <machine/stdarg.h>
 
 extern int unprivileged_read_msgbuf;
 
+=======
+>>>>>>> origin/freebsd/current/main
 #if !defined(DDB) && !defined(STACK)
 #error "DDB or STACK options are required for WITNESS"
 #endif

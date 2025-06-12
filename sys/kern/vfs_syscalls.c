@@ -67,6 +67,7 @@
 #include <sys/rwlock.h>
 #include <sys/sdt.h>
 #include <sys/stat.h>
+#include <sys/stdarg.h>
 #include <sys/sx.h>
 #include <sys/pax.h>
 #include <sys/syscallsubr.h>
@@ -74,8 +75,6 @@
 #include <sys/sysproto.h>
 #include <sys/unistd.h>
 #include <sys/vnode.h>
-
-#include <machine/stdarg.h>
 
 #include <security/audit/audit.h>
 #include <security/mac/mac_framework.h>
