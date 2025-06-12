@@ -32,16 +32,17 @@
 #ifndef _SIGNAL_H_
 #define	_SIGNAL_H_
 
+#if (__POSIX_VISIBLE >= 202405 || __BSD_VISIBLE || _FORTIFY_SOURCE > 0) \
+    && !defined(SIG2STR_MAX)
+#define SIG2STR_MAX	32	/* size of buffer required for sig2str() */
+#endif
+
 #include <sys/cdefs.h>
 #include <sys/_types.h>
 #include <sys/signal.h>
 #if __POSIX_VISIBLE >= 200112 || __XSI_VISIBLE
 #include <machine/ucontext.h>
 #include <sys/_ucontext.h>
-#endif
-
-#if __POSIX_VISIBLE >= 202405 || __BSD_VISIBLE
-#define SIG2STR_MAX	32	/* size of buffer required for sig2str() */
 #endif
 
 __NULLABILITY_PRAGMA_PUSH
