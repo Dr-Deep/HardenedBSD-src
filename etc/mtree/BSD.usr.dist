@@ -89,6 +89,18 @@
         ..
         i18n
         ..
+        krb5
+            kdb
+            ..
+            plugins
+                kdb
+                ..
+                preauth
+                ..
+                tls
+                ..
+            ..
+        ..
         libxo
             encoder
             ..
@@ -260,6 +272,8 @@
             ..
         ..
         dtrace
+        ..
+        et
         ..
         examples
             BSD_daemon

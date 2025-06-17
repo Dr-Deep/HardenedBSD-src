@@ -22,6 +22,13 @@ CFLAGS+= -include ${SRCTOP}/sys/contrib/openzfs/include/os/freebsd/spl/sys/ccomp
 CFLAGS+= -DHAVE_ISSETUGID 
 CFLAGS+= -include ${SRCTOP}/sys/modules/zfs/zfs_config.h
 
+<<<<<<< HEAD
 CFI_OVERRIDE=	-fno-sanitize=cfi-icall
+=======
+.include <src.opts.mk>
+
+HAS_TESTS=
+SUBDIR.${MK_TESTS}+=	tests
+>>>>>>> internal/hardened/current/master
 
 .include <bsd.lib.mk>

@@ -392,7 +392,7 @@ cc_conn_init(struct tcpcb *tp)
 		}
 		TCPT_RANGESET(tp->t_rxtcur,
 		    ((tp->t_srtt >> 2) + tp->t_rttvar) >> 1,
-		    tp->t_rttmin, TCPTV_REXMTMAX);
+		    tp->t_rttmin, tcp_rexmit_max);
 	}
 	if (metrics.hc_ssthresh) {
 		/*
@@ -3741,7 +3741,7 @@ tcp_xmit_timer(struct tcpcb *tp, int rtt)
 	 * the minimum feasible timer (which is 2 ticks).
 	 */
 	TCPT_RANGESET(tp->t_rxtcur, TCP_REXMTVAL(tp),
-		      max(tp->t_rttmin, rtt + 2), TCPTV_REXMTMAX);
+	    max(tp->t_rttmin, rtt + 2), tcp_rexmit_max);
 
 	/*
 	 * We received an ack for a packet that wasn't retransmitted;
