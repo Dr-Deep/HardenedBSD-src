@@ -483,7 +483,7 @@ branddefs = {
 		image = "/boot/images/hardenedbsd-brand-rev.png",
 	},
 	["none"] = {
-		fb = { image = none },
+		ascii = { image = none },
 	},
 }
 
