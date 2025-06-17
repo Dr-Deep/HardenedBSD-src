@@ -55,14 +55,6 @@ MLINKS+=libprocstat.3 procstat_close.3 \
 .if ${MK_CDDL} != "no"
 CFLAGS+=	-DLIBPROCSTAT_ZFS
 SRCS+=	zfs.c
-<<<<<<< HEAD
-OBJS+=	zfs/zfs_defs.o
-SUBDIR=	zfs
-zfs/zfs_defs.o: .PHONY
-	@cd ${.CURDIR}/zfs && ${MAKE} zfs_defs.o
-zfs/zfs_defs.pico: .PHONY
-	@cd ${.CURDIR}/zfs && ${MAKE} zfs_defs.pico
-=======
 ZFSTOP=	${SRCTOP}/sys/contrib/openzfs
 CFLAGS.zfs.c+=	-DIN_BASE
 CFLAGS.zfs.c+=	-DHAVE_ISSETUGID
@@ -77,7 +69,6 @@ CFLAGS.zfs.c+=	-I${SRCTOP}/sys/modules/zfs
 CFLAGS.zfs.c+=	-include ${ZFSTOP}/include/os/freebsd/spl/sys/ccompile.h
 CFLAGS.zfs.c+=	-include ${SRCTOP}/sys/modules/zfs/zfs_config.h
 CFLAGS.zfs.c+=	-Wno-cast-qual
->>>>>>> internal/freebsd/current/main
 .endif
 
 .include <bsd.lib.mk>
