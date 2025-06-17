@@ -3244,12 +3244,9 @@ _prebuild_libs=	${_kerberos5_lib_libasn1} \
 		${_kerberos5_lib_libhx509} ${_kerberos5_lib_libkrb5} \
 		${_kerberos5_lib_libroken} \
 		${_kerberos5_lib_libwind} \
-<<<<<<< HEAD
 		${_cdcfi_libs} \
-=======
 		${_krb5_util_et} \
 		${_krb5_util_profile} \
->>>>>>> internal/hardened/current/master
 		lib/libbz2 ${_libcom_err} lib/libcrypt \
 		lib/libc++ \
 		lib/libelf lib/libexpat \
