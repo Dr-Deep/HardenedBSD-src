@@ -516,8 +516,12 @@ branddefs = {
 		},
 	},
 	["hbsd"] = {
-		graphic = hbsd_brand,
-		image = "/boot/images/hardenedbsd-brand-rev.png",
+		ascii = {
+			image = hbsd_brand,
+		},
+		fb = {
+			image = "/boot/images/hardenedbsd-brand-rev.png",
+		},
 	},
 	["none"] = {
 		ascii = { image = none },

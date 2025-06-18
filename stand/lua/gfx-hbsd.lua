@@ -28,8 +28,9 @@
 --
 
 return {
-	logo = {
-		graphic = {
+    logo = {
+        ascii = {
+            image = {
             "\027[mdUtPUzJxc21rZmUzOGtFdVhMaW1QKzdY",
             "Btf\027[36mHardened\027[34mBSD\027[mxfOL9QwvfyxGHk8NMG",
             "4ZGNmMGM2NDE2NjU4MjM5YjhkDdiM2Q3",
@@ -43,10 +44,13 @@ return {
             "diM2Q3NzgxODdkMDA2MDU2Zt7pQ+aX2g",
             "h3r\027[36mHardened\027[34mBSD\027[mvCOXT59dcSRw9mBbOl",
             "EcyCwdlh1xWKOu9qGWcmlHoBiScDv14="
-		},
-		requires_color = true,
-		shift = {x = 1, y = 5},
-		image = "/boot/images/hardenedbsd-logo-rev.png",
-		image_rl = 13
-	}
+            },
+            requires_color = true,
+            shift = {x = 1, y = 5},
+	    },
+        fb = {
+	        image = "/boot/images/hardenedbsd-logo-rev.png",
+	        width = 13,
+        },
+    }
 }
