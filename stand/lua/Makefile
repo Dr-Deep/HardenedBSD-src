@@ -26,11 +26,8 @@ FILES=	cli.lua \
 	gfx-beastie.lua \
 	gfx-beastiebw.lua \
 	gfx-fbsdbw.lua \
-<<<<<<< HEAD
 	gfx-hbsd.lua \
-=======
 	gfx-install.lua \
->>>>>>> origin/freebsd/current/main
 	gfx-orb.lua \
 	gfx-orbbw.lua \
 	menu.lua \
