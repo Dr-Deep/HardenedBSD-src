@@ -1012,20 +1012,14 @@ typedef struct {
 #define	AT_PS_STRINGS	32	/* struct ps_strings */
 #define	AT_FXRNG	33	/* Pointer to root RNG seed version. */
 #define	AT_KPRELOAD	34	/* Base of vdso, preloaded by rtld */
-<<<<<<< HEAD
-#define	AT_PAXFLAGS 	35
-#define	AT_CHERI_STATS	36	/* Reserved */
-
-#define	AT_COUNT	37	/* Count of defined aux entry types. */
-=======
 #define	AT_USRSTACKBASE	35	/* Top of user stack */
 #define	AT_USRSTACKLIM	36	/* Grow limit of user stack */
 #define	AT_CHERI_STATS	37	/* Reserved */
 #define	AT_HWCAP3	38	/* CPU feature flags 3. */
 #define	AT_HWCAP4	39	/* CPU feature flags 4. */
+#define	AT_PAXFLAGS 	40
 
-#define	AT_COUNT	40	/* Count of defined aux entry types. */
->>>>>>> internal/freebsd/current/main
+#define	AT_COUNT	41	/* Count of defined aux entry types. */
 
 /*
  * Relocation types.
