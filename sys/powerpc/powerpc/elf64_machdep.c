@@ -98,6 +98,8 @@ struct sysentvec elf64_freebsd_sysvec_v1 = {
 	.sv_trap	= NULL,
 	.sv_hwcap	= &cpu_features,
 	.sv_hwcap2	= &cpu_features2,
+	.sv_hwcap3	= NULL,
+	.sv_hwcap4	= NULL,
 	.sv_onexec_old	= exec_onexec_old,
 	.sv_onexit	= exit_onexit,
 	.sv_regset_begin = SET_BEGIN(__elfN(regset)),
@@ -140,7 +142,12 @@ struct sysentvec elf64_freebsd_sysvec_v2 = {
 	.sv_trap	= NULL,
 	.sv_hwcap	= &cpu_features,
 	.sv_hwcap2	= &cpu_features2,
+<<<<<<< HEAD
 	.sv_pax_aslr_init = pax_aslr_init_vmspace,
+=======
+	.sv_hwcap3	= NULL,
+	.sv_hwcap4	= NULL,
+>>>>>>> internal/freebsd/current/main
 	.sv_onexec_old	= exec_onexec_old,
 	.sv_onexit	= exit_onexit,
 	.sv_regset_begin = SET_BEGIN(__elfN(regset)),

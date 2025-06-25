@@ -6719,6 +6719,15 @@ static const struct auxfmt {
 	AUXFMT(AT_PS_STRINGS, "%p"),
 	AUXFMT(AT_FXRNG, "%p"),
 	AUXFMT(AT_KPRELOAD, "%p"),
+<<<<<<< HEAD
+=======
+	AUXFMT(AT_USRSTACKBASE, "%#lx"),
+	AUXFMT(AT_USRSTACKLIM, "%#lx"),
+	/* AT_CHERI_STATS */
+	AUXFMT(AT_HWCAP3, "%#lx"),
+	AUXFMT(AT_HWCAP4, "%#lx"),
+
+>>>>>>> internal/freebsd/current/main
 };
 
 static bool
