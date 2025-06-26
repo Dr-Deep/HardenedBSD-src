@@ -1323,8 +1323,10 @@ __elfN(freebsd_copyout_auxargs)(struct image_params *imgp, uintptr_t base)
 		AUXARGS_ENTRY(pos, AT_HWCAP, *imgp->sysent->sv_hwcap);
 	if (imgp->sysent->sv_hwcap2 != NULL)
 		AUXARGS_ENTRY(pos, AT_HWCAP2, *imgp->sysent->sv_hwcap2);
-	AUXARGS_ENTRY(pos, AT_BSDFLAGS, __elfN(sigfastblock) ?
-	    ELF_BSDF_SIGFASTBLK : 0);
+	if (imgp->sysent->sv_hwcap3 != NULL)
+		AUXARGS_ENTRY(pos, AT_HWCAP3, *imgp->sysent->sv_hwcap3);
+	if (imgp->sysent->sv_hwcap4 != NULL)
+		AUXARGS_ENTRY(pos, AT_HWCAP4, *imgp->sysent->sv_hwcap4);
 	AUXARGS_ENTRY(pos, AT_ARGC, imgp->args->argc);
 	AUXARGS_ENTRY_PTR(pos, AT_ARGV, imgp->argv);
 	AUXARGS_ENTRY(pos, AT_ENVC, imgp->args->envc);
