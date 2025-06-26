@@ -287,7 +287,13 @@ local function addsudo(pwd)
 		warnmsg("impossible to open " .. sudoers)
 		return
 	end
-	f:write(pwd.name .. " " .. pwd.sudo .. "\n")
+	if type(pwd.sudo) == "string" then
+		f:write(pwd.name .. " " .. pwd.sudo .. "\n")
+	elseif type(pwd.sudo) == "table" then
+		for _, str in ipairs(pwd.sudo) do
+			f:write(pwd.name .. " " .. str .. "\n")
+		end
+	end
 	f:close()
 	if chmodsudoers then
 		sys_stat.chmod(sudoers, 416)
@@ -517,11 +523,14 @@ local function addfile(file, defer)
 	if file.permissions then
 		-- convert from octal to decimal
 		local perm = tonumber(file.permissions, 8)
-		sys_stat.chmod(file.path, perm)
+		sys_stat.chmod(filepath, perm)
 	end
 	if file.owner then
 		local owner, group = string.match(file.owner, "([^:]+):([^:]+)")
-		unistd.chown(file.path, owner, group)
+		if not owner then
+			owner = file.owner
+		end
+		unistd.chown(filepath, owner, group)
 	end
 	return true
 end
