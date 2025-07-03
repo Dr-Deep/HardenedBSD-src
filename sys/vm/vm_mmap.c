@@ -41,11 +41,8 @@
  */
 
 #include "opt_hwpmc_hooks.h"
-<<<<<<< HEAD
-#include "opt_pax.h"
-=======
 #include "opt_hwt_hooks.h"
->>>>>>> origin/freebsd/current/main
+#include "opt_pax.h"
 #include "opt_vm.h"
 
 #define	EXTERR_CATEGORY	EXTERR_CAT_MMAP

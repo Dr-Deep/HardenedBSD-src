@@ -30,11 +30,8 @@
 #include "opt_ddb.h"
 #include "opt_kld.h"
 #include "opt_hwpmc_hooks.h"
-<<<<<<< HEAD
-#include "opt_pax.h"
-=======
 #include "opt_hwt_hooks.h"
->>>>>>> origin/freebsd/current/main
+#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
