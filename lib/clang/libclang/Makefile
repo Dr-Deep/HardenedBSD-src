@@ -824,15 +824,12 @@ SRCS_MIN+=	Tooling/ArgumentsAdjusters.cpp
 SRCS_MIN+=	Tooling/CommonOptionsParser.cpp
 SRCS_MIN+=	Tooling/CompilationDatabase.cpp
 SRCS_MIN+=	Tooling/Core/Replacement.cpp
-<<<<<<< HEAD
-=======
 SRCS_MIN+=	Tooling/DependencyScanning/DependencyScanningFilesystem.cpp
 SRCS_MIN+=	Tooling/DependencyScanning/DependencyScanningService.cpp
 SRCS_MIN+=	Tooling/DependencyScanning/DependencyScanningTool.cpp
 SRCS_MIN+=	Tooling/DependencyScanning/DependencyScanningWorker.cpp
 SRCS_MIN+=	Tooling/DependencyScanning/ModuleDepCollector.cpp
 SRCS_MIN+=	Tooling/ExpandResponseFilesCompilationDatabase.cpp
->>>>>>> internal/freebsd/current/main
 SRCS_MIN+=	Tooling/FileMatchTrie.cpp
 SRCS_EXT+=	Tooling/Inclusions/HeaderIncludes.cpp
 SRCS_EXT+=	Tooling/Inclusions/IncludeStyle.cpp
