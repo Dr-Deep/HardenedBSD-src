@@ -49,8 +49,8 @@ return {
             shift = {x = 1, y = 5},
 	    },
         fb = {
-	        image = "/boot/images/hardenedbsd-logo-rev.png",
-	        width = 13,
+            image = "/boot/images/hardenedbsd-logo-rev.png",
+            width = 13,
         },
     }
 }
