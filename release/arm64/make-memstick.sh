@@ -54,11 +54,7 @@ if [ -n "${METALOG}" ]; then
 	echo "./etc/rc.conf.local type=file uname=root gname=wheel mode=0644" >> ${metalogfilename}
 	MAKEFSARG=${metalogfilename}
 fi
-<<<<<<< HEAD
-makefs -D -N ${BASEBITSDIR}/etc -B little -o label=${vendor_name}_Install -o version=2 ${2}.part ${MAKEFSARG}
-=======
-${MAKEFS} -D -N ${BASEBITSDIR}/etc -B little -o label=FreeBSD_Install -o version=2 ${2}.part ${MAKEFSARG}
->>>>>>> internal/freebsd/current/main
+${MAKEFS} -D -N ${BASEBITSDIR}/etc -B little -o label=${vendor_name}_Install -o version=2 ${2}.part ${MAKEFSARG}
 rm ${BASEBITSDIR}/etc/fstab
 rm ${BASEBITSDIR}/etc/rc.conf.local
 if [ -n "${METALOG}" ]; then
