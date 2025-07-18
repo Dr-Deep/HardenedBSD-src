@@ -596,6 +596,7 @@ MAN=	aac.4 \
 	tws.4 \
 	udp.4 \
 	udplite.4 \
+	${_ufshci.4} \
 	unionfs.4 \
 	ure.4 \
 	vale.4 \
@@ -748,7 +749,6 @@ MLINKS+=lge.4 if_lge.4
 MLINKS+=lo.4 loop.4
 MLINKS+=lp.4 plip.4
 MLINKS+=malo.4 if_malo.4
-MLINKS+=md.4 vn.4
 MLINKS+=mem.4 kmem.4
 MLINKS+=mfi.4 mfi_linux.4 \
 	mfi.4 mfip.4
@@ -940,6 +940,10 @@ MLINKS+=hwt.4	spe.4
 .endif
 .endif
 
+.if ${MACHINE_CPUARCH} == "amd64" || ${MACHINE_CPUARCH} == "aarch64"
+_ufshci.4=	ufshci.4
+.endif
+
 .if ${MACHINE_CPUARCH} == "amd64" || ${MACHINE_CPUARCH} == "i386" || \
 	 ${MACHINE_CPUARCH} == "aarch64"
 _gve.4=		gve.4
@@ -983,6 +987,7 @@ _ccd.4=		ccd.4
 .if ${MK_CDDL} != "no"
 _dtrace_provs=	dtrace_audit.4 \
 		dtrace_dtrace.4 \
+		dtrace_fbt.4 \
 		dtrace_io.4 \
 		dtrace_ip.4 \
 		dtrace_kinst.4 \
