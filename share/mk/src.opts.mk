@@ -146,6 +146,7 @@ __DEFAULT_YES_OPTIONS = \
     MAIL \
     MAILWRAPPER \
     MAKE \
+    MITKRB5 \
     MLX5TOOL \
     NETCAT \
     NETGRAPH \
@@ -218,8 +219,11 @@ __DEFAULT_NO_OPTIONS = \
     LOADER_VERIEXEC_PASS_MANIFEST \
     LLVM_FULL_DEBUGINFO \
     MALLOC_PRODUCTION \
+<<<<<<< HEAD
     MITKRB5 \
     OFED \
+=======
+>>>>>>> internal/freebsd/current/main
     OFED_EXTRA \
     OPENLDAP \
     PORTSNAP \
