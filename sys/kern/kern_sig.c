@@ -202,33 +202,6 @@ SYSINIT(signal, SI_SUB_P1003_1B, SI_ORDER_FIRST+3, sigqueue_start, NULL);
 	    (cr1)->cr_ruid == (cr2)->cr_uid || \
 	    (cr1)->cr_uid == (cr2)->cr_uid)
 
-<<<<<<< HEAD
-static int	sugid_coredump;
-SYSCTL_INT(_kern, OID_AUTO, sugid_coredump, CTLFLAG_RWTUN,
-    &sugid_coredump, 0, "Allow setuid and setgid processes to dump core");
-
-static int	capmode_coredump;
-SYSCTL_INT(_kern, OID_AUTO, capmode_coredump, CTLFLAG_RWTUN,
-    &capmode_coredump, 0, "Allow processes in capability mode to dump core");
-
-#ifdef PAX_HARDENING
-static int	do_coredump = 0;
-#else
-static int	do_coredump = 1;
-#endif
-SYSCTL_INT(_kern, OID_AUTO, coredump, CTLFLAG_RW,
-	&do_coredump, 0, "Enable/Disable coredumps");
-
-static int	set_core_nodump_flag = 0;
-SYSCTL_INT(_kern, OID_AUTO, nodump_coredump, CTLFLAG_RW, &set_core_nodump_flag,
-	0, "Enable setting the NODUMP flag on coredump files");
-
-static int	coredump_devctl = 0;
-SYSCTL_INT(_kern, OID_AUTO, coredump_devctl, CTLFLAG_RW, &coredump_devctl,
-	0, "Generate a devctl notification when processes coredump");
-
-=======
->>>>>>> internal/freebsd/current/main
 /*
  * Signal properties and actions.
  * The array below categorizes the signals and their default actions
@@ -3698,88 +3671,6 @@ killproc(struct proc *p, const char *why)
 }
 
 /*
-<<<<<<< HEAD
- * Force the current process to exit with the specified signal, dumping core
- * if appropriate.  We bypass the normal tests for masked and caught signals,
- * allowing unrecoverable failures to terminate the process without changing
- * signal state.  Mark the accounting record with the signal termination.
- * If dumping core, save the signal number for the debugger.  Calls exit and
- * does not return.
- */
-void
-sigexit(struct thread *td, int sig)
-{
-	struct proc *p = td->td_proc;
-	const char *coreinfo;
-	int rv;
-	bool logexit;
-
-	PROC_LOCK_ASSERT(p, MA_OWNED);
-	proc_set_p2_wexit(p);
-
-	p->p_acflag |= AXSIG;
-	if ((p->p_flag2 & P2_LOGSIGEXIT_CTL) == 0)
-		logexit = kern_logsigexit != 0;
-	else
-		logexit = (p->p_flag2 & P2_LOGSIGEXIT_ENABLE) != 0;
-
-	/*
-	 * We must be single-threading to generate a core dump.  This
-	 * ensures that the registers in the core file are up-to-date.
-	 * Also, the ELF dump handler assumes that the thread list doesn't
-	 * change out from under it.
-	 *
-	 * XXX If another thread attempts to single-thread before us
-	 *     (e.g. via fork()), we won't get a dump at all.
-	 */
-	if ((sigprop(sig) & SIGPROP_CORE) &&
-	    thread_single(p, SINGLE_NO_EXIT) == 0) {
-		p->p_sig = sig;
-		/*
-		 * Log signals which would cause core dumps
-		 * (Log as LOG_INFO to appease those who don't want
-		 * these messages.)
-		 * XXX : Todo, as well as euid, write out ruid too
-		 * Note that coredump() drops proc lock.
-		 */
-		rv = coredump(td);
-		switch (rv) {
-		case 0:
-			sig |= WCOREFLAG;
-			coreinfo = " (core dumped)";
-			break;
-		case EFAULT:
-			coreinfo = " (no core dump - bad address)";
-			break;
-		case EINVAL:
-			coreinfo = " (no core dump - invalid argument)";
-			break;
-		case EFBIG:
-			coreinfo = " (no core dump - too large)";
-			break;
-		default:
-			coreinfo = " (no core dump - other error)";
-			break;
-		}
-#ifdef PAX_SEGVGUARD
-		pax_segvguard_segfault(curthread, p->p_comm);
-#endif
-		if (logexit)
-			pax_log_internal(p, PAX_LOG_DEFAULT,
-			    "%s (jid %d, uid %d) exited on "
-			    "signal %d%s", p->p_comm,
-			    p->p_ucred->cr_prison->pr_id,
-			    td->td_ucred->cr_uid,
-			    sig &~ WCOREFLAG, coreinfo);
-	} else
-		PROC_UNLOCK(p);
-	exit1(td, 0, sig);
-	/* NOTREACHED */
-}
-
-/*
-=======
->>>>>>> internal/freebsd/current/main
  * Send queued SIGCHLD to parent when child process's state
  * is changed.
  */

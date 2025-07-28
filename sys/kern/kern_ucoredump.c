@@ -34,6 +34,8 @@
  * SUCH DAMAGE.
  */
 
+#include "opt_pax.h"
+
 #include <sys/param.h>
 #include <sys/acct.h>
 #include <sys/compressor.h>
@@ -69,7 +71,11 @@ static int sugid_coredump;
 SYSCTL_INT(_kern, OID_AUTO, sugid_coredump, CTLFLAG_RWTUN,
     &sugid_coredump, 0, "Allow setuid and setgid processes to dump core");
 
+#ifdef PAX_HARDENING
+static int do_coredump = 0;
+#else
 static int do_coredump = 1;
+#endif
 SYSCTL_INT(_kern, OID_AUTO, coredump, CTLFLAG_RW,
 	&do_coredump, 0, "Enable/Disable coredumps");
 
@@ -187,6 +193,9 @@ sigexit(struct thread *td, int sig)
 				break;
 			}
 		}
+#ifdef PAX_SEGVGUARD
+		pax_segvguard_segfault(curthread, p->p_comm);
+#endif
 		if (logexit)
 			log(LOG_INFO,
 			    "pid %d (%s), jid %d, uid %d: exited on "
