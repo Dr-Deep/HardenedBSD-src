@@ -453,12 +453,12 @@ check_pubkey_validity() {
 	done
 
 	caopt="-CApath"
-	if [ -f ${capath} ]; then
+	if [ -f ${mountpoint}/${capath} ]; then
 		caopt="-CAfile"
 	fi
 
 	${OPENSSL} verify \
-		${caopt} ${capath} \
+		${caopt} ${mountpoint}/${capath} \
 		${tmpdir}/pubkey.pem \
 		> /dev/null 2>&1
 	res=${?}
