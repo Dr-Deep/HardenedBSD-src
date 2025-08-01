@@ -2808,7 +2808,8 @@ crextend(struct ucred *cr, int n)
 	size_t nbytes;
 
 	MPASS2(cr->cr_ref == 1, "'cr_ref' must be 1 (referenced, unshared)");
-	MPASS2(cr->cr_ngroups == 0, "groups on 'cr' already set!");
+	MPASS2((cr->cr_flags & CRED_FLAG_GROUPSET) == 0,
+	    "groups on 'cr' already set!");
 	groups_check_positive_len(n);
 	groups_check_max_len(n);
 
@@ -2902,6 +2903,7 @@ crsetgroups_internal(struct ucred *cr, int ngrp, const gid_t *groups)
 
 	bcopy(groups, cr->cr_groups, ngrp * sizeof(gid_t));
 	cr->cr_ngroups = ngrp;
+	cr->cr_flags |= CRED_FLAG_GROUPSET;
 }
 
 /*
@@ -2918,15 +2920,19 @@ crsetgroups(struct ucred *cr, int ngrp, const gid_t *groups)
 
 	if (ngrp > ngroups_max)
 		ngrp = ngroups_max;
+	cr->cr_ngroups = 0;
+	if (ngrp == 0) {
+		cr->cr_flags |= CRED_FLAG_GROUPSET;
+		return;
+	}
+
 	/*
 	 * crextend() asserts that groups are not set, as it may allocate a new
 	 * backing storage without copying the content of the old one.  Since we
 	 * are going to install a completely new set anyway, signal that we
 	 * consider the old ones thrown away.
 	 */
-	cr->cr_ngroups = 0;
-	if (ngrp == 0)
-		return;
+	cr->cr_flags &= ~CRED_FLAG_GROUPSET;
 
 	crextend(cr, ngrp);
 	crsetgroups_internal(cr, ngrp, groups);
@@ -2934,20 +2940,21 @@ crsetgroups(struct ucred *cr, int ngrp, const gid_t *groups)
 }
 
 /*
- * Same as crsetgroups() but accepts an empty groups array.
+ * Same as crsetgroups() but sets the effective GID as well.
  *
  * This function ensures that an effective GID is always present in credentials.
- * An empty array will only set the effective GID to the fallback, while a
+ * An empty array will only set the effective GID to the default_egid, while a
  * non-empty array will peel off groups[0] to set as the effective GID and use
  * the remainder, if any, as supplementary groups.
  */
 void
-crsetgroups_fallback(struct ucred *cr, int ngrp, const gid_t *groups,
-    const gid_t fallback)
+crsetgroups_and_egid(struct ucred *cr, int ngrp, const gid_t *groups,
+    const gid_t default_egid)
 {
 	if (ngrp == 0) {
-		cr->cr_gid = fallback;
+		cr->cr_gid = default_egid;
 		cr->cr_ngroups = 0;
+		cr->cr_flags |= CRED_FLAG_GROUPSET;
 		return;
 	}
 
