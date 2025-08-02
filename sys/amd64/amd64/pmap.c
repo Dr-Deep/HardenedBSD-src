@@ -104,7 +104,11 @@
  */
 
 #include "opt_ddb.h"
+<<<<<<< HEAD
 #include "opt_pax.h"
+=======
+#include "opt_kstack_pages.h"
+>>>>>>> internal/freebsd/current/main
 #include "opt_pmap.h"
 #include "opt_vm.h"
 
