@@ -78,6 +78,7 @@ _INTERNALLIBS=	\
 		smdb \
 		smutil \
 		telnet \
+		util++ \
 		vers \
 		wpaap \
 		wpacommon \
@@ -702,6 +703,9 @@ LIBPKGECC?=	${LIBPKGECCDIR}/libpkgecc${PIE_SUFFIX}.a
 
 LIBPMCSTATDIR=	${_LIB_OBJTOP}/lib/libpmcstat
 LIBPMCSTAT?=	${LIBPMCSTATDIR}/libpmcstat.a
+
+LIBUTIL++DIR=	${_LIB_OBJTOP}/lib/libutil++
+LIBUTIL++?=	${LIBUTIL++DIR}/libutil++${PIE_SUFFIX}.a
 
 LIBWPAAPDIR=	${_LIB_OBJTOP}/usr.sbin/wpa/src/ap
 LIBWPAAP?=	${LIBWPAAPDIR}/libwpaap.a
