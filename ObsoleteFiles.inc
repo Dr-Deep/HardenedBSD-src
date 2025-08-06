@@ -83,18 +83,6 @@ OLD_LIBS+=usr/lib/libkrb5.so.121
 OLD_LIBS+=usr/lib/libkrb5profile.so.121
 OLD_LIBS+=usr/lib/libkrb5support.so.121
 OLD_LIBS+=usr/lib/libverto.so.121
-OLD_LIBS+=usr/lib/libcom_err.so.121
-OLD_LIBS+=usr/lib/libgssapi_krb5.so.121
-OLD_LIBS+=usr/lib/libgssrpc.so.121
-OLD_LIBS+=usr/lib/libk5crypto.so.121
-OLD_LIBS+=usr/lib/libkadm5clnt_mit.so.121
-OLD_LIBS+=usr/lib/libkadm5srv_mit.so.121
-OLD_LIBS+=usr/lib/libkdb5.so.121
-OLD_LIBS+=usr/lib/libkrad.so.121
-OLD_LIBS+=usr/lib/libkrb5.so.121
-OLD_LIBS+=usr/lib/libkrb5profile.so.121
-OLD_LIBS+=usr/lib/libkrb5support.so.121
-OLD_LIBS+=usr/lib/libverto.so.121
 
 # 20250726: xargs tests rewritten
 OLD_FILES+=usr/tests/usr.bin/xargs/legacy_test
@@ -218,7 +206,7 @@ OLD_FILES+=usr/sbin/keyserv
 OLD_FILES+=usr/bin/newkey
 OLD_FILES+=usr/share/man/man1/chkey.1.gz
 OLD_FILES+=usr/share/man/man1/keylogin.1.gz
-OLD_FILES+=usr/share/man/man1/keylogin.1.gz
+OLD_FILES+=usr/share/man/man1/keylogout.1.gz
 OLD_FILES+=usr/share/man/man5/publickey.5.gz
 OLD_FILES+=usr/share/man/man8/keyserv.1.gz
 OLD_FILES+=etc/rc.d/keyserv
@@ -255,7 +243,6 @@ OLD_FILES+=usr/lib/libalias_skinny_p.a
 OLD_FILES+=usr/lib/libalias_smedia_p.a
 OLD_FILES+=usr/lib/libarchive_p.a
 OLD_FILES+=usr/lib/libasn1_p.a
-OLD_FILES+=usr/lib/libauditd_p.a
 OLD_FILES+=usr/lib/libavl_p.a
 OLD_FILES+=usr/lib/libbe_p.a
 OLD_FILES+=usr/lib/libbegemot_p.a
@@ -342,7 +329,6 @@ OLD_FILES+=usr/lib/libnss_tacplus_p.a
 OLD_FILES+=usr/lib/libnv_p.a
 OLD_FILES+=usr/lib/libnvpair_p.a
 OLD_FILES+=usr/lib/libopencsd_p.a
-OLD_FILES+=usr/lib/libopie_p.a
 OLD_FILES+=usr/lib/libpanel_p.a
 OLD_FILES+=usr/lib/libpanelw_p.a
 OLD_FILES+=usr/lib/libpathconv_p.a
@@ -355,7 +341,6 @@ OLD_FILES+=usr/lib/libprivateauditd_p.a
 OLD_FILES+=usr/lib/libprivatebsdstat_p.a
 OLD_FILES+=usr/lib/libprivatecbor_p.a
 OLD_FILES+=usr/lib/libprivatedevdctl_p.a
-OLD_FILES+=usr/lib/libprivateevent_p.a
 OLD_FILES+=usr/lib/libprivateevent1_p.a
 OLD_FILES+=usr/lib/libprivatefido2_p.a
 OLD_FILES+=usr/lib/libprivategmock_main_p.a
@@ -364,7 +349,6 @@ OLD_FILES+=usr/lib/libprivategtest_main_p.a
 OLD_FILES+=usr/lib/libprivategtest_p.a
 OLD_FILES+=usr/lib/libprivateheimipcc_p.a
 OLD_FILES+=usr/lib/libprivateheimipcs_p.a
-OLD_FILES+=usr/lib/libprivateifconfig_p.a
 OLD_FILES+=usr/lib/libprivateldns_p.a
 OLD_FILES+=usr/lib/libprivatesqlite3_p.a
 OLD_FILES+=usr/lib/libprivatessh_p.a
@@ -388,9 +372,7 @@ OLD_FILES+=usr/lib/libspl_p.a
 OLD_FILES+=usr/lib/libssl_p.a
 OLD_FILES+=usr/lib/libstats_p.a
 OLD_FILES+=usr/lib/libstdbuf_p.a
-OLD_FILES+=usr/lib/libstdc++_p.a
 OLD_FILES+=usr/lib/libstdthreads_p.a
-OLD_FILES+=usr/lib/libsupc++_p.a
 OLD_FILES+=usr/lib/libsysdecode_p.a
 OLD_FILES+=usr/lib/libtacplus_p.a
 OLD_FILES+=usr/lib/libtermcap_p.a
@@ -11511,6 +11493,7 @@ OLD_FILES+=usr/share/man/man4/nsp.4.gz
 OLD_FILES+=usr/share/man/man4/stg.4.gz
 # 20181021: mse(4) removal
 OLD_FILES+=usr/share/man/man4/mse.4.gz
+<<<<<<< HEAD
 # 20181015: Stale libcasper(3) files following r329452
 OLD_LIBS+=lib/casper/libcap_sysctl.so.0
 OLD_LIBS+=lib/casper/libcap_grp.so.0
@@ -19810,5 +19793,7 @@ OLD_DIRS+=usr/include/ufs/mfs
 # 20011001: UUCP migration to ports
 OLD_DIRS+=usr/libexec/uucp
 
+=======
+>>>>>>> internal/freebsd/current/main
 
 .include "tools/build/mk/OptionalObsoleteFiles.inc"
