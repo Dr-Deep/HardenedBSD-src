@@ -179,15 +179,11 @@ SUBDIR.${MK_DIALOG}+=	libdpv libfigpar
 SUBDIR.${MK_FDT}+=	libfdt
 SUBDIR.${MK_FILE}+=	libmagic
 SUBDIR.${MK_GPIO}+=	libgpio
-<<<<<<< HEAD
-SUBDIR.${MK_GSSAPI}+=	libgssapi librpcsec_gss
 SUBDIR.${MK_HBSDCONTROL}+=	libhbsdcontrol
-=======
 .if ${MK_MITKRB5} == "no"
 SUBDIR.${MK_GSSAPI}+=	libgssapi
 .endif
 SUBDIR.${MK_GSSAPI}+=	librpcsec_gss
->>>>>>> internal/freebsd/current/main
 SUBDIR.${MK_ICONV}+=	libiconv_modules
 .if ${MK_MITKRB5} == "no"
 SUBDIR.${MK_KERBEROS_SUPPORT}+=	libcom_err
