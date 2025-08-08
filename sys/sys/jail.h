@@ -281,13 +281,8 @@ struct prison_racct {
  * PR_ALLOW_DIFFERENCES determines which flags are able to be
  * different between the parent and child jail upon creation.
  */
-<<<<<<< HEAD
-#define	PR_ALLOW_DIFFERENCES		(PR_ALLOW_UNPRIV_DEBUG | \
-    PR_ALLOW_EXTATTR)
-=======
 #define	PR_ALLOW_DIFFERENCES		\
-    (PR_ALLOW_UNPRIV_DEBUG | PR_ALLOW_UNPRIV_PARENT_TAMPER)
->>>>>>> internal/freebsd/current/main
+    (PR_ALLOW_EXTATTR | PR_ALLOW_UNPRIV_DEBUG | PR_ALLOW_UNPRIV_PARENT_TAMPER)
 
 /*
  * OSD methods
