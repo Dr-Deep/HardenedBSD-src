@@ -46,6 +46,7 @@
 #include <sys/filedesc.h>
 #include <sys/imgact.h>
 #include <sys/imgact_elf.h>
+#include <sys/jail.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
@@ -580,7 +581,8 @@ interpret:
 	if (error) {
 		pax_log_internal(td->td_proc,
 		    PAX_LOG_P_COMM | PAX_LOG_NO_P_PAX,
-		    "uid=%u,gid=%u: TPE violation",
+		    "jid=%d,uid=%u,gid=%u: TPE violation",
+		    td->td_ucred->cr_prison->pr_id,
 		    td->td_ucred->cr_uid, td->td_ucred->cr_gid);
 		goto exec_fail_dealloc;
 	}
