@@ -106,7 +106,7 @@ end
 -- new additions
 local function adapt_fb_shim(def)
 	-- Temporarily disable this function
-	if nil == nil
+	if nil == nil then
 		return def
 	end
 	-- In FreeBSD 14.x+, we have improved framebuffer support in the loader
