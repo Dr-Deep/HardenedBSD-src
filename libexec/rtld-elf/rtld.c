@@ -2539,15 +2539,12 @@ parse_rtld_phdr(Obj_Entry *obj)
 	Elf_Addr note_start, note_end;
 	bool first_seg;
 
-<<<<<<< HEAD
 #ifdef HARDENEDBSD
 	obj->stack_flags = PF_R | PF_W;
 #else
-=======
-	first_seg = true;
->>>>>>> internal/freebsd/current/main
 	obj->stack_flags = PF_X | PF_R | PF_W;
 #endif
+	first_seg = true;
 	for (ph = obj->phdr;
 	    (const char *)ph < (const char *)obj->phdr + obj->phsize; ph++) {
 		switch (ph->p_type) {
