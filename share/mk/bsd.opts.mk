@@ -76,6 +76,11 @@ __DEFAULT_NO_OPTIONS = \
     CCACHE_BUILD \
     CTF \
     INSTALL_AS_USER \
+<<<<<<< HEAD
+=======
+    REPRODUCIBLE_BUILD \
+    RETPOLINE \
+>>>>>>> internal/freebsd/current/main
     RUN_TESTS \
     STALE_STAGED \
     UBSAN \
