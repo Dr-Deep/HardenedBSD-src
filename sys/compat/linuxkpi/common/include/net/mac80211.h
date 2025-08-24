@@ -1135,7 +1135,7 @@ extern const struct cfg80211_ops linuxkpi_mac80211cfgops;
 struct ieee80211_hw *linuxkpi_ieee80211_alloc_hw(size_t,
     const struct ieee80211_ops *);
 void linuxkpi_ieee80211_iffree(struct ieee80211_hw *);
-void linuxkpi_set_ieee80211_dev(struct ieee80211_hw *, char *);
+void linuxkpi_set_ieee80211_dev(struct ieee80211_hw *);
 int linuxkpi_ieee80211_ifattach(struct ieee80211_hw *);
 void linuxkpi_ieee80211_ifdetach(struct ieee80211_hw *);
 void linuxkpi_ieee80211_unregister_hw(struct ieee80211_hw *);
@@ -1255,7 +1255,7 @@ SET_IEEE80211_DEV(struct ieee80211_hw *hw, struct device *dev)
 {
 
 	set_wiphy_dev(hw->wiphy, dev);
-	linuxkpi_set_ieee80211_dev(hw, dev_name(dev));
+	linuxkpi_set_ieee80211_dev(hw);
 
 	IMPROVE();
 }
@@ -1741,12 +1741,15 @@ ieee80211_request_smps(struct ieee80211_vif *vif, u_int link_id,
 		"SMPS_STATIC",
 		"SMPS_DYNAMIC",
 		"SMPS_AUTOMATIC",
-		"SMPS_NUM_MODES"
 	};
 
-	if (linuxkpi_debug_80211 & D80211_TODO)
-		printf("%s:%d: XXX LKPI80211 TODO smps %d %s\n",
-		    __func__, __LINE__, smps, smps_mode_name[smps]);
+	if (vif->type != NL80211_IFTYPE_STATION)
+		return;
+
+	if (smps >= nitems(smps_mode_name))
+		panic("%s: unsupported smps value: %d\n", __func__, smps);
+
+	IMPROVE("XXX LKPI80211 TODO smps %d %s\n", smps, smps_mode_name[smps]);
 }
 
 static __inline void
