@@ -87,6 +87,13 @@
 #define ELF_NOTE_ROUNDSIZE	4
 #define OLD_EI_BRAND	8
 
+/*
+ * ELF_ABI_NAME is a string name of the ELF ABI.  ELF_ABI_ID is used
+ * to build variable names.
+ */
+#define	ELF_ABI_NAME	__XSTRING(__CONCAT(ELF, __ELF_WORD_SIZE))
+#define	ELF_ABI_ID	__CONCAT(elf, __ELF_WORD_SIZE)
+
 static int __elfN(check_header)(const Elf_Ehdr *hdr);
 static Elf_Brandinfo *__elfN(get_brandinfo)(struct image_params *imgp,
     const char *interp, int32_t *osrel, uint32_t *fctl0);
@@ -108,14 +115,15 @@ static Elf_Word __elfN(untrans_prot)(vm_prot_t);
 static size_t __elfN(prepare_register_notes)(struct thread *td,
     struct note_info_list *list, struct thread *target_td);
 
-SYSCTL_NODE(_kern, OID_AUTO, __CONCAT(elf, __ELF_WORD_SIZE),
-    CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+SYSCTL_NODE(_kern, OID_AUTO, ELF_ABI_ID, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "");
 
+#define	ELF_NODE_OID	__CONCAT(_kern_, ELF_ABI_ID)
+
 int __elfN(fallback_brand) = -1;
-SYSCTL_INT(__CONCAT(_kern_elf, __ELF_WORD_SIZE), OID_AUTO,
+SYSCTL_INT(ELF_NODE_OID, OID_AUTO,
     fallback_brand, CTLFLAG_RWTUN, &__elfN(fallback_brand), 0,
-    __XSTRING(__CONCAT(ELF, __ELF_WORD_SIZE)) " brand of last resort");
+    ELF_ABI_NAME " brand of last resort");
 
 static int elf_legacy_coredump = 0;
 SYSCTL_INT(_debug, OID_AUTO, __elfN(legacy_coredump), CTLFLAG_RW, 
@@ -133,15 +141,15 @@ int __elfN(nxstack) =
 
 #if defined(__amd64__)
 static int __elfN(vdso) = 1;
-SYSCTL_INT(__CONCAT(_kern_elf, __ELF_WORD_SIZE), OID_AUTO,
+SYSCTL_INT(ELF_NODE_OID, OID_AUTO,
     vdso, CTLFLAG_RWTUN, &__elfN(vdso), 0,
-    __XSTRING(__CONCAT(ELF, __ELF_WORD_SIZE)) ": enable vdso preloading");
+    ELF_ABI_NAME ": enable vdso preloading");
 #else
 static int __elfN(vdso) = 0;
 #endif
 
 static int __elfN(sigfastblock) = 1;
-SYSCTL_INT(__CONCAT(_kern_elf, __ELF_WORD_SIZE), OID_AUTO, sigfastblock,
+SYSCTL_INT(ELF_NODE_OID, OID_AUTO, sigfastblock,
     CTLFLAG_RWTUN, &__elfN(sigfastblock), 0,
     "enable sigfastblock for new processes");
 
@@ -2776,9 +2784,9 @@ __elfN(check_note)(struct image_params *imgp, Elf_Brandnote *brandnote,
  */
 static struct execsw __elfN(execsw) = {
 	.ex_imgact = __CONCAT(exec_, __elfN(imgact)),
-	.ex_name = __XSTRING(__CONCAT(ELF, __ELF_WORD_SIZE))
+	.ex_name = ELF_ABI_NAME
 };
-EXEC_SET(__CONCAT(elf, __ELF_WORD_SIZE), __elfN(execsw));
+EXEC_SET(ELF_ABI_ID, __elfN(execsw));
 
 static vm_prot_t
 __elfN(trans_prot)(Elf_Word flags)

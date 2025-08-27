@@ -9,10 +9,13 @@
 
 __<bsd.test.mk>__:	.NOTMAIN
 
+<<<<<<< HEAD
 # HBSDTODO: Research why compiling the tests fail with SafeStack.
 NOSAFESTACK=	yes
 MK_CROSS_DSO_CFI=	no
 
+=======
+>>>>>>> internal/hardened/current/master
 # Third-party software (kyua, etc) prefix.
 LOCALBASE?=	/usr/local
 

@@ -105,6 +105,10 @@ end
 -- Backwards compatibility shims for previous FreeBSD versions, please document
 -- new additions
 local function adapt_fb_shim(def)
+	-- Temporarily disable this function
+	if nil == nil then
+		return def
+	end
 	-- In FreeBSD 14.x+, we have improved framebuffer support in the loader
 	-- and some graphics may have images that we can actually draw on the
 	-- screen.  Those graphics may come with shifts that are distinct from
@@ -516,8 +520,12 @@ branddefs = {
 		},
 	},
 	["hbsd"] = {
-		graphic = hbsd_brand,
-		image = "/boot/images/hardenedbsd-brand-rev.png",
+		ascii = {
+			image = hbsd_brand,
+		},
+		fb = {
+			image = "/boot/images/hardenedbsd-brand-rev.png",
+		},
 	},
 	["none"] = {
 		ascii = { image = none },
