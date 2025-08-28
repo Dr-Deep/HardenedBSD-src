@@ -1,3 +1,6 @@
+.\"
+.\" SPDX-License-Identifier: BSD-2-Clause
+.\"
 .\" Copyright (c) 2002 Marcel Moolenaar
 .\" All rights reserved.
 .\"
@@ -22,7 +25,7 @@
 .\" (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 .\" THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 .\"
-.Dd March 1, 2023
+.Dd August 27, 2025
 .Dt UUIDGEN 1
 .Os
 .Sh NAME
@@ -30,10 +33,7 @@
 .Nd generate universally unique identifiers
 .Sh SYNOPSIS
 .Nm
-.Op Fl 1
-.Op Fl R
-.Op Fl r
-.Op Fl c
+.Op Fl 1Rcr
 .Op Fl n Ar count
 .Op Fl o Ar filename
 .Sh DESCRIPTION
@@ -75,6 +75,8 @@ The upper hard limit is 2048
 Redirect output to
 .Ar filename
 instead of stdout.
+.It Fl r
+This option controls creation of random UUID (version 4).
 .El
 .Pp
 Batched generation yields a dense set of identifiers in such a way that there
@@ -90,11 +92,11 @@ reflected in the distance between two successive identifiers.
 .Sh EXAMPLES
 Generate a batch of three UUIDs.
 Notice the similarity of the string before the first hyphen of the UUID
-(known as
+.Po known as
 .Em time_low
 in
 .Em rfc4122
-):
+.Pc :
 .Bd -literal -offset indent
 $ uuidgen -n3
 8bc44345-4d90-11ee-88c7-b42e991fc52e
