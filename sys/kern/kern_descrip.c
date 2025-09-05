@@ -5255,6 +5255,8 @@ file_type_to_name(short type)
 		return ("eventfd");
 	case DTYPE_TIMERFD:
 		return ("timerfd");
+	case DTYPE_JAILDESC:
+		return ("jail");
 	default:
 		return ("unkn");
 	}

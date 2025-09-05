@@ -126,7 +126,6 @@ __DEFAULT_YES_OPTIONS = \
     LEGACY_CONSOLE \
     LLD \
     LLD_BOOTSTRAP \
-    LLVM_ASSERTIONS \
     LLVM_BINUTILS \
     LLVM_COV \
     LLVM_CXXFILT \
@@ -146,6 +145,7 @@ __DEFAULT_YES_OPTIONS = \
     MAIL \
     MAILWRAPPER \
     MAKE \
+    MALLOC_PRODUCTION \
     MITKRB5 \
     MLX5TOOL \
     NETCAT \
@@ -167,7 +167,11 @@ __DEFAULT_YES_OPTIONS = \
     QUOTAS \
     RADIUS_SUPPORT \
     RBOOTD \
+<<<<<<< HEAD
     RELRO \
+=======
+    REPRODUCIBLE_BUILD \
+>>>>>>> freebsd/15-stable/main
     RESCUE \
     ROUTED \
     SENDMAIL \
@@ -217,13 +221,19 @@ __DEFAULT_NO_OPTIONS = \
     HESIOD \
     LOADER_VERBOSE \
     LOADER_VERIEXEC_PASS_MANIFEST \
+    LLVM_ASSERTIONS \
     LLVM_FULL_DEBUGINFO \
+<<<<<<< HEAD
     MALLOC_PRODUCTION \
     OFED \
     OFED_EXTRA \
     OPENLDAP \
     PORTSNAP \
     REPRODUCIBLE_BUILD \
+=======
+    OFED_EXTRA \
+    OPENLDAP \
+>>>>>>> freebsd/15-stable/main
     RPCBIND_WARMSTART_SUPPORT \
     SORT_THREADS \
     SPECTREV1_FIX \
