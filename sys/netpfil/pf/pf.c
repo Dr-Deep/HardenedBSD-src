@@ -3633,6 +3633,18 @@ pf_translate_af(struct pf_pdesc *pd)
 		pd->src = (struct pf_addr *)&ip4->ip_src;
 		pd->dst = (struct pf_addr *)&ip4->ip_dst;
 		pd->off = sizeof(struct ip);
+		if (pd->m->m_pkthdr.csum_flags & CSUM_TCP_IPV6) {
+			pd->m->m_pkthdr.csum_flags &= ~CSUM_TCP_IPV6;
+			pd->m->m_pkthdr.csum_flags |= CSUM_TCP;
+		}
+		if (pd->m->m_pkthdr.csum_flags & CSUM_UDP_IPV6) {
+			pd->m->m_pkthdr.csum_flags &= ~CSUM_UDP_IPV6;
+			pd->m->m_pkthdr.csum_flags |= CSUM_UDP;
+		}
+		if (pd->m->m_pkthdr.csum_flags & CSUM_SCTP_IPV6) {
+			pd->m->m_pkthdr.csum_flags &= ~CSUM_SCTP_IPV6;
+			pd->m->m_pkthdr.csum_flags |= CSUM_SCTP;
+		}
 		break;
 	case AF_INET6:
 		ip6 = mtod(pd->m, struct ip6_hdr *);
@@ -3650,6 +3662,18 @@ pf_translate_af(struct pf_pdesc *pd)
 		pd->src = (struct pf_addr *)&ip6->ip6_src;
 		pd->dst = (struct pf_addr *)&ip6->ip6_dst;
 		pd->off = sizeof(struct ip6_hdr);
+		if (pd->m->m_pkthdr.csum_flags & CSUM_TCP) {
+			pd->m->m_pkthdr.csum_flags &= ~CSUM_TCP;
+			pd->m->m_pkthdr.csum_flags |= CSUM_TCP_IPV6;
+		}
+		if (pd->m->m_pkthdr.csum_flags & CSUM_UDP) {
+			pd->m->m_pkthdr.csum_flags &= ~CSUM_UDP;
+			pd->m->m_pkthdr.csum_flags |= CSUM_UDP_IPV6;
+		}
+		if (pd->m->m_pkthdr.csum_flags & CSUM_SCTP) {
+			pd->m->m_pkthdr.csum_flags &= ~CSUM_SCTP;
+			pd->m->m_pkthdr.csum_flags |= CSUM_SCTP_IPV6;
+		}
 
 		/*
 		 * If we're dealing with a reassembled packet we need to adjust
@@ -8830,6 +8854,11 @@ pf_test_state_icmp(struct pf_kstate **state, struct pf_pdesc *pd,
 		default: {
 			int	action;
 
+			/*
+			 * Placeholder value, so future calls to pf_change_ap()
+			 * don't try to update a NULL checksum pointer.
+			 */
+			pd->pcksum = &pd->sctp_dummy_sum;
 			key.af = pd2.af;
 			key.proto = pd2.proto;
 			pf_addrcpy(&key.addr[pd2.sidx], pd2.src, key.af);
@@ -10590,12 +10619,21 @@ pf_setup_pdesc(sa_family_t af, int dir, struct pf_pdesc *pd, struct mbuf **m0,
 		break;
 	}
 #endif /* INET6 */
+	default:
+		/*
+		 * Placeholder value, so future calls to pf_change_ap() don't
+		 * try to update a NULL checksum pointer.
+		*/
+		pd->pcksum = &pd->sctp_dummy_sum;
+		break;
 	}
 
 	if (pd->sport)
 		pd->osport = pd->nsport = *pd->sport;
 	if (pd->dport)
 		pd->odport = pd->ndport = *pd->dport;
+
+	MPASS(pd->pcksum != NULL);
 
 	return (0);
 }
