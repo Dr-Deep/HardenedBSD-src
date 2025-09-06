@@ -162,7 +162,6 @@ __DEFAULT_YES_OPTIONS = \
     PKGBOOTSTRAP \
     PMC \
     PPP \
-    PTHREADS_ASSERTIONS \
     QUOTAS \
     RADIUS_SUPPORT \
     RBOOTD \
@@ -223,8 +222,12 @@ __DEFAULT_NO_OPTIONS = \
     OFED \
     OFED_EXTRA \
     OPENLDAP \
+<<<<<<< HEAD
     PORTSNAP \
     REPRODUCIBLE_BUILD \
+=======
+    PTHREADS_ASSERTIONS \
+>>>>>>> origin/freebsd/15-stable/main
     RPCBIND_WARMSTART_SUPPORT \
     SORT_THREADS \
     SPECTREV1_FIX \
