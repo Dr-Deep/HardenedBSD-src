@@ -64,11 +64,7 @@ __DEFAULT_YES_OPTIONS = \
     NIS \
     NLS \
     OPENSSH \
-<<<<<<< HEAD
-=======
-    RELRO \
     REPRODUCIBLE_BUILD \
->>>>>>> origin/freebsd/15-stable/main
     SSP \
     TESTS \
     TOOLCHAIN \
@@ -81,11 +77,6 @@ __DEFAULT_NO_OPTIONS = \
     CCACHE_BUILD \
     CTF \
     INSTALL_AS_USER \
-<<<<<<< HEAD
-    REPRODUCIBLE_BUILD \
-=======
-    RETPOLINE \
->>>>>>> origin/freebsd/15-stable/main
     RUN_TESTS \
     STALE_STAGED \
     UBSAN \
