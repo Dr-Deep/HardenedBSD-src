@@ -2236,9 +2236,7 @@ kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 	 */
 	if (created) {
 		sx_assert(&allprison_lock, SX_XLOCKED);
-		mtx_lock(&ppr->pr_mtx);
-		knote_fork(ppr->pr_klist, pr->pr_id);
-		mtx_unlock(&ppr->pr_mtx);
+		prison_knote(ppr, NOTE_JAIL_CHILD | pr->pr_id);
 		mtx_lock(&pr->pr_mtx);
 		drflags |= PD_LOCKED;
 		pr->pr_state = PRISON_STATE_ALIVE;
@@ -4964,7 +4962,6 @@ sysctl_jail_param(SYSCTL_HANDLER_ARGS)
  * jail creation time but cannot be changed in an existing jail.
  */
 SYSCTL_JAIL_PARAM(, jid, CTLTYPE_INT | CTLFLAG_RDTUN, "I", "Jail ID");
-SYSCTL_JAIL_PARAM(, desc, CTLTYPE_INT | CTLFLAG_RW, "I", "Jail descriptor");
 SYSCTL_JAIL_PARAM(, parent, CTLTYPE_INT | CTLFLAG_RD, "I", "Jail parent ID");
 SYSCTL_JAIL_PARAM_STRING(, name, CTLFLAG_RW, MAXHOSTNAMELEN, "Jail name");
 SYSCTL_JAIL_PARAM_STRING(, path, CTLFLAG_RDTUN, MAXPATHLEN, "Jail root path");
@@ -5400,6 +5397,7 @@ prison_knote(struct prison *pr, long hint)
 	if (!locked)
 		mtx_lock(&pr->pr_mtx);
 	KNOTE_LOCKED(pr->pr_klist, hint);
+	jaildesc_knote(pr, hint);
 	if (!locked)
 		mtx_unlock(&pr->pr_mtx);
 }
