@@ -76,11 +76,7 @@ __DEFAULT_NO_OPTIONS = \
     CCACHE_BUILD \
     CTF \
     INSTALL_AS_USER \
-<<<<<<< HEAD
-=======
     MANSPLITPKG \
-    RETPOLINE \
->>>>>>> origin/freebsd/15-stable/main
     RUN_TESTS \
     STALE_STAGED \
     UBSAN \
