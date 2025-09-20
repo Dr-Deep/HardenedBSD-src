@@ -60,7 +60,6 @@ __DEFAULT_YES_OPTIONS = \
     MAKE_CHECK_USE_SANDBOX \
     MAN \
     MANCOMPRESS \
-    MANSPLITPKG \
     NIS \
     NLS \
     OPENSSH \
@@ -77,6 +76,11 @@ __DEFAULT_NO_OPTIONS = \
     CCACHE_BUILD \
     CTF \
     INSTALL_AS_USER \
+<<<<<<< HEAD
+=======
+    MANSPLITPKG \
+    RETPOLINE \
+>>>>>>> origin/freebsd/15-stable/main
     RUN_TESTS \
     STALE_STAGED \
     UBSAN \
