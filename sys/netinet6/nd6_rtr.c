@@ -96,11 +96,9 @@ VNET_DEFINE(int, nd6_defifindex);
 VNET_DEFINE(int, ip6_use_tempaddr) = 1;
 #else
 VNET_DEFINE(int, ip6_use_tempaddr) = 0;
-<<<<<<< HEAD
 #endif
-=======
+
 VNET_DEFINE(bool, ip6_use_stableaddr) = 0;
->>>>>>> internal/freebsd/current/main
 
 VNET_DEFINE(int, ip6_desync_factor);
 VNET_DEFINE(uint32_t, ip6_temp_max_desync_factor) = TEMP_MAX_DESYNC_FACTOR_BASE;
