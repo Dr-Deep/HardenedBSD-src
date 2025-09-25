@@ -12,6 +12,22 @@ Items affecting the ports and packages system can be found in
 /usr/ports/UPDATING.  Please read that file before updating system packages
 and/or ports.
 
+20250924:
+	Several changes which affect pkgbase users (only):
+
+	powerd has been moved to a new FreeBSD-powerd package.  If you have
+	FreeBSD-set-minimal installed, the new package will be installed
+	automatically, otherwise you may want to install it by hand.
+
+	libpmc and related utilities (/usr/sbin/pmc*) have moved to the new
+	FreeBSD-pmc package.  If you use these, you may want to install the
+	package.
+
+	The libbz2 package has been renamed to bzip2, and /usr/bin/bzip2 has
+	been moved to the new package.  If you have set-minimal installed,
+	the new package will be added automatically, otherwise you may want
+	to manually install it.
+
 20250918:
 	The MANSPLITPKG knob has been turned off by default, so pkgbase builds
 	will no longer generate "-man" subpackages; instead the manpages will
