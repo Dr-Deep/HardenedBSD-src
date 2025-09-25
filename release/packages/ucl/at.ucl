@@ -16,14 +16,18 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-comment = "Run periodic system functions"
+deps {
+	# atrun relies on cron to work.
+	"cron" {
+		version = "${VERSION}"
+		origin = "base"
+	},
 
-desc = <<EOD
-The periodic(8) utility, usually run from cron(8), provides a system for
-scheduling regular system maintenance tasks.  This package also provides
-the base periodic tasks for the base system.
-EOD
-
-annotations {
-	set = "minimal,minimal-jail"
+	# at(1) passes the command to /bin/sh
+	"runtime" {
+		version = "${VERSION}"
+		origin = "base"
+	},
 }
+
+
