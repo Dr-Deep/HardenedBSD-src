@@ -111,6 +111,8 @@
         ..
         ossl-modules
         ..
+	virtual_oss
+	..
     ..
     libdata
         ldscripts
