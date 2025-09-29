@@ -50,8 +50,6 @@ CONFS=	DAEMON \
 	${_nscd} \
 	${_opensm} \
 	os-release \
-	powerd \
-	pppoed \
 	pwcheck \
 	quota \
 	random \
@@ -77,6 +75,7 @@ CONFS=	DAEMON \
 	ugidfw \
 	var \
 	var_run \
+	virtual_oss \
 	watchdogd
 
 CONFGROUPS+=		DEVD
@@ -126,6 +125,14 @@ NFSPACKAGE=		nfs
 CONFGROUPS+=		NEWSYSLOG
 NEWSYSLOG=		newsyslog
 NEWSYSLOGPACKAGE=	newsyslog
+
+CONFGROUPS+=		POWERD
+POWERD=			powerd
+POWERDPACKAGE=		powerd
+
+CONFGROUPS+=		PPPOED
+PPPOED=			pppoed
+PPPOEDPACKAGE=		ppp
 
 CONFGROUPS+=		SYSLOGD
 SYSLOGD=		syslogd

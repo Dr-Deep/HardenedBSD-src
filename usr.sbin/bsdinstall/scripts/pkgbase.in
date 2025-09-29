@@ -103,7 +103,8 @@ local function select_components(components, options)
 	for component, _ in pairs(components) do
 		-- Decide which sets we want to offer to the user:
 		--
-		-- "minimal" is not offered since it's always included.
+		-- "minimal" is not offered since it's always included, as is
+		-- "pkg" if it's present.
 		--
 		-- "-dbg" sets are never offered, because those are handled
 		-- via the "debug" component.
@@ -113,7 +114,8 @@ local function select_components(components, options)
 		--
 		-- Sets whose name ends in "-jail" are intended for jails, and
 		-- are only offered if no_kernel is set.
-		if not component:match("^minimal") and
+		if component ~= "pkg" and
+		   not component:match("^minimal") and
 		   not component:match("%-dbg$") and
 		   not (component == "kernels") and
 		   not (not options.no_kernel and component:match("%-jail$")) then
@@ -161,6 +163,13 @@ local function select_components(components, options)
 	-- autoremove then trying to remove minimal.
 	local selected = {"minimal"}
 
+	-- If pkg is available, always install it so the user can manage the
+	-- installed system.  This is optional, because a repository built
+	-- from src alone won't have a pkg package.
+	if components["pkg"] then
+		table.insert(selected, "pkg")
+	end
+
 	if not options.no_kernel then
 		table.insert(selected, "kernel")
 	end
@@ -182,13 +191,28 @@ local function select_packages(pkg, options)
 		["debug"] = {},
 	}
 
+<<<<<<< HEAD
 	local rquery = capture(pkg .. "rquery -U -r HardenedBSD-base %n")
+=======
+	-- Note: if you update this list, you must also update the list in
+	-- release/scripts/pkgbase-stage.lua.
+	local kernel_packages = {
+		-- Most architectures use this
+		["FreeBSD-kernel-generic"] = true,
+		-- PowerPC uses either of these, depending on platform
+		["FreeBSD-kernel-generic64"] = true,
+		["FreeBSD-kernel-generic64le"] = true,
+	}
+
+	local rquery = capture(pkg .. "rquery -U -r FreeBSD-base %n")
+>>>>>>> internal/hardened/current/master
 	for package in rquery:gmatch("[^\n]+") do
 		local setname = package:match("^HardenedBSD%-set%-(.+)$")
 
 		if setname then
 			components[setname] = components[setname] or {}
 			table.insert(components[setname], package)
+<<<<<<< HEAD
 		elseif package:match("^HardenedBSD%-kernel%-.*") and
 			package ~= "HardenedSD-kernel-man"
 		then
@@ -198,6 +222,15 @@ local function select_packages(pkg, options)
 			elseif package == "HardenedBSD%-kernel-hardenedbsd-dbg" then
 				table.insert(components["kernel-dbg"], package)
 			end
+=======
+		elseif kernel_packages[package] then
+			table.insert(components["kernel"], package)
+		elseif kernel_packages[package:match("(.*)%-dbg$")] then
+			table.insert(components["kernel-dbg"], package)
+		elseif package == "pkg" then
+			components["pkg"] = components["pkg"] or {}
+			table.insert(components["pkg"], package)
+>>>>>>> internal/hardened/current/master
 		end
 	end
 
