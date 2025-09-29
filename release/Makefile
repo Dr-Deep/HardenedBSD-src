@@ -335,13 +335,8 @@ dvd: ${PKGBASE_REPO_DIR}
 	${.CURDIR}/scripts/pkgbase-stage.lua dvd \
 	    ${.OBJDIR}/pkgbase-repo-dir \
 	    ${.TARGET}/usr/freebsd-packages/offline \
-<<<<<<< HEAD
-	    "${_ALL_libcompats}" ${PKG_ABI}
-	cp ${.CURDIR}/scripts/HardenedBSD-base-offline.conf \
-=======
 	    "${_ALL_libcompats}" ${PKG_ABI} ${.OBJDIR}/pkgdb-dvd
-	cp ${.CURDIR}/scripts/FreeBSD-base-offline.conf \
->>>>>>> internal/hardened/current/master
+	cp ${.CURDIR}/scripts/HardenedBSD-base-offline.conf \
 		${.TARGET}/usr/freebsd-packages/repos/
 	mtree -c -p ${.TARGET}/usr/freebsd-packages | \
 	    mtree -C -k type,mode,link,size | \
