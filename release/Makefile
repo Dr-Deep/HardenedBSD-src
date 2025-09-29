@@ -225,6 +225,7 @@ disc1: ${PKGBASE_REPO_DIR}
 	    MK_TOOLCHAIN=no \
 	    MK_RESCUE=no MK_DICT=no \
 	    MK_KERNEL_SYMBOLS=no MK_TESTS=no MK_DEBUG_FILES=no)
+.if !defined(NOPKGBASE) || empty(NOPKGBASE)
 # Create offline pkgbase repo on release media
 	mkdir -p ${.TARGET}/usr/freebsd-packages/repos/
 	${.CURDIR}/scripts/pkgbase-stage.lua disc \
@@ -236,6 +237,8 @@ disc1: ${PKGBASE_REPO_DIR}
 	mtree -c -p ${.TARGET}/usr/freebsd-packages | \
 	    mtree -C -k type,mode,link,size | \
 	    sed 's|^\.|./usr/freebsd-packages|g' >> ${.TARGET}/METALOG
+.endif
+.if !defined(NODISTSETS)
 	# Copy MANIFEST to provide legacy dist checksums in both modes
 	mkdir -p ${.TARGET}/usr/freebsd-dist
 	echo "./usr/freebsd-dist type=dir uname=root gname=wheel mode=0755" >> ${.TARGET}/METALOG
@@ -247,6 +250,7 @@ disc1: ${PKGBASE_REPO_DIR}
 	    cp $${dist} ${.TARGET}/usr/freebsd-dist; \
 	    echo "./usr/freebsd-dist/$${dist} type=file uname=root gname=wheel mode=0644" >> ${.TARGET}/METALOG; \
 	done
+.endif
 .endif
 .if ${.MAKE.OS} == "FreeBSD" && (!defined(NOPKG) || empty(NOPKG))
 # Install packages onto release media.
