@@ -211,7 +211,6 @@ disc1: ${PKGBASE_REPO}
 	    MK_TOOLCHAIN=no \
 	    MK_RESCUE=no MK_DICT=no \
 	    MK_KERNEL_SYMBOLS=no MK_TESTS=no MK_DEBUG_FILES=no)
-.if !defined(NOPKGBASE) || empty(NOPKGBASE)
 # Create offline pkgbase repo on release media
 	mkdir -p ${.TARGET}/usr/freebsd-packages/repos/
 	${.CURDIR}/scripts/pkgbase-stage.lua disc \
@@ -223,8 +222,6 @@ disc1: ${PKGBASE_REPO}
 	mtree -c -p ${.TARGET}/usr/freebsd-packages | \
 	    mtree -C -k type,mode,link,size | \
 	    sed 's|^\.|./usr/freebsd-packages|g' >> ${.TARGET}/METALOG
-.endif
-.if !defined(NODISTSETS)
 	# Copy MANIFEST to provide legacy dist checksums in both modes
 	mkdir -p ${.TARGET}/usr/freebsd-dist
 	echo "./usr/freebsd-dist type=dir uname=root gname=wheel mode=0755" >> ${.TARGET}/METALOG
@@ -236,7 +233,6 @@ disc1: ${PKGBASE_REPO}
 	    cp $${dist} ${.TARGET}/usr/freebsd-dist; \
 	    echo "./usr/freebsd-dist/$${dist} type=file uname=root gname=wheel mode=0644" >> ${.TARGET}/METALOG; \
 	done
-.endif
 .endif
 .if ${.MAKE.OS} == "FreeBSD" && (!defined(NOPKG) || empty(NOPKG))
 # Install packages onto release media.
@@ -258,13 +254,11 @@ disc1: ${PKGBASE_REPO}
 	dd if=/dev/random of=${.TARGET}/boot/entropy bs=4k count=1
 	chown 0:0 ${.TARGET}/boot/entropy
 	chmod 0600 ${.TARGET}/boot/entropy
-.if defined(NO_ROOT)
 	echo "./etc/resolv.conf type=link uname=root gname=wheel mode=0644 link=/tmp/bsdinstall_etc/resolv.conf" >> ${.TARGET}/METALOG
 	echo "./etc/rc.conf type=file uname=root gname=wheel mode=0644" >> ${.TARGET}/METALOG
 	echo "./etc/sysctl.conf type=file uname=root gname=wheel mode=0644" >> ${.TARGET}/METALOG
 	echo "./boot/loader.conf type=file uname=root gname=wheel mode=0644" >> ${.TARGET}/METALOG
 	echo "./etc/rc.local type=file uname=root gname=wheel mode=0644" >> ${.TARGET}/METALOG
-.endif
 	touch ${.TARGET}
 
 bootonly:
@@ -324,7 +318,7 @@ dvd: ${PKGBASE_REPO}
 	    ${.OBJDIR}/pkgbase-repo/${PKG_ABI}/latest \
 	    ${.TARGET}/usr/freebsd-packages/offline \
 	    "${_ALL_libcompats}" ${PKG_ABI}
-	cp ${.CURDIR}/scripts/FreeBSD-base-offline.conf \
+	cp ${.CURDIR}/scripts/HardenedBSD-base-offline.conf \
 		${.TARGET}/usr/freebsd-packages/repos/
 	mtree -c -p ${.TARGET}/usr/freebsd-packages | \
 	    mtree -C -k type,mode,link,size | \

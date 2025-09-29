@@ -21,17 +21,17 @@ end
 -- Returns a list of packages to be included in the given media
 local function select_packages(pkg, media, all_libcompats)
 	local components = {}
-	local rquery = capture(pkg .. "rquery -U -r FreeBSD-base %n")
+	local rquery = capture(pkg .. "rquery -U -r HardenedBSD-base %n")
 	for package in rquery:gmatch("[^\n]+") do
-		local set = package:match("^FreeBSD%-set%-(.*)$")
+		local set = package:match("^HardenedBSD%-set%-(.*)$")
 		if set then
 			components[set] = package
 		-- Kernels other than FreeBSD-kernel-generic are ignored
 		-- Note that on powerpc64 and powerpc64le the names are
 		-- slightly different.
-		elseif package:match("^FreeBSD%-kernel%-generic.*-dbg") then
+		elseif package:match("^HardenedBSD%-kernel%-hardenedbsd.*-dbg") then
 			components["kernel-dbg"] = package
-		elseif package:match("^FreeBSD%-kernel%-generic.*") then
+		elseif package:match("^HardenedBSD%-kernel%-hardened.*") then
 			components["kernel"] = package
 		end
 	end
@@ -79,9 +79,9 @@ local function main()
 	local ABI = assert(arg[5])
 
 	assert(os.execute("mkdir -p pkgbase-repo-conf"))
-	local f <close> = assert(io.open("pkgbase-repo-conf/FreeBSD-base.conf", "w"))
+	local f <close> = assert(io.open("pkgbase-repo-conf/HardenedBSD-base.conf", "w"))
 	assert(f:write(string.format([[
-	FreeBSD-base: {
+	HardenedBSD-base: {
 	  url: "file://%s",
 	  enabled: yes
 	}

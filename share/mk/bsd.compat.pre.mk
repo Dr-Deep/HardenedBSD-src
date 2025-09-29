@@ -1,7 +1,7 @@
 .if !targets(__<${_this:T}>__)
 __<${_this:T}>__:	.NOTMAIN
 
-_ALL_LIBCOMPATS:=	32
+_ALL_LIBCOMPATS:=
 
 _ALL_libcompats:=	${_ALL_LIBCOMPATS:tl}
 
