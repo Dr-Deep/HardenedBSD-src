@@ -79,7 +79,8 @@ local function select_components(components, options)
 	local descriptions = {
 		["kernel-dbg"] = "Debug symbols for the kernel",
 		["devel"] = "C/C++ compilers and related utilities",
-		["base"] = "The complete base system (includes devel)",
+		["optional"] = "Optional software (excluding compilers)",
+		["base"] = "The complete base system (includes devel and optional)",
 		["src"] = "System source tree",
 		["tests"] = "Test suite",
 		["lib32"] = "32-bit compatibility libraries",
@@ -137,7 +138,7 @@ local function select_components(components, options)
 	end
 
 	local bsddialog_args = {
-		"--backtitle", "FreeBSD Installer",
+		"--backtitle", "HardenedBSD Installer",
 		"--title", "Select System Components",
 		"--nocancel",
 		"--disable-esc",
@@ -195,15 +196,12 @@ local function select_packages(pkg, options)
 	-- release/scripts/pkgbase-stage.lua.
 	local kernel_packages = {
 		-- Most architectures use this
-		["FreeBSD-kernel-generic"] = true,
-		-- PowerPC uses either of these, depending on platform
-		["FreeBSD-kernel-generic64"] = true,
-		["FreeBSD-kernel-generic64le"] = true,
+		["HardenedBSD-kernel-hardenedbsd"] = true,
 	}
 
-	local rquery = capture(pkg .. "rquery -U -r FreeBSD-base %n")
+	local rquery = capture(pkg .. "rquery -U -r HardenedBSD-base %n")
 	for package in rquery:gmatch("[^\n]+") do
-		local setname = package:match("^FreeBSD%-set%-(.+)$")
+		local setname = package:match("^HardenedBSD%-set%-(.+)$")
 
 		if setname then
 			components[setname] = components[setname] or {}
@@ -247,7 +245,7 @@ local function select_packages(pkg, options)
 		-- actually exists, because some sets (src, tests) don't
 		-- have a -dbg subpackage.
 		for _, c in ipairs(pkglist) do
-			local setname = c:match("^FreeBSD%-set%-(.*)$")
+			local setname = c:match("^HardenedBSD%-set%-(.*)$")
 			if debug and setname then
 				local dbgset = setname.."-dbg"
 				if components[dbgset] then
@@ -293,12 +291,12 @@ local function pkgbase()
 	-- there (e.g. because we are performing an offline installation).
 	local chroot_repos_dir = chroot .. "/usr/local/etc/pkg/repos/"
 	assert(os.execute("mkdir -p " .. chroot_repos_dir))
-	assert(os.execute("cp /usr/share/bsdinstall/FreeBSD-base.conf " ..
-		chroot_repos_dir))
 
 	local repos_dir = os.getenv("BSDINSTALL_PKG_REPOS_DIR")
 	if not repos_dir then
 		repos_dir = chroot_repos_dir
+		assert(os.execute("mkdir -p " .. repos_dir))
+
 		-- Since pkg always interprets fingerprints paths as relative to
 		-- the --rootdir we must copy the key from the host.
 		assert(os.execute("mkdir -p " .. chroot .. "/usr/share/keys"))
@@ -319,13 +317,13 @@ local function pkgbase()
 
 	local packages = table.concat(select_packages(pkg, options), " ")
 
-	while not os.execute(pkg .. "install -U -F -y -r FreeBSD-base " .. packages) do
+	while not os.execute(pkg .. "install -U -F -y -r HardenedBSD-base " .. packages) do
 		if not prompt_yn("Fetching packages failed, try again?") then
 			os.exit(1)
 		end
 	end
 
-	if not os.execute(pkg .. "install -U -y -r FreeBSD-base " .. packages) then
+	if not os.execute(pkg .. "install -U -y -r HardenedBSD-base " .. packages) then
 		os.exit(1)
 	end
 end
