@@ -16,11 +16,12 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-comment = "YACC runtime library"
+comment = "LZMA2 data compression"
 
 desc = <<EOD
-liby provides default implementations of main() and yyerror() for applications
-which use the yacc(1) parser generator.
+xz compresses data using the LZMA2 data compression algorithm.  This package
+provides the front-end xz(1) utility, and the liblzma library which allows
+applications to use this functionality programatically.
 EOD
 
 annotations {
