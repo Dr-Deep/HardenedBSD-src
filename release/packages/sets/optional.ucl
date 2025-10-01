@@ -16,9 +16,18 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-comment = "Base system kernels (metapackage)"
+comment = "Optional base system software (metapackage)"
+
+vital = true
 
 desc = <<EOD
-This metapackage installs the operating system kernels provided with the
-base system.
+This metapackage installs all optional software, other than compilers,
+which is part of the base system but not installed by the minimal set.
 EOD
+
+deps {
+	"set-minimal" {
+		version = "${VERSION}"
+		origin = "base"
+	},
+}

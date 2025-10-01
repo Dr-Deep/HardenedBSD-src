@@ -16,9 +16,16 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-comment = "Base system kernels (metapackage)"
+comment = "Optional software debug symbols (metapackage)"
 
 desc = <<EOD
-This metapackage installs the operating system kernels provided with the
-base system.
+This metapackage installs debugging symbols for optional software
+which is not part of the minimal set.
 EOD
+
+deps {
+	"set-minimal-dbg" {
+		version = "${VERSION}"
+		origin = "base"
+	},
+}

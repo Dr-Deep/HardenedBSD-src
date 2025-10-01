@@ -16,9 +16,19 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-comment = "Base system kernels (metapackage)"
+comment = "Optional base system software for jails (metapackage)"
+
+vital = true
 
 desc = <<EOD
-This metapackage installs the operating system kernels provided with the
-base system.
+This metapackage installs all optional software which is part of the
+base system but not installed by the minimal set, other than compilers
+and software which is not generally useful in a jail(8) environment.
 EOD
+
+deps {
+	"set-minimal-jail" {
+		version = "${VERSION}"
+		origin = "base"
+	},
+}
