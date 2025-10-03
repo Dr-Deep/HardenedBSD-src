@@ -39,8 +39,21 @@ cleanup() {
 }
 
 metalog_add_data() {
+	local file mode type
+
 	if [ -n "${NO_ROOT}" ]; then
-		echo "$1 type=file uname=root gname=wheel mode=0644" >> \
+		file=$1
+		if [ -f ${DESTDIR}/${file} ]; then
+			type=file
+			mode=${2:-0644}
+		elif [ -d ${DESTDIR}/${file} ]; then
+			type=dir
+			mode=${2:-0755}
+		else
+			echo "metalog_add_data: ${file} not found" >&2
+			return 1
+		fi
+		echo "${file} type=${type} uname=root gname=wheel mode=${mode}" >> \
 		    ${DESTDIR}/METALOG
 	fi
 }
@@ -81,7 +94,10 @@ vm_install_base() {
 		local pkg_cmd
 		pkg_cmd="pkg --rootdir ${DESTDIR} --repo-conf-dir ${PKGBASE_REPO_DIR}
 			-o ASSUME_ALWAYS_YES=yes -o IGNORE_OSVERSION=yes
-			-o INSTALL_AS_USER=yes "
+			-o ABI=${PKG_ABI} -o INSTALL_AS_USER=yes "
+		if [ -n "${NO_ROOT}" ]; then
+			pkg_cmd="$pkg_cmd -o METALOG=METALOG"
+		fi
 		$pkg_cmd update
 		selected=$($pkg_cmd rquery -U -r FreeBSD-base %n | \
 			vm_filter_base_packages | vm_extra_filter_base_packages)
@@ -110,7 +126,7 @@ vm_install_base() {
 	echo '# Custom /etc/fstab for FreeBSD VM images' \
 		> ${DESTDIR}/etc/fstab
 	if [ "${VMFS}" != zfs ]; then
-		echo "/dev/${ROOTLABEL}/rootfs   /       ${VMFS}   rw      1       1" \
+		echo "/dev/${ROOTLABEL}/rootfs   /       ${VMFS}   rw,noatime      1       1" \
 			>> ${DESTDIR}/etc/fstab
 	fi
 	if [ -z "${NOSWAP}" ]; then
@@ -172,7 +188,6 @@ vm_extra_enable_services() {
 			${DESTDIR}/etc/rc.conf
 		# Expand the filesystem to fill the disk.
 		echo 'growfs_enable="YES"' >> ${DESTDIR}/etc/rc.conf
-		touch ${DESTDIR}/firstboot
 	fi
 
 	return 0
@@ -186,6 +201,7 @@ vm_extra_install_packages() {
 		for pkg in ${VM_EXTRA_PACKAGES}; do
 			INSTALL_AS_USER=yes \
 			${PKG_CMD} \
+			    -o ABI=${PKG_ABI} \
 			    -o METALOG=${DESTDIR}/METALOG.pkg \
 			    -o REPOS_DIR=${PKG_REPOS_DIR} \
 			    -o PKG_DBDIR=${DESTDIR}/var/db/pkg \
@@ -237,9 +253,16 @@ vm_emulation_cleanup() {
 }
 
 vm_extra_pkg_rmcache() {
-	if [ -e ${DESTDIR}/usr/local/sbin/pkg ]; then
-		chroot ${DESTDIR} ${EMULATOR} env ASSUME_ALWAYS_YES=yes \
-			/usr/local/sbin/pkg clean -y -a
+	if [ -n "${NO_ROOT}" ]; then
+		${PKG_CMD} \
+		    -o ASSUME_ALWAYS_YES=yes \
+		    -r ${DESTDIR} \
+		    clean -y -a
+	else
+		if [ -e ${DESTDIR}/usr/local/sbin/pkg ]; then
+			chroot ${DESTDIR} ${EMULATOR} env ASSUME_ALWAYS_YES=yes \
+			    /usr/local/sbin/pkg clean -y -a
+		fi
 	fi
 
 	return 0
@@ -383,6 +406,11 @@ vm_create_disk() {
 			>> ${DESTDIR}/etc/fstab
 	fi
 
+	# Add a marker file which indicates that this image has never
+	# been booted.  Some services run only upon the first boot.
+	touch ${DESTDIR}/firstboot
+	metalog_add_data ./firstboot
+
 	echo "Building filesystem...  Please wait."
 	buildfs
 
@@ -406,9 +434,4 @@ vm_create_disk() {
 vm_extra_create_disk() {
 
 	return 0
-}
-
-touch_firstboot() {
-	touch ${DESTDIR}/firstboot
-	metalog_add_data ./firstboot
 }
