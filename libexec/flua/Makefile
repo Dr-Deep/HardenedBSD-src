@@ -19,8 +19,9 @@ FLUA_MODULES+=	liblyaml
 FLUA_MODULES+=	lposix
 
 .ifdef BOOTSTRAPPING
-FLUA_MODULES+=	libfreebsd/sys/linker
-FLUA_MODULES+=	libfreebsd/kenv
+# libfreebsd is generally omitted from the bootstrap flua because its
+# functionality largely assumes a FreeBSD kernel/system headers, so it doesn't
+# really offer functionality that we can use in bootstrap.
 CFLAGS+=	-I${.CURDIR} -DBOOTSTRAPPING
 
 SHAREDIR=	${WORLDTMP}/legacy/usr/share/flua
