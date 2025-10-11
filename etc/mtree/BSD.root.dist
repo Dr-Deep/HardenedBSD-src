@@ -134,11 +134,7 @@
     ..
     rescue          tags=package=rescue
     ..
-<<<<<<< HEAD
-    root            mode=0710
-=======
-    root            mode=0750 tags=package=runtime
->>>>>>> origin/freebsd/15-stable/main
+    root            mode=0710 tags=package=runtime
     ..
     sbin            tags=package=runtime
     ..
