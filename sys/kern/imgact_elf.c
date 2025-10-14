@@ -153,16 +153,7 @@ SYSCTL_INT(ELF_NODE_OID, OID_AUTO, sigfastblock,
     CTLFLAG_RWTUN, &__elfN(sigfastblock), 0,
     "enable sigfastblock for new processes");
 
-<<<<<<< HEAD
-static Elf_Brandinfo *elf_brand_list[MAX_BRANDS];
-=======
-static bool __elfN(allow_wx) = true;
-SYSCTL_BOOL(ELF_NODE_OID, OID_AUTO, allow_wx,
-    CTLFLAG_RWTUN, &__elfN(allow_wx), 0,
-    "Allow pages to be mapped simultaneously writable and executable");
-
 static const Elf_Brandinfo *elf_brand_list[MAX_BRANDS];
->>>>>>> internal/freebsd/current/main
 
 #define	aligned(a, t)	(rounddown2((u_long)(a), sizeof(t)) == (u_long)(a))
 
