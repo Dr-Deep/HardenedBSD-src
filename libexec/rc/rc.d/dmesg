@@ -19,7 +19,6 @@ stop_cmd=":"
 do_dmesg()
 {
 	rm -f ${dmesg_file}
-<<<<<<< HEAD
 
 	case `/sbin/sysctl -n security.bsd.unprivileged_read_msgbuf` in
 	1)
@@ -29,9 +28,6 @@ do_dmesg()
 		( umask 077 ; /sbin/dmesg $rc_flags > ${dmesg_file} )
 		;;
 	esac
-=======
-	( umask "${dmesg_umask}" ; /sbin/dmesg $rc_flags > ${dmesg_file} )
->>>>>>> internal/freebsd/current/main
 }
 
 load_rc_config $name
