@@ -23,7 +23,17 @@ _REVISION!=	${MAKE} -C ${SRCTOP}/release -V REVISION
 REVISION?=	${_REVISION}
 
 .if ${BRANCH} == CURRENT || ${BRANCH} == STABLE
+<<<<<<< HEAD
 SUBURL=		latest
+=======
+SUBURL=		base_latest
+.elif ${BRANCH} == RELEASE || ${BRANCH:C/[0-9]+$//} == BETA || \
+    ${BRANCH:C/[0-9]+$//} == RC
+SUBURL=		base_release_${REVISION:C/[0-9]+\.//}
+.else
+.warning Invalid branch "${BRANCH}"
+SUBURL=		base_latest
+>>>>>>> internal/freebsd/current/main
 .endif
 
 HardenedBSD-base.conf: HardenedBSD-base.conf.in
