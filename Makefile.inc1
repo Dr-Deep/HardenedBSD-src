@@ -600,9 +600,9 @@ PKG_VERSION:=	${_PKG_REVISION}${EXTRA_REVISION:C/[[:space:]]//g}
 .endif
 .endif	# !defined(_MKSHOWCONFIG)
 
-PKG_NAME_PREFIX?=	FreeBSD
-PKG_MAINTAINER?=	re@FreeBSD.org
-PKG_WWW?=		https://www.FreeBSD.org
+PKG_NAME_PREFIX?=	HardenedBSD
+PKG_MAINTAINER?=	core@hardenedbsd.org
+PKG_WWW?=		https://hardenedbsd.org
 PKG_WORKERS_COUNT?=	1
 
 .if make(*package*)
@@ -620,17 +620,6 @@ SOURCE_DATE_EPOCH=	${TIMEEPOCHNOW:gmtime}
 .else
 SOURCE_DATE_EPOCH=	${PKG_TIMESTAMP}
 .endif
-<<<<<<< HEAD
-PKG_WORKERS_COUNT?=	1
-
-PKG_NAME_PREFIX?=	HardenedBSD
-PKG_MAINTAINER?=	core@hardenedbsd.org
-PKG_WWW?=		https://hardenedbsd.org
-.export PKG_NAME_PREFIX
-.export PKG_MAINTAINER
-.export PKG_WWW
-=======
->>>>>>> origin/freebsd/15-stable/main
 .endif
 
 .if !defined(_MKSHOWCONFIG)
