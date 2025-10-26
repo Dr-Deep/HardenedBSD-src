@@ -172,6 +172,7 @@ SUBDIR=	\
 	iflib \
 	${_igc} \
 	imgact_binmisc \
+	${_imx} \
 	${_intelspi} \
 	${_io} \
 	${_ioat} \
@@ -673,7 +674,9 @@ _irdma=		irdma
 .if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "arm" || \
 	${MACHINE_CPUARCH} == "riscv"
 .if !empty(OPT_FDT)
+_allwinner=	allwinner
 _if_cgem=	if_cgem
+_sdhci_fdt=	sdhci_fdt
 .endif
 .endif
 
@@ -706,7 +709,6 @@ _hyperv=  hyperv
 _vf_i2c=	vf_i2c
 
 .if !empty(OPT_FDT)
-_allwinner=	allwinner
 _dwwdt=		dwwdt
 _enetc=		enetc
 _felix=		felix
@@ -714,12 +716,8 @@ _rockchip=	rockchip
 .endif
 .endif
 
-.if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "arm" || \
-    ${MACHINE_CPUARCH} == "riscv"
-.if !empty(OPT_FDT)
-_sdhci_fdt=	sdhci_fdt
-.endif
-_neta=		neta
+.if ${MACHINE_CPUARCH} == "arm"
+_imx=		imx
 .endif
 
 .if ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "amd64"
@@ -911,7 +909,8 @@ _nvram+=	powermac_nvram
 
 .if ${MACHINE_CPUARCH} == "arm" || ${MACHINE_CPUARCH} == "aarch64"
 _bcm283x_clkman=  bcm283x_clkman
-_bcm283x_pwm=  bcm283x_pwm
+_bcm283x_pwm=	bcm283x_pwm
+_neta=		neta
 .endif
 
 .if !(${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} < 110000)
