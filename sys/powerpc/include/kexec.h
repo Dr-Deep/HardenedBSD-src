@@ -1,8 +1,7 @@
 /*-
- * Copyright (c) 2015 The FreeBSD Foundation
+ * SPDX-License-Identifier: BSD-2-Clause
  *
- * This software was developed by Semihalf under
- * the sponsorship of the FreeBSD Foundation.
+ * Copyright (c) 2025 Juniper Networks, Inc.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -16,7 +15,7 @@
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
  * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
@@ -26,43 +25,14 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/param.h>
-#include <ddb/ddb.h>
-#include <ddb/db_access.h>
-#include <ddb/db_sym.h>
+#ifndef	_POWERPC_KEXEC_H_
+#define	_POWERPC_KEXEC_H_
 
-#include <machine/armreg.h>
-#include <machine/disassem.h>
-
-static u_int db_disasm_read_word(vm_offset_t);
-static void db_disasm_printaddr(vm_offset_t);
-
-/* Glue code to interface db_disasm to the generic ARM disassembler */
-static const struct disasm_interface db_disasm_interface = {
-	.di_readword = db_disasm_read_word,
-	.di_printaddr = db_disasm_printaddr,
-	.di_printf = db_printf,
-};
-
-static u_int
-db_disasm_read_word(vm_offset_t address)
+int
+kexec_load_md(struct kexec_image *image)
 {
-
-	return (db_get_value(address, INSN_SIZE, 0));
+	return (ENOSYS);
 }
 
-static void
-db_disasm_printaddr(vm_offset_t address)
-{
-
-	db_printsym((db_addr_t)address, DB_STGY_ANY);
-}
-
-vm_offset_t
-db_disasm(vm_offset_t loc, bool altfmt)
-{
-
-	return (disasm(&db_disasm_interface, loc, altfmt));
-}
-
-/* End of db_disasm.c */
+#define	kexec_reboot_md(x) do {} while (0)
+#endif /* _POWERPC_KEXEC_H_ */
