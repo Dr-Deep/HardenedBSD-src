@@ -91,11 +91,9 @@ CFLAGS+=	-DCONFIG_IWLWIFI_DEVICE_TRACING=1
 #CFLAGS+=	-DCONFIG_THERMAL=1
 #CFLAGS+=	-DCONFIG_EFI=1
 
-<<<<<<< HEAD
-TRIVIAL_VAR_AUTO_INIT_ZERO_SAFE=	yes
-=======
 # XXX-BZ how to do this just for pcie/drv.c (and gcc vs. clang)?
 CFLAGS += -Wno-override-init -Wno-initializer-overrides
->>>>>>> origin/freebsd/15-stable/main
+
+TRIVIAL_VAR_AUTO_INIT_ZERO_SAFE=	yes
 
 .include <bsd.kmod.mk>
