@@ -702,7 +702,6 @@ rip_ctloutput(struct socket *so, struct sockopt *sopt)
 			break;
 
 		case IP_DUMMYNET3:	/* generic dummynet v.3 functions */
-		case IP_DUMMYNET_GET:
 			if (ip_dn_ctl_ptr != NULL)
 				error = ip_dn_ctl_ptr(sopt);
 			else
@@ -769,9 +768,6 @@ rip_ctloutput(struct socket *so, struct sockopt *sopt)
 			break;
 
 		case IP_DUMMYNET3:	/* generic dummynet v.3 functions */
-		case IP_DUMMYNET_CONFIGURE:
-		case IP_DUMMYNET_DEL:
-		case IP_DUMMYNET_FLUSH:
 			if (ip_dn_ctl_ptr != NULL)
 				error = ip_dn_ctl_ptr(sopt);
 			else
