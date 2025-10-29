@@ -346,6 +346,7 @@ SUBDIR=	\
 	rc4 \
 	${_rdma} \
 	${_rdrand_rng} \
+	${_rdseed_rng} \
 	re \
 	rl \
 	${_rockchip} \
@@ -808,8 +809,8 @@ _nfe=		nfe
 _nvram=		nvram
 .if ${MK_CRYPT} != "no" || defined(ALL_MODULES)
 _padlock=	padlock
-_padlock_rng=	padlock_rng
 _rdrand_rng=	rdrand_rng
+_rdseed_rng=	rdseed_rng
 .endif
 _pchtherm = pchtherm
 _s3=		s3
@@ -878,6 +879,9 @@ _glxsb=		glxsb
 _pcfclock=	pcfclock
 _pst=		pst
 _sbni=		sbni
+.if ${MK_CRYPT} != "no" || defined(ALL_MODULES)
+_padlock_rng=	padlock_rng
+.endif
 .endif
 
 .if ${MACHINE_ARCH} == "armv7"
