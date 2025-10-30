@@ -16,20 +16,17 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-messages = [
-	{
-		type: upgrade
-		message: <<EOM
-After upgrading local-unbound, the configuration file should be regenerated
-by running "service local_unbound setup" before restarting the service.
-EOM
-	}
-]
+comment = "DEFLATE (gzip) data compression library"
 
-deps {
-	# local-unbound uses resolvconf to update resolv.conf and to generate
-	# its forward.conf.
-	"resolvconf" {
-		version = "${VERSION}"
-	},
+desc = <<EOD
+zlib implements the DEFLATE data compression algorithm, as used in the
+GNU gzip(1) utility.  DEFLATE is widely used in many situations, such
+as network protocols (including HTTP) that need to compress data in
+transit, and in utilities that compress data on disk.
+EOD
+
+licenses = [ "Zlib" ]
+
+annotations {
+	set = "minimal,minimal-jail"
 }
