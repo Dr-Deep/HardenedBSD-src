@@ -3159,15 +3159,15 @@ db_print_inpflags(int inp_flags)
 	}
 	if (inp_flags & INP_ONESBCAST) {
 		db_printf("%sINP_ONESBCAST", comma ? ", " : "");
-		comma  = 1;
+		comma = 1;
 	}
 	if (inp_flags & INP_DROPPED) {
 		db_printf("%sINP_DROPPED", comma ? ", " : "");
-		comma  = 1;
+		comma = 1;
 	}
 	if (inp_flags & INP_SOCKREF) {
 		db_printf("%sINP_SOCKREF", comma ? ", " : "");
-		comma  = 1;
+		comma = 1;
 	}
 	if (inp_flags & INP_RESERVED_0) {
 		db_printf("%sINP_RESERVED_0", comma ? ", " : "");
@@ -3207,7 +3207,7 @@ db_print_inpvflag(u_char inp_vflag)
 	}
 }
 
-static void
+void
 db_print_inpcb(struct inpcb *inp, const char *name, int indent)
 {
 
