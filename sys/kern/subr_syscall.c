@@ -58,8 +58,8 @@ syscallenter(struct thread *td)
 	struct proc *p;
 	struct syscall_args *sa;
 	struct sysent *se;
-	int error, traced;
-	bool sy_thr_static;
+	int error;
+	bool sy_thr_static, traced;
 
 	VM_CNT_INC(v_syscall);
 	p = td->td_proc;
@@ -222,7 +222,7 @@ syscallret(struct thread *td)
 	struct proc *p;
 	struct syscall_args *sa;
 	ksiginfo_t ksi;
-	int traced;
+	bool traced;
 
 	KASSERT(td->td_errno != ERELOOKUP,
 	    ("ERELOOKUP not consumed syscall %d", td->td_sa.code));
@@ -256,9 +256,9 @@ syscallret(struct thread *td)
 	}
 #endif
 
-	traced = 0;
+	traced = false;
 	if (__predict_false(p->p_flag & P_TRACED)) {
-		traced = 1;
+		traced = true;
 		PROC_LOCK(p);
 		td->td_dbgflags |= TDB_SCX;
 		PROC_UNLOCK(p);
