@@ -20,6 +20,43 @@ PROG=	${PROG_CXX}
 MK_DEBUG_FILES=	no
 .endif
 
+<<<<<<< HEAD
+=======
+# ELF hardening knobs
+.if ${MK_BIND_NOW} != "no"
+LDFLAGS+= -Wl,-znow
+.endif
+.if ${LINKER_TYPE} != "mac"
+.if ${MK_RELRO} == "no"
+LDFLAGS+= -Wl,-znorelro
+.else
+LDFLAGS+= -Wl,-zrelro
+.endif
+.endif
+# Static PIE is not yet supported/tested.
+.if ${MK_PIE} != "no" && (!defined(NO_SHARED) || ${NO_SHARED:tl} == "no")
+CFLAGS+= -fPIE
+CXXFLAGS+= -fPIE
+LDFLAGS+= -pie
+OBJ_EXT=pieo
+.else
+OBJ_EXT=o
+.endif
+.if ${MK_RETPOLINE} != "no"
+.if ${COMPILER_FEATURES:Mretpoline} && ${LINKER_FEATURES:Mretpoline}
+CFLAGS+= -mretpoline
+CXXFLAGS+= -mretpoline
+# retpolineplt is broken with static linking (PR 233336)
+.if !defined(NO_SHARED) || ${NO_SHARED:tl} == "no"
+LDFLAGS+= -Wl,-zretpolineplt
+.endif
+.else
+.if !defined(_NO_INCLUDE_COMPILERMK)
+.warning Retpoline requested but not supported by compiler or linker
+.endif
+.endif
+.endif
+>>>>>>> origin/freebsd/15-stable/main
 # LLD sensibly defaults to -znoexecstack, so do the same for BFD
 LDFLAGS.bfd+= -Wl,-znoexecstack
 .if ${MK_BRANCH_PROTECTION} != "no"
@@ -29,6 +66,34 @@ LDFLAGS+= -Wl,-zbti-report=error
 .endif
 .endif
 
+<<<<<<< HEAD
+=======
+# Initialize stack variables on function entry
+.if ${OPT_INIT_ALL} != "none"
+.if ${COMPILER_FEATURES:Minit-all}
+CFLAGS+= -ftrivial-auto-var-init=${OPT_INIT_ALL}
+CXXFLAGS+= -ftrivial-auto-var-init=${OPT_INIT_ALL}
+.if ${OPT_INIT_ALL} == "zero" && ${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} < 160000
+CFLAGS+= -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang
+CXXFLAGS+= -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang
+.endif
+.else
+.if !defined(_NO_INCLUDE_COMPILERMK)
+.warning INIT_ALL (${OPT_INIT_ALL}) requested but not supported by compiler
+.endif
+.endif
+.endif
+
+# Zero used registers on return (mitigate some ROP)
+.if ${MK_ZEROREGS} != "no"
+.if ${COMPILER_FEATURES:Mzeroregs}
+ZEROREG_TYPE?= used
+CFLAGS+= -fzero-call-used-regs=${ZEROREG_TYPE}
+CXXFLAGS+= -fzero-call-used-regs=${ZEROREG_TYPE}
+.endif
+.endif
+
+>>>>>>> origin/freebsd/15-stable/main
 # bsd.sanitizer.mk is not installed, so don't require it (e.g. for ports).
 .sinclude "bsd.sanitizer.mk"
 
