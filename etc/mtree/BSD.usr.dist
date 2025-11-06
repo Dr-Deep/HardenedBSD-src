@@ -242,8 +242,8 @@
             ..
             legal
             ..
-            llvm
-                clang
+            llvm            tags=package=clang
+                clang       tags=package=clang
                 ..
             ..
             ncurses
@@ -867,7 +867,7 @@
             scrnmaps
             ..
         ..
-        tabset
+        tabset                tags=package=ncurses-lib
         ..
         vi
             catalog
