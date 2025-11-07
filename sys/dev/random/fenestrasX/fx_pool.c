@@ -127,7 +127,7 @@ static const struct fxrng_ent_cls fxrng_garbage = {
  */
 static const struct fxrng_ent_char {
 	const struct fxrng_ent_cls	*entc_cls;
-} fxrng_ent_char[ENTROPYSOURCE] = {
+} fxrng_ent_char[/*ENTROPYSOURCE*/] = {
 	[RANDOM_CACHED] = {
 		.entc_cls = &fxrng_hi_push,
 	},
@@ -206,7 +206,17 @@ static const struct fxrng_ent_char {
 	[RANDOM_PURE_VMGENID] = {
 		.entc_cls = &fxrng_hi_push,
 	},
+	[RANDOM_PURE_QUALCOMM] = {
+		.entc_cls = &fxrng_hi_pull,
+	},
+	[RANDOM_PURE_ARMV8] = {
+		.entc_cls = &fxrng_hi_pull,
+	},
+	[RANDOM_PURE_ARM_TRNG] = {
+		.entc_cls = &fxrng_hi_pull,
+	},
 };
+CTASSERT(nitems(fxrng_ent_char) == ENTROPYSOURCE);
 
 /* Useful for single-bit-per-source state. */
 BITSET_DEFINE(fxrng_bits, ENTROPYSOURCE);
