@@ -6,19 +6,9 @@
 .
     bin
     ..
-<<<<<<< HEAD
-    include
-        c++
-            v1
-            ..
-        ..
-        private
-            bsddialog
-=======
     include                   tags=package=clibs-dev
         private               tags=package=clibs-dev
             bsddialog         tags=package=utilities-dev
->>>>>>> internal/hardened/current/master
             ..
             bsdstat           tags=package=libbsdstat-dev
             ..
