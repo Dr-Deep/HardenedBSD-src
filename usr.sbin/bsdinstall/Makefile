@@ -27,6 +27,6 @@ SUBURL=		latest
 .endif
 
 HardenedBSD-base.conf: HardenedBSD-base.conf.in
-	sed "s|%%SUBURL%%|${SUBURL}|" < ${.ALLSRC} > ${.TARGET}
+	sed "s|%%PKGHOST%%|${PKGHOST}|;s|%%SUBURL%%|${SUBURL}|;s|%%KEYSDIR%%|${KEYSDIR}|" < ${.ALLSRC} > ${.TARGET}
 
 .include <bsd.prog.mk>
