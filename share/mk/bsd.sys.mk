@@ -311,6 +311,12 @@ CFLAGS+=	-D_FORTIFY_SOURCE=${FORTIFY_SOURCE}
 CXXFLAGS+=	-D_FORTIFY_SOURCE=${FORTIFY_SOURCE}
 .endif
 
+# HBSD: Various hardening flags that are good to force enable
+CFLAGS+=	-fno-delete-null-pointer-checks
+CXXFLAGS+=	-fno-delete-null-pointer-checks
+CWARNFLAGS+=	-Werror=format-security
+CXXWARNFLAGS+=	-Werror=format-security
+
 # Additional flags passed in CFLAGS and CXXFLAGS when MK_DEBUG_FILES is
 # enabled.
 DEBUG_FILES_CFLAGS?= -g -gz=zlib

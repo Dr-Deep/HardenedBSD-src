@@ -25020,7 +25020,7 @@ static int _wrap_SBError_SetErrorStringWithFormat__SWIG_3(lua_State* L) {
     }
     
     arg2 = (char *)lua_tostring(L, 2);
-    result = (int)(arg1)->SetErrorStringWithFormat((char const *)arg2);
+    result = (int)(arg1)->SetErrorStringWithFormat("%s", arg2);
     lua_pushinteger(L, (lua_Integer) result); SWIG_arg++;
     return SWIG_arg;
     
