@@ -3212,11 +3212,9 @@ unp_disconnect(struct unpcb *unp, struct unpcb *unp2)
 #endif
 		LIST_REMOVE(unp, unp_reflink);
 		UNP_REF_LIST_UNLOCK();
-		if (so) {
-			SOCK_LOCK(so);
-			so->so_state &= ~SS_ISCONNECTED;
-			SOCK_UNLOCK(so);
-		}
+		SOCK_LOCK(so);
+		so->so_state &= ~SS_ISCONNECTED;
+		SOCK_UNLOCK(so);
 		break;
 
 	case SOCK_STREAM:
@@ -4204,10 +4202,12 @@ unp_gc(__unused void *arg, int pending)
 		struct socket *so;
 
 		so = unref[i]->f_data;
-		CURVNET_SET(so->so_vnet);
-		socantrcvmore(so);
-		unp_dispose(so);
-		CURVNET_RESTORE();
+		if (!SOLISTENING(so)) {
+			CURVNET_SET(so->so_vnet);
+			socantrcvmore(so);
+			unp_dispose(so);
+			CURVNET_RESTORE();
+		}
 	}
 
 	/*
