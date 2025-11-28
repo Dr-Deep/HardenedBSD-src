@@ -315,7 +315,7 @@ create_one_review()
     printf "\nSubscribers:\n" >> "$msg"
     printf "%s\n" "${subscribers}" >> "$msg"
 
-    yes | env EDITOR=true \
+    yes | EDITOR=true \
         arc diff --message-file "$msg" --never-apply-patches --create \
         --allow-untracked $BROWSE --head "$commit" "${commit}~"
     [ $? -eq 0 ] || err "could not create Phabricator diff"
@@ -786,7 +786,7 @@ shift $((OPTIND-1))
 
 [ $# -ge 1 ] || err_usage
 
-which arc >/dev/null 2>&1 || err "arc is required, install devel/arcanist"
+[ -x "${ARC_CMD}" ] || err "arc is required, install devel/arcanist-lib"
 which jq >/dev/null 2>&1 || err "jq is required, install textproc/jq"
 
 if [ "$VERBOSE" ]; then
