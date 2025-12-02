@@ -238,6 +238,7 @@ _LIBRARIES=	\
 		usb \
 		usbhid \
 		util \
+		uvmem \
 		uutil \
 		verto \
 		vmmapi \
@@ -498,7 +499,12 @@ _DP_fifolog=	z
 _DP_ipf=	kvm
 _DP_tpool=	spl
 _DP_uutil=	avl spl
+<<<<<<< HEAD
 _DP_zfs=	jail md pthread rt umem util uutil m avl bsdxml crypto geom nvpair \
+=======
+_DP_uvmem=	pthread
+_DP_zfs=	md pthread rt umem util uutil m avl bsdxml crypto geom nvpair \
+>>>>>>> internal/freebsd/current/main
 	z zfs_core zutil
 _DP_zfsbootenv= zfs nvpair
 _DP_zfs_core=	nvpair spl zutil
@@ -779,6 +785,9 @@ LIBSYS_PIC?=	${LIBSYS_PICDIR}/libsys_pic.a
 
 LIBSAMPLERATEDIR?=	${_LIB_OBJTOP}/lib/libsamplerate
 LIBSAMPLERATE?=	${LIBSAMPLERATEDIR}/libsamplerate${PIE_SUFFIX}.a
+
+LIBUVMEMDIR=	${OBJTOP}/lib/libuvmem
+LIBUVMEM?=	${LIBUVMEMDIR}/libuvmem${PIE_SUFFIX}.a
 
 # Define a directory for each library.  This is useful for adding -L in when
 # not using a --sysroot or for meta mode bootstrapping when there is no
