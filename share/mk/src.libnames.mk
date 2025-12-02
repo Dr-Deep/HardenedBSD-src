@@ -499,13 +499,10 @@ _DP_fifolog=	z
 _DP_ipf=	kvm
 _DP_tpool=	spl
 _DP_uutil=	avl spl
-<<<<<<< HEAD
-_DP_zfs=	jail md pthread rt umem util uutil m avl bsdxml crypto geom nvpair \
-=======
 _DP_uvmem=	pthread
 _DP_zfs=	md pthread rt umem util uutil m avl bsdxml crypto geom nvpair \
->>>>>>> internal/freebsd/current/main
 	z zfs_core zutil
+
 _DP_zfsbootenv= zfs nvpair
 _DP_zfs_core=	nvpair spl zutil
 _DP_zpool=	md pthread z icp spl nvpair avl umem
@@ -516,6 +513,8 @@ _DP_ifconfig=	m
 _DP_pfctl=	nv
 _DP_krb5ss=		edit
 
+# HBSD Requirements
+_DP_zfs+=	jail
 _DP_lattzfs=	zfs spl nvpair
 
 # OFED support
