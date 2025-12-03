@@ -29,12 +29,7 @@
  * SUCH DAMAGE.
  */
 
-<<<<<<< HEAD
-#include <sys/cdefs.h>
-
 #include "opt_pax.h"
-=======
->>>>>>> origin/freebsd/current/main
 #include "opt_rss.h"
 
 #include <sys/param.h>
