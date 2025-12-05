@@ -1,7 +1,10 @@
+<<<<<<< HEAD
 .include <bsd.init.mk>
 
 ZFSTOP=	${SRCTOP}/sys/contrib/openzfs
 
+=======
+>>>>>>> internal/hardened/current/master
 .PATH: ${ZFSTOP}/man/man4
 .PATH: ${ZFSTOP}/man/man5
 .PATH: ${ZFSTOP}/man/man7
@@ -69,7 +72,7 @@ CFLAGS+= \
 	-I${ZFSTOP}/include \
 	-I${ZFSTOP}/lib/libspl/include \
 	-I${ZFSTOP}/lib/libspl/include/os/freebsd \
-	-I${SRCTOP}/sys/contrib/openzfs/lib/libzpool/include \
+	-I${ZFSTOP}/lib/libzpool/include \
 	-I${SRCTOP}/sys \
 	-I${SRCTOP}/cddl/compat/opensolaris/include \
 	-I${ZFSTOP}/cmd/zpool \

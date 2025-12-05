@@ -238,6 +238,7 @@ _LIBRARIES=	\
 		usb \
 		usbhid \
 		util \
+		uvmem \
 		uutil \
 		verto \
 		vmmapi \
@@ -291,6 +292,7 @@ _LIBRARIES+= \
 		irdma \
 		mlx4 \
 		mlx5 \
+		bnxtre \
 		rdmacm \
 		osmcomp \
 		opensm \
@@ -366,7 +368,7 @@ _DP_cap_sysctl=	nv
 _DP_cap_syslog=	nv
 _DP_crypt=	md
 .if ${MK_OFED} != "no"
-_DP_pcap=	ibverbs mlx5
+_DP_pcap=	ibverbs mlx5 bnxtre
 .endif
 _DP_pjdlog=	util
 _DP_usb=	pthread
@@ -498,8 +500,10 @@ _DP_fifolog=	z
 _DP_ipf=	kvm
 _DP_tpool=	spl
 _DP_uutil=	avl spl
-_DP_zfs=	jail md pthread rt umem util uutil m avl bsdxml crypto geom nvpair \
+_DP_uvmem=	pthread
+_DP_zfs=	md pthread rt umem util uutil m avl bsdxml crypto geom nvpair \
 	z zfs_core zutil
+
 _DP_zfsbootenv= zfs nvpair
 _DP_zfs_core=	nvpair spl zutil
 _DP_zpool=	md pthread z icp spl nvpair avl umem
@@ -510,6 +514,8 @@ _DP_ifconfig=	m
 _DP_pfctl=	nv
 _DP_krb5ss=		edit
 
+# HBSD Requirements
+_DP_zfs+=	jail
 _DP_lattzfs=	zfs spl nvpair
 
 # OFED support
@@ -518,11 +524,12 @@ _DP_cxgb4=	ibverbs pthread
 _DP_ibcm=	ibverbs
 _DP_ibmad=	ibumad
 _DP_ibnetdisc=	osmcomp ibmad ibumad
-_DP_ibumad=	
+_DP_ibumad=
 _DP_ibverbs=
 _DP_irdma=	ibverbs pthread
 _DP_mlx4=	ibverbs pthread
 _DP_mlx5=	ibverbs pthread
+_DP_bnxtre=	ibverbs pthread
 _DP_rdmacm=	ibverbs
 _DP_osmcomp=	pthread
 _DP_opensm=	pthread
@@ -780,6 +787,9 @@ LIBSYS_PIC?=	${LIBSYS_PICDIR}/libsys_pic.a
 LIBSAMPLERATEDIR?=	${_LIB_OBJTOP}/lib/libsamplerate
 LIBSAMPLERATE?=	${LIBSAMPLERATEDIR}/libsamplerate${PIE_SUFFIX}.a
 
+LIBUVMEMDIR=	${OBJTOP}/lib/libuvmem
+LIBUVMEM?=	${LIBUVMEMDIR}/libuvmem${PIE_SUFFIX}.a
+
 # Define a directory for each library.  This is useful for adding -L in when
 # not using a --sysroot or for meta mode bootstrapping when there is no
 # Makefile.depend.  These are sorted by directory.
@@ -818,6 +828,7 @@ LIBIBVERBSDIR=	${_LIB_OBJTOP}/lib/ofed/libibverbs
 LIBIRDMADIR=	${_LIB_OBJTOP}/lib/ofed/libirdma
 LIBMLX4DIR=	${_LIB_OBJTOP}/lib/ofed/libmlx4
 LIBMLX5DIR=	${_LIB_OBJTOP}/lib/ofed/libmlx5
+LIBBNXTREDIR=	${_LIB_OBJTOP}/lib/ofed/libbnxtre
 LIBRDMACMDIR=	${_LIB_OBJTOP}/lib/ofed/librdmacm
 LIBOSMCOMPDIR=	${_LIB_OBJTOP}/lib/ofed/complib
 LIBOPENSMDIR=	${_LIB_OBJTOP}/lib/ofed/libopensm
