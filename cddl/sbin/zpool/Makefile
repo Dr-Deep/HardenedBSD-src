@@ -75,10 +75,10 @@ CFLAGS+= \
 	-DSYSCONFDIR=\"/etc\" \
 	-DPKGDATADIR=\"/usr/share/zfs\"
 
-<<<<<<< HEAD
-LIBADD=	geom jail nvpair uutil zfs zutil avl spl tpool zfs_core m
-=======
 LIBADD=	geom nvpair zfs zutil avl spl zfs_core m
->>>>>>> origin/freebsd/current/main
 LDADD+= 	-pthread
+
+# HardenedBSD's changes require libjail
+LIBADD+=	jail
+
 .include <bsd.prog.mk>
