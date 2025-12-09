@@ -14,7 +14,11 @@ export ROOTDIR="$PWD/dvd"
 export PORTSDIR="${PORTSDIR:-/usr/ports}"
 
 _DVD_PACKAGES="
+<<<<<<< HEAD
 archivers/unzip
+=======
+comms/usbmuxd
+>>>>>>> origin/freebsd/15-stable/main
 devel/git@lite
 editors/emacs@nox
 editors/vim
