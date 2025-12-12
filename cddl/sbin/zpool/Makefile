@@ -77,8 +77,16 @@ CFLAGS+= \
 	-DSYSCONFDIR=\"/etc\" \
 	-DPKGDATADIR=\"/usr/share/zfs\"
 
+<<<<<<< HEAD
 MK_CROSS_DSO_CFI=	no
 
 LIBADD=	geom jail nvpair uutil zfs zutil avl spl tpool zfs_core m
+=======
+LIBADD=	geom nvpair zfs zutil avl spl zfs_core m
+>>>>>>> internal/hardened/current/master
 LDADD+= 	-pthread
+
+# HardenedBSD's changes require libjail
+LIBADD+=	jail
+
 .include <bsd.prog.mk>
