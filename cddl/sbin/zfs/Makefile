@@ -73,14 +73,11 @@ CFLAGS+= \
 	-include ${SRCTOP}/sys/modules/zfs/zfs_config.h \
 	-I${SRCTOP}/sys/modules/zfs
 
-<<<<<<< HEAD
 MK_CROSS_DSO_CFI=	no
 
-LIBADD=	jail avl nvpair geom  uutil zfs_core spl tpool zutil zfs m crypto
-=======
 LIBADD=	jail avl nvpair geom zfs_core spl zutil zfs m crypto
->>>>>>> internal/hardened/current/master
 LDADD+=	-pthread
+
 .include <bsd.prog.mk>
 
 CWARNFLAGS.zfs_main.c+=	-Wno-unused-variable
