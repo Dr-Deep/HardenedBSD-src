@@ -723,6 +723,7 @@ hdspechan_init(kobj_t obj, void *devinfo, struct snd_dbuf *b,
 	ch->data = malloc(ch->size, M_HDSPE, M_NOWAIT);
 	if (ch->data == NULL) {
 		device_printf(scp->dev, "Can't allocate data.\n");
+		mtx_unlock(&sc->lock);
 		return (NULL);
 	}
 	ch->position = 0;
