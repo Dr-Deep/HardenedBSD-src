@@ -43,7 +43,7 @@
 #endif
 #include <sys/utsname.h>
 
-#if defined(__FreeBSD__) && defined(SIOCIFCREATE2)
+#if defined(__FreeBSD__) && __FreeBSD_version < 1600006
 /*
  * Add support for capturing on FreeBSD usbusN interfaces.
  */
@@ -1721,7 +1721,7 @@ pcap_cleanup_bpf(pcap_t *p)
 		}
 #endif /* HAVE_BSD_IEEE80211 */
 
-#if defined(__FreeBSD__) && defined(SIOCIFCREATE2)
+#if defined(__FreeBSD__) && __FreeBSD_version < 1600006
 		/*
 		 * Attempt to destroy the usbusN interface that we created.
 		 */
@@ -1738,7 +1738,7 @@ pcap_cleanup_bpf(pcap_t *p)
 				}
 			}
 		}
-#endif /* defined(__FreeBSD__) && defined(SIOCIFCREATE2) */
+#endif /* defined(__FreeBSD__) && __FreeBSD_version < 1600006 */
 		/*
 		 * Take this pcap out of the list of pcaps for which we
 		 * have to take the interface out of some mode.
@@ -2037,11 +2037,11 @@ pcap_activate_bpf(pcap_t *p)
 	}
 #endif /* __APPLE__ */
 
+#if defined(__FreeBSD__) && __FreeBSD_version < 1600006
 	/*
-	 * If this is FreeBSD, and the device name begins with "usbus",
+	 * If this is legacy FreeBSD, and the device name begins with "usbus",
 	 * try to create the interface if it's not available.
 	 */
-#if defined(__FreeBSD__) && defined(SIOCIFCREATE2)
 	if (strncmp(p->opt.device, usbus_prefix, USBUS_PREFIX_LEN) == 0) {
 		/*
 		 * Do we already have an interface with that name?
@@ -2115,7 +2115,7 @@ pcap_activate_bpf(pcap_t *p)
 			pcapint_add_to_pcaps_to_close(p);
 		}
 	}
-#endif /* defined(__FreeBSD__) && defined(SIOCIFCREATE2) */
+#endif /* defined(__FreeBSD__) && __FreeBSD_version < 1600006 */
 
 #ifdef HAVE_ZEROCOPY_BPF
 	/*
