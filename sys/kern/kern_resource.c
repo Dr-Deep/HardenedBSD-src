@@ -903,6 +903,9 @@ getrlimitusage_one(struct proc *p, u_int which, int flags, rlim_t *res)
 	case RLIMIT_PIPEBUF:
 		*res = ui->ui_pipecnt;
 		break;
+	case RLIMIT_VMM:
+		*res = ui->ui_vmmcnt;
+		break;
 	default:
 		error = EINVAL;
 		break;
@@ -1651,6 +1654,9 @@ uifree(struct uidinfo *uip)
 	if (uip->ui_inotifywatchcnt != 0)
 		printf("freeing uidinfo: uid = %d, inotifywatchcnt = %ld\n",
 		    uip->ui_uid, uip->ui_inotifywatchcnt);
+	if (uip->ui_vmmcnt != 0)
+		printf("freeing vmmcnt: uid = %d, vmmcnt = %ld\n",
+		    uip->ui_uid, uip->ui_vmmcnt);
 	free(uip, M_UIDINFO);
 }
 
@@ -1769,6 +1775,13 @@ chginotifywatchcnt(struct uidinfo *uip, int diff, rlim_t max)
 
 	return (chglimit(uip, &uip->ui_inotifywatchcnt, diff, max,
 	    "inotifywatchcnt"));
+}
+
+int
+chgvmmcnt(struct uidinfo *uip, int diff, rlim_t max)
+{
+
+	return (chglimit(uip, &uip->ui_vmmcnt, diff, max, "vmmcnt"));
 }
 
 static int
