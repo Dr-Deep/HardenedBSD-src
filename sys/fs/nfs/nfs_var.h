@@ -443,8 +443,11 @@ int nfs_supportsposixacls(struct vnode *);
 int nfsrv_dissectace(struct nfsrv_descript *, struct acl_entry *,
     bool, int *, int *, NFSPROC_T *);
 uint32_t nfs_aceperm(acl_perm_t);
+int nfsrv_dissectposixace(struct nfsrv_descript *, struct acl_entry *,
+    bool, int *, int *);
 int nfsrv_buildacl(struct nfsrv_descript *, NFSACL_T *, __enum_uint8(vtype),
     NFSPROC_T *);
+int nfsrv_buildposixacl(struct nfsrv_descript *, NFSACL_T *, acl_type_t);
 int nfsrv_compareacl(NFSACL_T *, NFSACL_T *);
 
 /* nfs_clrpcops.c */
@@ -469,8 +472,8 @@ int nfsrpc_setclient(struct nfsmount *, struct nfsclclient *, int,
 int nfsrpc_getattr(vnode_t, struct ucred *, NFSPROC_T *, struct nfsvattr *);
 int nfsrpc_getattrnovp(struct nfsmount *, u_int8_t *, int, int,
     struct ucred *, NFSPROC_T *, struct nfsvattr *, u_int64_t *, uint32_t *);
-int nfsrpc_setattr(vnode_t, struct vattr *, NFSACL_T *, struct ucred *,
-    NFSPROC_T *, struct nfsvattr *, int *);
+int nfsrpc_setattr(vnode_t, struct vattr *, NFSACL_T *, acl_type_t,
+    struct ucred *, NFSPROC_T *, struct nfsvattr *, int *);
 int nfsrpc_lookup(vnode_t, char *, int, struct ucred *, NFSPROC_T *,
     struct nfsvattr *, struct nfsvattr *, struct nfsfh **, int *, int *,
     uint32_t);
@@ -523,7 +526,7 @@ int nfsrpc_statfs(vnode_t, struct nfsstatfs *, struct nfsfsinfo *, uint32_t *,
 int nfsrpc_fsinfo(vnode_t, struct nfsfsinfo *, struct ucred *,
     NFSPROC_T *, struct nfsvattr *, int *);
 int nfsrpc_pathconf(vnode_t, struct nfsv3_pathconf *, bool *, uint32_t *,
-    struct ucred *, NFSPROC_T *, struct nfsvattr *, int *);
+    struct ucred *, NFSPROC_T *, struct nfsvattr *, int *, uint32_t *);
 int nfsrpc_renew(struct nfsclclient *, struct nfsclds *, struct ucred *,
     NFSPROC_T *);
 int nfsrpc_rellockown(struct nfsmount *, struct nfscllockowner *, uint8_t *,
@@ -532,8 +535,10 @@ int nfsrpc_getdirpath(struct nfsmount *, u_char *, struct ucred *,
     NFSPROC_T *);
 int nfsrpc_delegreturn(struct nfscldeleg *, struct ucred *,
     struct nfsmount *, NFSPROC_T *, int);
-int nfsrpc_getacl(vnode_t, struct ucred *, NFSPROC_T *, NFSACL_T *);
-int nfsrpc_setacl(vnode_t, struct ucred *, NFSPROC_T *, NFSACL_T *);
+int nfsrpc_getacl(struct vnode *, acl_type_t, struct ucred *, NFSPROC_T *,
+    NFSACL_T *);
+int nfsrpc_setacl(struct vnode *, acl_type_t, struct ucred *, NFSPROC_T *,
+    NFSACL_T *);
 int nfsrpc_exchangeid(struct nfsmount *, struct nfsclclient *,
     struct nfssockreq *, int, uint32_t, struct nfsclds **, struct ucred *,
     NFSPROC_T *);
