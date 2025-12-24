@@ -18,7 +18,7 @@ LIBADD+=	z
 LIBADD+=	zstd
 .endif
 
-.if defined(TOOLS_PREFIX) || ${MK_LLVM_LINK_STATIC_LIBRARIES} == "yes"
+.if defined(TOOLS_PREFIX)
 LIBPRIV=
 LIBEXT=		a
 .else

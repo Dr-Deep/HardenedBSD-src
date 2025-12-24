@@ -1,8 +1,8 @@
-.include <src.opts.mk>
+.include <bsd.init.mk>
 .include "../llvm.pre.mk"
 
-.if defined(TOOLS_PREFIX) || ${MK_LLVM_LINK_STATIC_LIBRARIES} == "yes"
-# Build static library during cross-tools stage, or when explicitly requested.
+.if defined(TOOLS_PREFIX)
+# Build static library during cross-tools stage
 LIB=		llvm
 INTERNALLIB=
 .else
@@ -14,7 +14,6 @@ PRIVATELIB=
 # Work around "relocation R_PPC_GOT16 out of range" errors
 PICFLAG=        -fPIC
 .endif
-CFLAGS+=	-DLLVM_BUILD_LLVM_DYLIB
 .endif
 
 SHARED_CXXFLAGS+=	-UPIC # To avoid compile errors
@@ -48,6 +47,8 @@ CFLAGS+=	-DBLAKE3_NO_AVX512 -DBLAKE3_NO_AVX2 -DBLAKE3_NO_SSE41 \
 .if ${TARGET_ARCH} != "arm64"
 CFLAGS+=	-DBLAKE3_USE_NEON=0
 .endif
+
+CFLAGS+=	-DLLVM_BUILD_LLVM_DYLIB
 
 SRCDIR=		llvm/lib
 
