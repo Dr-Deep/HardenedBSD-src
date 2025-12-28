@@ -323,6 +323,9 @@ local function pkgbase()
 	local repos_dir = os.getenv("BSDINSTALL_PKG_REPOS_DIR")
 	if not repos_dir then
 		repos_dir = "/usr/share/bsdinstall/"
+		assert(os.execute("mkdir -p " .. repos_dir))
+		assert(os.execute("cp /usr/share/bsdinstall/HardenedBSD-base.conf " .. repos_dir))
+
 		-- Since pkg always interprets fingerprints paths as relative to
 		-- the --rootdir we must copy the key from the host.
 		assert(os.execute("mkdir -p " .. chroot .. "/usr/share/keys"))
@@ -355,7 +358,7 @@ local function pkgbase()
 
 	-- Enable the FreeBSD-base repository for this system.
 	assert(os.execute("mkdir -p " .. chroot .. "/usr/local/etc/pkg/repos"))
-	assert(os.execute("echo 'FreeBSD-base: { enabled: yes }' > " .. chroot .. "/usr/local/etc/pkg/repos/FreeBSD.conf"))
+	assert(os.execute("echo 'HardenedBSD-base: { enabled: yes }' > " .. chroot .. "/usr/local/etc/pkg/repos/FreeBSD.conf"))
 end
 
 pkgbase()
