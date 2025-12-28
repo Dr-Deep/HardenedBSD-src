@@ -224,11 +224,8 @@ __DEFAULT_NO_OPTIONS = \
     OFED \
     OFED_EXTRA \
     OPENLDAP \
-<<<<<<< HEAD
     PORTSNAP \
-=======
     REPRODUCIBLE_PATHS \
->>>>>>> internal/freebsd/current/main
     RPCBIND_WARMSTART_SUPPORT \
     SORT_THREADS \
     SPECTREV1_FIX \
