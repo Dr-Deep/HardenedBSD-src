@@ -78,7 +78,7 @@ local function main()
 	-- Determines package subset selected
 	local media = assert(arg[1])
 	assert(media == "disc" or media == "dvd")
-	-- Directory containing FreeBSD-base repository config
+	-- Directory containing HardenedBSD-base repository config
 	local repo_dir = assert(arg[2])
 	-- Directory to create new repository
 	local target = assert(arg[3])

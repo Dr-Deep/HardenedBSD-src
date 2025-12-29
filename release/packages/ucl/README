@@ -6,10 +6,10 @@ package's subpackages.
 For example, if a Makefile sets PACKAGE=foo, then the build might generate the
 following packages:
 
-	FreeBSD-foo
-	FreeBSD-foo-dev
-	FreeBSD-foo-lib32
-	FreeBSD-foo-man
+	HardenedBSD-foo
+	HardenedBSD-foo-dev
+	HardenedBSD-foo-lib32
+	HardenedBSD-foo-man
 
 All of these packages will include "foo-all.ucl", but "foo.ucl" will only be
 included by FreeBSD-foo, "foo-dev.ucl" will only be included by FreeBSD-foo-dev,

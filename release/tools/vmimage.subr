@@ -75,15 +75,15 @@ vm_base_packages_list() {
 	# "installworld installkernel distribution", aka. the full base
 	# system.
 	for S in base kernels; do
-		echo FreeBSD-set-$S
-		echo FreeBSD-set-$S-dbg
+		echo HardenedBSD-set-$S
+		echo HardenedBSD-set-$S-dbg
 	done
 	case ${TARGET_ARCH} in
 	amd64 | aarch64 | powerpc64)
-		echo FreeBSD-set-lib32
-		echo FreeBSD-set-lib32-dbg
+		echo HardenedBSD-set-lib32
+		echo HardenedBSD-set-lib32-dbg
 	esac
-	echo FreeBSD-set-tests
+	echo HardenedBSD-set-tests
 }
 
 vm_extra_filter_base_packages() {
@@ -105,10 +105,10 @@ vm_install_base() {
 		fi
 		$pkg_cmd update
 		selected=$(vm_base_packages_list | vm_extra_filter_base_packages)
-		$pkg_cmd install -U -r FreeBSD-base $selected
+		$pkg_cmd install -U -r HardenedBSD-base $selected
 		metalog_add_data ./var/db/pkg/local.sqlite
 		mkdir -p ${DESTDIR}/usr/local/etc/pkg/repos
-		echo 'FreeBSD-base: { enabled: yes }' > ${DESTDIR}/usr/local/etc/pkg/repos/FreeBSD.conf
+		echo 'HardenedBSD-base: { enabled: yes }' > ${DESTDIR}/usr/local/etc/pkg/repos/HardenedBSD-base.conf
 		metalog_add_data ./usr/local/etc/pkg/repos
 		metalog_add_data ./usr/local/etc/pkg/repos/FreeBSD.conf
 	else

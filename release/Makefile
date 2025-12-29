@@ -226,9 +226,9 @@ pkgbase-repo.tar: pkgbase-repo
 
 pkgbase-repo-dir: pkgbase-repo
 	mkdir -p pkgbase-repo-dir
-	printf "FreeBSD-base: { url: "file://%s", enabled: yes }" \
+	printf "HardenedBSD-base: { url: "file://%s", enabled: yes }" \
 	    ${.OBJDIR}/pkgbase-repo/${PKG_ABI}/latest \
-	    > pkgbase-repo-dir/FreeBSD-base.conf
+	    > pkgbase-repo-dir/HardenedBSD-base.conf
 
 disc1:
 # Install system
@@ -247,7 +247,7 @@ disc1:
 	    ${.OBJDIR}/pkgbase-repo-dir \
 	    ${.TARGET}/usr/freebsd-packages/offline \
 	    "${_ALL_libcompats}" ${PKG_ABI} ${.OBJDIR}/pkgdb-disc1
-	cp ${.CURDIR}/scripts/FreeBSD-base-offline.conf \
+	cp ${.CURDIR}/scripts/HardenedBSD-base-offline.conf \
 		${.TARGET}/usr/freebsd-packages/repos/
 	mtree -c -p ${.TARGET}/usr/freebsd-packages | \
 	    mtree -C -k type,mode,link,size | \
@@ -265,6 +265,7 @@ disc1:
 	    cp $${dist} ${.TARGET}/usr/freebsd-dist; \
 	    echo "./usr/freebsd-dist/$${dist} type=file uname=root gname=wheel mode=0644" >> ${.TARGET}/METALOG; \
 	done
+.endif
 .endif
 .if ${.MAKE.OS} == "FreeBSD" && (!defined(NOPKG) || empty(NOPKG))
 # Install packages onto release media.
@@ -441,10 +442,10 @@ pkg-stage: dvd
 	env PORTSDIR=${PORTSDIR} REPOS_DIR=${.CURDIR}/pkg_repos/ \
 		sh ${.CURDIR}/scripts/pkg-stage.sh -N
 	mkdir -p ${.OBJDIR}/dvd/packages/repos/
-	cp ${.CURDIR}/scripts/FreeBSD_install_cdrom.conf \
+	cp ${.CURDIR}/scripts/HardenedBSD_install_cdrom.conf \
 		${.OBJDIR}/dvd/packages/repos/
 	echo "./packages/repos type=dir uname=root gname=wheel mode=0755" >> dvd/METALOG
-	echo "./packages/repos/FreeBSD_install_cdrom.conf type=file uname=root gname=wheel mode=0644" >> dvd/METALOG
+	echo "./packages/repos/HardenedBSD_install_cdrom.conf type=file uname=root gname=wheel mode=0644" >> dvd/METALOG
 .endif
 	touch ${.TARGET}
 

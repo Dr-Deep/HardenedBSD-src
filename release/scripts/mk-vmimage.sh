@@ -40,7 +40,7 @@ usage() {
 main() {
 	local arg
 	VMCONFIG="/dev/null"
-	while getopts "C:c:d:F:f:i:o:s:S:" arg; do
+	while getopts "C:c:d:F:f:i:o:s:S:V:" arg; do
 		case "${arg}" in
 			C)
 				VMBUILDCONF="${OPTARG}"
@@ -68,6 +68,9 @@ main() {
 				;;
 			S)
 				WORLDDIR="${OPTARG}"
+				;;
+			V)
+				VENDOR_NAME="${OPTARG}"
 				;;
 			*)
 				;;

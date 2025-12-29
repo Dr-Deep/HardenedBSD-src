@@ -8,12 +8,14 @@ branch=$1; shift
 arch=$1; shift
 image=$1; shift
 output=$1; shift
+vendor_name=$1; shift
 
 major=${rev%.*}
 minor=${rev#*.}
 
 abi=FreeBSD:${major}:${arch}
 ver=${rev}-${branch}-${arch}
+vendor_name=${vendor_name:-HardenedBSD}
 
 echo "Building OCI freebsd${major}-${image} image for ${abi}"
 
@@ -26,7 +28,7 @@ init_repo() {
 
 	mkdir -p ${workdir}/repos
 	cat > ${workdir}/repos/base.conf <<EOF
-FreeBSD-base: {
+${vendor_name}-base: {
   url: "file:///usr/obj${srcdir}/repo/${abi}/latest"
   signature_type: "none"
   fingerprints: "none"
