@@ -13,6 +13,8 @@ VMFS?=		ufs
 VMFSLIST?=	ufs zfs
 SWAPSIZE?=	1g
 VMBASE?=	vm
+VENDOR_NAME?=	HardenedBSD
+NO_ROOT?=	yes
 
 VHD_DESC=	Azure, VirtualPC, Hyper-V, Xen disk image
 VMDK_DESC=	VMWare, VirtualBox disk image
@@ -146,7 +148,7 @@ cw-${_CW:tl}-${_FS}-${_FMT}: ${QEMUTGT} ${PKGBASE_REPO_DIR}
 		PKG_CMD=${PKG_CMD:Upkg} \
 		PKG_ABI=${PKG_ABI} \
 		PKG_REPOS_DIR=${PKG_REPOS_DIR:U${.OBJDIR}/${.TARGET}/etc/pkg} \
-		PKG_REPO_NAME=${PKG_REPO_NAME:UFreeBSD-ports} \
+		PKG_REPO_NAME=${PKG_REPO_NAME:U${VENDOR_NAME}} \
 		PKG_INSTALL_EPOCH=${PKG_INSTALL_EPOCH:U${GITEPOCH}} \
 		NOPKGBASE=${NOPKGBASE} \
 		PKGBASE_REPO_DIR=${.OBJDIR}/pkgbase-repo-dir \
@@ -154,7 +156,8 @@ cw-${_CW:tl}-${_FS}-${_FMT}: ${QEMUTGT} ${PKGBASE_REPO_DIR}
 		-C ${.CURDIR}/tools/vmimage.subr -d ${.OBJDIR}/${.TARGET} \
 		-F ${"${_CW:MEC2-BUILDER}" != "":?ufs:${_FS}} \
 		-i ${.OBJDIR}/${_CW:tl}.${_FS}.${_FMT}.img -s ${VMSIZE} -f ${_FMT} \
-		-S ${WORLDDIR} -o ${.OBJDIR}/${${_CW:tu}${_FS:tu}${_FMT:tu}IMAGE} -c ${${_CW:tu}CONF} || true
+		-S ${WORLDDIR} -o ${.OBJDIR}/${${_CW:tu}${_FS:tu}${_FMT:tu}IMAGE} -c ${${_CW:tu}CONF} \
+		-V ${VENDOR_NAME} || true
 	touch ${.TARGET}
 .   endfor
 .  endfor
@@ -205,7 +208,7 @@ vm-image:	${QEMUTGT} ${PKGBASE_REPO_DIR}
 		PKG_CMD=${PKG_CMD:Upkg} \
 		PKG_ABI=${PKG_ABI} \
 		PKG_REPOS_DIR=${PKG_REPOS_DIR:U${.OBJDIR}/${.TARGET}-${FORMAT}-${FS}/etc/pkg} \
-		PKG_REPO_NAME=${PKG_REPO_NAME:UFreeBSD-ports} \
+		PKG_REPO_NAME=${PKG_REPO_NAME:U${VENDOR_NAME}} \
 		PKG_INSTALL_EPOCH=${PKG_INSTALL_EPOCH:U${GITEPOCH}} \
 		NOPKGBASE=${NOPKGBASE} \
 		PKGBASE_REPO_DIR=${.OBJDIR}/pkgbase-repo-dir \
