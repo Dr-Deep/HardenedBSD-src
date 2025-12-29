@@ -1,5 +1,5 @@
 HardenedBSD-base: {
-  url: "https://pkgbase.hardenedbsd.org/pkgbase/HardenedBSD/${ABI}/%%SUBURL%%",
+  url: "https://pkgbase.hardenedbsd.org/pkgbase/HardenedBSD/${ABI}",
   signature_type: "fingerprints",
   fingerprints: "/usr/share/keys/pkg",
   enabled: yes
