@@ -77,11 +77,7 @@ __DEFAULT_NO_OPTIONS = \
     INSTALL_AS_USER \
     MANSPLITPKG \
     REPRODUCIBLE_BUILD \
-<<<<<<< HEAD
-=======
     REPRODUCIBLE_PATHS \
-    RETPOLINE \
->>>>>>> origin/freebsd/current/main
     RUN_TESTS \
     STALE_STAGED \
     UBSAN \
