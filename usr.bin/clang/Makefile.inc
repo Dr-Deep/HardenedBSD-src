@@ -1,6 +1,6 @@
 .include <src.opts.mk>
 
-.if defined(TOOLS_PREFIX) || ${MK_LLVM_LINK_STATIC_LIBRARIES} == "yes"
+.if defined(TOOLS_PREFIX)
 MK_PIE:=	no	# Explicit libXXX.a references
 .endif
 
