@@ -9,4 +9,6 @@ SRCS+=	opt_ipstealth.h
 
 CFLAGS+= -I${SRCTOP}/sys/contrib/ck/include
 
+TRIVIAL_VAR_AUTO_INIT_ZERO_SAFE=	yes
+
 .include <bsd.kmod.mk>
