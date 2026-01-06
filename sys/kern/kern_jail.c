@@ -85,7 +85,9 @@
 #define	PRISON0_HOSTUUID_MODULE	"hostuuid"
 
 MALLOC_DEFINE(M_PRISON, "prison", "Prison structures");
+#ifdef RACCT
 static MALLOC_DEFINE(M_PRISON_RACCT, "prison_racct", "Prison racct structures");
+#endif
 
 /* Keep struct prison prison0 and some code in kern_jail_set() readable. */
 #ifdef INET
@@ -3061,14 +3063,19 @@ do_jail_attach(struct thread *td, struct prison *pr, int drflags)
 	PROC_LOCK(p);
 	oldcred = crcopysafe(p, newcred);
 	newcred->cr_prison = pr;
-	proc_set_cred(p, newcred);
-	setsugid(p);
 #ifdef RACCT
 	racct_proc_ucred_changed(p, oldcred, newcred);
 #endif
 #ifdef RCTL
 	crhold(newcred);
 #endif
+	/*
+	 * Takes over 'newcred''s reference, so 'newcred' must not be used
+	 * besides this point except on RCTL where we took an additional
+	 * reference above.
+	 */
+	proc_set_cred(p, newcred);
+	setsugid(p);
 	PROC_UNLOCK(p);
 #ifdef RCTL
 	rctl_proc_ucred_changed(p, newcred);
