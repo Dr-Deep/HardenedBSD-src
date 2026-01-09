@@ -96,9 +96,15 @@ arm_create_user() {
 		groupadd hbsd -g 1001
 	chroot ${CHROOTDIR} mkdir -p ${DESTDIR}/home/hbsd
 	chroot ${CHROOTDIR} /usr/sbin/pw -R ${DESTDIR} \
+<<<<<<< HEAD
 		useradd hbsd \
 		-m -M 0750 -w yes -n hbsd -u 1001 -g 1001 -G 0 \
 		-c 'HardenedBSD User' -d '/home/hbsd' -s '/bin/csh'
+=======
+		useradd freebsd \
+		-m -M 0755 -w yes -n freebsd -u 1001 -g 1001 -G 0 \
+		-c 'FreeBSD User' -d '/home/freebsd' -s '/bin/sh'
+>>>>>>> origin/freebsd/current/main
 	chroot ${CHROOTDIR} /usr/sbin/pw -R ${DESTDIR} \
 		usermod root -w yes
 
