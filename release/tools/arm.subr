@@ -98,7 +98,7 @@ arm_create_user() {
 	chroot ${CHROOTDIR} /usr/sbin/pw -R ${DESTDIR} \
 		useradd hbsd \
 		-m -M 0750 -w yes -n hbsd -u 1001 -g 1001 -G 0 \
-		-c 'HardenedBSD User' -d '/home/hbsd' -s '/bin/csh'
+		-c 'HardenedBSD User' -d '/home/hbsd' -s '/bin/sh'
 	chroot ${CHROOTDIR} /usr/sbin/pw -R ${DESTDIR} \
 		usermod root -w yes
 
