@@ -176,11 +176,8 @@ __DEFAULT_YES_OPTIONS = \
     SERVICESDB \
     SETUID_LOGIN \
     SHAREDOCS \
-<<<<<<< HEAD
     SHLIBRANDOM \
-=======
     SOUND \
->>>>>>> internal/freebsd/current/main
     SOURCELESS \
     SOURCELESS_HOST \
     SOURCELESS_UCODE \
