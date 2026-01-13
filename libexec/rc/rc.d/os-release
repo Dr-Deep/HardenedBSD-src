@@ -18,10 +18,10 @@ load_rc_config $name
 
 : ${osrelease_file:=/var/run/os-release}
 : ${osrelease_perms:=444}
-: ${osrelease_home_url:="https://www.FreeBSD.org"}
-: ${osrelease_documentation_url:="https://docs.FreeBSD.org"}
-: ${osrelease_support_url:="https://www.FreeBSD.org/support"}
-: ${osrelease_bug_report_url:="https://bugs.FreeBSD.org"}
+: ${osrelease_home_url:="https://hardenedbsd.org/"}
+: ${osrelease_documentation_url:="https://git.hardenedbsd.org/hardenedbsd/HardenedBSD/-/wikis/home"}
+: ${osrelease_support_url:="mailto:users@hardenedbsd.org"}
+: ${osrelease_bug_report_url:="https://git.hardenedbsd.org/hardenedbsd/HardenedBSD/-/issues"}
 
 osrelease_start()
 {
@@ -39,15 +39,10 @@ osrelease_start()
 		ANSI_COLOR="0;31"
 		PRETTY_NAME="HardenedBSD $_version"
 		CPE_NAME="cpe:/o:freebsd:freebsd:$_version_id"
-<<<<<<< HEAD
-		HOME_URL="https://hardenedbsd.org/"
-		BUG_REPORT_URL="https://git.hardenedbsd.org/hardenedbsd/HardenedBSD/-/issues"
-=======
 		HOME_URL="${osrelease_home_url}"
 		DOCUMENTATION_URL="${osrelease_documentation_url}"
 		SUPPORT_URL="${osrelease_support_url}"
 		BUG_REPORT_URL="${osrelease_bug_report_url}"
->>>>>>> internal/freebsd/current/main
 __EOF__
 	install -C -o root -g wheel -m ${osrelease_perms} "$t" "${osrelease_file}"
 	rm -f "$t"
