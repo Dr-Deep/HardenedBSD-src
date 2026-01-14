@@ -2521,14 +2521,8 @@ parse_rtld_phdr(Obj_Entry *obj)
 	obj->stack_flags = PF_R | PF_W;
 #else
 	obj->stack_flags = PF_X | PF_R | PF_W;
-<<<<<<< HEAD
 #endif
-	first_seg = true;
-	for (ph = obj->phdr;
-	    (const char *)ph < (const char *)obj->phdr + obj->phsize; ph++) {
-=======
 	for (ph = obj->phdr; ph < obj->phdr + obj->phnum; ph++) {
->>>>>>> internal/freebsd/current/main
 		switch (ph->p_type) {
 		case PT_LOAD:
 			if (first_seg) {
