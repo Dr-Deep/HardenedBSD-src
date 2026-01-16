@@ -1868,7 +1868,6 @@ kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 		if (error)
 			goto done_deref;
 
-<<<<<<< HEAD
 #ifdef PAX
 		if (!pax_init_prison(pr, opts)) {
 			error = EINVAL;
@@ -1876,14 +1875,12 @@ kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 		}
 #endif
 
-=======
 #ifdef MAC
 		error = mac_prison_init(pr, M_WAITOK);
 		MPASS(error == 0);
 
 		mtx_assert(&pr->pr_mtx, MA_OWNED);
 #else
->>>>>>> internal/freebsd/current/main
 		mtx_lock(&pr->pr_mtx);
 #endif
 		drflags |= PD_LOCKED;
