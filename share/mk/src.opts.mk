@@ -101,7 +101,11 @@ __DEFAULT_YES_OPTIONS = \
     FINGER \
     FLOPPY \
     FORTH \
+<<<<<<< HEAD
     FP_LIBC \
+=======
+    FREEBSD_UPDATE \
+>>>>>>> internal/freebsd/current/main
     FTP \
     GAMES \
     GNU_DIFF \
