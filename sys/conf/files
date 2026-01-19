@@ -5269,12 +5269,12 @@ security/mac/mac_kdb.c		optional mac
 security/mac/mac_framework.c	optional mac
 security/mac/mac_inet.c		optional mac inet | mac inet6
 security/mac/mac_inet6.c	optional mac inet6
-security/mac/mac_jail.c		optional mac pax_control_acl
 security/mac/mac_label.c	optional mac
 security/mac/mac_net.c		optional mac
 security/mac/mac_pipe.c		optional mac
 security/mac/mac_posix_sem.c	optional mac
 security/mac/mac_posix_shm.c	optional mac
+security/mac/mac_prison.c	optional mac
 security/mac/mac_priv.c		optional mac
 security/mac/mac_process.c	optional mac
 security/mac/mac_socket.c	optional mac

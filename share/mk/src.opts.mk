@@ -101,7 +101,6 @@ __DEFAULT_YES_OPTIONS = \
     FINGER \
     FLOPPY \
     FORTH \
-    FP_LIBC \
     FTP \
     GAMES \
     GNU_DIFF \
@@ -177,6 +176,7 @@ __DEFAULT_YES_OPTIONS = \
     SETUID_LOGIN \
     SHAREDOCS \
     SHLIBRANDOM \
+    SOUND \
     SOURCELESS \
     SOURCELESS_HOST \
     SOURCELESS_UCODE \
@@ -542,6 +542,7 @@ MK_LLVM_COV:= no
 MK_SAFESTACK:=	no
 .endif
 
+<<<<<<< HEAD
 MK_CFI:=	no
 MK_RETPOLINE:=	no
 
@@ -571,6 +572,11 @@ MK_CTF:=	no
 # libpmc and friends are receiving a lot of code churn right now.
 # Disable building libpmc and friends due to build issues.
 MK_PMC:=	no
+=======
+# CUSE is needed only by virtual_oss, but virtual_oss is part of MK_SOUND.
+.if ${MK_CUSE} == "no"
+MK_SOUND:= no
+>>>>>>> internal/hardened/current/master
 .endif
 
 .if ${MK_ASAN} == "yes"

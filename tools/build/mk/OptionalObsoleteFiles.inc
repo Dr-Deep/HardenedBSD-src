@@ -2326,9 +2326,6 @@ OLD_FILES+=usr/share/man/man5/hesiod.conf.5.gz
 .endif
 
 .if ${MK_HTML} == no
-OLD_FILES+=usr/share/doc/ncurses/hackguide.html
-OLD_FILES+=usr/share/doc/ncurses/ncurses-intro.html
-OLD_DIRS+=usr/share/doc/ncurses
 OLD_FILES+=usr/share/doc/ntp/accopt.html
 OLD_FILES+=usr/share/doc/ntp/assoc.html
 OLD_FILES+=usr/share/doc/ntp/audio.html
@@ -7399,6 +7396,19 @@ OLD_DIRS+=var/spool/clientmqueue
 
 .if ${MK_SERVICESDB} == no
 OLD_FILES+=var/db/services.db
+.endif
+
+.if ${MK_SOUND} == no
+OLD_DIRS+=lib/mixer
+OLD_DIRS+=lib/virtual_oss
+OLD_DIRS+=usr.bin/beep
+OLD_DIRS+=usr.bin/mididump
+OLD_DIRS+=usr.sbin/mixer
+OLD_DIRS+=usr.sbin/sndctl
+OLD_DIRS+=usr.sbin/virtual_oss
+OLD_FILES+=libexec/rc/rc.d/mixer
+OLD_FILES+=libexec/rc/rc.d/virtual_oss
+OLD_FILES+=sbin/devd/snd.conf
 .endif
 
 .if ${MK_NUAGEINIT} == no

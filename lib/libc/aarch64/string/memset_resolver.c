@@ -1,6 +1,7 @@
 /*-
- * Copyright (c) 2014 Shawn Webb, <shawn.webb@hardenedbsd.org>
- * All rights reserved.
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Copyright (c) 2026 Arm Ltd
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -23,45 +24,19 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
+#include <sys/types.h>
+#include <machine/ifunc.h>
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
+#include <elf.h>
 
-#include "opt_mac.h"
+void *__memset_aarch64(void *, int, size_t);
+void *__memset_aarch64_mops(void *, int, size_t);
 
-#include <sys/param.h>
-#include <sys/condvar.h>
-#include <sys/extattr.h>
-#include <sys/imgact.h>
-#include <sys/jail.h>
-#include <sys/kernel.h>
-#include <sys/lock.h>
-#include <sys/malloc.h>
-#include <sys/mutex.h>
-#include <sys/proc.h>
-#include <sys/sbuf.h>
-#include <sys/systm.h>
-#include <sys/vnode.h>
-#include <sys/mount.h>
-#include <sys/file.h>
-#include <sys/namei.h>
-#include <sys/sdt.h>
-#include <sys/sysctl.h>
-
-#include <vm/vm.h>
-#include <vm/pmap.h>
-#include <vm/vm_map.h>
-#include <vm/vm_object.h>
-
-#include <fs/devfs/devfs.h>
-
-#include <security/mac/mac_framework.h>
-#include <security/mac/mac_internal.h>
-#include <security/mac/mac_policy.h>
-
-void
-mac_prison_destroy(struct prison *pr)
+DEFINE_UIFUNC(, void *, memset, (void *, int, size_t))
 {
+	if (ifunc_arg->_hwcap2 & HWCAP2_MOPS)
+		return (__memset_aarch64_mops);
 
-	MAC_POLICY_PERFORM(prison_destroy, pr);
+	return (__memset_aarch64);
 }
+
