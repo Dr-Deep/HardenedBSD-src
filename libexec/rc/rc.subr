@@ -2681,7 +2681,7 @@ check_required_after()
 				*)	_args="${_f}" ;;
 			esac
 			if ! load_kld ${_args}; then
-				if [ -z "$rc_force" ]; then
+				if check_jail && [ -z "$rc_force" ]; then
 					return 1
 				fi
 			fi
