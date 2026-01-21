@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2020-2025 The FreeBSD Foundation
+ * Copyright (c) 2020-2026 The FreeBSD Foundation
  *
  * This software was developed by Björn Zeeb under sponsorship from
  * the FreeBSD Foundation.
@@ -51,8 +51,16 @@ extern int linuxkpi_debug_80211;
 #define	IMPROVE(fmt, ...)	if (linuxkpi_debug_80211 & D80211_IMPROVE) \
     printf("%s:%d: XXX LKPI80211 IMPROVE " fmt "\n", __func__, __LINE__, ##__VA_ARGS__)
 
-
-/* 9.4.2.55 Management MIC element (CMAC-256, GMAC-128, and GMAC-256). */
+/* 802.11-2024, 9.4.2.53 MME. */
+/* BIP-CMAC-128 */
+struct ieee80211_mmie {
+	uint8_t		element_id;
+	uint8_t		length;
+	uint16_t	key_id;
+	uint8_t		ipn[6];
+	uint8_t		mic[8];
+};
+/* BIP-CMAC-256, BIP-GMAC-128, BIP-GMAC-256 */
 struct ieee80211_mmie_16 {
 	uint8_t		element_id;
 	uint8_t		length;
@@ -211,6 +219,7 @@ enum ieee80211_min_mpdu_start_spacing {
 #define	IEEE80211_FCTL_TODS			(IEEE80211_FC1_DIR_TODS << 8)
 #define	IEEE80211_FCTL_MOREFRAGS		(IEEE80211_FC1_MORE_FRAG << 8)
 #define	IEEE80211_FCTL_PM			(IEEE80211_FC1_PWR_MGT << 8)
+#define	IEEE80211_FCTL_MOREDATA			(IEEE80211_FC1_MORE_DATA << 8)
 
 #define	IEEE80211_FTYPE_MGMT			IEEE80211_FC0_TYPE_MGT
 #define	IEEE80211_FTYPE_CTL			IEEE80211_FC0_TYPE_CTL
@@ -470,18 +479,6 @@ enum ieee80211_tx_control_flags {
 	IEEE80211_TX_CTRL_RATE_INJECT		= BIT(2),
 	IEEE80211_TX_CTRL_DONT_USE_RATE_MASK	= BIT(3),
 	IEEE80211_TX_CTRL_MLO_LINK		= 0xF0000000,	/* This is IEEE80211_LINK_UNSPECIFIED on the high bits. */
-};
-
-enum ieee80211_tx_rate_flags {
-	/* XXX TODO .. right shift numbers */
-	IEEE80211_TX_RC_40_MHZ_WIDTH		= BIT(0),
-	IEEE80211_TX_RC_80_MHZ_WIDTH		= BIT(1),
-	IEEE80211_TX_RC_160_MHZ_WIDTH		= BIT(2),
-	IEEE80211_TX_RC_GREEN_FIELD		= BIT(3),
-	IEEE80211_TX_RC_MCS			= BIT(4),
-	IEEE80211_TX_RC_SHORT_GI		= BIT(5),
-	IEEE80211_TX_RC_VHT_MCS			= BIT(6),
-	IEEE80211_TX_RC_USE_SHORT_PREAMBLE	= BIT(7),
 };
 
 #define	IEEE80211_RNR_TBTT_PARAMS_PSD_RESERVED	-128
