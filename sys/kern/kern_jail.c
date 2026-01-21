@@ -3799,12 +3799,6 @@ prison_deref_kill(struct prison *pr, struct prisonlist *freeprison)
 	pr->pr_state = PRISON_STATE_DYING;
 	mtx_unlock(&pr->pr_mtx);
 
-#ifdef MAC
-#ifdef PAX_CONTROL_ACL
-	mac_prison_destroy(pr);
-#endif
-#endif
-
 	rpr = NULL;
 	FOREACH_PRISON_DESCENDANT_PRE_POST(pr, cpr, descend) {
 		if (descend) {
