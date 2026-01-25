@@ -84,6 +84,9 @@ vm_base_packages_list() {
 		echo HardenedBSD-set-lib32-dbg
 	esac
 	echo HardenedBSD-set-tests
+	# Also install pkg, since systems with a packaged base system should
+	# have the tools to upgrade themselves.
+	echo pkg
 }
 
 vm_extra_filter_base_packages() {
