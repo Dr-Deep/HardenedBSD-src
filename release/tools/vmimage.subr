@@ -83,14 +83,10 @@ vm_base_packages_list() {
 		echo HardenedBSD-set-lib32
 		echo HardenedBSD-set-lib32-dbg
 	esac
-<<<<<<< HEAD
 	echo HardenedBSD-set-tests
-=======
-	echo FreeBSD-set-tests
 	# Also install pkg, since systems with a packaged base system should
 	# have the tools to upgrade themselves.
 	echo pkg
->>>>>>> internal/freebsd/current/main
 }
 
 vm_extra_filter_base_packages() {
