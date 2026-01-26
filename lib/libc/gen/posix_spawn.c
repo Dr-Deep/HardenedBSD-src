@@ -260,19 +260,14 @@ _posix_spawn_thr(void *data)
 		if (psa->error)
 			_exit(127);
 	}
-<<<<<<< HEAD
 	if (psa->envp == NULL) {
 		psa->envp = fake_envp;
 	}
-	if (psa->use_env_path)
-		__libc_execvpe(psa->path, psa->argv, psa->envp);
-=======
-	envp = psa->envp != NULL ? psa->envp : environ;
+	envp = psa->envp;
 	if (psa->sa != NULL && (*(psa->sa))->sa_execfd != -1)
 		fexecve((*(psa->sa))->sa_execfd, psa->argv, envp);
 	else if (psa->use_env_path)
 		__libc_execvpe(psa->path, psa->argv, envp);
->>>>>>> origin/freebsd/current/main
 	else
 		_execve(psa->path, psa->argv, psa->envp);
 	psa->error = errno;

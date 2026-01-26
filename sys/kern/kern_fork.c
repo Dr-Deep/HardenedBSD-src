@@ -921,7 +921,6 @@ fork1(struct thread *td, struct fork_req *fr)
 	else
 		MPASS(fr->fr_procp == NULL);
 
-<<<<<<< HEAD
 #ifdef PAX_SEGVGUARD
 	if (td->td_proc->p_pid != 0) {
 		VOP_LOCK(curthread->td_proc->p_textvp, LK_SHARED);
@@ -934,8 +933,6 @@ fork1(struct thread *td, struct fork_req *fr)
 #endif
 
 	/* Check for the undefined or unimplemented flags. */
-=======
->>>>>>> origin/freebsd/current/main
 	if ((flags & ~(RFFLAGS | RFTSIGFLAGS(RFTSIGMASK))) != 0)
 		return (EXTERROR(EINVAL,
 		    "Undef or unimplemented flags %#jx", flags));
