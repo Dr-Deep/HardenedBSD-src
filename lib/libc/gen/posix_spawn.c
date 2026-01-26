@@ -50,6 +50,7 @@ struct __posix_spawnattr {
 	int			sa_schedpolicy;
 	sigset_t		sa_sigdefault;
 	sigset_t		sa_sigmask;
+	int			sa_execfd;
 };
 
 struct __posix_spawn_file_actions {
@@ -259,11 +260,19 @@ _posix_spawn_thr(void *data)
 		if (psa->error)
 			_exit(127);
 	}
+<<<<<<< HEAD
 	if (psa->envp == NULL) {
 		psa->envp = fake_envp;
 	}
 	if (psa->use_env_path)
 		__libc_execvpe(psa->path, psa->argv, psa->envp);
+=======
+	envp = psa->envp != NULL ? psa->envp : environ;
+	if (psa->sa != NULL && (*(psa->sa))->sa_execfd != -1)
+		fexecve((*(psa->sa))->sa_execfd, psa->argv, envp);
+	else if (psa->use_env_path)
+		__libc_execvpe(psa->path, psa->argv, envp);
+>>>>>>> origin/freebsd/current/main
 	else
 		_execve(psa->path, psa->argv, psa->envp);
 	psa->error = errno;
@@ -580,6 +589,7 @@ posix_spawnattr_init(posix_spawnattr_t *ret)
 	sa = calloc(1, sizeof(struct __posix_spawnattr));
 	if (sa == NULL)
 		return (errno);
+	sa->sa_execfd = -1;
 
 	/* Set defaults as specified by POSIX, cleared above */
 	*ret = sa;
@@ -642,6 +652,14 @@ posix_spawnattr_getsigmask(const posix_spawnattr_t * __restrict sa,
 }
 
 int
+posix_spawnattr_getexecfd_np(const posix_spawnattr_t * __restrict sa,
+    int * __restrict fdp)
+{
+	*fdp = (*sa)->sa_execfd;
+	return (0);
+}
+
+int
 posix_spawnattr_setflags(posix_spawnattr_t *sa, short flags)
 {
 	if ((flags & ~(POSIX_SPAWN_RESETIDS | POSIX_SPAWN_SETPGROUP |
@@ -688,5 +706,13 @@ posix_spawnattr_setsigmask(posix_spawnattr_t * __restrict sa,
     const sigset_t * __restrict sigmask)
 {
 	(*sa)->sa_sigmask = *sigmask;
+	return (0);
+}
+
+int
+posix_spawnattr_setexecfd_np(posix_spawnattr_t * __restrict sa,
+    int execfd)
+{
+	(*sa)->sa_execfd = execfd;
 	return (0);
 }
