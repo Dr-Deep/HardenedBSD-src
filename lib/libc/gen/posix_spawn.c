@@ -248,6 +248,7 @@ _posix_spawn_thr(void *data)
 {
 	struct posix_spawn_args *psa;
 	char *fake_envp[1] = {NULL};
+	char * const * envp;
 
 	psa = data;
 	if (psa->sa != NULL) {
@@ -263,6 +264,7 @@ _posix_spawn_thr(void *data)
 	if (psa->envp == NULL) {
 		psa->envp = fake_envp;
 	}
+
 	envp = psa->envp;
 	if (psa->sa != NULL && (*(psa->sa))->sa_execfd != -1)
 		fexecve((*(psa->sa))->sa_execfd, psa->argv, envp);
