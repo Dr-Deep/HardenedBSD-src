@@ -376,7 +376,7 @@ pcpu0_init(void)
 /*
  * Initialize proc0
  */
-void
+static void
 init_proc0(vm_offset_t kstack)
 {
 	proc_linkup0(&proc0, &thread0);
