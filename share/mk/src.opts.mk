@@ -315,15 +315,6 @@ __DEFAULT_NO_OPTIONS+=FDT
 __DEFAULT_YES_OPTIONS+=FDT
 .endif
 
-<<<<<<< HEAD
-.if ${__T:Mriscv64*} == ""
-__DEFAULT_YES_OPTIONS+=LLDB
-.else
-__DEFAULT_NO_OPTIONS+=LLDB
-.endif
-
-=======
->>>>>>> internal/freebsd/current/main
 # LIB32 is not supported on all 64-bit architectures.
 .if (${__T:Maarch64*} != "" && ((defined(X_COMPILER_TYPE) && ${X_COMPILER_TYPE} != "gcc") || (!defined(X_COMPILER_TYPE) && ${COMPILER_TYPE} != "gcc"))) || ${__T} == "amd64" || ${__T} == "powerpc64"
 __DEFAULT_NO_OPTIONS+=LIB32
