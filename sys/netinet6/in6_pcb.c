@@ -116,11 +116,7 @@
 
 SYSCTL_DECL(_net_inet6);
 SYSCTL_DECL(_net_inet6_ip6);
-#ifdef PAX_HARDENING
 VNET_DEFINE_STATIC(int, connect_in6addr_wild) = 0;
-#else
-VNET_DEFINE_STATIC(int, connect_in6addr_wild) = 1;
-#endif
 #define	V_connect_in6addr_wild	VNET(connect_in6addr_wild)
 SYSCTL_INT(_net_inet6_ip6, OID_AUTO, connect_in6addr_wild,
     CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(connect_in6addr_wild), 0,
