@@ -345,12 +345,7 @@ _DP_archive+=	md
 .endif
 .endif
 _DP_sqlite3=	pthread
-<<<<<<< HEAD
-_DP_ssl=	crypto
-_DP_tls=	crypto ssl
-=======
 _DP_ssl=	pthread crypto
->>>>>>> origin/freebsd/15-stable/main
 _DP_ssh=	crypto crypt z
 .if ${MK_LDNS} != "no"
 _DP_ssh+=	ldns
