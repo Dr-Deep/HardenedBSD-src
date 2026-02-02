@@ -101,7 +101,11 @@ __DEFAULT_YES_OPTIONS = \
     FINGER \
     FLOPPY \
     FORTH \
+<<<<<<< HEAD
     FP_LIBC \
+=======
+    FREEBSD_UPDATE \
+>>>>>>> origin/freebsd/15-stable/main
     FTP \
     GAMES \
     GNU_DIFF \
@@ -421,6 +425,10 @@ BROKEN_OPTIONS+= OFED
 .if ${MACHINE:Nhost*} == "" && ${MK_host_egacy} == "yes"
 # we cannot expect tests to work
 BROKEN_OPTIONS+= TESTS
+.endif
+
+.if ${__T} != "amd64"
+BROKEN_OPTIONS+=BHYVE_SNAPSHOT
 .endif
 
 .-include <site.src.opts.mk>

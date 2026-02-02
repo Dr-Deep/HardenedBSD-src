@@ -1188,7 +1188,7 @@ static struct kproc_desc racctd_kp = {
 };
 
 static void
-racctd_init(void)
+racctd_init(void *dummy __unused)
 {
 	if (!racct_enable)
 		return;
@@ -1198,7 +1198,7 @@ racctd_init(void)
 SYSINIT(racctd, SI_SUB_RACCTD, SI_ORDER_FIRST, racctd_init, NULL);
 
 static void
-racct_init(void)
+racct_init(void *dummy __unused)
 {
 	if (!racct_enable)
 		return;
