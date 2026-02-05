@@ -13,12 +13,8 @@ export REPO_AUTOUPDATE="NO"
 export ROOTDIR="$PWD/dvd"
 export PORTSDIR="${PORTSDIR:-/usr/ports}"
 
-<<<<<<< HEAD
-_DVD_PACKAGES="
-archivers/unzip
-=======
 _DVD_PACKAGES_MAIN="
->>>>>>> origin/freebsd/15-stable/main
+archivers/unzip
 comms/usbmuxd
 devel/git@lite
 editors/emacs@nox
