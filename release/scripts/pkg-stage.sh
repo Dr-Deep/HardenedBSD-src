@@ -62,7 +62,7 @@ while getopts N opt; do
 	esac
 done
 
-PKG_ARGS="-d --rootdir ${ROOTDIR}"
+PKG_ARGS="--rootdir ${ROOTDIR}"
 if [ $NO_ROOT ]; then
 	PKG_ARGS="$PKG_ARGS -o INSTALL_AS_USER=1"
 fi
