@@ -1,11 +1,7 @@
 .include <bsd.init.mk>
 .include "../llvm.pre.mk"
 
-LIB=		llvm
 INTERNALLIB=
-<<<<<<< HEAD
-=======
-.else
 PACKAGE=	clang
 SHLIB_CXX=	llvm
 SHLIB_MAJOR=	19
@@ -22,7 +18,6 @@ CFLAGS+=	-DLLVM_BUILD_LLVM_DYLIB
 .endif
 
 SHARED_CXXFLAGS+=	-UPIC # To avoid compile errors
->>>>>>> origin/freebsd/current/main
 
 CFLAGS+=	-I${.OBJDIR}
 CFLAGS+=	-I${SRCTOP}/sys/contrib/zstd/lib

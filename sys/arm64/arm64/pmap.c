@@ -10213,10 +10213,7 @@ SYSCTL_OID(_vm_pmap, OID_AUTO, kernel_maps,
     CTLFLAG_ROOTONLY,
     NULL, 0, sysctl_kmaps, "A",
     "Dump kernel address layout");
-<<<<<<< HEAD
 #endif /* !PAX_HARDENING */
-=======
-
 
 void pagezero_simple(void *);
 void pagezero_cache(void *);
@@ -10235,4 +10232,3 @@ DEFINE_IFUNC(static, void, pagezero, (void *))
 	else
 		return (pagezero_simple);
 }
->>>>>>> origin/freebsd/current/main
