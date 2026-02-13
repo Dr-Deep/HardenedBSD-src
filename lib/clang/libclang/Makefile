@@ -2,6 +2,26 @@
 .include "../clang.pre.mk"
 
 LIB=		clang
+<<<<<<< HEAD
+=======
+INTERNALLIB=
+.else
+PACKAGE=	clang
+SHLIB_CXX=	clang
+SHLIB_MAJOR=	19
+PRIVATELIB=
+.if ${MACHINE} == "powerpc"
+# Work around "relocation R_PPC_GOT16 out of range" errors
+PICFLAG=        -fPIC
+.endif
+.if ${MACHINE_CPUARCH} == "aarch64"
+# Only required for GCC
+LIBADD+=	compiler_rt
+.endif
+.endif
+
+SHARED_CXXFLAGS+=	-UPIC # To avoid compile errors
+>>>>>>> origin/freebsd/current/main
 
 CFLAGS+=	-I${.OBJDIR}
 CFLAGS+=	-I${OBJTOP}/lib/clang/libllvm

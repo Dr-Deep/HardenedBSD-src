@@ -2,6 +2,23 @@
 .include "../lldb.pre.mk"
 
 LIB=		lldb
+<<<<<<< HEAD
+=======
+INTERNALLIB=
+.else
+PACKAGE=	lldb
+SHLIB_CXX=	lldb
+SHLIB_MAJOR=	19
+PRIVATELIB=
+.if ${MACHINE_CPUARCH} == "aarch64"
+# Only required for GCC
+LIBADD+=	compiler_rt
+.endif
+.endif
+
+SHARED_CXXFLAGS+=	-UPIC # To avoid compile errors
+
+>>>>>>> origin/freebsd/current/main
 SRCDIR=		lldb/source
 
 CFLAGS+=	-I${LLDB_SRCS}/include

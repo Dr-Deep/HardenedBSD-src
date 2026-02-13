@@ -3,6 +3,26 @@
 
 LIB=		llvm
 INTERNALLIB=
+<<<<<<< HEAD
+=======
+.else
+PACKAGE=	clang
+SHLIB_CXX=	llvm
+SHLIB_MAJOR=	19
+PRIVATELIB=
+.if ${MACHINE} == "powerpc"
+# Work around "relocation R_PPC_GOT16 out of range" errors
+PICFLAG=        -fPIC
+.endif
+.if ${MACHINE_CPUARCH} == "aarch64"
+# Only required for GCC
+LIBADD+=	compiler_rt
+.endif
+CFLAGS+=	-DLLVM_BUILD_LLVM_DYLIB
+.endif
+
+SHARED_CXXFLAGS+=	-UPIC # To avoid compile errors
+>>>>>>> origin/freebsd/current/main
 
 CFLAGS+=	-I${.OBJDIR}
 CFLAGS+=	-I${SRCTOP}/sys/contrib/zstd/lib
