@@ -1,7 +1,11 @@
 .include <bsd.init.mk>
 .include "../llvm.pre.mk"
 
+.if defined(TOOLS_PREFIX) || ${MK_LLVM_LINK_STATIC_LIBRARIES} == "yes"
+# Build static library during cross-tools stage, or when explicitly requested.
+LIB=		llvm
 INTERNALLIB=
+.else
 PACKAGE=	clang
 SHLIB_CXX=	llvm
 SHLIB_MAJOR=	19
@@ -48,8 +52,6 @@ CFLAGS+=	-DBLAKE3_NO_AVX512 -DBLAKE3_NO_AVX2 -DBLAKE3_NO_SSE41 \
 .if ${TARGET_ARCH} != "arm64"
 CFLAGS+=	-DBLAKE3_USE_NEON=0
 .endif
-
-CFLAGS+=	-DLLVM_BUILD_LLVM_DYLIB
 
 SRCDIR=		llvm/lib
 
