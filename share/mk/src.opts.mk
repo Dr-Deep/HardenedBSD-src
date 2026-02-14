@@ -215,11 +215,8 @@ __DEFAULT_NO_OPTIONS = \
     DTRACE_ASAN \
     DTRACE_TESTS \
     EXPERIMENTAL \
-<<<<<<< HEAD
     FREEBSD_UPDATE \
-=======
     GNU_DIFF \
->>>>>>> origin/freebsd/current/main
     HESIOD \
     IPFILTER_IPFS \
     LOADER_VERBOSE \
