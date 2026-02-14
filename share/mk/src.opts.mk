@@ -103,7 +103,6 @@ __DEFAULT_YES_OPTIONS = \
     FORTH \
     FTP \
     GAMES \
-    GNU_DIFF \
     GOOGLETEST \
     GPIO \
     HAST \
@@ -216,7 +215,11 @@ __DEFAULT_NO_OPTIONS = \
     DTRACE_ASAN \
     DTRACE_TESTS \
     EXPERIMENTAL \
+<<<<<<< HEAD
     FREEBSD_UPDATE \
+=======
+    GNU_DIFF \
+>>>>>>> origin/freebsd/current/main
     HESIOD \
     IPFILTER_IPFS \
     LOADER_VERBOSE \
