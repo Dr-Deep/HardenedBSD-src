@@ -23,6 +23,8 @@ CWARNFLAGS.crc32.c+=${NO_WSTRICT_PROTOTYPES} # crc32.c:586
 CWARNFLAGS.trees.c+=${NO_WSTRICT_PROTOTYPES} # trees.c:232
 CWARNFLAGS.zutil.c+=${NO_WSTRICT_PROTOTYPES} # zutil.c:27,32
 
+TRIVIAL_VAR_AUTO_INIT_ZERO_SAFE=	yes
+
 .include <bsd.kmod.mk>
 
 CWARNFLAGS+=${NO_WDEPRECATED_NON_PROTOTYPE} # https://github.com/madler/zlib/issues/633
