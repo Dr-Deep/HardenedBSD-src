@@ -539,14 +539,24 @@
 #define	PRIV_VERIEXEC_CONTROL	702	/* Can configure veriexec */
 
 /*
+<<<<<<< HEAD
  * sysctl(9) privileges.
  */
 #define	PRIV_SYSCTL_ROOTONLY	800
+=======
+ * vmm privileges.
+ */
+#define	PRIV_VMM_PPTDEV		710	/* Can manipulate ppt devices. */
+>>>>>>> origin/freebsd/current/main
 
 /*
  * Track end of privilege list.
  */
+<<<<<<< HEAD
 #define	_PRIV_HIGHEST		801
+=======
+#define	_PRIV_HIGHEST		711
+>>>>>>> origin/freebsd/current/main
 
 /*
  * Validate that a named privilege is known by the privilege system.  Invalid
