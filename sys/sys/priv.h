@@ -553,11 +553,7 @@
 /*
  * Track end of privilege list.
  */
-<<<<<<< HEAD
 #define	_PRIV_HIGHEST		801
-=======
-#define	_PRIV_HIGHEST		713
->>>>>>> internal/freebsd/current/main
 
 /*
  * Validate that a named privilege is known by the privilege system.  Invalid
