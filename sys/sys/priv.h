@@ -547,11 +547,17 @@
  * vmm privileges.
  */
 #define	PRIV_VMM_PPTDEV		710	/* Can manipulate ppt devices. */
+#define	PRIV_VMM_CREATE		711	/* Can create non-temporal VMs. */
+#define	PRIV_VMM_DESTROY	712	/* Can destroy other users' VMs. */
 
 /*
  * Track end of privilege list.
  */
+<<<<<<< HEAD
 #define	_PRIV_HIGHEST		801
+=======
+#define	_PRIV_HIGHEST		713
+>>>>>>> internal/freebsd/current/main
 
 /*
  * Validate that a named privilege is known by the privilege system.  Invalid
