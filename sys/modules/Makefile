@@ -780,7 +780,6 @@ _amdsbwd=	amdsbwd
 _amdsmn=	amdsmn
 _amdtemp=	amdtemp
 _arcmsr=	arcmsr
-_asmc=		asmc
 .if ${MK_CRYPT} != "no" || defined(ALL_MODULES)
 _blake2=	blake2
 .endif
@@ -839,6 +838,7 @@ _x86bios=	x86bios
 
 .if ${MACHINE_CPUARCH} == "amd64"
 _amdgpio=	amdgpio
+_asmc=		asmc
 _ccp=		ccp
 _enic=		enic
 _iavf=		iavf
