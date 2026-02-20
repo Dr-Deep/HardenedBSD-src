@@ -544,6 +544,13 @@
 #define	PRIV_SYSCTL_ROOTONLY	800
 
 /*
+ * vmm privileges.
+ */
+#define	PRIV_VMM_PPTDEV		710	/* Can manipulate ppt devices. */
+#define	PRIV_VMM_CREATE		711	/* Can create non-temporal VMs. */
+#define	PRIV_VMM_DESTROY	712	/* Can destroy other users' VMs. */
+
+/*
  * Track end of privilege list.
  */
 #define	_PRIV_HIGHEST		801

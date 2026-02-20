@@ -103,7 +103,6 @@ __DEFAULT_YES_OPTIONS = \
     FORTH \
     FTP \
     GAMES \
-    GNU_DIFF \
     GOOGLETEST \
     GPIO \
     HAST \
@@ -131,6 +130,7 @@ __DEFAULT_YES_OPTIONS = \
     LLVM_BINUTILS \
     LLVM_COV \
     LLVM_CXXFILT \
+    LLVM_LINK_STATIC_LIBRARIES \
     LOADER_BIOS_TEXTONLY \
     LOADER_GELI \
     LOADER_KBOOT \
@@ -216,6 +216,7 @@ __DEFAULT_NO_OPTIONS = \
     DTRACE_TESTS \
     EXPERIMENTAL \
     FREEBSD_UPDATE \
+    GNU_DIFF \
     HESIOD \
     IPFILTER_IPFS \
     LOADER_VERBOSE \
@@ -545,6 +546,7 @@ MK_LLVM_COV:= no
 MK_SAFESTACK:=	no
 .endif
 
+<<<<<<< HEAD
 MK_CFI:=	no
 MK_RETPOLINE:=	no
 
@@ -581,6 +583,8 @@ MK_PMC:=	no
 MK_SOUND:= no
 .endif
 
+=======
+>>>>>>> internal/hardened/current/master
 .if ${MK_ASAN} == "yes"
 # In order to get sensible backtraces from ASAN we have to install
 # llvm-symbolizer as /usr/bin/addr2line instead of the elftoolchain version.

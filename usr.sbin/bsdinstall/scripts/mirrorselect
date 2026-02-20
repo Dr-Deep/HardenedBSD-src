@@ -36,11 +36,8 @@ BSDCFG_SHARE="/usr/share/bsdconfig"
 : ${BSDDIALOG_ERROR=255}
 
 case `uname -r` in
-14.*)
-	_hbsd_dist_dir="pub/14-stable/`uname -m`/`uname -p`/installer/LATEST"
-	;;
-13.*)
-	_hbsd_dist_dir="pub/13-stable/`uname -m`/`uname -p`/installer/LATEST"
+15.*)
+	_hbsd_dist_dir="pub/15-stable/amd64/amd64/installer/LATEST"
 	;;
 *)
 	_hbsd_dist_dir="pub/current/`uname -m`/`uname -p`/LATEST"
@@ -52,7 +49,7 @@ MIRROR=`bsddialog --backtitle "$OSNAME Installer" \
     --title "Mirror Selection" --extra-button --extra-label "Other" \
     --menu "Please select the best suitable site for you or \"other\" if you want to specify a different choice. The \"Main Site\" directs users to the nearest project managed mirror via GeoDNS (they carry the full range of possible distributions and support both IPv4 and IPv6). All other sites are known as \"Community Mirrors\"; not every site listed here carries more than the base distribution kits. Select a site!" \
     0 0 16 \
-	https://installers.hardenedbsd.org	"Main Site (NYI)"\
+	https://installers.hardenedbsd.org	"Main Site (Colorado, USA)" \
 	http://qspcqclhifj3tcpojsbwoxgwanlo2wakti2ia4wozxjcldkxmw2yj3yd.onion "Onion Service" \
     2>&1 1>&5`
 MIRROR_BUTTON=$?

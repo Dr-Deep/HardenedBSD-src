@@ -1,7 +1,27 @@
 .include <bsd.init.mk>
 .include "../clang.pre.mk"
 
+.if defined(TOOLS_PREFIX) || ${MK_LLVM_LINK_STATIC_LIBRARIES} == "yes"
+# Build static library during cross-tools stage, or when explicitly requested.
 LIB=		clang
+INTERNALLIB=
+.else
+SHLIB_CXX=	clang
+SHLIB_MAJOR=	19
+PRIVATELIB=
+.if ${MACHINE} == "powerpc"
+# Work around "relocation R_PPC_GOT16 out of range" errors
+PICFLAG=        -fPIC
+.endif
+.if ${MACHINE_CPUARCH} == "aarch64"
+# Only required for GCC
+LIBADD+=	compiler_rt
+.endif
+.endif
+
+PACKAGE=	clang
+
+SHARED_CXXFLAGS+=	-UPIC # To avoid compile errors
 
 CFLAGS+=	-I${.OBJDIR}
 CFLAGS+=	-I${OBJTOP}/lib/clang/libllvm
@@ -853,6 +873,21 @@ SRCS_ALL+=	${SRCS_LDB}
 .endif
 SRCS+=		${SRCS_ALL:O}
 
+LIBDEPS+=	llvm
+
+.if defined(TOOLS_PREFIX) || ${MK_LLVM_LINK_STATIC_LIBRARIES} == "yes"
+LIBPRIV=
+LIBEXT=		a
+.else
+LIBPRIV=	private
+LIBEXT=		so
+.endif
+
+.for lib in ${LIBDEPS}
+DPADD+=		${OBJTOP}/lib/clang/lib${lib}/lib${LIBPRIV}${lib}.${LIBEXT}
+LDADD+=		${OBJTOP}/lib/clang/lib${lib}/lib${LIBPRIV}${lib}.${LIBEXT}
+.endfor
+
 clang/AST/AbstractBasicReader.inc: \
 	${CLANG_SRCS}/include/clang/AST/PropertiesBase.td
 	${CLANG_TBLGEN} -gen-clang-basic-reader \
@@ -1307,7 +1342,5 @@ DPSRCS+=	${TGHDRS}
 CLEANFILES+=	${TGHDRS} ${TGHDRS:C/$/.d/}
 
 .include "../clang.build.mk"
-
-INTERNALLIB=
 
 .include <bsd.lib.mk>

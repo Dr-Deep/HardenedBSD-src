@@ -1,8 +1,27 @@
 .include <bsd.init.mk>
 .include "../llvm.pre.mk"
 
+.if defined(TOOLS_PREFIX) || ${MK_LLVM_LINK_STATIC_LIBRARIES} == "yes"
+# Build static library during cross-tools stage, or when explicitly requested.
 LIB=		llvm
 INTERNALLIB=
+.else
+PACKAGE=	clang
+SHLIB_CXX=	llvm
+SHLIB_MAJOR=	19
+PRIVATELIB=
+.if ${MACHINE} == "powerpc"
+# Work around "relocation R_PPC_GOT16 out of range" errors
+PICFLAG=        -fPIC
+.endif
+.if ${MACHINE_CPUARCH} == "aarch64"
+# Only required for GCC
+LIBADD+=	compiler_rt
+.endif
+CFLAGS+=	-DLLVM_BUILD_LLVM_DYLIB
+.endif
+
+SHARED_CXXFLAGS+=	-UPIC # To avoid compile errors
 
 CFLAGS+=	-I${.OBJDIR}
 CFLAGS+=	-I${SRCTOP}/sys/contrib/zstd/lib
@@ -33,8 +52,6 @@ CFLAGS+=	-DBLAKE3_NO_AVX512 -DBLAKE3_NO_AVX2 -DBLAKE3_NO_SSE41 \
 .if ${TARGET_ARCH} != "arm64"
 CFLAGS+=	-DBLAKE3_USE_NEON=0
 .endif
-
-CFLAGS+=	-DLLVM_BUILD_LLVM_DYLIB
 
 SRCDIR=		llvm/lib
 
