@@ -546,7 +546,6 @@ MK_LLVM_COV:= no
 MK_SAFESTACK:=	no
 .endif
 
-<<<<<<< HEAD
 MK_CFI:=	no
 MK_RETPOLINE:=	no
 
@@ -578,13 +577,6 @@ MK_CTF:=	no
 MK_PMC:=	no
 .endif
 
-# CUSE is needed only by virtual_oss, but virtual_oss is part of MK_SOUND.
-.if ${MK_CUSE} == "no"
-MK_SOUND:= no
-.endif
-
-=======
->>>>>>> internal/hardened/current/master
 .if ${MK_ASAN} == "yes"
 # In order to get sensible backtraces from ASAN we have to install
 # llvm-symbolizer as /usr/bin/addr2line instead of the elftoolchain version.
