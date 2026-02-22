@@ -26,7 +26,6 @@ LDIRS=	BSD_daemon \
 	perfmon \
 	ppi \
 	ppp \
-	printing \
 	ses \
 	scsi_target \
 	sound \
@@ -254,6 +253,8 @@ SE_PPP= \
 	ppp.secret.span-isp \
 	ppp.secret.span-isp.working
 
+.if ${MK_LPR} != "no"
+LDIRS+=		printing
 SE_DIRS+=	printing
 SE_PRINTINGPACKAGE=lp
 SE_PRINTING= \
@@ -273,6 +274,7 @@ SE_PRINTING= \
 	psif \
 	pstf \
 	pstfX
+.endif
 
 SE_DIRS+=	ses
 SE_SES= \
