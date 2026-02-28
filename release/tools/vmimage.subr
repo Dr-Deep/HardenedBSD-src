@@ -72,26 +72,10 @@ vm_base_packages_list() {
 	# Output a list of package sets equivalent to what we get from
 	# "installworld installkernel distribution", aka. the full base
 	# system.
-<<<<<<< HEAD
-	for S in base kernels; do
-		echo HardenedBSD-set-$S
-		echo HardenedBSD-set-$S-dbg
-	done
-	case ${TARGET_ARCH} in
-	amd64 | aarch64 | powerpc64)
-		echo HardenedBSD-set-lib32
-		echo HardenedBSD-set-lib32-dbg
-=======
-	echo FreeBSD-set-base
-	[ -z "${WITHOUT_DEBUG_FILES}" ] && echo FreeBSD-set-base-dbg
-	echo FreeBSD-set-kernels
-	[ -z "${WITHOUT_KERNEL_SYMBOLS}" ] && echo FreeBSD-set-kernels-dbg
-	case ${TARGET_ARCH} in
-	amd64 | aarch64 | powerpc64)
-		echo FreeBSD-set-lib32
-		[ -z "${WITHOUT_DEBUG_FILES}" ] && echo FreeBSD-set-lib32-dbg
->>>>>>> origin/freebsd/current/main
-	esac
+	echo HardenedBSD-set-base
+	[ -z "${WITHOUT_DEBUG_FILES}" ] && echo HardenedBSD-set-base-dbg
+	echo HardenedBSD-set-kernels
+	[ -z "${WITHOUT_KERNEL_SYMBOLS}" ] && echo HardenedBSD-set-kernels-dbg
 	echo HardenedBSD-set-tests
 	# Also install pkg, since systems with a packaged base system should
 	# have the tools to upgrade themselves.
