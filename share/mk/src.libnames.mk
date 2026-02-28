@@ -509,6 +509,7 @@ _DP_netmap=
 _DP_ifconfig=	m
 _DP_pfctl=	nv
 _DP_krb5ss=		edit
+_DP_iscsiutil=	md
 
 # HBSD Requirements
 _DP_zfs+=	jail
