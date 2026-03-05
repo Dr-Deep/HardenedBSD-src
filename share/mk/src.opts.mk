@@ -128,11 +128,7 @@ __DEFAULT_YES_OPTIONS = \
     LLVM_ASSERTIONS \
     LLVM_BINUTILS \
     LLVM_COV \
-<<<<<<< HEAD
-    LLVM_CXXFILT \
     LLVM_LINK_STATIC_LIBRARIES \
-=======
->>>>>>> internal/freebsd/current/main
     LOADER_BIOS_TEXTONLY \
     LOADER_GELI \
     LOADER_KBOOT \

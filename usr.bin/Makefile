@@ -254,11 +254,7 @@ SUBDIR.${MK_TOOLCHAIN}+=	c89
 SUBDIR.${MK_TOOLCHAIN}+=	c99
 SUBDIR.${MK_TOOLCHAIN}+=	ctags
 SUBDIR.${MK_TOOLCHAIN}+=	cxxfilt
-<<<<<<< HEAD
-.endif
 SUBDIR.${MK_TOOLCHAIN}+=	ar
-=======
->>>>>>> internal/freebsd/current/main
 # ELF Tool Chain elfcopy required for EFI objects (PR280771)
 SUBDIR.${MK_TOOLCHAIN}+=	elfcopy
 SUBDIR.${MK_TOOLCHAIN}+=	file2c
