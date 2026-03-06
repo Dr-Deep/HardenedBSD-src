@@ -128,7 +128,6 @@ __DEFAULT_YES_OPTIONS = \
     LLVM_ASSERTIONS \
     LLVM_BINUTILS \
     LLVM_COV \
-    LLVM_CXXFILT \
     LLVM_LINK_STATIC_LIBRARIES \
     LOADER_BIOS_TEXTONLY \
     LOADER_GELI \
@@ -581,12 +580,6 @@ MK_PMC:=	no
 # llvm-symbolizer as /usr/bin/addr2line instead of the elftoolchain version.
 MK_LLVM_BINUTILS:=	yes
 MK_SAFESTACK:=		no
-.endif
-
-.if ${MK_LLVM_BINUTILS} == "yes"
-# MK_LLVM_CXXFILT is a subset of MK_LLVM_BINUTILS and should therefore be
-# enabled if MK_LLVM_BINUTILS is set.
-MK_LLVM_CXXFILT:=	yes
 .endif
 
 .if ${MK_LOADER_VERIEXEC} == "no"
