@@ -523,25 +523,6 @@ BUILDENV_SHELL?=/bin/sh
 .endif
 
 .if !defined(_MKSHOWCONFIG)
-.if !defined(VCS_REVISION) || empty(VCS_REVISION)
-.if !defined(SVNVERSION_CMD) || empty(SVNVERSION_CMD)
-. for _D in ${PATH:S,:, ,g}
-.  if exists(${_D}/svnversion)
-SVNVERSION_CMD?=${_D}/svnversion
-.  endif
-.  if exists(${_D}/svnliteversion)
-SVNVERSION_CMD?=${_D}/svnliteversion
-.  endif
-. endfor
-.endif
-.if defined(SVNVERSION_CMD) && !empty(SVNVERSION_CMD)
-_VCS_REVISION?=	$$(eval ${SVNVERSION_CMD} ${SRCDIR})
-. if !empty(_VCS_REVISION)
-VCS_REVISION=	$$(echo r${_VCS_REVISION})
-.export VCS_REVISION
-. endif
-.endif
-.endif
 
 .if !defined(GIT_CMD) || empty(GIT_CMD)
 . for _P in /usr/bin /usr/local/bin
@@ -603,6 +584,7 @@ EXTRA_REVISION=	p${_BRANCH:C/.*-p([0-9]+$)/\1/}
 .if !defined(PKG_VERSION)
 PKG_VERSION:=	${_PKG_REVISION}${EXTRA_REVISION:C/[[:space:]]//g}
 .endif
+
 .endif	# !defined(_MKSHOWCONFIG)
 
 PKG_NAME_PREFIX?=	HardenedBSD
@@ -2301,20 +2283,24 @@ create-world-packages-jobs: create-world-package-${pkgname}
 create-world-package-${pkgname}: .PHONY
 	@sh ${SRCDIR}/release/packages/generate-ucl.sh -o ${pkgname} \
 		-s ${SRCDIR} -u ${WSTAGEDIR}/${pkgname}.ucl
-	@awk -F\" ' \
-		/^name/ { printf("===> Creating %s-", $$2); next } \
-		/^version/ { print $$2; next } \
-		' ${WSTAGEDIR}/${pkgname}.ucl
-	@if [ "${pkgname}" == "runtime" ]; then \
-		sed -i '' -e "s/%VCS_REVISION%/${VCS_REVISION}/" ${WSTAGEDIR}/${pkgname}.ucl ; \
+	@if [ "$$(grep -vc '^@dir' ${WSTAGEDIR}/${pkgname}.plist)" -gt 0 ]; then \
+		awk -F\" ' \
+			/^name/ { printf("===> Creating %s-", $$2); next } \
+			/^version/ { print $$2; next } \
+			' ${WSTAGEDIR}/${pkgname}.ucl && \
+		${PKG_CMD} -o ABI=${PKG_ABI} -o ALLOW_BASE_SHLIBS=yes \
+			-o OSVERSION="${SRCRELDATE}" \
+			create -f ${PKG_FORMAT} ${PKG_CLEVEL} -T${PKG_CTHREADS} \
+			-M ${WSTAGEDIR}/${pkgname}.ucl \
+			-p ${WSTAGEDIR}/${pkgname}.plist \
+			-r ${WSTAGEDIR} \
+			-o ${REPODIR}/${PKG_ABI}/${PKG_OUTPUT_DIR}; \
+	else \
+		awk -F\" ' \
+			/^name/ { printf("===> Skipping %s-", $$2); next } \
+			/^version/ { print $$2; next } \
+			' ${WSTAGEDIR}/${pkgname}.ucl; \
 	fi
-	${PKG_CMD} -o ABI=${PKG_ABI} -o ALLOW_BASE_SHLIBS=yes \
-		-o OSVERSION="${SRCRELDATE}" \
-		create -f ${PKG_FORMAT} ${PKG_CLEVEL} -T${PKG_CTHREADS} \
-		-M ${WSTAGEDIR}/${pkgname}.ucl \
-		-p ${WSTAGEDIR}/${pkgname}.plist \
-		-r ${WSTAGEDIR} \
-		-o ${REPODIR}/${PKG_ABI}/${PKG_OUTPUT_DIR}
 .endfor
 
 create-sets-packages-jobs: .PHONY create-sets-packages
