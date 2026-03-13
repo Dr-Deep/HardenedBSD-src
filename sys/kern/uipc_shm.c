@@ -1942,6 +1942,8 @@ shm_fill_kinfo_locked(struct shmfd *shmfd, struct kinfo_file *kif, bool list)
 	size_t pr_pathlen;
 	bool visible;
 
+	memset(kif, 0, sizeof(*kif));
+
 	sx_assert(&shm_dict_lock, SA_LOCKED);
 	kif->kf_type = KF_TYPE_SHM;
 	kif->kf_un.kf_file.kf_file_mode = S_IFREG | shmfd->shm_mode;
