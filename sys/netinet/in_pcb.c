@@ -716,7 +716,8 @@ int
 in_pcbbind(struct inpcb *inp, struct sockaddr_in *sin, int flags,
     struct ucred *cred)
 {
-	int anonport, error;
+	int error;
+	bool anonport;
 
 	KASSERT(sin == NULL || sin->sin_family == AF_INET,
 	    ("%s: invalid address family for %p", __func__, sin));
