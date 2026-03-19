@@ -249,28 +249,17 @@ kern_mmap(struct thread *td, const struct mmap_req *mrp)
 	 * ld.so sometimes issues anonymous map requests with non-zero
 	 * pos.
 	 */
-<<<<<<< HEAD
-	if ((len == 0 && p->p_osrel >= P_OSREL_MAP_ANON) ||
-	    ((flags & MAP_ANON) != 0 && (fd != -1 || pos != 0))) {
-		return (EXTERROR(EINVAL,
-		    "offset %#jd not zero/fd %#jd not -1 for MAP_ANON",
-		    fd, pos));
-=======
-	if (!SV_CURPROC_FLAG(SV_AOUT)) {
-		if (len == 0 && p->p_osrel >= P_OSREL_MAP_ANON)
-			return (EXTERROR(EINVAL, "mapping with zero length"));
-		if ((flags & MAP_ANON) != 0) {
-			if (fd != -1)
-				return (EXTERROR(EINVAL,
-				    "fd %#jd not -1 for MAP_ANON", fd));
-			if (pos != 0)
-				return (EXTERROR(EINVAL,
-				    "offset %#jd not zero for MAP_ANON", pos));
+	if (len == 0 && p->p_osrel >= P_OSREL_MAP_ANON)
+		return (EXTERROR(EINVAL, "mapping with zero length"));
+	if ((flags & MAP_ANON) != 0) {
+		if (fd != -1) {
+			return (EXTERROR(EINVAL,
+			    "fd %#jd not -1 for MAP_ANON", fd));
 		}
-	} else {
-		if ((flags & MAP_ANON) != 0)
-			pos = 0;
->>>>>>> origin/freebsd/current/main
+		if (pos != 0) {
+			return (EXTERROR(EINVAL,
+				"offset %#jd not zero for MAP_ANON", pos));
+		}
 	}
 
 	if (flags & MAP_STACK) {
