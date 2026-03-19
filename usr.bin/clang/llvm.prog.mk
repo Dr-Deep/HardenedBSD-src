@@ -12,6 +12,16 @@ CFLAGS+=	-I${OBJTOP}/lib/clang/libllvm
 LIBDEPS+=	llvmminimal
 .else
 LIBDEPS+=	llvm
+<<<<<<< HEAD
+=======
+.if defined(TOOLS_PREFIX) || ${MK_LLVM_LINK_STATIC_LIBRARIES} == "yes"
+LIBPRIV=
+LIBEXT=		a
+.else
+LIBPRIV=	private
+LIBEXT=		so
+.endif
+>>>>>>> origin/freebsd/current/main
 LIBADD+=	z
 LIBADD+=	zstd
 .endif
