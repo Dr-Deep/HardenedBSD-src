@@ -382,15 +382,13 @@ SRCS+=	fse_compress.c \
 	zstd_opt.c \
 	zstd_preSplit.c
 
-<<<<<<< HEAD
-TRIVIAL_VAR_AUTO_INIT_ZERO_SAFE=	yes
-=======
 #zstd/decompress
 SRCS+=	huf_decompress.c \
 	zstd_ddict.c \
 	zstd_decompress_block.c \
 	zstd_decompress.c
->>>>>>> origin/freebsd/current/main
+
+TRIVIAL_VAR_AUTO_INIT_ZERO_SAFE=	yes
 
 .include <bsd.kmod.mk>
 
