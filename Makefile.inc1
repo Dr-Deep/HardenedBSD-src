@@ -3104,12 +3104,9 @@ cross-tools: .MAKE .PHONY
     ${LOCAL_XTOOL_DIRS} \
     ${_clang_libs} \
     ${_clang} \
-    ${_lld} \
-<<<<<<< HEAD
     ${_ar} \
-=======
+    ${_lld} \
     ${_llvm_binutils} \
->>>>>>> origin/freebsd/current/main
     ${_elftctools} \
     ${_dtrace_tools} \
     ${_btxld} \
