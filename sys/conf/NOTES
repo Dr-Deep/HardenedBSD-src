@@ -2851,8 +2851,8 @@ options 	PAX_INSECURE_MODE	# Allow to override INVARIANTS enforcements
 options 	HBSD_DEBUG
 
 # zstd support
-# This enables support for Zstd compressed core dumps, GEOM_UZIP images,
-# and is required by zfs if statically linked.
+# This enables support for Zstandard compression for core dumps,
+# kernel dumps, GEOM_UZIP images, and tarfs, and is required by zfs.
 options 	ZSTDIO
 
 # BHND(4) drivers
