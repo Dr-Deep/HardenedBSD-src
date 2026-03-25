@@ -14,11 +14,8 @@ MK_SPECTREV1_FIX=	no
 MK_LTOLIB=		no
 MK_PIE=		no
 MK_RETPOLINE=	no
-<<<<<<< HEAD
 _HBSD_EXTRA_HARDENING_DISABLED=	1
-=======
 MK_ZEROREGS=	no
->>>>>>> origin/freebsd/current/main
 MAN=
 .if !defined(PIC)
 NO_PIC=
