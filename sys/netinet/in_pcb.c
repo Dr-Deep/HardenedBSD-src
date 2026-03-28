@@ -42,7 +42,6 @@
 #include "opt_inet6.h"
 #include "opt_pax.h"
 #include "opt_ratelimit.h"
-#include "opt_route.h"
 #include "opt_rss.h"
 
 #include <sys/param.h>
@@ -1168,8 +1167,8 @@ in_pcbconnect(struct inpcb *inp, struct sockaddr_in *sin, struct ucred *cred)
 		MPASS(error == 0);
 	} else
 		in_pcbrehash(inp);
-#ifdef ROUTE_MPATH
-	if (CALC_FLOWID_OUTBOUND) {
+
+	if (V_fib_hash_outbound) {
 		uint32_t hash_val, hash_type;
 
 		hash_val = fib4_calc_software_hash(inp->inp_laddr,
@@ -1179,7 +1178,6 @@ in_pcbconnect(struct inpcb *inp, struct sockaddr_in *sin, struct ucred *cred)
 		inp->inp_flowid = hash_val;
 		inp->inp_flowtype = hash_type;
 	}
-#endif
 	if (anonport)
 		inp->inp_flags |= INP_ANONPORT;
 	return (0);
