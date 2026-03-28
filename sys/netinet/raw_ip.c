@@ -508,8 +508,7 @@ rip_send(struct socket *so, int pruflags, struct mbuf *m, struct sockaddr *nam,
 		ip->ip_len = htons(m->m_pkthdr.len);
 		ip->ip_src = inp->inp_laddr;
 		ip->ip_dst.s_addr = *dst;
-#ifdef ROUTE_MPATH
-		if (CALC_FLOWID_OUTBOUND) {
+		if (V_fib_hash_outbound) {
 			uint32_t hash_type, hash_val;
 
 			hash_val = fib4_calc_software_hash(ip->ip_src,
@@ -518,7 +517,6 @@ rip_send(struct socket *so, int pruflags, struct mbuf *m, struct sockaddr *nam,
 			M_HASHTYPE_SET(m, hash_type);
 			flags |= IP_NODEFAULTFLOWID;
 		}
-#endif
 		if (jailed(inp->inp_cred)) {
 			/*
 			 * prison_local_ip4() would be good enough but would
@@ -561,8 +559,7 @@ rip_send(struct socket *so, int pruflags, struct mbuf *m, struct sockaddr *nam,
 				return (EINVAL);
 			ip = mtod(m, struct ip *);
 		}
-#ifdef ROUTE_MPATH
-		if (CALC_FLOWID_OUTBOUND) {
+		if (V_fib_hash_outbound) {
 			uint32_t hash_type, hash_val;
 
 			hash_val = fib4_calc_software_hash(ip->ip_dst,
@@ -571,7 +568,6 @@ rip_send(struct socket *so, int pruflags, struct mbuf *m, struct sockaddr *nam,
 			M_HASHTYPE_SET(m, hash_type);
 			flags |= IP_NODEFAULTFLOWID;
 		}
-#endif
 		INP_RLOCK(inp);
 		/*
 		 * Don't allow both user specified and setsockopt options,
