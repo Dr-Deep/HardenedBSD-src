@@ -23,17 +23,13 @@ local function select_packages(pkg, media, all_libcompats)
 	-- Note: if you update this list, you must also update the list in
 	-- usr.sbin/bsdinstall/scripts/pkgbase.in.
 	local kernel_packages = {
-		-- Most architectures use this
-		["FreeBSD-kernel-generic"] = true,
-		-- PowerPC uses either of these, depending on platform
-		["FreeBSD-kernel-generic64"] = true,
-		["FreeBSD-kernel-generic64le"] = true,
+		["HardenedBSD-kernel-hardenedbsd"] = true,
 	}
 
 	local components = {}
-	local rquery = capture(pkg .. "rquery -U -r FreeBSD-base %n")
+	local rquery = capture(pkg .. "rquery -U -r HardenedBSD-base %n")
 	for package in rquery:gmatch("[^\n]+") do
-		local set = package:match("^FreeBSD%-set%-(.*)$")
+		local set = package:match("^HardenedBSD%-set%-(.*)$")
 		if set then
 			components[set] = package
 		elseif kernel_packages[package] then

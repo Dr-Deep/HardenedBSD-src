@@ -226,9 +226,9 @@ pkgbase-repo.tar: pkgbase-repo
 
 pkgbase-repo-dir: pkgbase-repo
 	mkdir -p pkgbase-repo-dir
-	printf "FreeBSD-base: { url: "file://%s", enabled: yes }" \
+	printf "HardenedBSD-base: { url: "file://%s", enabled: yes }" \
 	    ${.OBJDIR}/pkgbase-repo/${PKG_ABI}/latest \
-	    > pkgbase-repo-dir/FreeBSD-base.conf
+	    > pkgbase-repo-dir/HardenedBSD-base.conf
 
 disc1:
 # Install system
@@ -240,41 +240,31 @@ disc1:
 	    MK_TOOLCHAIN=no \
 	    MK_RESCUE=no MK_DICT=no \
 	    MK_KERNEL_SYMBOLS=no MK_TESTS=no MK_DEBUG_FILES=no)
-.if !defined(NOPKGBASE) || empty(NOPKGBASE)
 # Create offline pkgbase repo on release media
 	mkdir -p ${.TARGET}/usr/freebsd-packages/repos/
 	${.CURDIR}/scripts/pkgbase-stage.lua disc \
 	    ${.OBJDIR}/pkgbase-repo-dir \
 	    ${.TARGET}/usr/freebsd-packages/offline \
 	    "${_ALL_libcompats}" ${PKG_ABI} ${.OBJDIR}/pkgdb-disc1
-	cp ${.CURDIR}/scripts/FreeBSD-base-offline.conf \
+	cp ${.CURDIR}/scripts/HardenedBSD-base-offline.conf \
 		${.TARGET}/usr/freebsd-packages/repos/
 	mtree -c -p ${.TARGET}/usr/freebsd-packages | \
 	    mtree -C -k type,mode,link,size | \
 	    sed 's|^\.|./usr/freebsd-packages|g' >> ${.TARGET}/METALOG
-.endif
-.if !defined(NODISTSETS) || empty(NODISTSETS)
 	# Copy MANIFEST to provide legacy dist checksums in both modes
 	mkdir -p ${.TARGET}/usr/freebsd-dist
 	echo "./usr/freebsd-dist type=dir uname=root gname=wheel mode=0755" >> ${.TARGET}/METALOG
 	cp MANIFEST ${.TARGET}/usr/freebsd-dist
 	echo "./usr/freebsd-dist/MANIFEST type=file uname=root gname=wheel mode=0644" >> ${.TARGET}/METALOG
-.if defined(NOPKGBASE) && !empty(NOPKGBASE)
 # Copy distfiles
 	for dist in $$(ls *.txz | grep -v container | grep -vE -- '(${base ${_ALL_libcompats}:L:ts|})-dbg'); do \
 	    cp $${dist} ${.TARGET}/usr/freebsd-dist; \
 	    echo "./usr/freebsd-dist/$${dist} type=file uname=root gname=wheel mode=0644" >> ${.TARGET}/METALOG; \
 	done
-.endif
-.endif
-.if ${.MAKE.OS} == "FreeBSD" && (!defined(NOPKG) || empty(NOPKG))
+.if ${.MAKE.OS} == "FreeBSD"
 # Install packages onto release media.
-.if !defined(NOPKGBASE) || empty(NOPKGBASE)
 	${PKGBASE_INSTALL} pkg
 	${PKGBASE_CLEAN}
-.else
-	${PKG_INSTALL} pkg
-.endif
 	${PKG_INSTALL} wifi-firmware-kmod-release || true
 	${PKG_CLEAN} || true
 .endif
@@ -283,20 +273,18 @@ disc1:
 	echo hostid_enable=\"NO\" >> ${.TARGET}/etc/rc.conf
 	echo vfs.mountroot.timeout=\"10\" >> ${.TARGET}/boot/loader.conf
 	echo kernels_autodetect=\"NO\" >> ${.TARGET}/boot/loader.conf
-	echo loader_brand=\"install\" >> ${.TARGET}/boot/loader.conf
+	#echo loader_brand=\"install\" >> ${.TARGET}/boot/loader.conf
 	echo loader_menu_multi_user_prompt=\"Installer\" >> ${.TARGET}/boot/loader.conf
 	cp ${.CURDIR}/rc.local ${.TARGET}/etc
 	# XXXOP - try to work around installer lockup on random dev in a virtual machine
 	dd if=/dev/random of=${.TARGET}/boot/entropy bs=4k count=1
 	chown 0:0 ${.TARGET}/boot/entropy
 	chmod 0600 ${.TARGET}/boot/entropy
-.if defined(NO_ROOT)
 	echo "./etc/resolv.conf type=link uname=root gname=wheel mode=0644 link=/tmp/bsdinstall_etc/resolv.conf" >> ${.TARGET}/METALOG
 	echo "./etc/rc.conf type=file uname=root gname=wheel mode=0644" >> ${.TARGET}/METALOG
 	echo "./etc/sysctl.conf type=file uname=root gname=wheel mode=0644" >> ${.TARGET}/METALOG
 	echo "./boot/loader.conf type=file uname=root gname=wheel mode=0644" >> ${.TARGET}/METALOG
 	echo "./etc/rc.local type=file uname=root gname=wheel mode=0644" >> ${.TARGET}/METALOG
-.endif
 	touch ${.TARGET}
 
 bootonly:
@@ -310,20 +298,14 @@ bootonly:
 	    MK_TOOLCHAIN=no \
 	    MK_RESCUE=no MK_DICT=no \
 	    MK_KERNEL_SYMBOLS=no MK_TESTS=no MK_DEBUG_FILES=no)
-.if !defined(NODISTSETS) || empty(NODISTSETS)
 # Copy manifest only (no distfiles) to get checksums
 	mkdir -p ${.TARGET}/usr/freebsd-dist
 	cp MANIFEST ${.TARGET}/usr/freebsd-dist
 	echo "./usr/freebsd-dist type=dir uname=root gname=wheel mode=0755" >> ${.TARGET}/METALOG
 	echo "./usr/freebsd-dist/MANIFEST type=file uname=root gname=wheel mode=0644" >> ${.TARGET}/METALOG
-.endif
-.if ${.MAKE.OS} == "FreeBSD" && (!defined(NOPKG) || empty(NOPKG))
-.if !defined(NOPKGBASE) || empty(NOPKGBASE)
+.if ${.MAKE.OS} == "FreeBSD"
 	${PKGBASE_INSTALL} pkg
 	${PKGBASE_CLEAN}
-.else
-	${PKG_INSTALL} pkg
-.endif
 	${PKG_INSTALL} wifi-firmware-iwlwifi-kmod wifi-firmware-rtw88-kmod || true
 	${PKG_CLEAN} || true
 .endif
@@ -351,20 +333,17 @@ dvd:
 	( cd ${WORLDDIR} && ${IMAKE} installworld installkernel distribution \
 		DESTDIR=${.OBJDIR}/${.TARGET} MK_RESCUE=no MK_KERNEL_SYMBOLS=no \
 		MK_TESTS=no MK_DEBUG_FILES=no)
-.if !defined(NOPKGBASE) || empty(NOPKGBASE)
 # Create offline pkgbase repo on release media
 	mkdir -p ${.TARGET}/usr/freebsd-packages/repos/
 	${.CURDIR}/scripts/pkgbase-stage.lua dvd \
 	    ${.OBJDIR}/pkgbase-repo-dir \
 	    ${.TARGET}/usr/freebsd-packages/offline \
 	    "${_ALL_libcompats}" ${PKG_ABI} ${.OBJDIR}/pkgdb-dvd
-	cp ${.CURDIR}/scripts/FreeBSD-base-offline.conf \
+	cp ${.CURDIR}/scripts/HardenedBSD-base-offline.conf \
 		${.TARGET}/usr/freebsd-packages/repos/
 	mtree -c -p ${.TARGET}/usr/freebsd-packages | \
 	    mtree -C -k type,mode,link,size | \
 	    sed 's|^\.|./usr/freebsd-packages|g' >> ${.TARGET}/METALOG
-.endif
-.if !defined(NODISTSETS) || empty(NODISTSETS)
 	# Copy MANIFEST to provide legacy dist checksums in both modes
 	mkdir -p ${.TARGET}/usr/freebsd-dist
 	echo "./usr/freebsd-dist type=dir uname=root gname=wheel mode=0755" >> ${.TARGET}/METALOG
@@ -376,15 +355,10 @@ dvd:
 	    cp $${dist} ${.TARGET}/usr/freebsd-dist; \
 	    echo "./usr/freebsd-dist/$${dist} type=file uname=root gname=wheel mode=0644" >> ${.TARGET}/METALOG; \
 	done
-.endif
-.if ${.MAKE.OS} == "FreeBSD" && (!defined(NOPKG) || empty(NOPKG))
+.if ${.MAKE.OS} == "FreeBSD"
 # Install packages onto release media.
-.if !defined(NOPKGBASE) || empty(NOPKGBASE)
 	${PKGBASE_INSTALL} pkg
 	${PKGBASE_CLEAN}
-.else
-	${PKG_INSTALL} pkg
-.endif
 	${PKG_INSTALL} wifi-firmware-kmod-release || true
 	${PKG_CLEAN} || true
 .endif
@@ -438,10 +412,10 @@ pkg-stage: dvd
 	env PORTSDIR=${PORTSDIR} REPOS_DIR=${.CURDIR}/pkg_repos/ \
 		sh ${.CURDIR}/scripts/pkg-stage.sh -N
 	mkdir -p ${.OBJDIR}/dvd/packages/repos/
-	cp ${.CURDIR}/scripts/FreeBSD_install_cdrom.conf \
+	cp ${.CURDIR}/scripts/HardenedBSD_install_cdrom.conf \
 		${.OBJDIR}/dvd/packages/repos/
 	echo "./packages/repos type=dir uname=root gname=wheel mode=0755" >> dvd/METALOG
-	echo "./packages/repos/FreeBSD_install_cdrom.conf type=file uname=root gname=wheel mode=0644" >> dvd/METALOG
+	echo "./packages/repos/HardenedBSD_install_cdrom.conf type=file uname=root gname=wheel mode=0644" >> dvd/METALOG
 .endif
 	touch ${.TARGET}
 
