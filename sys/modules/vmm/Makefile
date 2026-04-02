@@ -18,7 +18,8 @@ SRCS+=	vmm.c			\
 	vmm_dev_machdep.c	\
 	vmm_instruction_emul.c	\
 	vmm_mem.c		\
-	vmm_stat.c
+	vmm_stat.c		\
+	vmm_vm.c
 
 .if ${MACHINE_CPUARCH} == "aarch64"
 KERN_SSP_CFLAG=	-fstack-protector
