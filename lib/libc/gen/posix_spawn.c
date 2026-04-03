@@ -554,6 +554,8 @@ posix_spawn_file_actions_addchdir_np(posix_spawn_file_actions_t *
 	STAILQ_INSERT_TAIL(&(*fa)->fa_list, fae, fae_list);
 	return (0);
 }
+__weak_reference(posix_spawn_file_actions_addchdir_np,
+    posix_spawn_file_actions_addchdir);
 
 int
 posix_spawn_file_actions_addfchdir_np(posix_spawn_file_actions_t *__restrict fa,
@@ -575,6 +577,9 @@ posix_spawn_file_actions_addfchdir_np(posix_spawn_file_actions_t *__restrict fa,
 	STAILQ_INSERT_TAIL(&(*fa)->fa_list, fae, fae_list);
 	return (0);
 }
+
+__weak_reference(posix_spawn_file_actions_addfchdir_np,
+    posix_spawn_file_actions_addfchdir);
 
 int
 posix_spawn_file_actions_addclosefrom_np (posix_spawn_file_actions_t *
