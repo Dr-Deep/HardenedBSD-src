@@ -358,6 +358,9 @@ main(int argc, char *argv[])
 			if ((sblock.fs_flags & (FS_DOSOFTDEP | FS_SUJ)) ==
 			    (FS_DOSOFTDEP | FS_SUJ)) {
 				warnx("%s remains unchanged as enabled", name);
+			} else if (sblock.fs_flags & FS_GJOURNAL) {
+				warnx("%s cannot be enabled while GEOM "
+				    "journaling is enabled", name);
 			} else if (sblock.fs_clean == 0) {
 				warnx("%s cannot be enabled until fsck is run",
 				    name);
@@ -386,6 +389,9 @@ main(int argc, char *argv[])
 		if (strcmp(Jvalue, "enable") == 0) {
 			if (sblock.fs_flags & FS_GJOURNAL) {
 				warnx("%s remains unchanged as enabled", name);
+			} if (sblock.fs_flags & FS_DOSOFTDEP) {
+				warnx("%s cannot be enabled while soft "
+				    "updates are enabled", name);
 			} else {
 				sblock.fs_flags |= FS_GJOURNAL;
 				warnx("%s set", name);
@@ -403,9 +409,9 @@ main(int argc, char *argv[])
 	}
 	if (kflag) {
 		name = "space to hold for metadata blocks";
-		if (sblock.fs_metaspace == kvalue)
+		if (sblock.fs_metaspace == kvalue) {
 			warnx("%s remains unchanged as %d", name, kvalue);
-		else {
+		} else {
 			kvalue = blknum(&sblock, kvalue);
 			if (kvalue > sblock.fs_fpg / 2) {
 				kvalue = blknum(&sblock, sblock.fs_fpg / 2);
@@ -477,9 +483,12 @@ main(int argc, char *argv[])
 	if (nflag) {
  		name = "soft updates";
  		if (strcmp(nvalue, "enable") == 0) {
-			if (sblock.fs_flags & FS_DOSOFTDEP)
+			if (sblock.fs_flags & FS_DOSOFTDEP) {
 				warnx("%s remains unchanged as enabled", name);
-			else if (sblock.fs_clean == 0) {
+			} else if (sblock.fs_flags & FS_GJOURNAL) {
+				warnx("%s cannot be enabled while GEOM "
+				    "journaling is enabled", name);
+			} else if (sblock.fs_clean == 0) {
 				warnx("%s cannot be enabled until fsck is run",
 				    name);
 			} else {
@@ -631,7 +640,7 @@ dir_search(ufs2_daddr_t blk, int bytes)
 		return (-1);
 	}
 	for (off = 0; off < bytes; off += dp->d_reclen) {
-		dp = (struct direct *)&block[off];
+		dp = (struct direct *)(uintptr_t)&block[off];
 		if (dp->d_reclen == 0)
 			break;
 		if (dp->d_ino == 0)
@@ -696,7 +705,7 @@ dir_clear_block(const char *block, off_t off)
 	struct direct *dp;
 
 	for (; off < sblock.fs_bsize; off += DIRBLKSIZ) {
-		dp = (struct direct *)&block[off];
+		dp = (struct direct *)(uintptr_t)&block[off];
 		dp->d_ino = 0;
 		dp->d_reclen = DIRBLKSIZ;
 		dp->d_type = DT_UNKNOWN;
@@ -719,7 +728,7 @@ dir_insert(ufs2_daddr_t blk, off_t off, ino_t ino)
 		return (-1);
 	}
 	bzero(&block[off], sblock.fs_bsize - off);
-	dp = (struct direct *)&block[off];
+	dp = (struct direct *)(uintptr_t)&block[off];
 	dp->d_ino = ino;
 	dp->d_reclen = DIRBLKSIZ;
 	dp->d_type = DT_REG;
@@ -846,7 +855,7 @@ indir_fill(ufs2_daddr_t blk, int level, int *resid)
 	int i;
 
 	bzero(indirbuf, sizeof(indirbuf));
-	bap1 = (ufs1_daddr_t *)indirbuf;
+	bap1 = (ufs1_daddr_t *)(uintptr_t)indirbuf;
 	bap2 = (void *)bap1;
 	cnt = 0;
 	for (i = 0; i < NINDIR(&sblock) && *resid != 0; i++) {
