@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996
+ * Copyright (c) 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 2000
  *	The Regents of the University of California.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -19,25 +19,11 @@
  * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.
  */
 
-/* \summary: Raw IP printer */
+#include <pcap.h>
+#include <stdio.h>
 
-#include <config.h>
-
-#include "netdissect-stdinc.h"
-
-#include "netdissect.h"
-
-/*
- * The DLT_RAW packet has no header. It contains a raw IPv4 or IPv6 packet.
- */
-
-void
-raw_if_print(netdissect_options *ndo, const struct pcap_pkthdr *h, const u_char *p)
+int
+main(void)
 {
-	ndo->ndo_protocol = "raw";
-	ndo->ndo_ll_hdr_len += 0;
-	if (ndo->ndo_eflag)
-		ND_PRINT("ip: ");
-
-	ipN_print(ndo, p, h->len);
+	printf("%s\n", pcap_lib_version());
 }
