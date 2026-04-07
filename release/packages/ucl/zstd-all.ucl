@@ -16,13 +16,15 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-comment = "Bluetooth Service Discovery Protocol library"
+comment = "Fast, lossless compression algorithm"
 
 desc = <<EOD
-libsdp allows applications to interact with the Bluetooth Service Discovery
-Protocol.
+Zstandard, also called zstd, is a fast data compression algorithm developed
+by Meta Platforms, Inc. and standardised by the IETF in RFC 8478.  Zstd is
+designed to offer a compression ratio comparable to DEFLATE (zlib), but with
+performance suitable for real-time compression applications.
 EOD
 
 annotations {
-	set = "optional,optional-jail"
+	set = "minimal,minimal-jail"
 }

@@ -16,12 +16,18 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-comment = "LZMA2 data compression"
+comment = "Modular user authentication facility"
 
 desc = <<EOD
-xz compresses data using the LZMA2 data compression algorithm.  This package
-provides the front-end xz(1) utility, and the liblzma library which allows
-applications to use this functionality programmatically.
+PAM (Pluggable Authentication Modules) is an API to connect programs which
+wish to authenticate users, such as login(1) or sshd(8), with authentication
+providers that handle various authentication methods, such as UNIX passwords
+or Kerberos.  PAM allows any application to authenticate using any supported
+method without needing to modify the application.
+
+PAM was originally implemented by Sun Microsystems as part of the Solaris
+operating system.  This implementation of PAM comes from OpenPAM, and aims
+to be compatible with Solaris PAM.
 EOD
 
 annotations {
