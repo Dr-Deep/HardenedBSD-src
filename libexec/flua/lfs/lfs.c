@@ -66,8 +66,9 @@
 #ifdef _STANDALONE
 #include "lstd.h"
 #include "lutils.h"
-#include "bootstrap.h"
 #endif
+
+#include "bootstrap.h"
 
 #ifndef nitems
 #define	nitems(x)	(sizeof((x)) / sizeof((x)[0]))
@@ -443,6 +444,14 @@ luaopen_lfs(lua_State *L)
 	/* Non-standard extension for loader, used with lfs.dir(). */
 	lua_pushinteger(L, DT_DIR);
 	lua_setfield(L, -2, "DT_DIR");
+	lua_pushinteger(L, DT_REG);
+	lua_setfield(L, -2, "DT_REG");
+	lua_pushinteger(L, DT_LNK);
+	lua_setfield(L, -2, "DT_LNK");
 #endif
 	return 1;
 }
+
+#ifndef _STANDALONE
+FLUA_MODULE(lfs);
+#endif
