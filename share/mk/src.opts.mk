@@ -213,9 +213,12 @@ __DEFAULT_NO_OPTIONS = \
     DISK_IMAGE_TOOLS_BOOTSTRAP \
     DTRACE_ASAN \
     DTRACE_TESTS \
+<<<<<<< HEAD
     EXPERIMENTAL \
     FREEBSD_UPDATE \
     GNU_DIFF \
+=======
+>>>>>>> origin/freebsd/current/main
     HESIOD \
     IPFILTER_IPFS \
     LOADER_VERBOSE \
