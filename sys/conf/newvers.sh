@@ -50,13 +50,8 @@
 #
 
 TYPE="FreeBSD"
-<<<<<<< HEAD
-REVISION="15.0"
-BRANCH="STABLE-HBSD"
-=======
 REVISION="15.1"
-BRANCH="PRERELEASE"
->>>>>>> tor/freebsd/15-stable/main
+BRANCH="PRERELEASE-HBSD"
 if [ -n "${BRANCH_OVERRIDE}" ]; then
 	BRANCH=${BRANCH_OVERRIDE}
 fi
