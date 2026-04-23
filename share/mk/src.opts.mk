@@ -200,11 +200,7 @@ __DEFAULT_YES_OPTIONS = \
     WPA_SUPPLICANT_EAPOL \
     ZFS \
     ZFS_TESTS \
-<<<<<<< HEAD
-    LOADER_ZFS \
     ZERO_REGS \
-=======
->>>>>>> upstream/main
     ZONEINFO
 
 __DEFAULT_NO_OPTIONS = \
@@ -226,10 +222,6 @@ __DEFAULT_NO_OPTIONS = \
     LOADER_USB \
     LOADER_VERBOSE \
     LOADER_VERIEXEC_PASS_MANIFEST \
-<<<<<<< HEAD
-    LLVM_FULL_DEBUGINFO \
-=======
->>>>>>> upstream/main
     MALLOC_PRODUCTION \
     OFED \
     OFED_EXTRA \
