@@ -1145,7 +1145,7 @@ exec_map_first_page(struct image_params *imgp)
 	if (error != VM_PAGER_OK)
 		return (EIO);
 	imgp->firstpage = sf_buf_alloc(m, 0);
-	imgp->image_header = (char *)sf_buf_kva(imgp->firstpage);
+	imgp->image_header = sf_buf_kva(imgp->firstpage);
 
 	return (0);
 }
@@ -1444,7 +1444,7 @@ err_exit:
 }
 
 struct exec_args_kva {
-	vm_offset_t addr;
+	void *addr;
 	u_int gen;
 	SLIST_ENTRY(exec_args_kva) next;
 };
@@ -1472,7 +1472,7 @@ exec_prealloc_args_kva(void *arg __unused)
 }
 SYSINIT(exec_args_kva, SI_SUB_EXEC, SI_ORDER_ANY, exec_prealloc_args_kva, NULL);
 
-static vm_offset_t
+static void *
 exec_alloc_args_kva(void **cookie)
 {
 	struct exec_args_kva *argkva;
@@ -1487,8 +1487,7 @@ exec_alloc_args_kva(void **cookie)
 		SLIST_REMOVE_HEAD(&exec_args_kva_freelist, next);
 		mtx_unlock(&exec_args_kva_mtx);
 	}
-	kasan_mark((void *)argkva->addr, exec_map_entry_size,
-	    exec_map_entry_size, 0);
+	kasan_mark(argkva->addr, exec_map_entry_size, exec_map_entry_size, 0);
 	*(struct exec_args_kva **)cookie = argkva;
 	return (argkva->addr);
 }
@@ -1498,9 +1497,8 @@ exec_release_args_kva(struct exec_args_kva *argkva, u_int gen)
 {
 	vm_offset_t base;
 
-	base = argkva->addr;
-	kasan_mark((void *)argkva->addr, 0, exec_map_entry_size,
-	    KASAN_EXEC_ARGS_FREED);
+	base = (vm_offset_t)argkva->addr;
+	kasan_mark(argkva->addr, 0, exec_map_entry_size, KASAN_EXEC_ARGS_FREED);
 	if (argkva->gen != gen) {
 		(void)vm_map_madvise(exec_map, base, base + exec_map_entry_size,
 		    MADV_FREE);
@@ -1563,7 +1561,7 @@ int
 exec_alloc_args(struct image_args *args)
 {
 
-	args->buf = (char *)exec_alloc_args_kva(&args->bufkva);
+	args->buf = exec_alloc_args_kva(&args->bufkva);
 	return (0);
 }
 
