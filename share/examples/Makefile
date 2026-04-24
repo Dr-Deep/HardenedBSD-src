@@ -327,6 +327,7 @@ SE_DIRS+=	sound
 SE_SOUND= \
 	kqueue.c \
 	midi.c \
+	mmap.c \
 	oss.h \
 	poll.c \
 	select.c \
