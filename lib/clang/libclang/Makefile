@@ -163,11 +163,8 @@ SRCS_MIN+=	ASTMatchers/ASTMatchFinder.cpp
 SRCS_MIN+=	ASTMatchers/ASTMatchersInternal.cpp
 SRCS_MIN+=	ASTMatchers/Dynamic/Diagnostics.cpp
 SRCS_MIN+=	ASTMatchers/Dynamic/Registry.cpp
-<<<<<<< HEAD
-=======
 SRCS_MIN+=	ASTMatchers/Dynamic/VariantValue.cpp
 SRCS_MIN+=	ASTMatchers/LowLevelHelpers.cpp
->>>>>>> upstream/main
 SRCS_MIN+=	Analysis/AnalysisDeclContext.cpp
 SRCS_MIN+=	Analysis/BodyFarm.cpp
 SRCS_MIN+=	Analysis/CFG.cpp

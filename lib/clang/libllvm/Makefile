@@ -604,36 +604,6 @@ SRCS_EXT+=	DebugInfo/CodeView/TypeRecordHelpers.cpp
 SRCS_MIN+=	DebugInfo/CodeView/TypeRecordMapping.cpp
 SRCS_MIN+=	DebugInfo/CodeView/TypeStreamMerger.cpp
 SRCS_MIN+=	DebugInfo/CodeView/TypeTableCollection.cpp
-<<<<<<< HEAD
-SRCS_MIW+=	DebugInfo/DWARF/DWARFAbbreviationDeclaration.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFAcceleratorTable.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFAddressRange.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFCompileUnit.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFContext.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFDataExtractor.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFDebugAbbrev.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFDebugAddr.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFDebugArangeSet.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFDebugAranges.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFDebugFrame.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFDebugInfoEntry.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFDebugLine.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFDebugLoc.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFDebugMacro.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFDebugPubTable.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFDebugRangeList.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFDebugRnglists.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFDie.cpp
-SRCS_MIN+=	DebugInfo/DWARF/DWARFExpression.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFFormValue.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFGdbIndex.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFListTable.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFTypePrinter.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFTypeUnit.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFUnit.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFUnitIndex.cpp
-SRCS_MIW+=	DebugInfo/DWARF/DWARFVerifier.cpp
-=======
 SRCS_MIN+=	DebugInfo/DWARF/DWARFAbbreviationDeclaration.cpp
 SRCS_MIN+=	DebugInfo/DWARF/DWARFAcceleratorTable.cpp
 SRCS_MIN+=	DebugInfo/DWARF/DWARFAddressRange.cpp
@@ -678,7 +648,6 @@ SRCS_MIW+=	DebugInfo/GSYM/InlineInfo.cpp
 SRCS_MIW+=	DebugInfo/GSYM/LineTable.cpp
 SRCS_MIW+=	DebugInfo/GSYM/LookupResult.cpp
 SRCS_MIW+=	DebugInfo/GSYM/MergedFunctionsInfo.cpp
->>>>>>> upstream/main
 SRCS_MIN+=	DebugInfo/MSF/MSFBuilder.cpp
 SRCS_MIN+=	DebugInfo/MSF/MSFCommon.cpp
 SRCS_EXT+=	DebugInfo/MSF/MSFError.cpp
@@ -995,10 +964,6 @@ SRCS_MIN+=	LTO/LTO.cpp
 SRCS_MIN+=	LTO/LTOBackend.cpp
 SRCS_EXL+=	LTO/LTOCodeGenerator.cpp
 SRCS_EXL+=	LTO/LTOModule.cpp
-<<<<<<< HEAD
-SRCS_EXL+=	LTO/SummaryBasedOptimizations.cpp
-=======
->>>>>>> upstream/main
 SRCS_EXL+=	LTO/ThinLTOCodeGenerator.cpp
 SRCS_MIN+=	LTO/UpdateCompilerUsed.cpp
 SRCS_MIN+=	Linker/IRMover.cpp
@@ -1155,12 +1120,8 @@ SRCS_MIW+=	Object/Minidump.cpp
 SRCS_MIN+=	Object/ModuleSymbolTable.cpp
 SRCS_EXT+=	Object/Object.cpp
 SRCS_MIN+=	Object/ObjectFile.cpp
-<<<<<<< HEAD
-SRCS_MIW+=	Object/OffloadBinary.cpp
-=======
 SRCS_MIN+=	Object/OffloadBinary.cpp
 SRCS_MIW+=	Object/OffloadBundle.cpp
->>>>>>> upstream/main
 SRCS_MIN+=	Object/RecordStreamer.cpp
 SRCS_MIW+=	Object/RelocationResolver.cpp
 SRCS_MIW+=	Object/SymbolSize.cpp
@@ -1867,14 +1828,9 @@ SRCS_MIN+=	TargetParser/SubtargetFeature.cpp
 SRCS_MIN+=	TargetParser/TargetParser.cpp
 SRCS_MIN+=	TargetParser/Triple.cpp
 SRCS_MIN+=	TargetParser/X86TargetParser.cpp
-<<<<<<< HEAD
-SRCS_MIW+=	TextAPI/Architecture.cpp
-SRCS_MIW+=	TextAPI/ArchitectureSet.cpp
-=======
 SRCS_XDB+=	Telemetry/Telemetry.cpp
 SRCS_MIN+=	TextAPI/Architecture.cpp
 SRCS_MIN+=	TextAPI/ArchitectureSet.cpp
->>>>>>> upstream/main
 SRCS_MIW+=	TextAPI/BinaryReader/DylibReader.cpp
 SRCS_MIW+=	TextAPI/InterfaceFile.cpp
 SRCS_MIW+=	TextAPI/PackedVersion.cpp
