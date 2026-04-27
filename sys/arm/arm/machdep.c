@@ -122,8 +122,6 @@ vm_offset_t vector_page;
 /* The address at which the kernel was loaded.  Set early in initarm(). */
 vm_paddr_t arm_physmem_kernaddr;
 
-extern int *end;
-
 #ifdef FDT
 vm_paddr_t pmap_pa;
 vm_offset_t systempage;
@@ -376,7 +374,7 @@ pcpu0_init(void)
 /*
  * Initialize proc0
  */
-void
+static void
 init_proc0(vm_offset_t kstack)
 {
 	proc_linkup0(&proc0, &thread0);
