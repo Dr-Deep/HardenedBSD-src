@@ -1,11 +1,7 @@
 .include <src.opts.mk>
 
-<<<<<<< HEAD
 PACKAGE=	clang
-=======
 PACKAGE?=	clang
-MK_PIE:=	no	# Explicit libXXX.a references
->>>>>>> upstream/main
 
 .if ${MK_LLVM_FULL_DEBUGINFO} == "no"
 .if ${COMPILER_TYPE} == "clang"
