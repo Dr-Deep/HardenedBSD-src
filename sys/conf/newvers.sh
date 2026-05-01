@@ -51,7 +51,11 @@
 
 TYPE="FreeBSD"
 REVISION="15.1"
+<<<<<<< HEAD
 BRANCH="PRERELEASE-HBSD"
+=======
+BRANCH="STABLE"
+>>>>>>> upstream/stable/15
 if [ -n "${BRANCH_OVERRIDE}" ]; then
 	BRANCH=${BRANCH_OVERRIDE}
 fi
