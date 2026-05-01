@@ -1,5 +1,3 @@
-[[_TOC_]]
-
 # About HardenedBSD
 
 HardenedBSD is a fork of FreeBSD, founded in 2014, that implements
