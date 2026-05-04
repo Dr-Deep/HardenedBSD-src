@@ -9,11 +9,6 @@ Some of HardenedBSD's features can be toggled on a per-application and
 per-jail basis using secadm or hbsdcontrol. Documentation for both
 tools will be covered later.
 
-# Translations
-
-* [Espanol](https://git.hardenedbsd.org/hardenedbsd/HardenedBSD/-/wikis/Home_es)
-* [Français](https://git.hardenedbsd.org/hardenedbsd/HardenedBSD/-/wikis/Home_fr)
-
 # History
 
 Work on HardenedBSD began in 2013 when Oliver Pinter and Shawn Webb
@@ -37,7 +32,7 @@ FreeBSD's source code. HardenedBSD syncs with FreeBSD every six hours.
 Some of the branches, but not all, are listed below:
 
 1. HEAD -> hardened/current/master
-1. stable/14 -> hardened/14-stable/master
+1. stable/15 -> hardened/15-stable/master
 
 # Features
 
@@ -80,11 +75,11 @@ $ fetch https://installers.hardenedbsd.org/pub/keys/ssh.pub.txt
 ```
 
 Then download the build artifact. For purposes of this documentation, the
-compressed memstick installation image for HardenedBSD 14-STABLE will be used.
+compressed memstick installation image for HardenedBSD 15-STABLE will be used.
 
 ```
-$ fetch https://installers.hardenedbsd.org/pub/14-stable/amd64/amd64/installer/LATEST/memstick.img.xz
-$ fetch https://installers.hardenedbsd.org/pub/14-stable/amd64/amd64/installer/LATEST/memstick.img.xz.sig
+$ fetch https://installers.hardenedbsd.org/pub/15-stable/amd64/amd64/installer/LATEST/memstick.img.xz
+$ fetch https://installers.hardenedbsd.org/pub/15-stable/amd64/amd64/installer/LATEST/memstick.img.xz.sig
 ```
 
 Next, generate an `allowed_signers` file which contains the SSH public key:
@@ -905,8 +900,8 @@ HardenedBSD development branches:
 
 | Branch           			| Repository		| Binary Updates| Purpose						|
 |---------------------------------------|-----------------------|---------------|-------------------------------------------------------|
-| hardened/current/master		| HardenedBSD		| amd64, arm64	| Main development branch (15-CURRENT)			|
-| hardened/14-stable/master		| HardenedBSD		| amd64		| 14-STABLE development					|
+| hardened/current/master		| HardenedBSD		| amd64, arm64	| Main development branch (16-CURRENT)			|
+| hardened/15-stable/master		| HardenedBSD		| amd64		| 15-STABLE development					|
 
 For the most part, the normal FreeBSD development process can be followed.
 Perform a git clone if the intended branch into `/usr/src` and perform the
@@ -927,7 +922,7 @@ The HardenedBSD Ports and Packages offers a simple way to install applications.
 
 The Ports Collection lives outside the context of the base OS.
 We automatically sync every six hours with FreeBSD.
-For 14-stable and 15-current there is only one git branch dedicated to ports,
+For 15-stable and 16-current there is only one git branch dedicated to ports,
 namely: "[hardenedbsd/main](https://git.hardenedbsd.org/hardenedbsd/ports/-/tree/hardenedbsd/main)"
 
 We don't support [FreeBSD's quarterly ports branches](https://wiki.freebsd.org/Ports/QuarterlyBranch)
@@ -937,8 +932,8 @@ fixes for all the ports in the tree.
 The package repos are built from the ports repo. Ports are generally more
 up-to-date than packages due to the build time required to produce the packages.
 You can follow the building of the packages from the following links:
-* [14-STABLE/amd64 package builder](https://hbsd-pkg-14-stable-01.hardenedbsd.org/)
-* [15-CURRENT/amd64 package builder](https://hbsd-pkg-current-01.hardenedbsd.org/)
+* [15-STABLE/amd64 package builder](https://hbsd-pkg-15-stable-01.hardenedbsd.org/)
+* [16-CURRENT/amd64 package builder](https://hbsd-pkg-current-01.hardenedbsd.org/)
 
 Another detail, HardenedBSD has some ports that FreeBSD does not have, here is the list:
 - games/scratch
@@ -993,12 +988,12 @@ baseurl="http://updates.hardenedbsd.org/pub/HardenedBSD/updates/${branch}/$(unam
 ```
 
 And as another example, the `hbsd-update.conf` for the
-hardened/14-stable/master branch in the HardenedBSD repo:
+hardened/15-stable/master branch in the HardenedBSD repo:
 
 ```
-dnsrec="$(uname -m).master.14-stable.hardened.hardenedbsd.updates.hardenedbsd.org"
+dnsrec="$(uname -m).master.15-stable.hardened.hardenedbsd.updates.hardenedbsd.org"
 capath="/usr/share/keys/hbsd-update/trusted"
-branch="hardened/14-stable/master"
+branch="hardened/15-stable/master"
 baseurl="http://updates.hardenedbsd.org/pub/HardenedBSD/updates/${branch}/$(uname -m)"
 ```
 
@@ -1009,10 +1004,10 @@ Thus, generating a diff between the two configuration files would result in:
 +++ hbsd-update_4-stable.conf
 @@ -1,4 +1,4 @@
 -dnsrec="$(uname -m).master.current.hardened.hardenedbsd.updates.hardenedbsd.org"
-+dnsrec="$(uname -m).master.14-stable.hardened.hardenedbsd.updates.hardenedbsd.org"
++dnsrec="$(uname -m).master.15-stable.hardened.hardenedbsd.updates.hardenedbsd.org"
  capath="/usr/share/keys/hbsd-update/trusted"
 -branch="hardened/current/master"
-+branch="hardened/14-stable/master"
++branch="hardened/15-stable/master"
  baseurl="http://updates.hardenedbsd.org/pub/HardenedBSD/updates/${branch}/$(uname -m)"
 ```
 
