@@ -10,11 +10,6 @@ LIBADD=	util crypt
 CONFTTYSNAME=	ttys
 CONFTTYS+=	ttys
 
-<<<<<<< HEAD
 NOCFI=	yes
 
-NO_SHARED?=	YES
-
-=======
->>>>>>> upstream/stable/15
 .include <bsd.prog.mk>
