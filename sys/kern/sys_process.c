@@ -76,6 +76,13 @@
 /* Assert it's safe to unlock a process, e.g. to allocate working memory */
 #define	PROC_ASSERT_TRACEREQ(p)	MPASS(((p)->p_flag2 & P2_PTRACEREQ) != 0)
 
+#define PROC_PRIV_CHECK(priv) do {	 			\
+		int _error;					\
+		_error = priv_check(currthread, priv);	\
+		if (_error)					\
+			return (_error);			\
+	} while (0)
+
 /*
  * Functions implemented below:
  *
@@ -113,6 +120,7 @@ int
 proc_write_regs(struct thread *td, struct reg *regs)
 {
 	PROC_LOCK_ASSERT(td->td_proc, MA_OWNED);
+	PROC_PRIV_CHECK(PRIV_PROC_MEM_WRITE);
 	return (set_regs(td, regs));
 }
 
@@ -127,6 +135,7 @@ int
 proc_write_dbregs(struct thread *td, struct dbreg *dbregs)
 {
 	PROC_LOCK_ASSERT(td->td_proc, MA_OWNED);
+	PROC_PRIV_CHECK(PRIV_PROC_MEM_WRITE);
 	return (set_dbregs(td, dbregs));
 }
 
@@ -145,6 +154,7 @@ int
 proc_write_fpregs(struct thread *td, struct fpreg *fpregs)
 {
 	PROC_LOCK_ASSERT(td->td_proc, MA_OWNED);
+	PROC_PRIV_CHECK(PRIV_PROC_MEM_WRITE);
 	return (set_fpregs(td, fpregs));
 }
 
@@ -265,6 +275,8 @@ proc_write_regset(struct thread *td, int note, struct iovec *iov)
 	if (regset->set == NULL)
 		return (EINVAL);
 
+	PROC_PRIV_CHECK(PRIV_PROC_MEM_WRITE);
+
 	p = td->td_proc;
 
 	/* Drop the proc lock while allocating the temp buffer */
@@ -298,6 +310,7 @@ int
 proc_write_regs32(struct thread *td, struct reg32 *regs32)
 {
 	PROC_LOCK_ASSERT(td->td_proc, MA_OWNED);
+	PROC_PRIV_CHECK(PRIV_PROC_MEM_WRITE);
 	return (set_regs32(td, regs32));
 }
 
@@ -312,6 +325,7 @@ int
 proc_write_dbregs32(struct thread *td, struct dbreg32 *dbregs32)
 {
 	PROC_LOCK_ASSERT(td->td_proc, MA_OWNED);
+	PROC_PRIV_CHECK(PRIV_PROC_MEM_WRITE);
 	return (set_dbregs32(td, dbregs32));
 }
 
@@ -326,6 +340,7 @@ int
 proc_write_fpregs32(struct thread *td, struct fpreg32 *fpregs32)
 {
 	PROC_LOCK_ASSERT(td->td_proc, MA_OWNED);
+	PROC_PRIV_CHECK(PRIV_PROC_MEM_WRITE);
 	return (set_fpregs32(td, fpregs32));
 }
 #endif
@@ -367,9 +382,7 @@ proc_rwmem(struct proc *p, struct uio *uio)
 	fault_flags = writing ? VM_FAULT_DIRTY : VM_FAULT_NORMAL;
 
 	if (writing) {
-		error = priv_check_cred(p->p_ucred, PRIV_PROC_MEM_WRITE);
-		if (error)
-			return (error);
+		PROC_PRIV_CHECK(PRIV_PROC_MEM_WRITE);
 	}
 
 	/*
