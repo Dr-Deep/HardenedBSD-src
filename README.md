@@ -27,9 +27,40 @@ incorporated HardenedBSD's ASLR implementation in 2016. OPNsense
 completed their migration to HardenedBSD on 31 January 2019. In April 2021,
 OPNsense switched back to FreeBSD.
 
+<<<<<<< HEAD
 HardenedBSD exists today as a fork of FreeBSD that closely follow's
 FreeBSD's source code. HardenedBSD syncs with FreeBSD every six hours.
 Some of the branches, but not all, are listed below:
+=======
+Source Roadmap:
+---------------
+| Directory | Description |
+| --------- | ----------- |
+| bin | System/user commands. |
+| cddl | Source code for third-party software under the Common Development and Distribution License. |
+| contrib | Source code for third-party software. |
+| crypto | Source code for cryptographic libraries and commands (see [crypto/README](crypto/README)). |
+| etc | Template files for /etc. |
+| gnu | Source code for third-party software under the GNU General Public License (GPL) or Lesser General Public License (LGPL). Please see [gnu/COPYING](gnu/COPYING) and [gnu/COPYING.LIB](gnu/COPYING.LIB) for more information. |
+| include | System include files. |
+| kerberos5 | Build system for Kerberos 5 (Heimdal). |
+| krb5 | Build system for Kerberos 5 (MIT). |
+| lib | System libraries. |
+| libexec | System commands intended to be executed by other commands or daemons. |
+| packages | Base system packages. |
+| release | Makefiles and scripts used for building releases and VM images. |
+| rescue | Build system for statically linked /rescue commands. |
+| sbin | System commands. |
+| secure | Build system for cryptographic libraries and commands (excluding Kerberos). |
+| share | Shared resources. |
+| stand | Boot loader sources. |
+| sys | Kernel sources (see [sys/README.md](sys/README.md)). |
+| targets | Support for experimental `DIRDEPS_BUILD` |
+| tests | Tests which can be run by Kyua.  See [tests/README](tests/README) for additional information. |
+| tools | Ancillary utilities and tests (not included in the build). |
+| usr.bin | User commands. |
+| usr.sbin | System administration commands. |
+>>>>>>> upstream/main
 
 1. HEAD -> hardened/current/master
 1. stable/15 -> hardened/15-stable/master
