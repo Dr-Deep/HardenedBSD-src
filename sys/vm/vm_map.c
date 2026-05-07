@@ -4880,16 +4880,11 @@ retry:
 	 * limit.
 	 */
 	is_procstack = addr >= (vm_offset_t)vm->vm_maxsaddr &&
-<<<<<<< HEAD
 	    addr < (vm_offset_t)p->p_usrstack;
-	if (is_procstack && (ctob(vm->vm_ssize) + grow_amount > stacklim))
-=======
-	    addr < (vm_offset_t)vm->vm_stacktop;
 	if (is_procstack && (ctob(vm->vm_ssize) + grow_amount > stacklim)) {
 		if (report_stackoverflow)
 			uprintf("pid %d comm %s tid %d stack overflow\n",
 			    p->p_pid, p->p_comm, td->td_tid);
->>>>>>> upstream/main
 		return (KERN_NO_SPACE);
 	}
 
