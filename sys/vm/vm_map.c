@@ -4799,6 +4799,11 @@ vm_map_stack_locked(vm_map_t map, vm_offset_t addrbos, vm_size_t max_ssize,
 	return (rv);
 }
 
+static bool report_stackoverflow = true;
+SYSCTL_BOOL(_vm, OID_AUTO, report_stackoverflow, CTLFLAG_RWTUN,
+    &report_stackoverflow, 0,
+    "uprintf() on stack overflow");
+
 /*
  * Attempts to grow a vm stack entry.  Returns KERN_SUCCESS if we
  * successfully grow the stack.
@@ -4807,6 +4812,7 @@ static int
 vm_map_growstack(vm_map_t map, vm_offset_t addr, vm_map_entry_t gap_entry)
 {
 	vm_map_entry_t stack_entry;
+	struct thread *td;
 	struct proc *p;
 	struct vmspace *vm;
 	vm_offset_t gap_end, gap_start, grow_start;
@@ -4822,7 +4828,8 @@ vm_map_growstack(vm_map_t map, vm_offset_t addr, vm_map_entry_t gap_entry)
 	int error __diagused;
 #endif
 
-	p = curproc;
+	td = curthread;
+	p = td->td_proc;
 	vm = p->p_vmspace;
 
 	/*
@@ -4836,9 +4843,9 @@ vm_map_growstack(vm_map_t map, vm_offset_t addr, vm_map_entry_t gap_entry)
 
 	MPASS(!vm_map_is_system(map));
 
-	lmemlim = lim_cur(curthread, RLIMIT_MEMLOCK);
-	stacklim = lim_cur(curthread, RLIMIT_STACK);
-	vmemlim = lim_cur(curthread, RLIMIT_VMEM);
+	lmemlim = lim_cur(td, RLIMIT_MEMLOCK);
+	stacklim = lim_cur(td, RLIMIT_STACK);
+	vmemlim = lim_cur(td, RLIMIT_VMEM);
 retry:
 	/* If addr is not in a hole for a stack grow area, no need to grow. */
 	if (gap_entry == NULL && !vm_map_lookup_entry(map, addr, &gap_entry))
@@ -4854,24 +4861,37 @@ retry:
 	} else {
 		return (KERN_FAILURE);
 	}
-	guard = ((curproc->p_flag2 & P2_STKGAP_DISABLE) != 0 ||
-	    (curproc->p_fctl0 & NT_FREEBSD_FCTL_STKGAP_DISABLE) != 0) ? 0 :
+	guard = ((p->p_flag2 & P2_STKGAP_DISABLE) != 0 ||
+	    (p->p_fctl0 & NT_FREEBSD_FCTL_STKGAP_DISABLE) != 0) ? 0 :
 	    gap_entry->next_read;
 	max_grow = gap_entry->end - gap_entry->start;
 	if (guard > max_grow)
 		return (KERN_NO_SPACE);
 	max_grow -= guard;
-	if (grow_amount > max_grow)
+	if (grow_amount > max_grow) {
+		if (report_stackoverflow)
+			uprintf("pid %d comm %s tid %d stack overflow\n",
+			    p->p_pid, p->p_comm, td->td_tid);
 		return (KERN_NO_SPACE);
+	}
 
 	/*
 	 * If this is the main process stack, see if we're over the stack
 	 * limit.
 	 */
 	is_procstack = addr >= (vm_offset_t)vm->vm_maxsaddr &&
+<<<<<<< HEAD
 	    addr < (vm_offset_t)p->p_usrstack;
 	if (is_procstack && (ctob(vm->vm_ssize) + grow_amount > stacklim))
+=======
+	    addr < (vm_offset_t)vm->vm_stacktop;
+	if (is_procstack && (ctob(vm->vm_ssize) + grow_amount > stacklim)) {
+		if (report_stackoverflow)
+			uprintf("pid %d comm %s tid %d stack overflow\n",
+			    p->p_pid, p->p_comm, td->td_tid);
+>>>>>>> upstream/main
 		return (KERN_NO_SPACE);
+	}
 
 #ifdef RACCT
 	if (racct_enable) {
