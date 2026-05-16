@@ -1925,20 +1925,7 @@ dsp_mmap_single(struct cdev *i_dev, vm_ooffset_t *offset,
 	struct pcm_channel *wrch, *rdch, *c;
 	int err;
 
-<<<<<<< HEAD
 	if (nprot & PROT_EXEC)
-=======
-#ifdef SV_ABI_LINUX
-	/*
-	 * https://lists.freebsd.org/pipermail/freebsd-emulation/2007-June/003698.html
-	 */
-	if ((nprot & PROT_EXEC) && (dsp_mmap_allow_prot_exec < 0 ||
-	    (dsp_mmap_allow_prot_exec == 0 &&
-	    SV_CURPROC_ABI() != SV_ABI_LINUX)))
-#else
-	if (nprot & PROT_EXEC)
-#endif
->>>>>>> upstream/main
 		return (EINVAL);
 
 	/*
