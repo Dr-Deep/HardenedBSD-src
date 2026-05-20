@@ -32,7 +32,7 @@ FreeBSD's source code. HardenedBSD syncs with FreeBSD every six hours.
 Some of the branches, but not all, are listed below:
 
 1. HEAD -> hardened/current/master
-1. stable/15 -> hardened/15-stable/master
+1. stable/15 -> hardened/15-stable/main
 
 # Features
 
@@ -923,7 +923,7 @@ HardenedBSD development branches:
 | Branch           			| Repository		| Binary Updates| Purpose						|
 |---------------------------------------|-----------------------|---------------|-------------------------------------------------------|
 | hardened/current/master		| HardenedBSD		| amd64, arm64	| Main development branch (16-CURRENT)			|
-| hardened/15-stable/master		| HardenedBSD		| amd64		| 15-STABLE development					|
+| hardened/15-stable/main       | HardenedBSD		| amd64		| 15-STABLE development					|
 
 For the most part, the normal FreeBSD development process can be followed.
 Perform a git clone if the intended branch into `/usr/src` and perform the
@@ -1010,12 +1010,12 @@ baseurl="http://updates.hardenedbsd.org/pub/HardenedBSD/updates/${branch}/$(unam
 ```
 
 And as another example, the `hbsd-update.conf` for the
-hardened/15-stable/master branch in the HardenedBSD repo:
+hardened/15-stable/main branch in the HardenedBSD repo:
 
 ```
-dnsrec="$(uname -m).master.15-stable.hardened.hardenedbsd.updates.hardenedbsd.org"
+dnsrec="$(uname -m).main.15-stable.hardened.hardenedbsd.updates.hardenedbsd.org"
 capath="/usr/share/keys/hbsd-update/trusted"
-branch="hardened/15-stable/master"
+branch="hardened/15-stable/main"
 baseurl="http://updates.hardenedbsd.org/pub/HardenedBSD/updates/${branch}/$(uname -m)"
 ```
 
@@ -1026,10 +1026,10 @@ Thus, generating a diff between the two configuration files would result in:
 +++ hbsd-update_4-stable.conf
 @@ -1,4 +1,4 @@
 -dnsrec="$(uname -m).master.current.hardened.hardenedbsd.updates.hardenedbsd.org"
-+dnsrec="$(uname -m).master.15-stable.hardened.hardenedbsd.updates.hardenedbsd.org"
++dnsrec="$(uname -m).main.15-stable.hardened.hardenedbsd.updates.hardenedbsd.org"
  capath="/usr/share/keys/hbsd-update/trusted"
 -branch="hardened/current/master"
-+branch="hardened/15-stable/master"
++branch="hardened/15-stable/main"
  baseurl="http://updates.hardenedbsd.org/pub/HardenedBSD/updates/${branch}/$(uname -m)"
 ```
 
