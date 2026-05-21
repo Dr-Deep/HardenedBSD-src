@@ -886,6 +886,26 @@ browsed at the [Radicle Explorer](https://radicle.network/nodes/rad.hardenedbsd.
 For users who are unfamiliar with Radicle, they have provided a
 [User Guide](https://radicle.dev/guides/user).
 
+As of 20 May 2026, Radicle can have difficulties in fetching the initial set of
+git pack files for our two largest repos (ports and src). To ease adoption of
+Radicle for src and ports, the HardenedBSD project periodically publishes
+archives of the repos meant to be unarchived into Radicle's storage location
+(default: `${HOME}/.radicle/storage`). The archives can be found
+[here](https://hardenedbsd.org/~shawn/radicle/archives/).
+
+These steps will bootstrap our larger repos for use with Radicle.
+
+```
+$ cd ${HOME}
+$ fetch -o src.tar.xz \
+    https://hardenedbsd.org/~shawn/radicle/archives/src.z2HLHXgL1xevBNQsf8BmQW7MpJmtm.2026-05-19.tar.xz
+$ tar -xf src.tar.xz -C ${HOME}/.radicle/storage
+$ rad clone rad:z2HLHXgL1xevBNQsf8BmQW7MpJmtm /usr/src
+$ cd /usr/src
+$ rad issue cache
+$ rad patch cache
+```
+
 Users do not need to run a full Radicle node to fetch the repos. The repos can
 be cloned using `git clone` like normal, but using this template command.
 Replace `<RID>` with the Repository ID.
