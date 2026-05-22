@@ -54,10 +54,12 @@ struct dsp_cdevpriv {
 	struct pcm_channel *wrch;
 };
 
+#ifdef SV_ABI_LINUX
 static int dsp_mmap_allow_prot_exec = 0;
 SYSCTL_INT(_hw_snd, OID_AUTO, compat_linux_mmap, CTLFLAG_RWTUN,
     &dsp_mmap_allow_prot_exec, 0,
-    "linux mmap compatibility (-1=force disable 0=auto 1=force enable)");
+    "linux mmap compatibility (-1=force-disable 0=auto)");
+#endif
 
 static int dsp_basename_clone = 1;
 SYSCTL_INT(_hw_snd, OID_AUTO, basename_clone, CTLFLAG_RWTUN,
@@ -1922,7 +1924,20 @@ dsp_mmap_single(struct cdev *i_dev, vm_ooffset_t *offset,
 	struct pcm_channel *wrch, *rdch, *c;
 	int err;
 
+<<<<<<< HEAD
 	if (nprot & PROT_EXEC)
+=======
+#ifdef SV_ABI_LINUX
+	/*
+	 * https://lists.freebsd.org/pipermail/freebsd-emulation/2007-June/003698.html
+	 */
+	if ((nprot & PROT_EXEC) && (dsp_mmap_allow_prot_exec < 0 ||
+	    (dsp_mmap_allow_prot_exec == 0 &&
+	    SV_CURPROC_ABI() != SV_ABI_LINUX)))
+#else
+	if (nprot & PROT_EXEC)
+#endif
+>>>>>>> upstream/stable/15
 		return (EINVAL);
 
 	/*
