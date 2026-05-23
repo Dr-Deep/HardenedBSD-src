@@ -1,4 +1,6 @@
 #
+#
+#
 # Makefile for building virtual machine and cloud provider disk images.
 #
 
@@ -13,8 +15,6 @@ VMFS?=		ufs
 VMFSLIST?=	ufs zfs
 SWAPSIZE?=	1g
 VMBASE?=	vm
-VENDOR_NAME?=	HardenedBSD
-NO_ROOT?=	yes
 
 VHD_DESC=	Azure, VirtualPC, Hyper-V, Xen disk image
 VMDK_DESC=	VMWare, VirtualBox disk image
@@ -39,9 +39,8 @@ BASIC-CLOUDINIT_FSLIST?=	ufs zfs
 BASIC-CLOUDINIT_DESC?=	Images for VM with cloudinit disk config support
 EC2_FORMAT=	raw
 EC2_FSLIST?=	ufs zfs
-EC2_FLAVOURS?=	BASE BUILDER CLOUD-INIT SMALL
+EC2_FLAVOURS?=	BASE CLOUD-INIT SMALL
 EC2-BASE_DESC=	Amazon EC2 image
-EC2-BUILDER_DESC=	Amazon EC2 AMI Builder image
 EC2-CLOUD-INIT_DESC=	Amazon EC2 Cloud-Init image
 EC2-SMALL_DESC=	Amazon EC2 small image
 GCE_FORMAT=	raw
@@ -75,7 +74,7 @@ CLOUDWARE?=	${CLOUDWARE_GEN}
 
 .for _V in TYPE BRANCH REVISION
 . if !defined(${_V}) || empty(${_V})
-${_V}!=	eval $$(awk '/^${_V}=/{print}' ${.CURDIR:H}/sys/conf/newvers.sh); echo $$${_V}
+${_V}!=	eval $$(awk '/^${_V}=/{print}' ${.CURDIR}/../sys/conf/newvers.sh); echo $$${_V}
 . endif
 .endfor
 
@@ -95,21 +94,13 @@ emulator-portinstall:
 .endif
 	touch ${.TARGET}
 
-.if ${TARGET_ARCH} != ${MACHINE_ARCH} && !defined(WITHOUT_QEMU)
+.if ${TARGET_ARCH} != ${MACHINE_ARCH}
 .if ( ${TARGET_ARCH} != "i386" ) || ( ${MACHINE_ARCH} != "amd64" )
 QEMUSTATIC=/usr/local/bin/qemu-${TARGET_ARCH}-static
 QEMUTGT=emulator-portinstall
 .endif
 .endif
 QEMUTGT?=
-
-.if (defined(WITH_CLOUDWARE) && !empty(WITH_CLOUDWARE)) || \
-    (defined(WITH_VMIMAGES) && !empty(WITH_VMIMAGES))
-.if (defined(WITHOUT_QEMU) && !defined(NO_ROOT)) || \
-  (!defined(WITHOUT_QEMU) && defined(NO_ROOT))
-.error WITHOUT_QEMU requires NO_ROOT (and vice versa)
-.endif
-.endif
 
 .if defined(WITH_CLOUDWARE) && !empty(WITH_CLOUDWARE) && !empty(CLOUDWARE)
 . for _CW in ${CLOUDWARE}
@@ -125,39 +116,14 @@ CLEANFILES+=	${_CW:tl}.${_FS}.${_FMT}.img \
 		${_CW:tl}.${_FS}.${_FMT}.raw
 ${_CW:tu}${_FS:tu}${_FMT:tu}IMAGE=	${_CW:tl}.${_FS}.${_FMT}
 
-# Special handling: EC2 "AMI Builder" images need a copy of the "base" disk
-# built first.
-.if ${_CW} == EC2-BUILDER
-cw-${_CW:tl}-${_FS}-${_FMT}: cw-ec2-base-${_FS}-${_FMT}
-.endif
-
-# Special handling: GCE images ingest src.txz and ports.txz and expect them
-# to be in the /ftp/ directory.  Note: This will need to be reworked before
-# distribution sets go away!
-.if ${_CW} == GCE
-cw-${_CW:tl}-${_FS}-${_FMT}: ftp
-.endif
-
-cw-${_CW:tl}-${_FS}-${_FMT}: ${QEMUTGT} ${PKGBASE_REPO_DIR}
+cw-${_CW:tl}-${_FS}-${_FMT}: ${QEMUTGT}
 	mkdir -p ${.OBJDIR}/${.TARGET}
 	env TARGET=${TARGET} TARGET_ARCH=${TARGET_ARCH} SWAPSIZE=${SWAPSIZE} \
 		QEMUSTATIC=${QEMUSTATIC} \
-		EC2BASEIMG=${.OBJDIR}/${EC2-BASE${_FS:tu}${_FMT:tu}IMAGE} \
-		${WITHOUT_QEMU:DWITHOUT_QEMU=true} \
-		${NO_ROOT:DNO_ROOT=true} \
-		PKG_CMD=${PKG_CMD:Upkg} \
-		PKG_ABI=${PKG_ABI} \
-		PKG_REPOS_DIR=${PKG_REPOS_DIR:U${.OBJDIR}/${.TARGET}/etc/pkg} \
-		PKG_REPO_NAME=${PKG_REPO_NAME:U${VENDOR_NAME}} \
-		PKG_INSTALL_EPOCH=${PKG_INSTALL_EPOCH:U${GITEPOCH}} \
-		NOPKGBASE=${NOPKGBASE} \
-		PKGBASE_REPO_DIR=${.OBJDIR}/pkgbase-repo-dir \
 		${.CURDIR}/scripts/mk-vmimage.sh \
-		-C ${.CURDIR}/tools/vmimage.subr -d ${.OBJDIR}/${.TARGET} \
-		-F ${"${_CW:MEC2-BUILDER}" != "":?ufs:${_FS}} \
+		-C ${.CURDIR}/tools/vmimage.subr -d ${.OBJDIR}/${.TARGET} -F ${_FS} \
 		-i ${.OBJDIR}/${_CW:tl}.${_FS}.${_FMT}.img -s ${VMSIZE} -f ${_FMT} \
-		-S ${WORLDDIR} -o ${.OBJDIR}/${${_CW:tu}${_FS:tu}${_FMT:tu}IMAGE} -c ${${_CW:tu}CONF} \
-		-V ${VENDOR_NAME} || true
+		-S ${WORLDDIR} -o ${.OBJDIR}/${${_CW:tu}${_FS:tu}${_FMT:tu}IMAGE} -c ${${_CW:tu}CONF}
 	touch ${.TARGET}
 .   endfor
 .  endfor
@@ -170,7 +136,7 @@ CLOUDTARGETS+=	cw-${_CW:tl}-${_FMT}
 CLEANFILES+=	${_CW:tl}.${_FMT}
 ${_CW:tu}${_FMT:tu}IMAGE=	${_CW:tl}.${_FMT}
 cw-${_CW:tl}-${_FMT}: cw-${_CW:tl}-${VMFS}-${_FMT}
-	ln -f ${${_CW:tu}${VMFS:tu}${_FMT:tu}IMAGE} ${${_CW:tu}${_FMT:tu}IMAGE} || true
+	ln -f ${${_CW:tu}${VMFS:tu}${_FMT:tu}IMAGE} ${${_CW:tu}${_FMT:tu}IMAGE}
 .  endfor
 
 # Targets without a disk format listed are the first disk format on the list
@@ -196,28 +162,18 @@ CLEANFILES+=	${VMBASE}.${FS}.${FORMAT}
 
 vm-base:	vm-image
 
-vm-image:	${QEMUTGT} ${PKGBASE_REPO_DIR}
+vm-image:	${QEMUTGT}
 .if defined(WITH_VMIMAGES) && !empty(WITH_VMIMAGES)
 . for FORMAT in ${VMFORMATS}
 .  for FS in ${VMFSLIST}
 	mkdir -p ${.OBJDIR}/${.TARGET}-${FORMAT}-${FS}
 	env TARGET=${TARGET} TARGET_ARCH=${TARGET_ARCH} SWAPSIZE=${SWAPSIZE} \
 		QEMUSTATIC=${QEMUSTATIC} \
-		${WITHOUT_QEMU:DWITHOUT_QEMU=true} \
-		${NO_ROOT:DNO_ROOT=true} \
-		PKG_CMD=${PKG_CMD:Upkg} \
-		PKG_ABI=${PKG_ABI} \
-		PKG_REPOS_DIR=${PKG_REPOS_DIR:U${.OBJDIR}/${.TARGET}-${FORMAT}-${FS}/etc/pkg} \
-		PKG_REPO_NAME=${PKG_REPO_NAME:U${VENDOR_NAME}} \
-		PKG_INSTALL_EPOCH=${PKG_INSTALL_EPOCH:U${GITEPOCH}} \
-		NOPKGBASE=${NOPKGBASE} \
-		PKGBASE_REPO_DIR=${.OBJDIR}/pkgbase-repo-dir \
 		${.CURDIR}/scripts/mk-vmimage.sh \
 		-C ${.CURDIR}/tools/vmimage.subr \
-		${VM_IMAGE_CONFIG:D-c ${VM_IMAGE_CONFIG}} \
 		-d ${.OBJDIR}/${.TARGET}-${FORMAT}-${FS} -F ${FS} \
 		-i ${.OBJDIR}/${FORMAT}.${FS}.img -s ${VMSIZE} -f ${FORMAT} \
-		-S ${WORLDDIR} -o ${.OBJDIR}/${VMBASE}.${FS}.${FORMAT} || true
+		-S ${WORLDDIR} -o ${.OBJDIR}/${VMBASE}.${FS}.${FORMAT}
 .  endfor
 . endfor
 .endif
@@ -254,7 +210,7 @@ vm-install:
 .  for FORMAT in ${VMFORMATS}
 .   for FS in ${VMFSLIST}
 	# Don't keep the originals.  There is a copy in ${.OBJDIR} if needed.
-	${XZ_CMD} -f ${DESTDIR}/vmimages/${OSRELEASE}-${FS}.${FORMAT}
+	${XZ_CMD} ${DESTDIR}/vmimages/${OSRELEASE}-${FS}.${FORMAT}
 .   endfor
 .  endfor
 . endif
@@ -270,7 +226,7 @@ cloud-install-BASIC-CI:
 . for _FMT in ${BASIC-CI_FORMAT}
 	cp -p ${.OBJDIR}/${BASIC-CI${_FS:tu}${_FMT:tu}IMAGE} \
 		${DESTDIR}/ciimages/${OSRELEASE}-BASIC-CI-${_FS}.${_FMT}
-	${XZ_CMD} -f ${DESTDIR}/ciimages/${OSRELEASE}-BASIC-CI-${_FS}.${_FMT}
+	${XZ_CMD} ${DESTDIR}/ciimages/${OSRELEASE}-BASIC-CI-${_FS}.${_FMT}
 . endfor
 .endfor
 	cd ${DESTDIR}/ciimages && sha512 ${OSRELEASE}* > \
@@ -284,7 +240,7 @@ cloud-install-BASIC-CLOUDINIT:
 . for _FMT in ${BASIC-CLOUDINIT_FORMAT}
 	cp -p ${.OBJDIR}/${BASIC-CLOUDINIT${_FS:tu}${_FMT:tu}IMAGE} \
 		${DESTDIR}/vmimages/${OSRELEASE}-BASIC-CLOUDINIT-${_FS}.${_FMT}
-	${XZ_CMD} -f ${DESTDIR}/vmimages/${OSRELEASE}-BASIC-CLOUDINIT-${_FS}.${_FMT}
+	${XZ_CMD} ${DESTDIR}/vmimages/${OSRELEASE}-BASIC-CLOUDINIT-${_FS}.${_FMT}
 . endfor
 .endfor
 	cd ${DESTDIR}/vmimages && sha512 ${OSRELEASE}* > \

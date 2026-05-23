@@ -29,7 +29,6 @@
 # mk-vmimage.sh: Create virtual machine disk images in various formats.
 #
 #
-set -e
 
 usage() {
 	echo "${0} usage:"
@@ -40,7 +39,7 @@ usage() {
 main() {
 	local arg
 	VMCONFIG="/dev/null"
-	while getopts "C:c:d:F:f:i:o:s:S:V:" arg; do
+	while getopts "C:c:d:F:f:i:o:s:S:" arg; do
 		case "${arg}" in
 			C)
 				VMBUILDCONF="${OPTARG}"
@@ -69,9 +68,6 @@ main() {
 			S)
 				WORLDDIR="${OPTARG}"
 				;;
-			V)
-				VENDOR_NAME="${OPTARG}"
-				;;
 			*)
 				;;
 		esac
@@ -95,7 +91,7 @@ main() {
 
 	. "${VMBUILDCONF}"
 
-	if [ -n "${VMCONFIG}" ] && [ ! -c "${VMCONFIG}" ]; then
+	if [ ! -z "${VMCONFIG}" ] && [ ! -c "${VMCONFIG}" ]; then
 		. "${VMCONFIG}"
 	fi
 
