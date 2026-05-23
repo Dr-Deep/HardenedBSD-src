@@ -1,26 +1,56 @@
-.TH "unbound-anchor" "8" "Jul 16, 2025" "NLnet Labs" "unbound 1.23.1"
-.\"
-.\" unbound-anchor.8 -- unbound anchor maintenance utility manual
-.\"
-.\" Copyright (c) 2008, NLnet Labs. All rights reserved.
-.\"
-.\" See LICENSE for the license.
-.\"
-.\"
-.SH "NAME"
-.B unbound\-anchor
-\- Unbound anchor utility.
-.SH "SYNOPSIS"
-.B unbound\-anchor
-.RB [ opts ]
-.SH "DESCRIPTION"
-.B Unbound\-anchor
-performs setup or update of the root trust anchor for DNSSEC validation.
-The program fetches the trust anchor with the method from RFC7958 when
-regular RFC5011 update fails to bring it up to date.
-It can be run (as root) from the commandline, or run as part of startup
-scripts.  Before you start the \fIunbound\fR(8) DNS server.
-.P
+.\" Man page generated from reStructuredText.
+.
+.
+.nr rst2man-indent-level 0
+.
+.de1 rstReportMargin
+\\$1 \\n[an-margin]
+level \\n[rst2man-indent-level]
+level margin: \\n[rst2man-indent\\n[rst2man-indent-level]]
+-
+\\n[rst2man-indent0]
+\\n[rst2man-indent1]
+\\n[rst2man-indent2]
+..
+.de1 INDENT
+.\" .rstReportMargin pre:
+. RS \\$1
+. nr rst2man-indent\\n[rst2man-indent-level] \\n[an-margin]
+. nr rst2man-indent-level +1
+.\" .rstReportMargin post:
+..
+.de UNINDENT
+. RE
+.\" indent \\n[an-margin]
+.\" old: \\n[rst2man-indent\\n[rst2man-indent-level]]
+.nr rst2man-indent-level -1
+.\" new: \\n[rst2man-indent\\n[rst2man-indent-level]]
+.in \\n[rst2man-indent\\n[rst2man-indent-level]]u
+..
+.TH "UNBOUND-ANCHOR" "8" "May 20, 2026" "1.25.1" "Unbound"
+.SH NAME
+unbound-anchor \- Unbound 1.25.1 anchor utility.
+.SH SYNOPSIS
+.sp
+\fBunbound\-anchor\fP [\fBopts\fP]
+.SH DESCRIPTION
+.sp
+\fBunbound\-anchor\fP performs setup or update of the root trust anchor for DNSSEC
+validation.
+The program fetches the trust anchor with the method from \fI\%RFC 7958\fP when
+regular \fI\%RFC 5011\fP update fails to bring it up to date.
+It can be run from the commandline, or run as part of startup scripts before
+you start the \fI\%unbound(8)\fP DNS server.
+.sp
+Note that if you want to use \fI\%RFC 5011\fP with Unbound (i.e., the
+\fI\%auto\-trust\-anchor\-file\fP option) so
+that trust anchor information is automatically tracked by Unbound during
+operation, the user that Unbound runs under (by default \(aqunbound\(aq) must have
+write permissions to the file and the directory the file lives in (for creating
+temporary files).
+In this case you would probably want to run this program as the designated
+Unbound user.
+.sp
 Suggested usage:
 .P
 .nf

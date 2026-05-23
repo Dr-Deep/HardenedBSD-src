@@ -1,28 +1,43 @@
-.TH "unbound" "8" "Jul 16, 2025" "NLnet Labs" "unbound 1.23.1"
-.\"
-.\" unbound.8 -- unbound manual
-.\"
-.\" Copyright (c) 2007, NLnet Labs. All rights reserved.
-.\"
-.\" See LICENSE for the license.
-.\"
-.\"
-.SH "NAME"
-.B unbound
-\- Unbound DNS validating resolver 1.23.1.
-.SH "SYNOPSIS"
-.B unbound
-.RB [ \-h ]
-.RB [ \-d ]
-.RB [ \-p ]
-.RB [ \-v ]
-.RB [ \-c
-.IR cfgfile ]
-.SH "DESCRIPTION"
-.B Unbound
-is a caching DNS resolver.
-.P
-It uses a built in list of authoritative nameservers for the root zone (.),
+.\" Man page generated from reStructuredText.
+.
+.
+.nr rst2man-indent-level 0
+.
+.de1 rstReportMargin
+\\$1 \\n[an-margin]
+level \\n[rst2man-indent-level]
+level margin: \\n[rst2man-indent\\n[rst2man-indent-level]]
+-
+\\n[rst2man-indent0]
+\\n[rst2man-indent1]
+\\n[rst2man-indent2]
+..
+.de1 INDENT
+.\" .rstReportMargin pre:
+. RS \\$1
+. nr rst2man-indent\\n[rst2man-indent-level] \\n[an-margin]
+. nr rst2man-indent-level +1
+.\" .rstReportMargin post:
+..
+.de UNINDENT
+. RE
+.\" indent \\n[an-margin]
+.\" old: \\n[rst2man-indent\\n[rst2man-indent-level]]
+.nr rst2man-indent-level -1
+.\" new: \\n[rst2man-indent\\n[rst2man-indent-level]]
+.in \\n[rst2man-indent\\n[rst2man-indent-level]]u
+..
+.TH "UNBOUND" "8" "May 20, 2026" "1.25.1" "Unbound"
+.SH NAME
+unbound \- Unbound DNS validating resolver 1.25.1.
+.SH SYNOPSIS
+.sp
+\fBunbound\fP [\fB\-hdpVv\fP] [\fB\-c <cfgfile>\fP]
+.SH DESCRIPTION
+.sp
+\fBunbound\fP is a caching DNS resolver.
+.sp
+It uses a built in list of authoritative nameservers for the root zone (\fB\&.\fP),
 the so called root hints.
 On receiving a DNS query it will ask the root nameservers for
 an answer and will in almost all cases receive a delegation to a top level

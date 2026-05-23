@@ -1,35 +1,64 @@
-.TH "unbound.conf" "5" "Jul 16, 2025" "NLnet Labs" "unbound 1.23.1"
-.\"
-.\" unbound.conf.5 -- unbound.conf manual
-.\"
-.\" Copyright (c) 2007, NLnet Labs. All rights reserved.
-.\"
-.\" See LICENSE for the license.
-.\"
-.\"
-.SH "NAME"
-.B unbound.conf
-\- Unbound configuration file.
-.SH "SYNOPSIS"
-.B unbound.conf
-.SH "DESCRIPTION"
-.B unbound.conf
-is used to configure
-\fIunbound\fR(8).
-The file format has attributes and values. Some attributes have attributes
-inside them.
-The notation is: attribute: value.
-.P
-Comments start with # and last to the end of line. Empty lines are
-ignored as is whitespace at the beginning of a line.
-.P
-The utility
-\fIunbound\-checkconf\fR(8)
-can be used to check unbound.conf prior to usage.
-.SH "EXAMPLE"
-An example config file is shown below. Copy this to /etc/unbound/unbound.conf
-and start the server with:
-.P
+.\" Man page generated from reStructuredText.
+.
+.
+.nr rst2man-indent-level 0
+.
+.de1 rstReportMargin
+\\$1 \\n[an-margin]
+level \\n[rst2man-indent-level]
+level margin: \\n[rst2man-indent\\n[rst2man-indent-level]]
+-
+\\n[rst2man-indent0]
+\\n[rst2man-indent1]
+\\n[rst2man-indent2]
+..
+.de1 INDENT
+.\" .rstReportMargin pre:
+. RS \\$1
+. nr rst2man-indent\\n[rst2man-indent-level] \\n[an-margin]
+. nr rst2man-indent-level +1
+.\" .rstReportMargin post:
+..
+.de UNINDENT
+. RE
+.\" indent \\n[an-margin]
+.\" old: \\n[rst2man-indent\\n[rst2man-indent-level]]
+.nr rst2man-indent-level -1
+.\" new: \\n[rst2man-indent\\n[rst2man-indent-level]]
+.in \\n[rst2man-indent\\n[rst2man-indent-level]]u
+..
+.TH "UNBOUND.CONF" "5" "May 20, 2026" "1.25.1" "Unbound"
+.SH NAME
+unbound.conf \- Unbound 1.25.1 configuration file.
+.SH SYNOPSIS
+.sp
+\fBunbound.conf\fP
+.SH DESCRIPTION
+.sp
+\fBunbound.conf\fP is used to configure \fI\%unbound(8)\fP\&.
+.sp
+The utility \fI\%unbound\-checkconf(8)\fP can be
+used to check \fBunbound.conf\fP prior to usage.
+.SH FILE FORMAT
+.sp
+Whitespace is used to separate keywords.
+Whitespace indentation is insignificant, but is still recommended for visual
+clarity.
+Comments start with \fB#\fP and last to the end of line.
+Empty lines are ignored, as is whitespace at the beginning of a line.
+.sp
+Attribute keywords end with a colon (\fB:\fP) and they are either options or
+section clauses (group options together).
+.sp
+The configuration file is logically divided into \fBsections\fP where each section
+is introduced by a \fI\%section clause\fP\&.
+.SH EXAMPLE
+.sp
+An example minimal config file is shown below; most settings are the defaults.
+Copy this to \fB/var/unbound/unbound.conf\fP and start the server with:
+.INDENT 0.0
+.INDENT 3.5
+.sp
 .nf
 	$ unbound \-c /etc/unbound/unbound.conf
 .fi

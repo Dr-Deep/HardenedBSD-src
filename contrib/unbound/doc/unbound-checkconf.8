@@ -1,28 +1,42 @@
-.TH "unbound-checkconf" "8" "Jul 16, 2025" "NLnet Labs" "unbound 1.23.1"
-.\"
-.\" unbound-checkconf.8 -- unbound configuration checker manual
-.\"
-.\" Copyright (c) 2007, NLnet Labs. All rights reserved.
-.\"
-.\" See LICENSE for the license.
-.\"
-.\"
-.SH "NAME"
-unbound\-checkconf
-\- Check Unbound configuration file for errors.
-.SH "SYNOPSIS"
-.B unbound\-checkconf
-.RB [ \-h ]
-.RB [ \-f ]
-.RB [ \-q ]
-.RB [ \-o
-.IR option ]
-.RI [ cfgfile ]
-.SH "DESCRIPTION"
-.B Unbound\-checkconf
-checks the configuration file for the
-\fIunbound\fR(8)
-DNS resolver for syntax and other errors.
+.\" Man page generated from reStructuredText.
+.
+.
+.nr rst2man-indent-level 0
+.
+.de1 rstReportMargin
+\\$1 \\n[an-margin]
+level \\n[rst2man-indent-level]
+level margin: \\n[rst2man-indent\\n[rst2man-indent-level]]
+-
+\\n[rst2man-indent0]
+\\n[rst2man-indent1]
+\\n[rst2man-indent2]
+..
+.de1 INDENT
+.\" .rstReportMargin pre:
+. RS \\$1
+. nr rst2man-indent\\n[rst2man-indent-level] \\n[an-margin]
+. nr rst2man-indent-level +1
+.\" .rstReportMargin post:
+..
+.de UNINDENT
+. RE
+.\" indent \\n[an-margin]
+.\" old: \\n[rst2man-indent\\n[rst2man-indent-level]]
+.nr rst2man-indent-level -1
+.\" new: \\n[rst2man-indent\\n[rst2man-indent-level]]
+.in \\n[rst2man-indent\\n[rst2man-indent-level]]u
+..
+.TH "UNBOUND-CHECKCONF" "8" "May 20, 2026" "1.25.1" "Unbound"
+.SH NAME
+unbound-checkconf \- Check Unbound 1.25.1 configuration file for errors.
+.SH SYNOPSIS
+.sp
+\fBunbound\-checkconf\fP [\fB\-hf\fP] [\fB\-o option\fP] [cfgfile]
+.SH DESCRIPTION
+.sp
+\fBunbound\-checkconf\fP checks the configuration file for the
+\fI\%unbound(8)\fP DNS resolver for syntax and other errors.
 The config file syntax is described in
 \fIunbound.conf\fR(5).
 .P

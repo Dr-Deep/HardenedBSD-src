@@ -1,30 +1,45 @@
-.TH "unbound-control" "8" "Jul 16, 2025" "NLnet Labs" "unbound 1.23.1"
-.\"
-.\" unbound-control.8 -- unbound remote control manual
-.\"
-.\" Copyright (c) 2008, NLnet Labs. All rights reserved.
-.\"
-.\" See LICENSE for the license.
-.\"
-.\"
-.SH "NAME"
-.B unbound\-control,
-.B unbound\-control\-setup
-\- Unbound remote server control utility.
-.SH "SYNOPSIS"
-.B unbound\-control
-.RB [ \-hq ]
-.RB [ \-c
-.IR cfgfile ]
-.RB [ \-s
-.IR server ]
-.IR command
-.SH "DESCRIPTION"
-.B Unbound\-control
-performs remote administration on the \fIunbound\fR(8) DNS server.
-It reads the configuration file, contacts the Unbound server over SSL
-sends the command and displays the result.
-.P
+.\" Man page generated from reStructuredText.
+.
+.
+.nr rst2man-indent-level 0
+.
+.de1 rstReportMargin
+\\$1 \\n[an-margin]
+level \\n[rst2man-indent-level]
+level margin: \\n[rst2man-indent\\n[rst2man-indent-level]]
+-
+\\n[rst2man-indent0]
+\\n[rst2man-indent1]
+\\n[rst2man-indent2]
+..
+.de1 INDENT
+.\" .rstReportMargin pre:
+. RS \\$1
+. nr rst2man-indent\\n[rst2man-indent-level] \\n[an-margin]
+. nr rst2man-indent-level +1
+.\" .rstReportMargin post:
+..
+.de UNINDENT
+. RE
+.\" indent \\n[an-margin]
+.\" old: \\n[rst2man-indent\\n[rst2man-indent-level]]
+.nr rst2man-indent-level -1
+.\" new: \\n[rst2man-indent\\n[rst2man-indent-level]]
+.in \\n[rst2man-indent\\n[rst2man-indent-level]]u
+..
+.TH "UNBOUND-CONTROL" "8" "May 20, 2026" "1.25.1" "Unbound"
+.SH NAME
+unbound-control \- Unbound 1.25.1 remote server control utility.
+.SH SYNOPSIS
+.sp
+\fBunbound\-control\fP [\fB\-hq\fP] [\fB\-c cfgfile\fP] [\fB\-s server\fP] command
+.SH DESCRIPTION
+.sp
+\fBunbound\-control\fP performs remote administration on the
+\fI\%unbound(8)\fP DNS server.
+It reads the configuration file, contacts the Unbound server over TLS sends the
+command and displays the result.
+.sp
 The available options are:
 .TP
 .B \-h
