@@ -14,7 +14,6 @@ set -e
 vendor_name="HardenedBSD"
 
 scriptdir=$(dirname $(realpath $0))
-. ${scriptdir}/../scripts/tools.subr
 . ${scriptdir}/../../tools/boot/install-boot.sh
 
 if [ "$(uname -s)" = "FreeBSD" ]; then
@@ -54,7 +53,7 @@ if [ -n "${METALOG}" ]; then
 	echo "./etc/rc.conf.local type=file uname=root gname=wheel mode=0644" >> ${metalogfilename}
 	MAKEFSARG=${metalogfilename}
 fi
-${MAKEFS} -D -N ${BASEBITSDIR}/etc -B little -o label=${vendor_name}_Install -o version=2 ${2}.part ${MAKEFSARG}
+makefs -D -N ${BASEBITSDIR}/etc -B little -o label=${vendor_name}_Install -o version=2 ${2}.part ${MAKEFSARG}
 rm ${BASEBITSDIR}/etc/fstab
 rm ${BASEBITSDIR}/etc/rc.conf.local
 if [ -n "${METALOG}" ]; then
@@ -64,14 +63,16 @@ fi
 # Make an ESP in a file.
 espfilename=$(mktemp /tmp/efiboot.XXXXXX)
 if [ -f "${BASEBITSDIR}/boot/loader_ia32.efi" ]; then
-	extra_args="${BASEBITSDIR}/boot/loader_ia32.efi bootia32"
+	make_esp_file ${espfilename} ${fat32min} ${BASEBITSDIR}/boot/loader.efi bootx64 \
+	    ${BASEBITSDIR}/boot/loader_ia32.efi bootia32
+else
+	make_esp_file ${espfilename} ${fat32min} ${BASEBITSDIR}/boot/loader.efi
 fi
-make_esp_file ${espfilename} ${fat32min} ${BASEBITSDIR}/boot/loader.efi bootx64 ${extra_args}
 
-${MKIMG} -s mbr \
+mkimg -s mbr \
     -b ${BASEBITSDIR}/boot/mbr \
     -p efi:=${espfilename} \
-    -p freebsd:-"${MKIMG} -s bsd -b ${BASEBITSDIR}/boot/boot -p freebsd-ufs:=${2}.part" \
+    -p freebsd:-"mkimg -s bsd -b ${BASEBITSDIR}/boot/boot -p freebsd-ufs:=${2}.part" \
     -a 2 \
     -o ${2}
 rm ${espfilename}
