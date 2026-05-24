@@ -35,7 +35,7 @@ cleanup() {
 		umount_loop ${DESTDIR}/dev 2>/dev/null
 	fi
 	umount_loop ${DESTDIR}
-	if [ -n "${mddev}" ]; then
+	if [ ! -z "${mddev}" ]; then
 		mdconfig -d -u ${mddev}
 	fi
 
@@ -98,7 +98,7 @@ arm_create_user() {
 	chroot ${CHROOTDIR} /usr/sbin/pw -R ${DESTDIR} \
 		useradd hbsd \
 		-m -M 0750 -w yes -n hbsd -u 1001 -g 1001 -G 0 \
-		-c 'HardenedBSD User' -d '/home/hbsd' -s '/bin/sh'
+		-c 'HardenedBSD User' -d '/home/hbsd' -s '/bin/csh'
 	chroot ${CHROOTDIR} /usr/sbin/pw -R ${DESTDIR} \
 		usermod root -w yes
 
@@ -209,6 +209,10 @@ arm_install_base() {
 	echo "hostname=\"${hostname}\"" > ${CHROOTDIR}/${DESTDIR}/etc/rc.conf
 	echo 'ifconfig_DEFAULT="DHCP inet6 accept_rtadv"' >> ${CHROOTDIR}/${DESTDIR}/etc/rc.conf
 	echo 'sshd_enable="YES"' >> ${CHROOTDIR}/${DESTDIR}/etc/rc.conf
+	echo 'sendmail_enable="NONE"' >> ${CHROOTDIR}/${DESTDIR}/etc/rc.conf
+	echo 'sendmail_submit_enable="NO"' >> ${CHROOTDIR}/${DESTDIR}/etc/rc.conf
+	echo 'sendmail_outbound_enable="NO"' >> ${CHROOTDIR}/${DESTDIR}/etc/rc.conf
+	echo 'sendmail_msp_queue_enable="NO"' >> ${CHROOTDIR}/${DESTDIR}/etc/rc.conf
 	echo 'growfs_enable="YES"' >> ${CHROOTDIR}/${DESTDIR}/etc/rc.conf
 	if [ -n "${CONFIG_POWERD_ENABLE}" ]; then
 		echo 'powerd_enable="YES"' >> ${CHROOTDIR}/${DESTDIR}/etc/rc.conf
