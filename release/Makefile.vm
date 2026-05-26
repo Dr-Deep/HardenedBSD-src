@@ -9,7 +9,7 @@ VMFORMATS?=	vhd vmdk qcow2 raw
 .if ${TARGET_ARCH} == riscv64
 VMSIZE?=	6144m
 .else
-VMSIZE?=	5120m
+VMSIZE?=	80g
 .endif
 VMFS?=		ufs
 VMFSLIST?=	ufs zfs
