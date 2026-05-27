@@ -562,15 +562,9 @@ SRCS_EXT+=	DWARFLinker/Parallel/SyntheticTypeNameBuilder.cpp
 SRCS_EXT+=	DWARFLinker/Utils.cpp
 SRCS_EXT+=	DWP/DWP.cpp
 SRCS_EXT+=	DWP/DWPError.cpp
-<<<<<<< HEAD
-SRCS_MIW+=	DebugInfo/BTF/BTFContext.cpp
-SRCS_MIW+=	DebugInfo/BTF/BTFParser.cpp
-SRCS_EXT+=	DebugInfo/CodeView/AppendingTypeTableBuilder.cpp
-=======
 SRCS_MIN+=	DebugInfo/BTF/BTFContext.cpp
 SRCS_MIN+=	DebugInfo/BTF/BTFParser.cpp
 SRCS_MIN+=	DebugInfo/CodeView/AppendingTypeTableBuilder.cpp
->>>>>>> upstream/main
 SRCS_MIN+=	DebugInfo/CodeView/CVSymbolVisitor.cpp
 SRCS_MIN+=	DebugInfo/CodeView/CVTypeVisitor.cpp
 SRCS_MIN+=	DebugInfo/CodeView/CodeViewError.cpp
@@ -1120,28 +1114,17 @@ SRCS_MIW+=	Object/FaultMapParser.cpp
 SRCS_MIN+=	Object/IRObjectFile.cpp
 SRCS_MIN+=	Object/IRSymtab.cpp
 SRCS_MIN+=	Object/MachOObjectFile.cpp
-<<<<<<< HEAD
-SRCS_MIW+=	Object/MachOUniversal.cpp
-SRCS_MIW+=	Object/MachOUniversalWriter.cpp
-SRCS_MIW+=	Object/Minidump.cpp
-=======
 SRCS_MIN+=	Object/MachOUniversal.cpp
 SRCS_MIN+=	Object/MachOUniversalWriter.cpp
 SRCS_MIN+=	Object/Minidump.cpp
->>>>>>> upstream/main
 SRCS_MIN+=	Object/ModuleSymbolTable.cpp
 SRCS_EXT+=	Object/Object.cpp
 SRCS_MIN+=	Object/ObjectFile.cpp
 SRCS_MIN+=	Object/OffloadBinary.cpp
 SRCS_MIW+=	Object/OffloadBundle.cpp
 SRCS_MIN+=	Object/RecordStreamer.cpp
-<<<<<<< HEAD
-SRCS_MIW+=	Object/RelocationResolver.cpp
-SRCS_MIW+=	Object/SymbolSize.cpp
-=======
 SRCS_MIN+=	Object/RelocationResolver.cpp
 SRCS_MIN+=	Object/SymbolSize.cpp
->>>>>>> upstream/main
 SRCS_MIN+=	Object/SymbolicFile.cpp
 SRCS_MIW+=	Object/TapiFile.cpp
 SRCS_MIW+=	Object/TapiUniversal.cpp
