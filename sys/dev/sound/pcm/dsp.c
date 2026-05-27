@@ -1921,8 +1921,12 @@ dsp_mmap_single(struct cdev *i_dev, vm_ooffset_t *offset,
 	struct snddev_info *d;
 	struct pcm_channel *wrch, *rdch, *c;
 	int err;
+	vm_ooffset_t offset_test;
 
 	if (nprot & PROT_EXEC)
+		return (EINVAL);
+	offset_test = *offset;
+	if (offset_test >= offset_test + size)
 		return (EINVAL);
 
 	/*
