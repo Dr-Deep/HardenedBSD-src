@@ -1,6 +1,7 @@
 .include <src.opts.mk>
 
 PACKAGE=	clang
+PACKAGE?=	clang
 
 .if ${MK_LLVM_FULL_DEBUGINFO} == "no"
 .if ${COMPILER_TYPE} == "clang"

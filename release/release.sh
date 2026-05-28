@@ -40,26 +40,9 @@ export PATH="/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin"
 VERSION=3
 
 # Prototypes that can be redefined per-chroot or per-target.
-
-# load_chroot_env(): Set up the build environment needed.
-#
-# Done as part of chroot_env().
 load_chroot_env() { }
-
-# load_target_env(): set up the build environment needed for the
-# chroot_build_target() and `${chroot_build_release}` steps.
 load_target_env() { }
-
-# buildenv_setup(): set up the build environment needed for post-chroot_setup()
 buildenv_setup() { }
-
-# chroot_cleanup(): Clean up resources setup in chroot_setup() at exit.
-#
-# This function can be built upon. `_chroot_cleanup` must be added to the end of
-# the override function, if overridden.
-chroot_cleanup() {
-	_chroot_cleanup
-} # chroot_cleanup()
 
 usage() {
 	echo "Usage: $0 [-c release.conf]"
@@ -79,7 +62,7 @@ env_setup() {
 	# The default version control system command to obtain the sources.
 	for _dir in /usr/bin /usr/local/bin; do
 		[ -x "${_dir}/git" ] && VCSCMD="/${_dir}/git"
-		[ -n "${VCSCMD}" ] && break 2
+		[ ! -z "${VCSCMD}" ] && break 2
 	done
 
 	if [ -z "${VCSCMD}" -a -z "${NOGIT}" ]; then
@@ -199,7 +182,7 @@ env_check() {
 	fi
 
 	# Unset CHROOTBUILD_SKIP if the chroot(8) does not appear to exist.
-	if [ -n "${CHROOTBUILD_SKIP}" -a ! -e ${CHROOTDIR}/bin/sh ]; then
+	if [ ! -z "${CHROOTBUILD_SKIP}" -a ! -e ${CHROOTDIR}/bin/sh ]; then
 		CHROOTBUILD_SKIP=
 	fi
 
@@ -216,8 +199,7 @@ env_check() {
 		KERNCONF=\"${KERNEL}\" ${CONF_FILES} ${SRCPORTS} \
 		WITH_DVD=${WITH_DVD} WITH_VMIMAGES=${WITH_VMIMAGES} \
 		WITH_CLOUDWARE=${WITH_CLOUDWARE} WITH_OCIIMAGES=${WITH_OCIIMAGES} \
-		XZ_THREADS=${XZ_THREADS} NOPKGBASE=${NOPKGBASE}"
-	RELEASE_RMAKEFLAGS="${RELEASE_RMAKEFLAGS} NO_ROOT=1 WITHOUT_QEMU=1"
+		XZ_THREADS=${XZ_THREADS}"
 
 	return 0
 } # env_check()
@@ -310,7 +292,45 @@ extra_chroot_setup() {
 		fi
 	fi
 
-	if [ -n "${EMBEDDEDPORTS}" ]; then
+	if [ ! -z "${WITH_OCIIMAGES}" ]; then
+		# Install buildah and skopeo from ports if the ports tree is available;
+		# otherwise install the pkg.
+		if [ -d ${CHROOTDIR}/usr/ports ]; then
+			# Trick the ports 'run-autotools-fixup' target to do the right
+			# thing.
+			_OSVERSION=$(chroot ${CHROOTDIR} /usr/bin/uname -U)
+			REVISION=$(chroot ${CHROOTDIR} make -C /usr/src/release -V REVISION)
+			BRANCH=$(chroot ${CHROOTDIR} make -C /usr/src/release -V BRANCH)
+			UNAME_r=${REVISION}-${BRANCH}
+			GITUNSETOPTS="CONTRIB CURL CVS GITWEB GUI HTMLDOCS"
+			GITUNSETOPTS="${GITUNSETOPTS} ICONV NLS P4 PERL"
+			GITUNSETOPTS="${GITUNSETOPTS} SEND_EMAIL SUBTREE SVN"
+			GITUNSETOPTS="${GITUNSETOPTS} PCRE PCRE2"
+			PBUILD_FLAGS="OSVERSION=${_OSVERSION} BATCH=yes"
+			PBUILD_FLAGS="${PBUILD_FLAGS} UNAME_r=${UNAME_r}"
+			PBUILD_FLAGS="${PBUILD_FLAGS} OSREL=${REVISION}"
+			PBUILD_FLAGS="${PBUILD_FLAGS} WRKDIRPREFIX=/tmp/ports"
+			PBUILD_FLAGS="${PBUILD_FLAGS} DISTDIR=/tmp/distfiles"
+			for _PORT in sysutils/buildah sysutils/skopeo; do
+				eval chroot ${CHROOTDIR} env ${PBUILD_FLAGS} make -C \
+				     /usr/ports/${_PORT} \
+				     FORCE_PKG_REGISTER=1 deinstall install clean distclean
+			done
+		else
+			eval chroot ${CHROOTDIR} env ASSUME_ALWAYS_YES=yes \
+				pkg install -y sysutils/buildah sysutils/skopeo
+			eval chroot ${CHROOTDIR} env ASSUME_ALWAYS_YES=yes \
+				pkg clean -y
+		fi
+		# Use the vfs storage driver so that this works whether or not
+		# the build directory is on ZFS. The images are small so the
+		# performance difference is negligible.
+		eval chroot ${CHROOTDIR} sed -I .bak -e '/^driver/s/zfs/vfs/' /usr/local/etc/containers/storage.conf
+		# Remove any stray images from previous builds
+		eval chroot ${CHROOTDIR} buildah rmi -af
+	fi
+
+	if [ ! -z "${EMBEDDEDPORTS}" ]; then
 		_OSVERSION=$(chroot ${CHROOTDIR} /usr/bin/uname -U)
 		REVISION=$(chroot ${CHROOTDIR} make -C /usr/src/release -V REVISION)
 		BRANCH=$(chroot ${CHROOTDIR} make -C /usr/src/release -V BRANCH)
@@ -335,7 +355,7 @@ extra_chroot_setup() {
 # chroot_build_target(): Build the userland and kernel for the build target.
 chroot_build_target() {
 	load_target_env
-	if [ -n "${EMBEDDEDBUILD}" ]; then
+	if [ ! -z "${EMBEDDEDBUILD}" ]; then
 		RELEASE_WMAKEFLAGS="${RELEASE_WMAKEFLAGS} \
 			TARGET=${EMBEDDED_TARGET} \
 			TARGET_ARCH=${EMBEDDED_TARGET_ARCH}"
@@ -345,10 +365,8 @@ chroot_build_target() {
 	fi
 	eval chroot ${CHROOTDIR} make -C /usr/src ${RELEASE_WMAKEFLAGS} buildworld
 	eval chroot ${CHROOTDIR} make -C /usr/src ${RELEASE_KMAKEFLAGS} buildkernel
-	if [ -n "${WITH_OCIIMAGES}" ]; then
-		mkdir -p ${CHROOT}/tmp/ports ${CHROOT}/tmp/distfiles
-		eval chroot ${CHROOTDIR} make -C /usr/src ${RELEASE_WMAKEFLAGS} \
-		    BOOTSTRAP_PKG_FROM_PORTS=YES packages
+	if [ ! -z "${WITH_OCIIMAGES}" ]; then
+		eval chroot ${CHROOTDIR} make -C /usr/src ${RELEASE_WMAKEFLAGS} packages
 	fi
 
 	return 0
@@ -357,7 +375,7 @@ chroot_build_target() {
 # chroot_build_release(): Invoke the 'make release' target.
 chroot_build_release() {
 	load_target_env
-	if [ -n "${WITH_VMIMAGES}" ]; then
+	if [ ! -z "${WITH_VMIMAGES}" ]; then
 		if [ -z "${VMFORMATS}" ]; then
 			VMFORMATS="$(eval chroot ${CHROOTDIR} \
 				make -C /usr/src/release -V VMFORMATS)"
@@ -409,7 +427,7 @@ chroot_arm_build_release() {
 		*)
 			;;
 	esac
-	[ -n "${RELEASECONF}" ] && . "${RELEASECONF}"
+	[ ! -z "${RELEASECONF}" ] && . "${RELEASECONF}"
 	export MAKE_FLAGS="${MAKE_FLAGS} TARGET=${EMBEDDED_TARGET}"
 	export MAKE_FLAGS="${MAKE_FLAGS} TARGET_ARCH=${EMBEDDED_TARGET_ARCH}"
 	export MAKE_FLAGS="${MAKE_FLAGS} ${CONF_FILES}"
@@ -444,18 +462,6 @@ chroot_arm_build_release() {
 	return 0
 } # chroot_arm_build_release()
 
-# chroot_cleanup(): Clean up resources setup in chroot_setup() at exit.
-#
-# This contains steps which must be executed at exit.
-#
-# Do not override this function: override `chroot_cleanup instead.
-_chroot_cleanup() {
-	if [ -c "${CHROOTDIR}/dev/null" ]; then
-		echo "Unmounting /dev in ${CHROOTDIR}"
-		umount -f "${CHROOTDIR}/dev"
-	fi
-}
-
 # main(): Start here.
 main() {
 	set -e # Everything must succeed
@@ -471,7 +477,7 @@ main() {
 		esac
 	done
 	shift $(($OPTIND - 1))
-	if [ -n "${RELEASECONF}" ]; then
+	if [ ! -z "${RELEASECONF}" ]; then
 		if [ -e "${RELEASECONF}" ]; then
 			. ${RELEASECONF}
 		else
@@ -480,7 +486,7 @@ main() {
 		fi
 	fi
 	env_check
-	trap chroot_cleanup INT EXIT TERM
+	trap "umount ${CHROOTDIR}/dev" EXIT # Clean up devfs mount on exit
 	chroot_setup
 	extra_chroot_setup
 	chroot_build_target

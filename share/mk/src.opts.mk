@@ -137,6 +137,7 @@ __DEFAULT_YES_OPTIONS = \
     LOADER_OFW \
     LOADER_PXEBOOT \
     LOADER_UBOOT \
+    LOADER_ZFS \
     LOCALES \
     LOCATE \
     LPR \
@@ -160,6 +161,7 @@ __DEFAULT_YES_OPTIONS = \
     PF \
     PIE \
     PKGBOOTSTRAP \
+    PKGCONF \
     PKGSERVE \
     PMC \
     PPP \
@@ -198,7 +200,6 @@ __DEFAULT_YES_OPTIONS = \
     WPA_SUPPLICANT_EAPOL \
     ZFS \
     ZFS_TESTS \
-    LOADER_ZFS \
     ZERO_REGS \
     ZONEINFO
 
@@ -208,18 +209,19 @@ __DEFAULT_NO_OPTIONS = \
     BHYVE_SNAPSHOT \
     CLANG_FORMAT \
     CLEAN \
-    DIALOG \
     DETECT_TZ_CHANGES \
+    DIALOG \
     DISK_IMAGE_TOOLS_BOOTSTRAP \
     DTRACE_ASAN \
     DTRACE_TESTS \
     FREEBSD_UPDATE \
     HESIOD \
     IPFILTER_IPFS \
+    LLVM_FULL_DEBUGINFO \
+    LLVM_LINK_STATIC_LIBRARIES \
     LOADER_USB \
     LOADER_VERBOSE \
     LOADER_VERIEXEC_PASS_MANIFEST \
-    LLVM_FULL_DEBUGINFO \
     MALLOC_PRODUCTION \
     OFED \
     OFED_EXTRA \
@@ -469,6 +471,8 @@ MK_KERBEROS_SUPPORT:=	no
 MK_MITKRB5:=	no
 .endif
 
+# MK_DTRACE also gates ctf tools, so we cannot build userland with CTF
+# if it is off.
 .if ${MK_DTRACE} == "no"
 MK_CTF:=	no
 .endif

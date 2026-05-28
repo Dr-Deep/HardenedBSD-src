@@ -102,7 +102,7 @@ VNET_DEFINE(ip_fw_ctl_ptr_t, ip_fw_ctl_ptr) = NULL;
 
 int	(*ip_dn_ctl_ptr)(struct sockopt *);
 int	(*ip_dn_io_ptr)(struct mbuf **, struct ip_fw_args *);
-void	(*ip_divert_ptr)(struct mbuf *, bool);
+void	(*ip_divert_ptr)(struct mbuf *, uint64_t, bool);
 int	(*ng_ipfw_input_p)(struct mbuf **, struct ip_fw_args *, bool);
 
 #ifdef INET
@@ -153,7 +153,7 @@ static void
 rip_init(void *arg __unused)
 {
 #define	INP_PCBHASH_RAW_SIZE	256
-	in_pcbinfo_init(&V_ripcbinfo, &ripcbstor, INP_PCBHASH_RAW_SIZE, 1);
+	in_pcbinfo_init(&V_ripcbinfo, &ripcbstor, INP_PCBHASH_RAW_SIZE, 0, 0);
 }
 VNET_SYSINIT(rip_init, SI_SUB_PROTO_DOMAIN, SI_ORDER_THIRD, rip_init, NULL);
 

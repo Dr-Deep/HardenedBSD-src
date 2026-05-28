@@ -128,8 +128,7 @@ virtdone:
 
 	/* Set up the stack */
 	adrp	x25, initstack_end
-	add	x25, x25, :lo12:initstack_end
-	sub	sp, x25, #PCB_SIZE
+	add	sp, x25, :lo12:initstack_end
 
 	/* Zero the BSS */
 	ldr	x15, .Lbss
@@ -799,7 +798,7 @@ common:
 	adrp	x9, socdev_va
 	str	x17, [x9, :lo12:socdev_va]
 
-	mov	x9, #(SOCDEV_PA & ~L2_OFFSET)	/* PA start */
+	ldr	x9, =(SOCDEV_PA)	/* PA start */
 	mov	x10, #1
 	bl	build_l2_block_pagetable
 #endif
@@ -1065,10 +1064,10 @@ LENTRY(start_mmu)
 	ldr	x2, mair
 
 	/*
-	 * If MTE is supported, configure GCR_EL1 and clear the TFSR registers of
-	 * any pending tag check faults
+	 * If FEAT_MTE2 is supported, configure GCR_EL1 and clear the TFSR
+	 * registers of any pending tag check faults
 	 */
-	CHECK_CPU_FEAT(x3, ID_AA64PFR1, MTE, MTE, 1f)
+	CHECK_CPU_FEAT(x3, ID_AA64PFR1, MTE, MTE2, 1f)
 
 	/* Set GCR_EL1, non-zero tags excluded by default */
 	mov	x3, #(GCR_Exclude_MASK | GCR_RRND)

@@ -1,4 +1,6 @@
 #
+#
+#
 # Makefile for uploading Google Compute Engine disk images.
 #
 
@@ -15,16 +17,8 @@ CLEANFILES+=		${GCE_UPLOAD_TGTS}
 GCE_BUCKET?=
 GCE_LICENSE?=
 
-.if ${TARGET_ARCH} == "amd64"
-GCE_ARCH=		X86_64
-.elif ${TARGET_ARCH} == "aarch64"
-GCE_ARCH=		ARM64
-.else
-GCE_ARCH=		UNSUPPORTED_IN_GCE
-.endif
-
 .if !defined(GCE_FAMILY) || empty(GCE_FAMILY)
-GCE_FAMILY=		${TYPE:tl}-${REVISION:S,.,-,}-${TARGET}
+GCE_FAMILY=		${TYPE:tl}-${REVISION:S,.,-,}
 .endif
 
 .if ${BRANCH} == "STABLE" || ${BRANCH} == "CURRENT" || ${BRANCH} == "PRERELEASE"
@@ -82,8 +76,7 @@ gce-do-upload-${_FS}:
 	/usr/local/bin/gsutil cp ${.OBJDIR}/${GCE_TARGET_${_FS}}.tar.gz \
 		gs://${GCE_BUCKET}/
 	/usr/local/bin/gcloud compute images create ${GCE_TARGET_${_FS}} \
-		--architecture=${GCE_ARCH} \
-		--family=${GCE_FAMILY}-${_FS}${GCE_FAMILY_SUFX} ${GCE_LICENSE} \
+		--family=${GCE_FAMILY}${GCE_FAMILY_SUFX} ${GCE_LICENSE} \
 		--guest-os-features=GVNIC,UEFI_COMPATIBLE \
 		--source-uri gs://${GCE_BUCKET}/${GCE_TARGET_${_FS}}.tar.gz
 	touch ${.OBJDIR}/${.TARGET}

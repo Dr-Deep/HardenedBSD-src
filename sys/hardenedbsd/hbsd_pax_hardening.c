@@ -439,11 +439,19 @@ sysctl_pax_kmod_load_disable(SYSCTL_HANDLER_ARGS)
 		return (err);
 	}
 
-	if (pax_kmod_load_disable && val == 0) {
-		return (EPERM);
+	if (val < 0) {
+		return (EINVAL);
 	}
 
-	pax_kmod_load_disable = val;
+	switch (pax_kmod_load_disable) {
+	case 0:
+		/* FALLTHROUGH */
+	case 1:
+		pax_kmod_load_disable = val;
+		break;
+	default:
+		return (EPERM);
+	}
 
 	return (0);
 

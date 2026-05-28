@@ -145,7 +145,7 @@ struct sysentvec {
 	void		(*sv_schedtail)(struct thread *);
 	void		(*sv_thread_detach)(struct thread *);
 	int		(*sv_trap)(struct thread *);
-	void		(* const sv_pax_aslr_init)(struct proc *p);
+	void		(*sv_pax_aslr_init)(struct proc *p);
 	u_long		*sv_hwcap;	/* Value passed in AT_HWCAP. */
 	u_long		*sv_hwcap2;	/* Value passed in AT_HWCAP2. */
 	u_long		*sv_hwcap3;	/* Value passed in AT_HWCAP3. */

@@ -12,6 +12,4 @@ CONFTTYS+=	ttys
 
 NOCFI=	yes
 
-NO_SHARED?=	YES
-
 .include <bsd.prog.mk>
