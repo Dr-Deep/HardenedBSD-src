@@ -87,6 +87,8 @@
 #define ELF_NOTE_ROUNDSIZE	4
 #define OLD_EI_BRAND	8
 
+#define	ELF_OFFPAGE_PHNUM	128
+
 /*
  * ELF_ABI_NAME is a string name of the ELF ABI.  ELF_ABI_ID is used
  * to build variable names.
@@ -96,8 +98,8 @@
 
 static int __elfN(check_header)(const Elf_Ehdr *hdr);
 static const Elf_Brandinfo *__elfN(get_brandinfo)(struct image_params *imgp,
-    const char *interp, int32_t *osrel, uint32_t *fctl0);
-static int __elfN(load_file)(struct proc *p, const char *file, u_long *addr,
+    const Elf_Phdr *phdr, const char *interp, int32_t *osrel, uint32_t *fctl0);
+static int __elfN(load_file)(struct thread *td, const char *file, u_long *addr,
     u_long *entry);
 static int __elfN(load_section)(const struct image_params *imgp,
     vm_ooffset_t offset, caddr_t vmaddr, size_t memsz, size_t filsz,
@@ -106,8 +108,7 @@ static int __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp);
 static bool __elfN(freebsd_trans_osrel)(const Elf_Note *note,
     int32_t *osrel);
 static bool kfreebsd_trans_osrel(const Elf_Note *note, int32_t *osrel);
-static bool can_exec_nonpie(struct proc *p);
-static bool __elfN(check_note)(struct image_params *imgp,
+static bool __elfN(check_note)(struct image_params *imgp, const Elf_Phdr *phdr,
     const Elf_Brandnote *checknote, int32_t *osrel, bool *has_fctl0,
     uint32_t *fctl0);
 static vm_prot_t __elfN(trans_prot)(Elf_Word);
@@ -283,8 +284,8 @@ __elfN(brand_inuse)(const Elf_Brandinfo *entry)
 }
 
 static const Elf_Brandinfo *
-__elfN(get_brandinfo)(struct image_params *imgp, const char *interp,
-    int32_t *osrel, uint32_t *fctl0)
+__elfN(get_brandinfo)(struct image_params *imgp, const Elf_Phdr *phdr,
+    const char *interp, int32_t *osrel, uint32_t *fctl0)
 {
 	const Elf_Ehdr *hdr = (const Elf_Ehdr *)imgp->image_header;
 	const Elf_Brandinfo *bi, *bi_m;
@@ -313,8 +314,8 @@ __elfN(get_brandinfo)(struct image_params *imgp, const char *interp,
 			has_fctl0 = false;
 			*fctl0 = 0;
 			*osrel = 0;
-			ret = __elfN(check_note)(imgp, bi->brand_note, osrel,
-			    &has_fctl0, fctl0);
+			ret = __elfN(check_note)(imgp, phdr, bi->brand_note,
+			    osrel, &has_fctl0, fctl0);
 			/* Give brand a chance to veto check_note's guess */
 			if (ret && bi->header_supported) {
 				ret = bi->header_supported(imgp, osrel,
@@ -727,19 +728,20 @@ __elfN(load_sections)(const struct image_params *imgp, const Elf_Ehdr *hdr,
  * the entry point for the loaded file.
  */
 static int
-__elfN(load_file)(struct proc *p, const char *file, u_long *addr,
-	u_long *entry)
+__elfN(load_file)(struct thread *td, const char *file, u_long *addr,
+    u_long *entry)
 {
 	struct {
 		struct nameidata nd;
 		struct vattr attr;
 		struct image_params image_params;
-	} *tempdata;
+	} *tempdata = NULL;
 	const Elf_Ehdr *hdr = NULL;
 	const Elf_Phdr *phdr = NULL;
 	struct nameidata *nd;
 	struct vattr *attr;
 	struct image_params *imgp;
+	void *m_phdrs = NULL;
 	u_long rbase;
 	u_long base_addr = 0;
 	int error;
@@ -749,7 +751,7 @@ __elfN(load_file)(struct proc *p, const char *file, u_long *addr,
 	 * XXXJA: This check can go away once we are sufficiently confident
 	 * that the checks in namei() are correct.
 	 */
-	if (IN_CAPABILITY_MODE(curthread))
+	if (IN_CAPABILITY_MODE(td))
 		return (ECAPMODE);
 #endif
 
@@ -761,7 +763,8 @@ __elfN(load_file)(struct proc *p, const char *file, u_long *addr,
 	/*
 	 * Initialize part of the common data
 	 */
-	imgp->proc = p;
+	imgp->td = td;
+	imgp->proc = td->td_proc;
 	imgp->attr = attr;
 
 	NDINIT(nd, LOOKUP, ISOPEN | FOLLOW | LOCKSHARED | LOCKLEAF,
@@ -798,24 +801,35 @@ __elfN(load_file)(struct proc *p, const char *file, u_long *addr,
 		goto fail;
 	}
 
-	/* Only support headers that fit within first page for now      */
-	if (!__elfN(phdr_in_zero_page)(hdr)) {
+	if (!aligned(imgp->image_header + hdr->e_phoff, Elf_Addr)) {
 		error = ENOEXEC;
 		goto fail;
 	}
-
-	phdr = (const Elf_Phdr *)(imgp->image_header + hdr->e_phoff);
-	if (!aligned(phdr, Elf_Addr)) {
-		error = ENOEXEC;
-		goto fail;
+	if (__elfN(phdr_in_zero_page)(hdr)) {
+		phdr = (const Elf_Phdr *)(imgp->image_header + hdr->e_phoff);
+	} else {
+		if (hdr->e_phnum > ELF_OFFPAGE_PHNUM) {
+			error = ENOEXEC;
+			goto fail;
+		}
+		VOP_UNLOCK(imgp->vp);
+		phdr = m_phdrs = malloc(hdr->e_phnum * sizeof(Elf_Phdr),
+		    M_TEMP, M_WAITOK | M_ZERO);
+		vn_lock(imgp->vp, LK_SHARED | LK_RETRY);
+		error = vn_rdwr(UIO_READ, imgp->vp, m_phdrs,
+		    hdr->e_phnum * sizeof(Elf_Phdr), hdr->e_phoff,
+		    UIO_SYSSPACE, IO_NODELOCKED, imgp->td->td_ucred,
+		    NOCRED, NULL, imgp->td);
+		if (error != 0)
+			goto fail;
 	}
 
 	error = __elfN(load_sections)(imgp, hdr, phdr, rbase, &base_addr);
 	if (error != 0)
 		goto fail;
 
-	if (p->p_sysent->sv_protect != NULL)
-		p->p_sysent->sv_protect(imgp, SVP_INTERP);
+	if (imgp->proc->p_sysent->sv_protect != NULL)
+		imgp->proc->p_sysent->sv_protect(imgp, SVP_INTERP);
 
 	*addr = base_addr;
 	*entry = (unsigned long)hdr->e_entry + rbase;
@@ -829,6 +843,7 @@ fail:
 			VOP_UNSET_TEXT_CHECKED(nd->ni_vp);
 		vput(nd->ni_vp);
 	}
+	free(m_phdrs, M_TEMP);
 	free(tempdata, M_TEMP);
 
 	return (error);
@@ -915,15 +930,12 @@ static int
 __elfN(get_interp)(struct image_params *imgp, const Elf_Phdr *phdr,
     char **interpp, bool *free_interpp)
 {
-	struct thread *td;
 	char *interp;
 	int error, interp_name_len;
 
 	KASSERT(phdr->p_type == PT_INTERP,
 	    ("%s: p_type %u != PT_INTERP", __func__, phdr->p_type));
 	ASSERT_VOP_LOCKED(imgp->vp, __func__);
-
-	td = curthread;
 
 	/* Path to interpreter */
 	if (phdr->p_filesz < 2 || phdr->p_filesz > MAXPATHLEN) {
@@ -952,8 +964,8 @@ __elfN(get_interp)(struct image_params *imgp, const Elf_Phdr *phdr,
 
 		error = vn_rdwr(UIO_READ, imgp->vp, interp,
 		    interp_name_len, phdr->p_offset,
-		    UIO_SYSSPACE, IO_NODELOCKED, td->td_ucred,
-		    NOCRED, NULL, td);
+		    UIO_SYSSPACE, IO_NODELOCKED, imgp->td->td_ucred,
+		    NOCRED, NULL, imgp->td);
 		if (error != 0) {
 			free(interp, M_TEMP);
 			uprintf("i/o error PT_INTERP %d\n", error);
@@ -986,13 +998,13 @@ __elfN(load_interp)(struct image_params *imgp, const Elf_Brandinfo *brand_info,
 	if (brand_info->interp_newpath != NULL &&
 	    (brand_info->interp_path == NULL ||
 	    strcmp(interp, brand_info->interp_path) == 0)) {
-		error = __elfN(load_file)(imgp->proc,
+		error = __elfN(load_file)(imgp->td,
 		    brand_info->interp_newpath, addr, entry);
 		if (error == 0)
 			return (0);
 	}
 
-	error = __elfN(load_file)(imgp->proc, interp, addr, entry);
+	error = __elfN(load_file)(imgp->td, interp, addr, entry);
 	if (error == 0)
 		return (0);
 
@@ -1003,7 +1015,6 @@ __elfN(load_interp)(struct image_params *imgp, const Elf_Brandinfo *brand_info,
 static int
 __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 {
-	struct thread *td;
 	const Elf_Ehdr *hdr;
 	const Elf_Phdr *phdr;
 	Elf_Auxargs *elf_auxargs;
@@ -1012,6 +1023,7 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	char *interp;
 	const Elf_Brandinfo *brand_info;
 	struct sysentvec *sv;
+	void *m_phdrs;
 	u_long addr, baddr, entry, proghdr;
 	u_long maxalign, maxsalign, mapsz, maxv;
 	uint32_t fctl0;
@@ -1036,16 +1048,6 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	 * detected an ELF file.
 	 */
 
-	if (!__elfN(phdr_in_zero_page)(hdr)) {
-		uprintf("Program headers not in the first page\n");
-		return (ENOEXEC);
-	}
-	phdr = (const Elf_Phdr *)(imgp->image_header + hdr->e_phoff); 
-	if (!aligned(phdr, Elf_Addr)) {
-		uprintf("Unaligned program headers\n");
-		return (ENOEXEC);
-	}
-
 	n = error = 0;
 	addr = 0;
 	baddr = 0;
@@ -1054,7 +1056,33 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	entry = proghdr = 0;
 	interp = NULL;
 	free_interp = false;
-	td = curthread;
+	m_phdrs = NULL;
+
+	if (!aligned(imgp->image_header + hdr->e_phoff, Elf_Addr)) {
+		uprintf("Unaligned program headers\n");
+		return (ENOEXEC);
+	}
+	if (hdr->e_phoff + hdr->e_phnum * hdr->e_phentsize < hdr->e_phoff) {
+		uprintf("PHDRS wrap\n");
+		return (ENOEXEC);
+	}
+	if (__elfN(phdr_in_zero_page)(hdr)) {
+		phdr = (const Elf_Phdr *)(imgp->image_header + hdr->e_phoff);
+	} else if (hdr->e_phnum > ELF_OFFPAGE_PHNUM) {
+		uprintf("Too many program headers\n");
+		return (ENOEXEC);
+	} else {
+		VOP_UNLOCK(imgp->vp);
+		phdr = m_phdrs = malloc(hdr->e_phnum * sizeof(Elf_Phdr),
+		    M_TEMP, M_WAITOK | M_ZERO);
+		vn_lock(imgp->vp, LK_SHARED | LK_RETRY);
+		error = vn_rdwr(UIO_READ, imgp->vp, m_phdrs,
+		    hdr->e_phnum * sizeof(Elf_Phdr), hdr->e_phoff,
+		    UIO_SYSSPACE, IO_NODELOCKED, imgp->td->td_ucred,
+		    NOCRED, NULL, imgp->td);
+		if (error != 0)
+			goto ret;
+	}
 
 	/*
 	 * Somewhat arbitrary, limit accepted max alignment for the
@@ -1136,7 +1164,7 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 		}
 	}
 
-	brand_info = __elfN(get_brandinfo)(imgp, interp, &osrel, &fctl0);
+	brand_info = __elfN(get_brandinfo)(imgp, phdr, interp, &osrel, &fctl0);
 	if (brand_info == NULL) {
 		uprintf("ELF binary type \"%u\" not known.\n",
 		    hdr->e_ident[EI_OSABI]);
@@ -1179,7 +1207,7 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	imgp->proc->p_sysent = sv;
 	imgp->proc->p_elf_brandinfo = brand_info;
 
-	maxv = vm_map_max(map) - lim_max(td, RLIMIT_STACK);
+	maxv = vm_map_max(map) - lim_max(imgp->td, RLIMIT_STACK);
 
 #ifdef PAX_ASLR
 	if (hdr->e_type == ET_DYN && baddr == 0) {
@@ -1221,7 +1249,7 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	 */
 	PROC_LOCK(imgp->proc);
 	vmspace = imgp->proc->p_vmspace;
-	addr = round_page((vm_offset_t)vmspace->vm_daddr + lim_max(td,
+	addr = round_page((vm_offset_t)vmspace->vm_daddr + lim_max(imgp->td,
 	    RLIMIT_DATA));
 	map->anon_loc = addr;
 	PROC_UNLOCK(imgp->proc);
@@ -1282,6 +1310,7 @@ ret:
 	ASSERT_VOP_LOCKED(imgp->vp, "skipped relock");
 	if (free_interp)
 		free(interp, M_TEMP);
+	free(m_phdrs, M_TEMP);
 	return (error);
 }
 
@@ -2638,7 +2667,7 @@ __elfN(parse_notes)(const struct image_params *imgp, const Elf_Note *checknote,
 		}
 		error = vn_rdwr(UIO_READ, imgp->vp, buf, pnote->p_filesz,
 		    pnote->p_offset, UIO_SYSSPACE, IO_NODELOCKED,
-		    curthread->td_ucred, NOCRED, NULL, curthread);
+		    imgp->td->td_ucred, NOCRED, NULL, imgp->td);
 		if (error != 0) {
 			uprintf("i/o error PT_NOTE\n");
 			goto retf;
@@ -2747,17 +2776,16 @@ note_fctl_cb(const Elf_Note *note, void *arg0, bool *res)
  * as for headers.
  */
 static bool
-__elfN(check_note)(struct image_params *imgp, const Elf_Brandnote *brandnote,
-    int32_t *osrel, bool *has_fctl0, uint32_t *fctl0)
+__elfN(check_note)(struct image_params *imgp, const Elf_Phdr *phdr,
+    const Elf_Brandnote *brandnote, int32_t *osrel, bool *has_fctl0,
+    uint32_t *fctl0)
 {
-	const Elf_Phdr *phdr;
 	const Elf_Ehdr *hdr;
 	struct brandnote_cb_arg b_arg;
 	struct fctl_cb_arg f_arg;
 	int i, j;
 
 	hdr = (const Elf_Ehdr *)imgp->image_header;
-	phdr = (const Elf_Phdr *)(imgp->image_header + hdr->e_phoff);
 	b_arg.brandnote = brandnote;
 	b_arg.osrel = osrel;
 	f_arg.has_fctl0 = has_fctl0;
