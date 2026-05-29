@@ -108,12 +108,7 @@ static int __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp);
 static bool __elfN(freebsd_trans_osrel)(const Elf_Note *note,
     int32_t *osrel);
 static bool kfreebsd_trans_osrel(const Elf_Note *note, int32_t *osrel);
-<<<<<<< HEAD
-static bool can_exec_nonpie(struct proc *p);
-static bool __elfN(check_note)(struct image_params *imgp,
-=======
 static bool __elfN(check_note)(struct image_params *imgp, const Elf_Phdr *phdr,
->>>>>>> upstream/main
     const Elf_Brandnote *checknote, int32_t *osrel, bool *has_fctl0,
     uint32_t *fctl0);
 static vm_prot_t __elfN(trans_prot)(Elf_Word);
@@ -1212,8 +1207,7 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	imgp->proc->p_sysent = sv;
 	imgp->proc->p_elf_brandinfo = brand_info;
 
-<<<<<<< HEAD
-	maxv = vm_map_max(map) - lim_max(td, RLIMIT_STACK);
+	maxv = vm_map_max(map) - lim_max(imgp->td, RLIMIT_STACK);
 
 #ifdef PAX_ASLR
 	if (hdr->e_type == ET_DYN && baddr == 0) {
@@ -1222,30 +1216,10 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 #endif
 
 	if (mapsz >= maxv - vm_map_min(map)) {
-=======
-	vmspace = imgp->proc->p_vmspace;
-	map = &vmspace->vm_map;
-	maxv = sv->sv_usrstack;
-	if ((imgp->map_flags & MAP_ASLR_STACK) == 0)
-		maxv -= lim_max(imgp->td, RLIMIT_STACK);
-	if (error == 0 && mapsz >= maxv - vm_map_min(map)) {
->>>>>>> upstream/main
 		uprintf("Excessive mapping size\n");
 		error = ENOEXEC;
 	}
 
-<<<<<<< HEAD
-=======
-	if (error == 0 && imgp->et_dyn_addr == ET_DYN_ADDR_RAND) {
-		KASSERT((map->flags & MAP_ASLR) != 0,
-		    ("ET_DYN_ADDR_RAND but !MAP_ASLR"));
-		error = __CONCAT(rnd_, __elfN(base))(map,
-		    vm_map_min(map) + mapsz + lim_max(imgp->td, RLIMIT_DATA),
-		    /* reserve half of the address space to interpreter */
-		    maxv / 2, maxalign, &imgp->et_dyn_addr);
-	}
-
->>>>>>> upstream/main
 	vn_lock(imgp->vp, LK_SHARED | LK_RETRY);
 	if (error != 0)
 		goto ret;
@@ -1273,13 +1247,9 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	 * calculation is that it leaves room for the heap to grow to
 	 * its maximum allowed size.
 	 */
-<<<<<<< HEAD
 	PROC_LOCK(imgp->proc);
 	vmspace = imgp->proc->p_vmspace;
-	addr = round_page((vm_offset_t)vmspace->vm_daddr + lim_max(td,
-=======
 	addr = round_page((vm_offset_t)vmspace->vm_daddr + lim_max(imgp->td,
->>>>>>> upstream/main
 	    RLIMIT_DATA));
 	map->anon_loc = addr;
 	PROC_UNLOCK(imgp->proc);
