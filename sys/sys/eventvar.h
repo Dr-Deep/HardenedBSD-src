@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1999,2000 Jonathan Lemon <jlemon@FreeBSD.org>
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	$FreeBSD$
  */
 
 #ifndef _SYS_EVENTVAR_H_
@@ -57,12 +55,14 @@ struct kqueue {
 #define KQ_CLOSING	0x10
 #define	KQ_TASKSCHED	0x20			/* task scheduled */
 #define	KQ_TASKDRAIN	0x40			/* waiting for task to drain */
+#define	KQ_CPONFORK	0x80
 	int		kq_knlistsize;		/* size of knlist */
 	struct		klist *kq_knlist;	/* list of knotes */
 	u_long		kq_knhashmask;		/* size of knhash */
 	struct		klist *kq_knhash;	/* hash table for knotes */
 	struct		task kq_task;
 	struct		ucred *kq_cred;
+	struct		kqueue *kq_forksrc;
 };
 
 #endif /* !_SYS_EVENTVAR_H_ */

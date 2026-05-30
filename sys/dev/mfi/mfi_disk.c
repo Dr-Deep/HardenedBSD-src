@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2006 IronPort Systems
  * All rights reserved.
@@ -27,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_mfi.h"
 
 #include <sys/param.h>
@@ -72,7 +70,7 @@ static device_method_t mfi_disk_methods[] = {
 	DEVMETHOD(device_probe,		mfi_disk_probe),
 	DEVMETHOD(device_attach,	mfi_disk_attach),
 	DEVMETHOD(device_detach,	mfi_disk_detach),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t mfi_disk_driver = {

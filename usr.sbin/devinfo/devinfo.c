@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2000, 2001 Michael Smith
  * Copyright (c) 2000 BSDi
@@ -31,33 +31,51 @@
  * Print information about system device configuration.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
+#include <sys/param.h>
 
-#include <sys/types.h>
 #include <err.h>
 #include <errno.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include "devinfo.h"
 
-static int	rflag;
-static int	vflag;
+static bool	rflag;
+static bool	vflag;
 
+static void	print_indent(int);
 static void	print_resource(struct devinfo_res *);
 static int	print_device_matching_resource(struct devinfo_res *, void *);
 static int	print_device_rman_resources(struct devinfo_rman *, void *);
+static void	print_device_props(struct devinfo_dev *);
 static int	print_device(struct devinfo_dev *, void *);
 static int	print_rman_resource(struct devinfo_res *, void *);
 static int	print_rman(struct devinfo_rman *, void *);
+static int	print_device_path(struct devinfo_dev *, void *);
+static void	print_path(struct devinfo_dev *, char *);
+static void	usage(void);
 
 struct indent_arg
 {
 	int	indent;
 	void	*arg;
 };
+
+
+static void
+print_indent(int n)
+{
+	static char	buffer[1024];
+
+	if (n < 1)
+		return;
+	n = MIN((size_t)n, sizeof(buffer) - 1);
+	memset(buffer, ' ', n);
+	buffer[n] = '\0';
+	printf("%s", buffer);
+}
 
 /*
  * Print a resource.
@@ -66,14 +84,22 @@ void
 print_resource(struct devinfo_res *res)
 {
 	struct devinfo_rman	*rman;
-	int			hexmode;
+	bool			hexmode;
+	rman_res_t		end;
 
 	rman = devinfo_handle_to_rman(res->dr_rman);
 	hexmode =  (rman->dm_size > 1000) || (rman->dm_size == 0);
-	printf(hexmode ? "0x%jx" : "%ju", res->dr_start);
-	if (res->dr_size > 1)
-		printf(hexmode ? "-0x%jx" : "-%ju",
-		    res->dr_start + res->dr_size - 1);
+	end = res->dr_start + res->dr_size - 1;
+
+	if (hexmode) {
+		printf("0x%jx", res->dr_start);
+		if (res->dr_size > 1)
+			printf("-0x%jx", end);
+	} else {
+		printf("%ju", res->dr_start);
+		if (res->dr_size > 1)
+			printf("-%ju", end);
+	}
 }
 
 /*
@@ -88,14 +114,12 @@ print_device_matching_resource(struct devinfo_res *res, void *arg)
 {
 	struct indent_arg	*ia = (struct indent_arg *)arg;
 	struct devinfo_dev	*dev = (struct devinfo_dev *)ia->arg;
-	int			i;
 
 	if (devinfo_handle_to_device(res->dr_device) == dev) {
 		/* in 'detect' mode, found a match */
 		if (ia->indent == 0)
 			return(1);
-		for (i = 0; i < ia->indent; i++)
-			printf(" ");
+		print_indent(ia->indent);
 		print_resource(res);
 		printf("\n");
 	}
@@ -109,7 +133,7 @@ int
 print_device_rman_resources(struct devinfo_rman *rman, void *arg)
 {
 	struct indent_arg	*ia = (struct indent_arg *)arg;
-	int			indent, i;
+	int			indent;
 
 	indent = ia->indent;
 
@@ -119,8 +143,7 @@ print_device_rman_resources(struct devinfo_rman *rman, void *arg)
 	    print_device_matching_resource, ia) != 0) {
 
 		/* there are, print header */
-		for (i = 0; i < indent; i++)
-			printf(" ");
+		print_indent(indent);
 		printf("%s:\n", rman->dm_desc);
 
 		/* print resources */
@@ -133,35 +156,42 @@ print_device_rman_resources(struct devinfo_rman *rman, void *arg)
 }
 
 static void
-print_dev(struct devinfo_dev *dev)
+print_device_props(struct devinfo_dev *dev)
 {
+	if (vflag) {
+		if (*dev->dd_desc) {
+			printf(" <%s>", dev->dd_desc);
+		}
+		if (*dev->dd_pnpinfo) {
+			printf(" pnpinfo %s", dev->dd_pnpinfo);
+		}
+		if (*dev->dd_location) {
+			printf(" at %s", dev->dd_location);
+		}
+	}
 
-	printf("%s", dev->dd_name[0] ? dev->dd_name : "unknown");
-	if (vflag && *dev->dd_pnpinfo)
-		printf(" pnpinfo %s", dev->dd_pnpinfo);
-	if (vflag && *dev->dd_location)
-		printf(" at %s", dev->dd_location);
 	if (!(dev->dd_flags & DF_ENABLED))
 		printf(" (disabled)");
 	else if (dev->dd_flags & DF_SUSPENDED)
 		printf(" (suspended)");
 }
 
-
 /*
  * Print information about a device.
  */
-int
+static int
 print_device(struct devinfo_dev *dev, void *arg)
 {
 	struct indent_arg	ia;
-	int			i, indent;
+	int			indent;
+	bool			printit = vflag || (dev->dd_name[0] != 0 &&
+				    dev->dd_state >= DS_ATTACHED);
 
-	if (vflag || (dev->dd_name[0] != 0 && dev->dd_state >= DS_ATTACHED)) {
+	if (printit) {
 		indent = (int)(intptr_t)arg;
-		for (i = 0; i < indent; i++)
-			printf(" ");
-		print_dev(dev);
+		print_indent(indent);
+		printf("%s", dev->dd_name[0] ? dev->dd_name : "unknown");
+		print_device_props(dev);
 		printf("\n");
 		if (rflag) {
 			ia.indent = indent + 4;
@@ -182,12 +212,40 @@ int
 print_rman_resource(struct devinfo_res *res, void *arg __unused)
 {
 	struct devinfo_dev	*dev;
-	
-	printf("    ");
-	print_resource(res);
+	struct devinfo_rman	*rman;
+	rman_res_t		end;
+	bool			hexmode;
+
 	dev = devinfo_handle_to_device(res->dr_device);
-	if ((dev != NULL) && (dev->dd_name[0] != 0)) {
-		printf(" (%s)", dev->dd_name);
+	rman = devinfo_handle_to_rman(res->dr_rman);
+	hexmode =  (rman->dm_size > 1000) || (rman->dm_size == 0);
+	end = res->dr_start + res->dr_size - 1;
+
+	printf("    ");
+
+	if (hexmode) {
+		if (res->dr_size > 1)
+			printf("0x%jx-0x%jx", res->dr_start, end);
+		else
+			printf("0x%jx", res->dr_start);
+	} else {
+		if (res->dr_size > 1)
+			printf("%ju-%ju", res->dr_start, end);
+		else
+			printf("%ju", res->dr_start);
+	}
+
+	dev = devinfo_handle_to_device(res->dr_device);
+	if (dev != NULL) {
+		if (dev->dd_name[0] != 0) {
+			printf(" (%s)", dev->dd_name);
+		} else {
+			printf(" (unknown)");
+			if (vflag && *dev->dd_pnpinfo)
+				printf(" pnpinfo %s", dev->dd_pnpinfo);
+			if (vflag && *dev->dd_location)
+				printf(" at %s", dev->dd_location);
+		}
 	} else {
 		printf(" ----");
 	}
@@ -206,27 +264,99 @@ print_rman(struct devinfo_rman *rman, void *arg __unused)
 	return(0);
 }
 
+static void
+print_device_path_entry(struct devinfo_dev *dev)
+{
+	const char *devname = dev->dd_name[0] ? dev->dd_name : "unknown";
+
+	printf("%s", devname);
+	print_device_props(dev);
+	if (vflag)
+		printf("\n");
+}
+
+/*
+ * This assumes the string to be compared in *cp is either space or
+ * nul terminated.
+ */
+static bool
+match_value(const char *cp, const char *name)
+{
+	const char *end;
+	size_t len;
+
+	end = strchr(cp, ' ');
+	if (end == NULL)
+		return (strcmp(cp, name) == 0);
+
+	if (end == cp)
+		return (false);
+
+	/* NB: strncmp(3) would return zero if name matches a prefix. */
+	len = end - cp;
+	return (strlen(name) == len && memcmp(name, cp, len) == 0);
+}
+
+static bool
+device_matches_name(struct devinfo_dev *dev, const char *name)
+{
+	const char *cp, *val;
+
+	if (strcmp(dev->dd_name, name) == 0)
+		return (true);
+
+	if (*dev->dd_location) {
+		/* Permit matches on the ACPI handle stored in location. */
+		if (name[0] == '\\' && (cp = strstr(dev->dd_location,
+		    "handle=\\")) != NULL) {
+			if (match_value(cp + strlen("handle="), name))
+				return (true);
+		}
+
+		/* Permit matches on the PCI dbsf stored in location. */
+		if (strncmp(name, "pci", strlen("pci")) == 0 &&
+		    (cp = strstr(dev->dd_location, "dbsf=pci")) != NULL) {
+			cp += strlen("dbsf=pci");
+			val = name + strlen("pci");
+			if (match_value(cp, val))
+				return (true);
+
+			/* Also match on pci<b>:<s>:<f> for domain 0. */
+			if (strncmp(cp, "0:", strlen("0:")) == 0 &&
+			    match_value(cp + strlen("0:"), val))
+				return (true);
+		}
+	}
+
+	return (false);
+}
+
 static int
-print_path(struct devinfo_dev *dev, void *xname)
+print_device_path(struct devinfo_dev *dev, void *xname)
 {
 	const char *name = xname;
 	int rv;
 
-	if (strcmp(dev->dd_name, name) == 0) {
-		print_dev(dev);
-		if (vflag)
-			printf("\n");
+	if (device_matches_name(dev, name)) {
+		print_device_path_entry(dev);
 		return (1);
 	}
 
-	rv = devinfo_foreach_device_child(dev, print_path, xname);
+	rv = devinfo_foreach_device_child(dev, print_device_path, xname);
 	if (rv == 1) {
 		printf(" ");
-		print_dev(dev);
-		if (vflag)
-			printf("\n");
+		print_device_path_entry(dev);
 	}
 	return (rv);
+}
+
+static void
+print_path(struct devinfo_dev *root, char *path)
+{
+	if (devinfo_foreach_device_child(root, print_device_path, (void *)path) == 0)
+		errx(1, "%s: Not found", path);
+	if (!vflag)
+		printf("\n");
 }
 
 static void __dead2
@@ -234,7 +364,7 @@ usage(void)
 {
 	fprintf(stderr, "%s\n%s\n%s\n",
 	    "usage: devinfo [-rv]",
-	    "       devinfo -u",
+	    "       devinfo -u [-v]",
 	    "       devinfo -p dev [-v]");
 	exit(1);
 }
@@ -243,23 +373,24 @@ int
 main(int argc, char *argv[]) 
 {
 	struct devinfo_dev	*root;
-	int			c, uflag, rv;
+	int			c, rv;
+	bool			uflag;
 	char			*path = NULL;
 
-	uflag = 0;
+	uflag = false;
 	while ((c = getopt(argc, argv, "p:ruv")) != -1) {
 		switch(c) {
 		case 'p':
 			path = optarg;
 			break;
 		case 'r':
-			rflag++;
+			rflag = true;
 			break;
 		case 'u':
-			uflag++;
+			uflag = true;
 			break;
 		case 'v':
-			vflag++;
+			vflag = true;
 			break;
 		default:
 			usage();
@@ -278,10 +409,7 @@ main(int argc, char *argv[])
 		errx(1, "can't find root device");
 
 	if (path) {
-		if (devinfo_foreach_device_child(root, print_path, (void *)path) == 0)
-			errx(1, "%s: Not found", path);
-		if (!vflag)
-			printf("\n");
+		print_path(root, path);
 	} else if (uflag) {
 		/* print resource usage? */
 		devinfo_foreach_rman(print_rman, NULL);

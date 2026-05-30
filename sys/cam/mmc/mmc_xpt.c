@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2013,2014 Ilya Bakulin <ilya@bakulin.de>
  * All rights reserved.
@@ -26,9 +26,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/bus.h>
 #include <sys/endian.h>
@@ -41,6 +38,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/fcntl.h>
 #include <sys/interrupt.h>
 #include <sys/sbuf.h>
+#include <sys/stdarg.h>
 
 #include <sys/lock.h>
 #include <sys/mutex.h>
@@ -61,19 +59,18 @@ __FBSDID("$FreeBSD$");
 #include <cam/mmc/mmc.h>
 #include <cam/mmc/mmc_bus.h>
 
-#include <machine/stdarg.h>	/* for xpt_print below */
 #include <machine/_inttypes.h>  /* for PRIu64 */
-#include "opt_cam.h"
 
 FEATURE(mmccam, "CAM-based MMC/SD/SDIO stack");
 
 static struct cam_ed * mmc_alloc_device(struct cam_eb *bus,
     struct cam_et *target, lun_id_t lun_id);
-static void mmc_dev_async(u_int32_t async_code, struct cam_eb *bus,
+static void mmc_dev_async(uint32_t async_code, struct cam_eb *bus,
     struct cam_et *target, struct cam_ed *device, void *async_arg);
 static void	 mmc_action(union ccb *start_ccb);
 static void	 mmc_dev_advinfo(union ccb *start_ccb);
-static void	 mmc_announce_periph(struct cam_periph *periph);
+static void	 mmc_announce_periph_sbuf(struct cam_periph *periph,
+    struct sbuf *sb);
 static void	 mmc_scan_lun(struct cam_periph *periph,
     struct cam_path *path, cam_flags flags, union ccb *ccb);
 
@@ -83,8 +80,8 @@ static void	 mmcprobe_start(struct cam_periph *periph, union ccb *start_ccb);
 static void	 mmcprobe_cleanup(struct cam_periph *periph);
 static void	 mmcprobe_done(struct cam_periph *periph, union ccb *done_ccb);
 
-static void mmc_proto_announce(struct cam_ed *device);
-static void mmc_proto_denounce(struct cam_ed *device);
+static void mmc_proto_announce_sbuf(struct cam_ed *device, struct sbuf *sb);
+static void mmc_proto_denounce_sbuf(struct cam_ed *device, struct sbuf *sb);
 static void mmc_proto_debug_out(union ccb *ccb);
 
 typedef enum {
@@ -147,7 +144,7 @@ static struct xpt_xport_ops mmc_xport_ops = {
 	.alloc_device = mmc_alloc_device,
 	.action = mmc_action,
 	.async = mmc_dev_async,
-	.announce = mmc_announce_periph,
+	.announce_sbuf = mmc_announce_periph_sbuf,
 };
 
 #define MMC_XPT_XPORT(x, X)				\
@@ -161,8 +158,8 @@ static struct xpt_xport_ops mmc_xport_ops = {
 MMC_XPT_XPORT(mmc, MMCSD);
 
 static struct xpt_proto_ops mmc_proto_ops = {
-	.announce = mmc_proto_announce,
-	.denounce = mmc_proto_denounce,
+	.announce_sbuf = mmc_proto_announce_sbuf,
+	.denounce_sbuf = mmc_proto_denounce_sbuf,
 	.debug_out = mmc_proto_debug_out,
 };
 
@@ -207,7 +204,7 @@ mmc_alloc_device(struct cam_eb *bus, struct cam_et *target, lun_id_t lun_id)
 }
 
 static void
-mmc_dev_async(u_int32_t async_code, struct cam_eb *bus, struct cam_et *target,
+mmc_dev_async(uint32_t async_code, struct cam_eb *bus, struct cam_et *target,
 	      struct cam_ed *device, void *async_arg)
 {
 
@@ -286,8 +283,8 @@ mmc_scan_lun(struct cam_periph *periph, struct cam_path *path,
 					  path, NULL, 0,
 					  request_ccb);
                 if (status != CAM_REQ_CMP) {
-			xpt_print(path, "xpt_scan_lun: cam_alloc_periph "
-                                  "returned an error, can't continue probe\n");
+			xpt_print(path,
+	"xpt_scan_lun: cam_alloc_periph returned an error, can't continue probe\n");
 		}
 		request_ccb->ccb_h.status = status;
 		xpt_done(request_ccb);
@@ -377,7 +374,7 @@ mmc_dev_advinfo(union ccb *start_ccb)
 }
 
 static void
-mmc_announce_periph(struct cam_periph *periph)
+mmc_announce_periph_sbuf(struct cam_periph *periph, struct sbuf *sb)
 {
 	struct	ccb_pathinq cpi;
 	struct	ccb_trans_settings cts;
@@ -385,7 +382,7 @@ mmc_announce_periph(struct cam_periph *periph)
 
 	cam_periph_assert(periph, MA_OWNED);
 
-	CAM_DEBUG(periph->path, CAM_DEBUG_TRACE, ("mmc_announce_periph"));
+	CAM_DEBUG(periph->path, CAM_DEBUG_TRACE, ("mmc_announce_periph_sbuf"));
 
 	memset(&cts, 0, sizeof(cts));
 	xpt_setup_ccb(&cts.ccb_h, path, CAM_PRIORITY_NORMAL);
@@ -431,9 +428,9 @@ mmc_print_ident(struct mmc_params *ident_data, struct sbuf *sb)
 	bool space = false;
 
 	sbuf_printf(sb, "Relative addr: %08x\n", ident_data->card_rca);
-	sbuf_printf(sb, "Card features: <");
+	sbuf_cat(sb, "Card features: <");
 	if (ident_data->card_features & CARD_FEATURE_MMC) {
-		sbuf_printf(sb, "MMC");
+		sbuf_cat(sb, "MMC");
 		space = true;
 	}
 	if (ident_data->card_features & CARD_FEATURE_MEMORY) {
@@ -455,7 +452,7 @@ mmc_print_ident(struct mmc_params *ident_data, struct sbuf *sb)
 	if (ident_data->card_features & CARD_FEATURE_18V) {
 		sbuf_printf(sb, "%s1.8-Signaling", space ? " " : "");
 	}
-	sbuf_printf(sb, ">\n");
+	sbuf_cat(sb, ">\n");
 
 	if (ident_data->card_features & CARD_FEATURE_MEMORY)
 		sbuf_printf(sb, "Card memory OCR: %08x\n",
@@ -466,29 +463,18 @@ mmc_print_ident(struct mmc_params *ident_data, struct sbuf *sb)
 		sbuf_printf(sb, "Number of functions: %u\n",
 		    ident_data->sdio_func_count);
 	}
-
-	sbuf_finish(sb);
-	printf("%s", sbuf_data(sb));
-	sbuf_clear(sb);
 }
 
 static void
-mmc_proto_announce(struct cam_ed *device)
+mmc_proto_announce_sbuf(struct cam_ed *device, struct sbuf *sb)
 {
-	struct sbuf	sb;
-	char		buffer[256];
-
-	sbuf_new(&sb, buffer, sizeof(buffer), SBUF_FIXEDLEN);
-	mmc_print_ident(&device->mmc_ident_data, &sb);
-	sbuf_finish(&sb);
-	sbuf_putbuf(&sb);
+	mmc_print_ident(&device->mmc_ident_data, sb);
 }
 
 static void
-mmc_proto_denounce(struct cam_ed *device)
+mmc_proto_denounce_sbuf(struct cam_ed *device, struct sbuf *sb)
 {
-
-	mmc_proto_announce(device);
+	mmc_proto_announce_sbuf(device, sb);
 }
 
 static void
@@ -530,16 +516,16 @@ mmcprobe_register(struct cam_periph *periph, void *arg)
 
 	request_ccb = (union ccb *)arg;
 	if (request_ccb == NULL) {
-		printf("mmcprobe_register: no probe CCB, "
-		       "can't register device\n");
+		printf(
+		    "mmcprobe_register: no probe CCB, can't register device\n");
 		return(CAM_REQ_CMP_ERR);
 	}
 
 	softc = (mmcprobe_softc *)malloc(sizeof(*softc), M_CAMXPT, M_NOWAIT);
 
 	if (softc == NULL) {
-		printf("proberegister: Unable to probe new device. "
-		       "Unable to allocate softc\n");
+		printf(
+	"proberegister: Unable to probe new device. Unable to allocate softc\n");
 		return(CAM_REQ_CMP_ERR);
 	}
 
@@ -553,8 +539,9 @@ mmcprobe_register(struct cam_periph *periph, void *arg)
 
         memset(&periph->path->device->mmc_ident_data, 0, sizeof(struct mmc_params));
 	if (status != 0) {
-		printf("proberegister: cam_periph_acquire failed (status=%d)\n",
-			status);
+		printf(
+		    "proberegister: cam_periph_acquire failed (status=%d)\n",
+		    status);
 		return (CAM_REQ_CMP_ERR);
 	}
 	CAM_DEBUG(periph->path, CAM_DEBUG_PROBE, ("Probe started\n"));
@@ -623,7 +610,6 @@ mmcprobe_start(struct cam_periph *periph, union ccb *start_ccb)
 		CAM_DEBUG(start_ccb->ccb_h.path, CAM_DEBUG_PROBE, ("Start with PROBE_RESET\n"));
 		/* FALLTHROUGH */
 	case PROBE_IDENTIFY:
-		xpt_path_inq(&start_ccb->cpi, periph->path);
 		CAM_DEBUG(start_ccb->ccb_h.path, CAM_DEBUG_PROBE, ("Start with PROBE_IDENTIFY\n"));
 		init_standard_ccb(start_ccb, XPT_MMC_GET_TRAN_SETTINGS);
 		break;
@@ -646,7 +632,7 @@ mmcprobe_start(struct cam_periph *periph, union ccb *start_ccb)
 		if (host_caps & MMC_CAP_SIGNALING_180)
 			softc->flags |= PROBE_FLAG_HOST_CAN_DO_18V;
 		uint32_t hv = mmc_highest_voltage(softc->host_ocr);
-		CAM_DEBUG(start_ccb->ccb_h.path, CAM_DEBUG_PROBE, ("reseting the bus\n"));
+		CAM_DEBUG(start_ccb->ccb_h.path, CAM_DEBUG_PROBE, ("resetting the bus\n"));
 		init_standard_ccb(start_ccb, XPT_MMC_SET_TRAN_SETTINGS);
 		cts->ios.vdd = hv;
 		cts->ios.bus_mode = opendrain;
@@ -822,7 +808,7 @@ mmcprobe_done(struct cam_periph *periph, union ccb *done_ccb)
 
 	int err;
 	struct ccb_mmcio *mmcio;
-	u_int32_t  priority;
+	uint32_t  priority;
 
 	CAM_DEBUG(done_ccb->ccb_h.path, CAM_DEBUG_PROBE, ("mmcprobe_done\n"));
 	softc = (mmcprobe_softc *)periph->softc;
@@ -1226,9 +1212,9 @@ mmc_path_inq(struct ccb_pathinq *cpi, const char *hba,
 	cpi->max_lun = 0;
 	cpi->initiator_id = 1;
 	cpi->maxio = maxio;
-	strncpy(cpi->sim_vid, "FreeBSD", SIM_IDLEN);
-	strncpy(cpi->hba_vid, hba, HBA_IDLEN);
-	strncpy(cpi->dev_name, cam_sim_name(sim), DEV_IDLEN);
+	strlcpy(cpi->sim_vid, "FreeBSD", SIM_IDLEN);
+	strlcpy(cpi->hba_vid, hba, HBA_IDLEN);
+	strlcpy(cpi->dev_name, cam_sim_name(sim), DEV_IDLEN);
 	cpi->unit_number = cam_sim_unit(sim);
 	cpi->bus_id = cam_sim_bus(sim);
 	cpi->protocol = PROTO_MMCSD;

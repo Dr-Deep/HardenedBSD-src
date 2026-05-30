@@ -22,8 +22,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #ifndef	_LINUXKPI_LINUX_XARRAY_H_
 #define	_LINUXKPI_LINUX_XARRAY_H_
@@ -31,12 +29,10 @@
 #include <linux/gfp.h>
 #include <linux/radix-tree.h>
 #include <linux/err.h>
+#include <linux/kconfig.h>
 
 #include <sys/lock.h>
 #include <sys/mutex.h>
-
-#define	XA_LIMIT(min, max) \
-    ({ CTASSERT((min) == 0); (uint32_t)(max); })
 
 #define	XA_FLAGS_ALLOC (1U << 0)
 #define	XA_FLAGS_LOCK_IRQ (1U << 1)
@@ -45,17 +41,41 @@
 #define	XA_ERROR(x) \
 	ERR_PTR(x)
 
-#define	xa_limit_32b XA_LIMIT(0, 0xFFFFFFFF)
+#define	xa_is_err(x) \
+	IS_ERR(x)
 
-#define	XA_ASSERT_LOCKED(xa) mtx_assert(&(xa)->mtx, MA_OWNED)
-#define	xa_lock(xa) mtx_lock(&(xa)->mtx)
-#define	xa_unlock(xa) mtx_unlock(&(xa)->mtx)
+#define	XA_ASSERT_LOCKED(xa) mtx_assert(&(xa)->xa_lock, MA_OWNED)
+#define	xa_lock(xa) mtx_lock(&(xa)->xa_lock)
+#define	xa_unlock(xa) mtx_unlock(&(xa)->xa_lock)
 
 struct xarray {
-	struct radix_tree_root root;
-	struct mtx mtx;		/* internal mutex */
-	uint32_t flags;		/* see XA_FLAGS_XXX */
+	struct radix_tree_root xa_head;
+	struct mtx xa_lock;	/* internal mutex */
+	uint32_t xa_flags;	/* see XA_FLAGS_XXX */
 };
+
+#define	DEFINE_XARRAY_FLAGS(name, flags) \
+	struct xarray name = { \
+		.xa_head.gfp_mask = GFP_NOWAIT, \
+		.xa_flags = flags, \
+	}; \
+	MTX_SYSINIT(name ## _mtx, &name.xa_lock, \
+	    "linuxkpi_DEFINE_XARRAY(" #name ")", \
+	    MTX_DEF | MTX_RECURSE)
+
+#define	DEFINE_XARRAY(name)		DEFINE_XARRAY_FLAGS(name, 0)
+#define	DEFINE_XARRAY_ALLOC(name)	DEFINE_XARRAY_FLAGS(name, XA_FLAGS_ALLOC)
+
+struct xa_limit {
+	uint32_t max;
+	uint32_t min;
+};
+
+#define	XA_LIMIT(min_, max_)	(struct xa_limit){ .min = (min_), .max = (max_) }
+
+#define	xa_limit_16b XA_LIMIT(0, USHRT_MAX)
+#define	xa_limit_31b XA_LIMIT(0, INT_MAX)
+#define	xa_limit_32b XA_LIMIT(0, UINT_MAX)
 
 /*
  * Extensible arrays API implemented as a wrapper
@@ -63,8 +83,9 @@ struct xarray {
  */
 void *xa_erase(struct xarray *, uint32_t);
 void *xa_load(struct xarray *, uint32_t);
-int xa_alloc(struct xarray *, uint32_t *, void *, uint32_t, gfp_t);
-int xa_alloc_cyclic(struct xarray *, uint32_t *, void *, uint32_t, uint32_t *, gfp_t);
+int xa_alloc(struct xarray *, uint32_t *, void *, struct xa_limit, gfp_t);
+int xa_alloc_cyclic(struct xarray *, uint32_t *, void *, struct xa_limit, uint32_t *, gfp_t);
+int xa_alloc_cyclic_irq(struct xarray *, uint32_t *, void *, struct xa_limit, uint32_t *, gfp_t);
 int xa_insert(struct xarray *, uint32_t, void *, gfp_t);
 void *xa_store(struct xarray *, uint32_t, void *, gfp_t);
 void xa_init_flags(struct xarray *, uint32_t);
@@ -80,12 +101,33 @@ void *xa_next(struct xarray *, unsigned long *, bool);
  * Unlocked version of functions above.
  */
 void *__xa_erase(struct xarray *, uint32_t);
-int __xa_alloc(struct xarray *, uint32_t *, void *, uint32_t, gfp_t);
-int __xa_alloc_cyclic(struct xarray *, uint32_t *, void *, uint32_t, uint32_t *, gfp_t);
+int __xa_alloc(struct xarray *, uint32_t *, void *, struct xa_limit, gfp_t);
+int __xa_alloc_cyclic(struct xarray *, uint32_t *, void *, struct xa_limit, uint32_t *, gfp_t);
 int __xa_insert(struct xarray *, uint32_t, void *, gfp_t);
 void *__xa_store(struct xarray *, uint32_t, void *, gfp_t);
 bool __xa_empty(struct xarray *);
 void *__xa_next(struct xarray *, unsigned long *, bool);
+
+#define	xa_store_irq(xa, index, ptr, gfp) \
+	xa_store((xa), (index), (ptr), (gfp))
+
+#define	xa_erase_irq(xa, index) \
+	xa_erase((xa), (index))
+
+#define	xa_lock_irq(xa)		xa_lock(xa)
+#define	xa_unlock_irq(xa)	xa_unlock(xa)
+
+#define	xa_lock_irqsave(xa, flags) \
+	do { \
+		xa_lock((xa)); \
+		flags = 0; \
+	} while (0)
+
+#define	xa_unlock_irqrestore(xa, flags) \
+	do { \
+		xa_unlock((xa)); \
+		flags == 0; \
+	} while (0)
 
 static inline int
 xa_err(void *ptr)

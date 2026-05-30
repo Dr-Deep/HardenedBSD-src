@@ -34,9 +34,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_pax.h"
 
 #include <sys/param.h>
@@ -62,8 +59,6 @@ __FBSDID("$FreeBSD$");
 #include <machine/elf.h>
 #include <machine/md_var.h>
 
-static const char *riscv_machine_arch(struct proc *p);
-
 u_long elf_hwcap;
 
 static struct sysentvec elf64_freebsd_sysvec = {
@@ -78,7 +73,6 @@ static struct sysentvec elf64_freebsd_sysvec = {
 	.sv_elf_core_osabi = ELFOSABI_FREEBSD,
 	.sv_elf_core_abi_vendor = FREEBSD_ABI_VENDOR,
 	.sv_elf_core_prepare_notes = __elfN(prepare_notes),
-	.sv_imgact_try	= NULL,
 	.sv_minsigstksz	= MINSIGSTKSZ,
 	.sv_minuser	= VM_MIN_ADDRESS,
 	.sv_maxuser	= 0,	/* Filled in during boot. */
@@ -92,7 +86,7 @@ static struct sysentvec elf64_freebsd_sysvec = {
 	.sv_fixlimit	= NULL,
 	.sv_maxssiz	= NULL,
 	.sv_flags	= SV_ABI_FREEBSD | SV_LP64 | SV_SHP | SV_TIMEKEEP |
-	    SV_RNG_SEED_VER,
+	    SV_RNG_SEED_VER | SV_SIGSYS,
 	.sv_set_syscall_retval = cpu_set_syscall_retval,
 	.sv_fetch_syscall_args = cpu_fetch_syscall_args,
 	.sv_syscallnames = syscallnames,
@@ -103,7 +97,6 @@ static struct sysentvec elf64_freebsd_sysvec = {
 	.sv_trap	= NULL,
 	.sv_pax_aslr_init = pax_aslr_init_vmspace,
 	.sv_hwcap	= &elf_hwcap,
-	.sv_machine_arch = riscv_machine_arch,
 	.sv_onexec_old	= exec_onexec_old,
 	.sv_onexit	= exit_onexit,
 	.sv_regset_begin = SET_BEGIN(__elfN(regset)),
@@ -111,28 +104,17 @@ static struct sysentvec elf64_freebsd_sysvec = {
 };
 INIT_SYSENTVEC(elf64_sysvec, &elf64_freebsd_sysvec);
 
-static const char *
-riscv_machine_arch(struct proc *p)
-{
-
-	if ((p->p_elf_flags & EF_RISCV_FLOAT_ABI_MASK) ==
-	    EF_RISCV_FLOAT_ABI_SOFT)
-		return (MACHINE_ARCH "sf");
-	return (MACHINE_ARCH);
-}
-
-static Elf64_Brandinfo freebsd_brand_info = {
+static const Elf64_Brandinfo freebsd_brand_info = {
 	.brand		= ELFOSABI_FREEBSD,
 	.machine	= EM_RISCV,
 	.compat_3_brand	= "FreeBSD",
-	.emul_path	= NULL,
 	.interp_path	= "/libexec/ld-elf.so.1",
 	.sysvec		= &elf64_freebsd_sysvec,
 	.interp_newpath	= NULL,
 	.brand_note	= &elf64_freebsd_brandnote,
 	.flags		= BI_CAN_EXEC_DYN | BI_BRAND_NOTE
 };
-SYSINIT(elf64, SI_SUB_EXEC, SI_ORDER_FIRST,
+C_SYSINIT(elf64, SI_SUB_EXEC, SI_ORDER_FIRST,
     (sysinit_cfunc_t)elf64_insert_brand_entry, &freebsd_brand_info);
 
 static void
@@ -293,10 +275,10 @@ reloctype_to_str(int type)
 }
 
 bool
-elf_is_ifunc_reloc(Elf_Size r_info __unused)
+elf_is_ifunc_reloc(Elf_Size r_info)
 {
 
-	return (false);
+	return (ELF_R_TYPE(r_info) == R_RISCV_IRELATIVE);
 }
 
 /*
@@ -344,15 +326,25 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 		break;
 
 	case R_RISCV_64:
+		error = lookup(lf, symidx, 1, &addr);
+		if (error != 0)
+			return (-1);
+
+		before64 = *where;
+		*where = addr + addend;
+		if (debug_kld)
+			printf("%p %c %-24s %016lx -> %016lx\n", where,
+			    (local ? 'l' : 'g'), reloctype_to_str(rtype),
+			    before64, *where);
+		break;
+
 	case R_RISCV_JUMP_SLOT:
 		error = lookup(lf, symidx, 1, &addr);
 		if (error != 0)
 			return (-1);
 
-		val = addr;
 		before64 = *where;
-		if (*where != val)
-			*where = val;
+		*where = addr;
 		if (debug_kld)
 			printf("%p %c %-24s %016lx -> %016lx\n", where,
 			    (local ? 'l' : 'g'), reloctype_to_str(rtype),
@@ -513,7 +505,12 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 			    (local ? 'l' : 'g'), reloctype_to_str(rtype),
 			    before32, *insn32p);
 		break;
-
+	case R_RISCV_IRELATIVE:
+		addr = relocbase + addend;
+		val = ((Elf64_Addr (*)(void))addr)();
+		if (*where != val)
+			*where = val;
+		break;
 	default:
 		printf("kldload: unexpected relocation type %ld, "
 		    "symbol index %ld\n", rtype, symidx);

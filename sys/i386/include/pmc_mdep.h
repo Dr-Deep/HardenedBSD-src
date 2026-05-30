@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2003-2005,2008 Joseph Koshy
  * Copyright (c) 2007 The FreeBSD Foundation
@@ -28,8 +28,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _MACHINE_PMC_MDEP_H
@@ -43,19 +41,16 @@ struct pmc_mdep;
  * On the i386 platform we support the following PMCs.
  *
  * TSC		The timestamp counter
- * K7		AMD Athlon XP/MP and other 32 bit processors.
  * K8		AMD Athlon64 and Opteron PMCs in 32 bit mode.
- * PIV		Intel P4/HTT and P4/EMT64
- * PPRO		Intel Pentium Pro, Pentium-II, Pentium-III, Celeron and
- *		Pentium-M processors
- * PENTIUM	Intel Pentium MMX.
+ * IBS		AMD IBS
  * IAP		Intel Core/Core2/Atom programmable PMCs.
  * IAF		Intel fixed-function PMCs.
  * UCP		Intel Uncore programmable PMCs.
  * UCF		Intel Uncore fixed-function PMCs.
  */
 
-#include <dev/hwpmc/hwpmc_amd.h> /* K7 and K8 */
+#include <dev/hwpmc/hwpmc_amd.h>
+#include <dev/hwpmc/hwpmc_ibs.h>
 #include <dev/hwpmc/hwpmc_core.h>
 #include <dev/hwpmc/hwpmc_tsc.h>
 #include <dev/hwpmc/hwpmc_uncore.h>
@@ -66,8 +61,8 @@ struct pmc_mdep;
  * IAF, IAP, UCF and UCP.
  */
 #define	PMC_MDEP_CLASS_INDEX_TSC	1
-#define	PMC_MDEP_CLASS_INDEX_K7		2
 #define	PMC_MDEP_CLASS_INDEX_K8		2
+#define	PMC_MDEP_CLASS_INDEX_IBS	3
 #define	PMC_MDEP_CLASS_INDEX_IAP	2
 #define	PMC_MDEP_CLASS_INDEX_IAF	3
 #define	PMC_MDEP_CLASS_INDEX_UCP	4
@@ -79,6 +74,7 @@ struct pmc_mdep;
 
 union pmc_md_op_pmcallocate  {
 	struct pmc_md_amd_op_pmcallocate	pm_amd;
+	struct pmc_md_ibs_op_pmcallocate	pm_ibs;
 	struct pmc_md_iap_op_pmcallocate	pm_iap;
 	struct pmc_md_ucf_op_pmcallocate	pm_ucf;
 	struct pmc_md_ucp_op_pmcallocate	pm_ucp;
@@ -94,6 +90,7 @@ union pmc_md_op_pmcallocate  {
 /* MD extension for 'struct pmc' */
 union pmc_md_pmc  {
 	struct pmc_md_amd_pmc	pm_amd;
+	struct pmc_md_ibs_pmc	pm_ibs;
 	struct pmc_md_iaf_pmc	pm_iaf;
 	struct pmc_md_iap_pmc	pm_iap;
 	struct pmc_md_ucf_pmc	pm_ucf;
@@ -125,11 +122,9 @@ struct pmc_mdep;
 #define	PMC_TRAPFRAME_TO_USER_SP(TF)	((TF)->tf_esp)
 #define	PMC_TRAPFRAME_TO_KERNEL_SP(TF)	((uintptr_t) &((TF)->tf_esp))
 
-#define	PMC_IN_KERNEL_STACK(S,START,END)		\
-	((S) >= (START) && (S) < (END))
+#define	PMC_IN_KERNEL_STACK(va)	kstack_contains(curthread, (va), sizeof(va))
 #define	PMC_IN_KERNEL(va)	INKERNEL(va)
-
-#define	PMC_IN_USERSPACE(va) ((va) <= VM_MAXUSER_ADDRESS)
+#define	PMC_IN_USERSPACE(va)	((va) <= VM_MAXUSER_ADDRESS)
 
 #define	PMC_IN_TRAP_HANDLER(PC) 			\
 	((PC) >= (uintptr_t)start_exceptions + setidt_disp &&	\

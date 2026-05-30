@@ -29,14 +29,6 @@
  * SUCH DAMAGE.
  */
 
-#ifndef lint
-#if 0
-static char sccsid[] = "@(#)lex.c	8.2 (Berkeley) 4/20/95";
-#endif
-#endif /* not lint */
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "rcv.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -207,8 +199,6 @@ commands(void)
 	if (!sourcing) {
 		if (signal(SIGINT, SIG_IGN) != SIG_IGN)
 			(void)signal(SIGINT, intr);
-		if (signal(SIGHUP, SIG_IGN) != SIG_IGN)
-			(void)signal(SIGHUP, hangup);
 		(void)signal(SIGTSTP, stop);
 		(void)signal(SIGTTOU, stop);
 		(void)signal(SIGTTIN, stop);
@@ -233,7 +223,8 @@ commands(void)
 		 */
 		n = 0;
 		for (;;) {
-			if (readline(input, &linebuf[n], LINESIZE - n) < 0) {
+			if (readline(input, &linebuf[n],
+			    sizeof(linebuf) - n) < 0) {
 				if (n == 0)
 					n = -1;
 				break;
@@ -576,17 +567,6 @@ stop(int s)
 }
 
 /*
- * Branch here on hangup signal and simulate "exit".
- */
-void
-hangup(int s __unused)
-{
-
-	/* nothing to do? */
-	exit(1);
-}
-
-/*
  * Announce the presence of the current Mail version,
  * give the message count, and print a header listing.
  */
@@ -672,7 +652,7 @@ newfileinfo(int omsgCount)
  */
 
 int
-pversion(int e __unused)
+pversion(void *arg __unused)
 {
 
 	printf("Version %s\n", version);

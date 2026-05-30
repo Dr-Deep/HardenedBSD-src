@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2007 Pawel Jakub Dawidek <pjd@FreeBSD.org>
  * All rights reserved.
@@ -23,9 +24,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -66,7 +64,7 @@ zone_dataset_attach(struct ucred *cred, const char *dataset, int jailid)
 	struct prison *pr;
 	int dofree, error;
 
-	if ((error = spl_priv_check_cred(cred, PRIV_ZFS_JAIL)) != 0)
+	if ((error = priv_check_cred(cred, PRIV_ZFS_JAIL)) != 0)
 		return (error);
 
 	/* Allocate memory before we grab prison's mutex. */
@@ -119,7 +117,7 @@ zone_dataset_detach(struct ucred *cred, const char *dataset, int jailid)
 	struct prison *pr;
 	int error;
 
-	if ((error = spl_priv_check_cred(cred, PRIV_ZFS_JAIL)) != 0)
+	if ((error = priv_check_cred(cred, PRIV_ZFS_JAIL)) != 0)
 		return (error);
 
 	sx_slock(&allprison_lock);

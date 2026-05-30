@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2013 Mikolaj Golub <trociny@FreeBSD.org>
  * Copyright (c) 2017 Dell EMC
@@ -25,15 +25,13 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _CORE_H
 #define _CORE_H
 
 enum psc_type {
-	PSC_TYPE_PROC,
+	PSC_TYPE_PROC = 0,
 	PSC_TYPE_FILES,
 	PSC_TYPE_VMMAP,
 	PSC_TYPE_GROUPS,
@@ -45,6 +43,7 @@ enum psc_type {
 	PSC_TYPE_ENVV,
 	PSC_TYPE_AUXV,
 	PSC_TYPE_PTLWPINFO,
+	PSC_TYPE_KQUEUES,
 	PSC_TYPE_MAX
 };
 

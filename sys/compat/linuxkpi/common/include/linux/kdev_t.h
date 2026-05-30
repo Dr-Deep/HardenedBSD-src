@@ -25,13 +25,26 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #ifndef	_LINUXKPI_LINUX_KDEV_T_H_
 #define	_LINUXKPI_LINUX_KDEV_T_H_
 
 #include <sys/types.h>
+
+/*
+ * The encoding of major/minor on FreeBSD is complex to take into account the
+ * compatibility with 16-bit dev_t (see <sys/types.h>). It is not possible to
+ * use a simple shift and thus, we can't have a proper definition of
+ * `MINORBITS`.
+ *
+ * At the time this is added to linuxkpi, this is used by the DRM generic code
+ * as the upper limit to allocate an ID using an xarray. It is not used to
+ * decode a minor, therefore any arbitrary value here is fine in this context.
+ *
+ * On Linux, the value is set to 20. Because of the above, we reuse this value,
+ * even so it does not correspond to the actual minor encoding on FreeBSD.
+ */
+#define MINORBITS	20
 
 #define MAJOR(dev)      major(dev)
 #define MINOR(dev)      minor(dev)

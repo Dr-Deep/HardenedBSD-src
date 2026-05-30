@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 .PATH: ${SRCTOP}/sys/netinet
 .PATH: ${SRCTOP}/sys/netinet6
 
@@ -8,7 +6,6 @@ SRCS=	sctp_asconf.c \
 	sctp_auth.c \
 	sctp_bsd_addr.c \
 	sctp_cc_functions.c \
-	sctp_crc32.c \
 	sctp_indata.c \
 	sctp_input.c \
 	sctp_kdtrace.c \

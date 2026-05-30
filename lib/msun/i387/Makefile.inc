@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 ARCH_SRCS = e_exp.S e_fmod.S e_log.S e_log10.S \
 	    e_remainder.S e_sqrt.S s_ceil.S s_copysign.S \
 	    s_finite.S s_floor.S s_llrint.S s_logb.S s_lrint.S \
@@ -19,4 +17,3 @@ ARCH_SRCS+= e_fmodl.S \
 	    s_logbl.S s_lrintl.S s_remquol.S s_rintl.S s_scalbnl.S s_truncl.S
 
 LDBL_PREC = 64	# XXX 64-bit format, but truncated to 53 bits
-SYM_MAPS += ${.CURDIR}/i387/Symbol.map

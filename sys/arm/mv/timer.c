@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2006 Benno Rice.
  * Copyright (C) 2007-2008 MARVELL INTERNATIONAL LTD.
@@ -29,9 +29,6 @@
  *
  * from: FreeBSD: //depot/projects/arm/src/sys/arm/xscale/pxa2x0/pxa2x0_timer.c, rev 1
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -123,9 +120,7 @@ static int	mv_timer_start(struct eventtimer *et,
 static int	mv_timer_stop(struct eventtimer *et);
 static void	mv_setup_timers(void);
 
-static void mv_watchdog_enable_armv5(void);
 static void mv_watchdog_enable_armadaxp(void);
-static void mv_watchdog_disable_armv5(void);
 static void mv_watchdog_disable_armadaxp(void);
 
 static void mv_delay(int usec, void* arg);
@@ -140,20 +135,9 @@ static struct mv_timer_config timer_armadaxp_config =
 	IRQ_TIMER0_CLR_ARMADAXP,
 	IRQ_TIMER_WD_CLR_ARMADAXP,
 };
-static struct mv_timer_config timer_armv5_config =
-{
-	MV_SOC_ARMV5,
-	&mv_watchdog_enable_armv5,
-	&mv_watchdog_disable_armv5,
-	0,
-	BRIDGE_IRQ_CAUSE,
-	IRQ_TIMER0_CLR,
-	IRQ_TIMER_WD_CLR,
-};
 
 static struct ofw_compat_data mv_timer_soc_config[] = {
 	{"marvell,armada-xp-timer",	(uintptr_t)&timer_armadaxp_config },
-	{"mrvl,timer",			(uintptr_t)&timer_armv5_config },
 	{NULL,				(uintptr_t)NULL },
 };
 
@@ -384,28 +368,6 @@ mv_set_timer_rel(uint32_t timer, uint32_t val)
 }
 
 static void
-mv_watchdog_enable_armv5(void)
-{
-	uint32_t val, irq_cause, irq_mask;
-
-	irq_cause = read_cpu_ctrl(timer_softc->config->bridge_irq_cause);
-	irq_cause &= timer_softc->config->irq_timer_wd_clr;
-	write_cpu_ctrl(timer_softc->config->bridge_irq_cause, irq_cause);
-
-	irq_mask = read_cpu_ctrl(BRIDGE_IRQ_MASK);
-	irq_mask |= IRQ_TIMER_WD_MASK;
-	write_cpu_ctrl(BRIDGE_IRQ_MASK, irq_mask);
-
-	val = read_cpu_ctrl(RSTOUTn_MASK);
-	val |= WD_RST_OUT_EN;
-	write_cpu_ctrl(RSTOUTn_MASK, val);
-
-	val = mv_get_timer_control();
-	val |= CPU_TIMER2_EN | CPU_TIMER2_AUTO;
-	mv_set_timer_control(val);
-}
-
-static void
 mv_watchdog_enable_armadaxp(void)
 {
 	uint32_t irq_cause, val;
@@ -425,28 +387,6 @@ mv_watchdog_enable_armadaxp(void)
 	val = mv_get_timer_control();
 	val |= CPU_TIMER2_EN | CPU_TIMER2_AUTO | CPU_TIMER_WD_25MHZ_EN;
 	mv_set_timer_control(val);
-}
-
-static void
-mv_watchdog_disable_armv5(void)
-{
-	uint32_t val, irq_cause,irq_mask;
-
-	val = mv_get_timer_control();
-	val &= ~(CPU_TIMER2_EN | CPU_TIMER2_AUTO);
-	mv_set_timer_control(val);
-
-	val = read_cpu_ctrl(RSTOUTn_MASK);
-	val &= ~WD_RST_OUT_EN;
-	write_cpu_ctrl(RSTOUTn_MASK, val);
-
-	irq_mask = read_cpu_ctrl(BRIDGE_IRQ_MASK);
-	irq_mask &= ~(IRQ_TIMER_WD_MASK);
-	write_cpu_ctrl(BRIDGE_IRQ_MASK, irq_mask);
-
-	irq_cause = read_cpu_ctrl(timer_softc->config->bridge_irq_cause);
-	irq_cause &= timer_softc->config->irq_timer_wd_clr;
-	write_cpu_ctrl(timer_softc->config->bridge_irq_cause, irq_cause);
 }
 
 static void

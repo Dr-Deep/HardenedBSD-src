@@ -26,7 +26,6 @@
  */
 
 #include "archive_platform.h"
-__FBSDID("$FreeBSD$");
 
 #ifdef HAVE_ERRNO_H
 #include <errno.h>
@@ -117,7 +116,7 @@ archive_write_set_format_cpio_newc(struct archive *_a)
 	if (a->format_free != NULL)
 		(a->format_free)(a);
 
-	cpio = (struct cpio *)calloc(1, sizeof(*cpio));
+	cpio = calloc(1, sizeof(*cpio));
 	if (cpio == NULL) {
 		archive_set_error(&a->archive, ENOMEM, "Can't allocate cpio data");
 		return (ARCHIVE_FATAL);
@@ -323,7 +322,7 @@ write_header(struct archive_write *a, struct archive_entry *entry)
 		    h + c_filesize_offset, c_filesize_size);
 	if (ret) {
 		archive_set_error(&a->archive, ERANGE,
-		    "File is too large for this format.");
+		    "File is too large for this format");
 		ret_final = ARCHIVE_FAILED;
 		goto exit_write_header;
 	}

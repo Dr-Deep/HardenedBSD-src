@@ -1,10 +1,7 @@
-# $FreeBSD$
-
-PACKAGE=runtime
-.PATH: ${.CURDIR:H:H}/misc
+PACKAGE=geom
 
 GEOM_CLASS=	part
 
-LIBADD=	util
+LIBADD=	util xo
 
 .include <bsd.lib.mk>

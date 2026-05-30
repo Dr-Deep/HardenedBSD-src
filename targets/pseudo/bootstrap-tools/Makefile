@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 # building clang is particularly tedious - so avoid re-inventing wheels
 
 all: bootstrap-toolchain
@@ -40,7 +38,6 @@ BSARGS= 	DESTDIR= \
 		BOOTSTRAPPING=${OSRELDATE} \
 		BWPHASE=${.TARGET} \
 		-DNO_CPU_CFLAGS \
-		-DNO_LINT \
 		-DNO_PIC \
 		-DNO_SHARED \
 		MK_CTF=no \
@@ -49,7 +46,6 @@ BSARGS= 	DESTDIR= \
 		MK_CLANG_FULL=no \
 		MK_HTML=no \
 		MK_MAN=no \
-		MK_PROFILE=no \
 		MK_SSP=no \
 		MK_TESTS=no \
 		MK_WERROR=no \
@@ -89,6 +85,7 @@ BSTCENV= \
 BSTCARGS= \
 	${BSARGS:NDESTDIR=*:NOBJTOP=*:NOBJROOT=*:NMK_CROSS_COMPILER=*:NMK_CLANG=*} \
 	BUILD_DIRDEPS=yes \
+	LLVM_MIN_TBLGEN=${TOOLSDIR}/usr/bin/llvm-min-tblgen \
 	LLVM_TBLGEN=${TOOLSDIR}/usr/bin/llvm-tblgen \
 	CLANG_TBLGEN=${TOOLSDIR}/usr/bin/clang-tblgen \
 	-DWITH_STAGING \

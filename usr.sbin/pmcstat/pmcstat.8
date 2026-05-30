@@ -23,9 +23,7 @@
 .\" out of the use of this software, even if advised of the possibility of
 .\" such damage.
 .\"
-.\" $FreeBSD$
-.\"
-.Dd August 17, 2020
+.Dd April 15, 2026
 .Dt PMCSTAT 8
 .Os
 .Sh NAME
@@ -57,7 +55,6 @@
 .Op Fl f Ar pluginopt
 .Op Fl g
 .Op Fl i Ar lwp
-.Op Fl k Ar kerneldir
 .Op Fl l Ar secs
 .Op Fl m Ar pathname
 .Op Fl n Ar rate
@@ -107,6 +104,10 @@ counting and sampling flavors.
 The values of all counting PMCs are printed in human readable form
 at regular intervals by
 .Nm .
+The format of
+.Nm Ns 's
+human-readable textual output is not stable, and could change
+in the future.
 The output of sampling PMCs may be configured to go to a log file for
 subsequent offline analysis, or, at the expense of greater
 overhead, may be configured to be printed in text form on the fly.
@@ -219,6 +220,30 @@ specified in
 .It Fl R Ar logfilename
 Perform offline analysis using sampling data in file
 .Ar logfilename .
+Each decoded record is printed as a single line with the following fields:
+a record type (e.g.,
+.Dq callchain ,
+.Dq initlog ) ,
+type-specific data, and a trailing 20-digit raw TSC value recording the
+CPU cycle at which the event occurred.
+The
+.Dq initlog
+record additionally prints
+.Dq Li tsc_freq=<hz> ,
+the TSC tick rate in Hz measured by the kernel at boot.
+To convert a TSC delta to nanoseconds:
+.Pp
+.Dl elapsed_ns = (tsc_end - tsc_start) * 1e9 / tsc_freq
+.Pp
+TSC-based timestamps and
+.Dq Li tsc_freq
+are only meaningful on x86 architectures
+.Pq amd64 and i386 .
+On all other architectures
+.Pq including arm64 and powerpc
+the
+.Dq Li tsc_freq
+field will be zero.
 .It Fl S Ar event-spec
 Allocate a system mode sampling PMC measuring hardware events
 specified in
@@ -226,8 +251,8 @@ specified in
 .It Fl T
 Use a
 .Xr top 1 Ns -like
-mode for sampling PMCs. The following hotkeys
-can be used:
+mode for sampling PMCs.
+The following hotkeys can be used:
 .Pp
 .Bl -tag -compact -width "Ctrl+a" -offset 4n
 .It Ic A
@@ -332,17 +357,6 @@ which you can get from
 .Xr ps 1
 .Fl o
 .Li lwp .
-.It Fl k Ar kerneldir
-Set the pathname of the kernel directory to argument
-.Ar kerneldir .
-This directory specifies where
-.Nm
-should look for the kernel and its modules.
-The default is to use the path of the running kernel obtained from the
-.Va kern.bootfile
-sysctl.
-Modules will also be searched for in /boot/modules if not found in
-.Ar kerneldir .
 .It Fl l Ar secs
 Set system-wide performance measurement duration for
 .Ar secs
@@ -495,16 +509,16 @@ The number of callchain records that had an
 value for a return address.
 .It "#exec handling errors"
 The number of
-.Xr exec 2
+.Xr execve 2
 events in the log file that named executables that could not be
 analyzed.
 .It "#exec/elf"
 The number of
-.Xr exec 2
+.Xr execve 2
 events that named ELF executables.
 .It "#exec/unknown"
 The number of
-.Xr exec 2
+.Xr execve 2
 events that named executables with unrecognized formats.
 .It "#samples/total"
 The total number of samples in the log file.
@@ -544,8 +558,6 @@ The
 .Nm
 utility first appeared in
 .Fx 6.0 .
-It is
-.Ud
 .Sh AUTHORS
 .An Joseph Koshy Aq Mt jkoshy@FreeBSD.org
 .Sh BUGS

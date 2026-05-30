@@ -22,8 +22,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifdef __BLOCKS__
@@ -39,7 +37,7 @@
  * compilers that support blocks and exposing the ABI in the source for other
  * compilers.
  */
-#define CALL_BLOCK(name, ...) name(__VA_ARGS__)
+#define CALL_BLOCK(name, ...) (name)(__VA_ARGS__)
 #else // !__BLOCKS__
 #define	DECLARE_BLOCK(retTy, name, argTys, ...)\
 	struct {\

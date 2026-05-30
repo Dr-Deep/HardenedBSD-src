@@ -32,27 +32,25 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)kern_fork.c	8.6 (Berkeley) 4/8/94
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include "opt_ktrace.h"
 #include "opt_kstack_pages.h"
 #include "opt_pax.h"
 
-#include <sys/param.h>
+#define EXTERR_CATEGORY	EXTERR_CAT_FORK
 #include <sys/systm.h>
+#include <sys/acct.h>
 #include <sys/bitstring.h>
-#include <sys/sysproto.h>
 #include <sys/eventhandler.h>
+#include <sys/exterrvar.h>
 #include <sys/fcntl.h>
 #include <sys/filedesc.h>
 #include <sys/jail.h>
 #include <sys/kernel.h>
 #include <sys/kthread.h>
+#include <sys/ktr.h>
+#include <sys/ktrace.h>
 #include <sys/sysctl.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
@@ -66,17 +64,15 @@ __FBSDID("$FreeBSD$");
 #include <sys/racct.h>
 #include <sys/resourcevar.h>
 #include <sys/sched.h>
+#include <sys/sdt.h>
+#include <sys/signalvar.h>
+#include <sys/sx.h>
 #include <sys/syscall.h>
+#include <sys/sysent.h>
+#include <sys/sysproto.h>
 #include <sys/vmmeter.h>
 #include <sys/vnode.h>
-#include <sys/acct.h>
-#include <sys/ktr.h>
-#include <sys/ktrace.h>
 #include <sys/unistd.h>
-#include <sys/sdt.h>
-#include <sys/sx.h>
-#include <sys/sysent.h>
-#include <sys/signalvar.h>
 
 #include <security/audit/audit.h>
 #include <security/mac/mac_framework.h>
@@ -172,10 +168,11 @@ sys_rfork(struct thread *td, struct rfork_args *uap)
 
 	/* Don't allow kernel-only flags. */
 	if ((uap->flags & RFKERNELONLY) != 0)
-		return (EINVAL);
+		return (EXTERROR(EINVAL, "Kernel-only flags %#jx", uap->flags));
 	/* RFSPAWN must not appear with others */
 	if ((uap->flags & RFSPAWN) != 0 && uap->flags != RFSPAWN)
-		return (EINVAL);
+		return (EXTERROR(EINVAL, "RFSPAWN must be the only flag %#jx",
+		    uap->flags));
 
 	AUDIT_ARG_FFLAGS(uap->flags);
 	bzero(&fr, sizeof(fr));
@@ -190,6 +187,53 @@ sys_rfork(struct thread *td, struct rfork_args *uap)
 	if (error == 0) {
 		td->td_retval[0] = pid;
 		td->td_retval[1] = 0;
+	}
+	return (error);
+}
+
+int
+sys_pdrfork(struct thread *td, struct pdrfork_args *uap)
+{
+	struct fork_req fr;
+	int error, fd, pid;
+
+	bzero(&fr, sizeof(fr));
+	fd = -1;
+
+	AUDIT_ARG_FFLAGS(uap->pdflags);
+	AUDIT_ARG_CMD(uap->rfflags);
+
+	if ((uap->rfflags & (RFSTOPPED | RFHIGHPID)) != 0)
+		return (EXTERROR(EINVAL,
+		    "Kernel-only flags %#jx", uap->rfflags));
+
+	/* RFSPAWN must not appear with others */
+	if ((uap->rfflags & RFSPAWN) != 0) {
+		if (uap->rfflags != RFSPAWN)
+			return (EXTERROR(EINVAL,
+			    "RFSPAWN must be the only flag %#jx",
+			    uap->rfflags));
+		fr.fr_flags = RFFDG | RFPROC | RFPPWAIT | RFMEM | RFPROCDESC;
+		fr.fr_flags2 = FR2_DROPSIG_CAUGHT;
+	} else {
+		if ((uap->rfflags & (RFPROC | RFPROCDESC)) !=
+		    (RFPROC | RFPROCDESC)) {
+			return (EXTERROR(EINVAL,
+			    "RFPROC|RFPROCDESC required %#jx", uap->rfflags));
+		}
+		fr.fr_flags = uap->rfflags;
+	}
+
+	fr.fr_pidp = &pid;
+	fr.fr_pd_fd = &fd;
+	fr.fr_pd_flags = uap->pdflags;
+	error = fork1(td, &fr);
+	if (error == 0) {
+		td->td_retval[0] = pid;
+		td->td_retval[1] = 0;
+		if ((fr.fr_flags & (RFPROC | RFPROCDESC)) ==
+		    (RFPROC | RFPROCDESC) || uap->rfflags == RFSPAWN)
+			error = copyout(&fd, uap->fdp, sizeof(fd));
 	}
 	return (error);
 }
@@ -404,6 +448,7 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	sx_xlock(&allproc_lock);
 	LIST_INSERT_HEAD(&allproc, p2, p_list);
 	allproc_gen++;
+	prison_proc_link(p2->p_ucred->cr_prison, p2);
 	sx_xunlock(&allproc_lock);
 
 	sx_xlock(PIDHASHLOCK(p2->p_pid));
@@ -432,7 +477,7 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 			pd = pdshare(p1->p_pd);
 		else
 			pd = pdcopy(p1->p_pd);
-		fd = fdcopy(p1->p_fd);
+		fd = fdcopy(p1->p_fd, p2);
 		fdtol = NULL;
 	} else {
 		if (fr->fr_flags2 & FR2_SHARE_PATHS)
@@ -506,7 +551,8 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	    P2_ASLR_IGNSTART | P2_NOTRACE | P2_NOTRACE_EXEC |
 	    P2_PROTMAX_ENABLE | P2_PROTMAX_DISABLE | P2_TRAPCAP |
 	    P2_STKGAP_DISABLE | P2_STKGAP_DISABLE_EXEC | P2_NO_NEW_PRIVS |
-	    P2_WXORX_DISABLE | P2_WXORX_ENABLE_EXEC);
+	    P2_WXORX_DISABLE | P2_WXORX_ENABLE_EXEC | P2_LOGSIGEXIT_CTL |
+	    P2_LOGSIGEXIT_ENABLE);
 	p2->p_swtick = ticks;
 	if (p1->p_flag & P_PROFIL)
 		startprofclock(p2);
@@ -617,11 +663,14 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	 * been preserved.
 	 */
 	p2->p_flag |= p1->p_flag & P_SUGID;
-	td2->td_pflags |= (td->td_pflags & (TDP_ALTSTACK | TDP_SIGFASTBLOCK));
-	SESS_LOCK(p1->p_session);
-	if (p1->p_session->s_ttyvp != NULL && p1->p_flag & P_CONTROLT)
-		p2->p_flag |= P_CONTROLT;
-	SESS_UNLOCK(p1->p_session);
+	td2->td_pflags |= td->td_pflags & (TDP_ALTSTACK | TDP_SIGFASTBLOCK);
+	td2->td_pflags2 |= td->td_pflags2 & TDP2_UEXTERR;
+	if (p1->p_flag & P_CONTROLT) {
+		SESS_LOCK(p1->p_session);
+		if (p1->p_session->s_ttyvp != NULL)
+			p2->p_flag |= P_CONTROLT;
+		SESS_UNLOCK(p1->p_session);
+	}
 	if (fr->fr_flags & RFPPWAIT)
 		p2->p_flag |= P_PPWAIT;
 
@@ -632,7 +681,6 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	LIST_INIT(&p2->p_orphans);
 
 	callout_init_mtx(&p2->p_itcallout, &p2->p_mtx, 0);
-	TAILQ_INIT(&p2->p_kqtim_stop);
 
 	/*
 	 * This begins the section where we must prevent the parent
@@ -862,11 +910,13 @@ fork1(struct thread *td, struct fork_req *fr)
 	struct vmspace *vm2;
 	struct ucred *cred;
 	struct file *fp_procdesc;
+	struct pgrp *pg;
 	vm_ooffset_t mem_charged;
 	int error, nprocs_new;
 	static int curfail;
 	static struct timeval lastfail;
 	int flags, pages;
+	bool killsx_locked, singlethreaded;
 
 	flags = fr->fr_flags;
 	pages = fr->fr_pages;
@@ -878,8 +928,10 @@ fork1(struct thread *td, struct fork_req *fr)
 
 #ifdef PAX_SEGVGUARD
 	if (td->td_proc->p_pid != 0) {
+		VOP_LOCK(curthread->td_proc->p_textvp, LK_SHARED);
 		error = pax_segvguard_check(curthread, curthread->td_proc->p_textvp,
 				td->td_proc->p_comm);
+		VOP_UNLOCK(curthread->td_proc->p_textvp);
 		if (error)
 			return (error);
 	}
@@ -887,32 +939,31 @@ fork1(struct thread *td, struct fork_req *fr)
 
 	/* Check for the undefined or unimplemented flags. */
 	if ((flags & ~(RFFLAGS | RFTSIGFLAGS(RFTSIGMASK))) != 0)
-		return (EINVAL);
+		return (EXTERROR(EINVAL,
+		    "Undef or unimplemented flags %#jx", flags));
 
-	/* Signal value requires RFTSIGZMB. */
 	if ((flags & RFTSIGFLAGS(RFTSIGMASK)) != 0 && (flags & RFTSIGZMB) == 0)
-		return (EINVAL);
+		return (EXTERROR(EINVAL,
+		    "Signal value requires RFTSIGZMB", flags));
 
-	/* Can't copy and clear. */
-	if ((flags & (RFFDG|RFCFDG)) == (RFFDG|RFCFDG))
-		return (EINVAL);
+	if ((flags & (RFFDG | RFCFDG)) == (RFFDG | RFCFDG))
+		return (EXTERROR(EINVAL, "Can not copy and clear"));
 
-	/* Check the validity of the signal number. */
 	if ((flags & RFTSIGZMB) != 0 && (u_int)RFTSIGNUM(flags) > _SIG_MAXSIG)
-		return (EINVAL);
+		return (EXTERROR(EINVAL, "Invalid signal", RFTSIGNUM(flags)));
 
 	if ((flags & RFPROCDESC) != 0) {
-		/* Can't not create a process yet get a process descriptor. */
 		if ((flags & RFPROC) == 0)
-			return (EINVAL);
+			return (EXTERROR(EINVAL,
+	    "Can not not create a process yet get a process descriptor"));
 
-		/* Must provide a place to put a procdesc if creating one. */
 		if (fr->fr_pd_fd == NULL)
-			return (EINVAL);
+			return (EXTERROR(EINVAL,
+		    "Must provide a place to put a procdesc if creating one"));
 
-		/* Check if we are using supported flags. */
 		if ((fr->fr_pd_flags & ~PD_ALLOWED_AT_FORK) != 0)
-			return (EINVAL);
+			return (EXTERROR(EINVAL,
+			    "Invallid pdflags at fork %#jx", fr->fr_pd_flags));
 	}
 
 	p1 = td->td_proc;
@@ -932,6 +983,8 @@ fork1(struct thread *td, struct fork_req *fr)
 	fp_procdesc = NULL;
 	newproc = NULL;
 	vm2 = NULL;
+	killsx_locked = false;
+	singlethreaded = false;
 
 	/*
 	 * Increment the nprocs resource before allocations occur.
@@ -962,6 +1015,52 @@ fork1(struct thread *td, struct fork_req *fr)
 	}
 
 	/*
+	 * If we are possibly multi-threaded, and there is a process
+	 * sending a signal to our group right now, ensure that our
+	 * other threads cannot be chosen for the signal queueing.
+	 * Otherwise, this might delay signal action, and make the new
+	 * child escape the signaling.
+	 */
+	pg = p1->p_pgrp;
+	if (p1->p_numthreads > 1) {
+		if (sx_try_slock(&pg->pg_killsx) != 0) {
+			killsx_locked = true;
+		} else {
+			PROC_LOCK(p1);
+			if (thread_single(p1, SINGLE_BOUNDARY)) {
+				PROC_UNLOCK(p1);
+				error = ERESTART;
+				goto fail2;
+			}
+			PROC_UNLOCK(p1);
+			singlethreaded = true;
+		}
+	}
+
+	/*
+	 * Atomically check for signals and block processes from sending
+	 * a signal to our process group until the child is visible.
+	 */
+	if (!killsx_locked && sx_slock_sig(&pg->pg_killsx) != 0) {
+		error = ERESTART;
+		goto fail2;
+	}
+	if (__predict_false(p1->p_pgrp != pg || sig_intr() != 0)) {
+		/*
+		 * Either the process was moved to other process
+		 * group, or there is pending signal.  sx_slock_sig()
+		 * does not check for signals if not sleeping for the
+		 * lock.
+		 */
+		sx_sunlock(&pg->pg_killsx);
+		killsx_locked = false;
+		error = ERESTART;
+		goto fail2;
+	} else {
+		killsx_locked = true;
+	}
+
+	/*
 	 * If required, create a process descriptor in the parent first; we
 	 * will abandon it if something goes wrong. We don't finit() until
 	 * later.
@@ -988,15 +1087,9 @@ fork1(struct thread *td, struct fork_req *fr)
 		}
 		proc_linkup(newproc, td2);
 	} else {
-		kmsan_thread_alloc(td2);
-		if (td2->td_kstack == 0 || td2->td_kstack_pages != pages) {
-			if (td2->td_kstack != 0)
-				vm_thread_dispose(td2);
-			if (!thread_alloc_stack(td2, pages)) {
-				error = ENOMEM;
-				goto fail2;
-			}
-		}
+		error = thread_recycle(td2, pages);
+		if (error != 0)
+			goto fail2;
 	}
 
 	if ((flags & RFMEM) == 0) {
@@ -1023,7 +1116,7 @@ fork1(struct thread *td, struct fork_req *fr)
 	 * XXX: This is ugly; when we copy resource usage, we need to bump
 	 *      per-cred resource counters.
 	 */
-	proc_set_cred_init(newproc, td->td_ucred);
+	newproc->p_ucred = crcowget(td->td_ucred);
 
 	/*
 	 * Initialize resource accounting for the child process.
@@ -1037,8 +1130,6 @@ fork1(struct thread *td, struct fork_req *fr)
 #ifdef MAC
 	mac_proc_init(newproc);
 #endif
-	newproc->p_klist = knlist_alloc(&newproc->p_mtx);
-	STAILQ_INIT(&newproc->p_ktr);
 
 	/*
 	 * Increment the count of procs running with this uid. Don't allow
@@ -1051,8 +1142,11 @@ fork1(struct thread *td, struct fork_req *fr)
 		chgproccnt(cred->cr_ruidinfo, 1, 0);
 	}
 
+	newproc->p_klist = knlist_alloc(&newproc->p_mtx);
+
 	do_fork(td, fr, newproc, td2, vm2, fp_procdesc);
-	return (0);
+	error = 0;
+	goto cleanup;
 fail0:
 	error = EAGAIN;
 #ifdef MAC
@@ -1060,7 +1154,7 @@ fail0:
 #endif
 	racct_proc_exit(newproc);
 fail1:
-	proc_unset_cred(newproc);
+	proc_unset_cred(newproc, false);
 fail2:
 	if (vm2 != NULL)
 		vmspace_free(vm2);
@@ -1070,7 +1164,16 @@ fail2:
 		fdrop(fp_procdesc, td);
 	}
 	atomic_add_int(&nprocs, -1);
-	pause("fork", hz / 2);
+cleanup:
+	if (killsx_locked)
+		sx_sunlock(&pg->pg_killsx);
+	if (singlethreaded) {
+		PROC_LOCK(p1);
+		thread_single_end(p1, SINGLE_BOUNDARY);
+		PROC_UNLOCK(p1);
+	}
+	if (error != 0)
+		pause("fork", hz / 2);
 	return (error);
 }
 
@@ -1127,8 +1230,14 @@ fork_exit(void (*callout)(void *, struct trapframe *), void *arg,
 	}
 	mtx_assert(&Giant, MA_NOTOWNED);
 
+	/*
+	 * Now going to return to userland.
+	 */
+
 	if (p->p_sysent->sv_schedtail != NULL)
 		(p->p_sysent->sv_schedtail)(td);
+
+	userret(td, frame);
 }
 
 /*
@@ -1159,7 +1268,7 @@ fork_return(struct thread *td, struct trapframe *frame)
 			td->td_dbgflags &= ~TDB_STOPATFORK;
 		}
 		PROC_UNLOCK(p);
-	} else if (p->p_flag & P_TRACED || td->td_dbgflags & TDB_BORN) {
+	} else if (p->p_flag & P_TRACED) {
  		/*
 		 * This is the start of a new thread in a traced
 		 * process.  Report a system call exit event.
@@ -1179,11 +1288,9 @@ fork_return(struct thread *td, struct trapframe *frame)
 	if (!prison_isalive(td->td_ucred->cr_prison))
 		exit1(td, 0, SIGKILL);
 
-	userret(td, frame);
-
 #ifdef KTRACE
 	if (KTRPOINT(td, KTR_SYSRET))
-		ktrsysret(SYS_fork, 0, 0);
+		ktrsysret(td->td_sa.code, 0, 0);
 #endif
 }
 

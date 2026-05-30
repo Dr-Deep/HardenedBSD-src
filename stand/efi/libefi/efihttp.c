@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2019 Intel Corporation
  *
@@ -23,12 +23,7 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
 
@@ -41,7 +36,6 @@ __FBSDID("$FreeBSD$");
 
 #include <efi.h>
 #include <efilib.h>
-#include <efiprot.h>
 #include <Protocol/Http.h>
 #include <Protocol/Ip4Config2.h>
 #include <Protocol/ServiceBinding.h>
@@ -570,6 +564,8 @@ efihttp_fs_open(const char *path, struct open_file *f)
 
 	if (!efihttp_init_done)
 		return (ENXIO);
+	if (f->f_dev != &efihttp_dev)
+		return (EINVAL);
 	/*
 	 * If any path fails to open, try with a trailing slash in
 	 * case it's a directory.

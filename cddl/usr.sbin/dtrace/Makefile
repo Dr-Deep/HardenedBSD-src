@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 .include <src.opts.mk>
 
 .PATH: ${SRCTOP}/cddl/contrib/opensolaris/cmd/dtrace
@@ -12,9 +10,10 @@ BINDIR?=	/usr/sbin
 WARNS?=		1
 
 CFLAGS+= -DIN_BASE
-CFLAGS+= -I${SRCTOP}/sys/contrib/openzfs/include
-CFLAGS+= -I${SRCTOP}/sys/contrib/openzfs/lib/libspl/include/
-CFLAGS+= -I${SRCTOP}/sys/contrib/openzfs/lib/libspl/include/os/freebsd
+CFLAGS+= -DSKIP_SPL_SYS_CONDVAR_H
+CFLAGS+= -I${ZFSTOP}/include
+CFLAGS+= -I${ZFSTOP}/lib/libspl/include/
+CFLAGS+= -I${ZFSTOP}/lib/libspl/include/os/freebsd
 CFLAGS+= -I${SRCTOP}/sys
 CFLAGS+= -I${SRCTOP}/cddl/compat/opensolaris/include
 CFLAGS+=	-I${SRCTOP}/sys/cddl/compat/opensolaris \
@@ -30,7 +29,12 @@ CFLAGS+= -DHAVE_ISSETUGID
 #CFLAGS+=	-DNEED_ERRLOC
 #YFLAGS+=	-d
 
-LIBADD=	dtrace ctf elf proc spl
+.if ${MK_DTRACE_ASAN} != "no"
+CFLAGS+=	-fsanitize=address -fsanitize=undefined
+LDFLAGS+=	-fsanitize=address -fsanitize=undefined
+.endif
+
+LIBADD=	dtrace ctf elf proc spl xo pthread
 
 .if ${MK_DTRACE_TESTS} != "no"
 SUBDIR+=	tests

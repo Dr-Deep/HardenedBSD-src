@@ -1,4 +1,5 @@
 #!/bin/ksh -p
+# SPDX-License-Identifier: CDDL-1.0
 #
 # CDDL HEADER START
 #
@@ -94,13 +95,13 @@ for nparity in 1 2 3; do
 	# log_must zfs set primarycache=metadata $TESTPOOL
 
 	log_must zfs create $TESTPOOL/fs
-	log_must fill_fs /$TESTPOOL/fs 1 256 10 1024 R
+	log_must fill_fs /$TESTPOOL/fs 1 256 10240 1 R
 
 	log_must zfs create -o compress=on $TESTPOOL/fs2
-	log_must fill_fs /$TESTPOOL/fs2 1 256 10 1024 R
+	log_must fill_fs /$TESTPOOL/fs2 1 256 10240 1 R
 
 	log_must zfs create -o compress=on -o recordsize=8k $TESTPOOL/fs3
-	log_must fill_fs /$TESTPOOL/fs3 1 256 10 1024 R
+	log_must fill_fs /$TESTPOOL/fs3 1 256 10240 1 R
 
 	log_must zpool export $TESTPOOL
 	log_must zpool import -o cachefile=none -d $dir $TESTPOOL
@@ -120,12 +121,7 @@ for nparity in 1 2 3; do
 
 		# Scrub the pool after the sequential resilver and verify
 		# that the silent damage was repaired by the scrub.
-		log_must zpool scrub -w $TESTPOOL
-		log_must zpool status $TESTPOOL
-		log_must check_pool_status $TESTPOOL "errors" \
-		    "No known data errors"
-		log_must check_pool_status $TESTPOOL "scan" "with 0 errors"
-		log_mustnot check_pool_status $TESTPOOL "scan" "repaired 0B"
+		log_must verify_draid_pool $TESTPOOL "damaged"
 	done
 
 	for nspare in 0 1 2; do
@@ -144,12 +140,7 @@ for nparity in 1 2 3; do
 	done
 
 	log_must zpool clear $TESTPOOL
-	log_must zpool scrub -w $TESTPOOL
-	log_must zpool status $TESTPOOL
-
-	log_must check_pool_status $TESTPOOL "errors" "No known data errors"
-	log_must check_pool_status $TESTPOOL "scan" "with 0 errors"
-	log_must check_pool_status $TESTPOOL "scan" "repaired 0B"
+	log_must verify_draid_pool $TESTPOOL "healing"
 
 	log_must zpool destroy "$TESTPOOL"
 done

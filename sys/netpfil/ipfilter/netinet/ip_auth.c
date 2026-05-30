@@ -1,4 +1,3 @@
-/*	$FreeBSD$	*/
 
 /*
  * Copyright (C) 2012 by Darren Reed.
@@ -109,10 +108,6 @@
 #endif
 /* END OF INCLUDES */
 
-#if !defined(lint)
-static const char rcsid[] = "@(#)$FreeBSD$";
-/* static const char rcsid[] = "@(#)$Id: ip_auth.c,v 2.73.2.24 2007/09/09 11:32:04 darrenr Exp $"; */
-#endif
 
 
 static void ipf_auth_deref(frauthent_t **);
@@ -1020,8 +1015,9 @@ ipf_auth_ioctlloop:
 
 			for (t = auth.fra_buf; m && (len > 0); ) {
 				i = MIN(M_LEN(m), len);
-				error = copyoutptr(softc, MTOD(m, char *),
-						   &t, i);
+				error = ipf_copyout_indirect(softc,
+							     MTOD(m, char *),
+							     &t, i);
 				len -= i;
 				t += i;
 				if (error != 0) {

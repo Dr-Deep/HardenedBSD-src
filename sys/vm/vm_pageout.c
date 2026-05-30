@@ -41,8 +41,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- *	from: @(#)vm_pageout.c	7.4 (Berkeley) 5/7/91
- *
  *
  * Copyright (c) 1987, 1990 Carnegie-Mellon University.
  * All rights reserved.
@@ -75,8 +73,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_vm.h"
 
 #include <sys/param.h>
@@ -84,6 +80,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/kernel.h>
 #include <sys/blockcount.h>
 #include <sys/eventhandler.h>
+#include <sys/limits.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
 #include <sys/proc.h>
@@ -112,6 +109,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_pager.h>
 #include <vm/vm_phys.h>
 #include <vm/vm_pagequeue.h>
+#include <vm/vm_radix.h>
 #include <vm/swap_pager.h>
 #include <vm/vm_extern.h>
 #include <vm/uma.h>
@@ -122,7 +120,7 @@ __FBSDID("$FreeBSD$");
 
 /* the kernel process "vm_pageout"*/
 static void vm_pageout(void);
-static void vm_pageout_init(void);
+static void vm_pageout_init(void *);
 static int vm_pageout_clean(vm_page_t m, int *numpagedout);
 static int vm_pageout_cluster(vm_page_t m);
 static void vm_pageout_mightbe_oom(struct vm_domain *vmd, int page_shortage,
@@ -186,10 +184,32 @@ SYSCTL_INT(_vm, OID_AUTO, pageout_oom_seq,
     CTLFLAG_RWTUN, &vm_pageout_oom_seq, 0,
     "back-to-back calls to oom detector to start OOM");
 
+static int
+sysctl_laundry_weight(SYSCTL_HANDLER_ARGS)
+{
+	int error, val;
+
+	val = *(int *)arg1;
+	error = sysctl_handle_int(oidp, &val, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (val < arg2 || val > 100)
+		return (EINVAL);
+	*(int *)arg1 = val;
+	return (0);
+}
+
 static int act_scan_laundry_weight = 3;
-SYSCTL_INT(_vm, OID_AUTO, act_scan_laundry_weight, CTLFLAG_RWTUN,
-    &act_scan_laundry_weight, 0,
+SYSCTL_PROC(_vm, OID_AUTO, act_scan_laundry_weight,
+    CTLTYPE_INT | CTLFLAG_RWTUN, &act_scan_laundry_weight, 1,
+    sysctl_laundry_weight, "I",
     "weight given to clean vs. dirty pages in active queue scans");
+
+static int inact_scan_laundry_weight = 1;
+SYSCTL_PROC(_vm, OID_AUTO, inact_scan_laundry_weight,
+    CTLTYPE_INT | CTLFLAG_RWTUN, &inact_scan_laundry_weight, 0,
+    sysctl_laundry_weight, "I",
+    "weight given to clean vs. dirty pages in inactive queue scans");
 
 static u_int vm_background_launder_rate = 4096;
 SYSCTL_UINT(_vm, OID_AUTO, background_launder_rate, CTLFLAG_RWTUN,
@@ -344,6 +364,25 @@ vm_pageout_defer(vm_page_t m, const uint8_t queue, const bool enqueued)
 }
 
 /*
+ * We can cluster only if the page is not clean, busy, or held, and the page is
+ * in the laundry queue.
+ */
+static bool
+vm_pageout_flushable(vm_page_t m)
+{
+	if (vm_page_tryxbusy(m) == 0)
+		return (false);
+	if (!vm_page_wired(m)) {
+		vm_page_test_dirty(m);
+		if (m->dirty != 0 && vm_page_in_laundry(m) &&
+		    vm_page_try_remove_write(m))
+			return (true);
+	}
+	vm_page_xunbusy(m);
+	return (false);
+}
+
+/*
  * Scan for pages at adjacent offsets within the given page's object that are
  * eligible for laundering, form a cluster of these pages and the given page,
  * and launder that cluster.
@@ -351,27 +390,21 @@ vm_pageout_defer(vm_page_t m, const uint8_t queue, const bool enqueued)
 static int
 vm_pageout_cluster(vm_page_t m)
 {
-	vm_object_t object;
-	vm_page_t mc[2 * vm_pageout_page_count], p, pb, ps;
-	vm_pindex_t pindex;
-	int ib, is, page_base, pageout_count;
+	struct pctrie_iter pages;
+	vm_page_t mc[2 * vm_pageout_page_count - 1];
+	int alignment, page_base, pageout_count;
 
-	object = m->object;
-	VM_OBJECT_ASSERT_WLOCKED(object);
-	pindex = m->pindex;
+	VM_OBJECT_ASSERT_WLOCKED(m->object);
 
 	vm_page_assert_xbusied(m);
 
-	mc[vm_pageout_page_count] = pb = ps = m;
+	vm_page_iter_init(&pages, m->object);
+	alignment = m->pindex % vm_pageout_page_count;
+	page_base = nitems(mc) / 2;
 	pageout_count = 1;
-	page_base = vm_pageout_page_count;
-	ib = 1;
-	is = 1;
+	mc[page_base] = m;
 
 	/*
-	 * We can cluster only if the page is not clean, busy, or held, and
-	 * the page is in the laundry queue.
-	 *
 	 * During heavy mmap/modification loads the pageout
 	 * daemon can really fragment the underlying file
 	 * due to flushing pages out of order and not trying to
@@ -379,78 +412,41 @@ vm_pageout_cluster(vm_page_t m)
 	 * holes).  To solve this problem we do the reverse scan
 	 * first and attempt to align our cluster, then do a 
 	 * forward scan if room remains.
+	 *
+	 * If we are at an alignment boundary, stop here, and switch directions.
 	 */
-more:
-	while (ib != 0 && pageout_count < vm_pageout_page_count) {
-		if (ib > pindex) {
-			ib = 0;
-			break;
-		}
-		if ((p = vm_page_prev(pb)) == NULL ||
-		    vm_page_tryxbusy(p) == 0) {
-			ib = 0;
-			break;
-		}
-		if (vm_page_wired(p)) {
-			ib = 0;
-			vm_page_xunbusy(p);
-			break;
-		}
-		vm_page_test_dirty(p);
-		if (p->dirty == 0) {
-			ib = 0;
-			vm_page_xunbusy(p);
-			break;
-		}
-		if (!vm_page_in_laundry(p) || !vm_page_try_remove_write(p)) {
-			vm_page_xunbusy(p);
-			ib = 0;
-			break;
-		}
-		mc[--page_base] = pb = p;
-		++pageout_count;
-		++ib;
-
-		/*
-		 * We are at an alignment boundary.  Stop here, and switch
-		 * directions.  Do not clear ib.
-		 */
-		if ((pindex - (ib - 1)) % vm_pageout_page_count == 0)
-			break;
+	if (alignment > 0) {
+		pages.index = mc[page_base]->pindex;
+		do {
+			m = vm_radix_iter_prev(&pages);
+			if (m == NULL || !vm_pageout_flushable(m))
+				break;
+			mc[--page_base] = m;
+		} while (pageout_count++ < alignment);
 	}
-	while (pageout_count < vm_pageout_page_count && 
-	    pindex + is < object->size) {
-		if ((p = vm_page_next(ps)) == NULL ||
-		    vm_page_tryxbusy(p) == 0)
-			break;
-		if (vm_page_wired(p)) {
-			vm_page_xunbusy(p);
-			break;
-		}
-		vm_page_test_dirty(p);
-		if (p->dirty == 0) {
-			vm_page_xunbusy(p);
-			break;
-		}
-		if (!vm_page_in_laundry(p) || !vm_page_try_remove_write(p)) {
-			vm_page_xunbusy(p);
-			break;
-		}
-		mc[page_base + pageout_count] = ps = p;
-		++pageout_count;
-		++is;
+	if (pageout_count < vm_pageout_page_count) {
+		pages.index = mc[page_base + pageout_count - 1]->pindex;
+		do {
+			m = vm_radix_iter_next(&pages);
+			if (m == NULL || !vm_pageout_flushable(m))
+				break;
+			mc[page_base + pageout_count] = m;
+		} while (++pageout_count < vm_pageout_page_count);
 	}
-
-	/*
-	 * If we exhausted our forward scan, continue with the reverse scan
-	 * when possible, even past an alignment boundary.  This catches
-	 * boundary conditions.
-	 */
-	if (ib != 0 && pageout_count < vm_pageout_page_count)
-		goto more;
+	if (pageout_count < vm_pageout_page_count &&
+	    alignment == nitems(mc) / 2 - page_base) {
+		/* Resume the reverse scan. */
+		pages.index = mc[page_base]->pindex;
+		do {
+			m = vm_radix_iter_prev(&pages);
+			if (m == NULL || !vm_pageout_flushable(m))
+				break;
+			mc[--page_base] = m;
+		} while (++pageout_count < vm_pageout_page_count);
+	}
 
 	return (vm_pageout_flush(&mc[page_base], pageout_count,
-	    VM_PAGER_PUT_NOREUSE, 0, NULL, NULL));
+	    VM_PAGER_PUT_NOREUSE, NULL));
 }
 
 /*
@@ -462,14 +458,14 @@ more:
  *	the parent to do more sophisticated things we may have to change
  *	the ordering.
  *
- *	Returned runlen is the count of pages between mreq and first
- *	page after mreq with status VM_PAGER_AGAIN.
- *	*eio is set to TRUE if pager returned VM_PAGER_ERROR or VM_PAGER_FAIL
- *	for any page in runlen set.
+ *	If eio is not NULL, returns the count of pages between 0 and first page
+ *	with status VM_PAGER_AGAIN.  *eio is set to true if pager returned
+ *	VM_PAGER_ERROR or VM_PAGER_FAIL for any page in that set.
+ *
+ *	Otherwise, returns the number of paged-out pages.
  */
 int
-vm_pageout_flush(vm_page_t *mc, int count, int flags, int mreq, int *prunlen,
-    boolean_t *eio)
+vm_pageout_flush(vm_page_t *mc, int count, int flags, bool *eio)
 {
 	vm_object_t object = mc[0]->object;
 	int pageout_status[count];
@@ -500,9 +496,9 @@ vm_pageout_flush(vm_page_t *mc, int count, int flags, int mreq, int *prunlen,
 
 	vm_pager_put_pages(object, mc, count, flags, pageout_status);
 
-	runlen = count - mreq;
+	runlen = count;
 	if (eio != NULL)
-		*eio = FALSE;
+		*eio = false;
 	for (i = 0; i < count; i++) {
 		vm_page_t mt = mc[i];
 
@@ -552,12 +548,12 @@ vm_pageout_flush(vm_page_t *mc, int count, int flags, int mreq, int *prunlen,
 				numpagedout++;
 			} else
 				vm_page_activate(mt);
-			if (eio != NULL && i >= mreq && i - mreq < runlen)
-				*eio = TRUE;
+			if (eio != NULL)
+				*eio = true;
 			break;
 		case VM_PAGER_AGAIN:
-			if (i >= mreq && i - mreq < runlen)
-				runlen = i - mreq;
+			if (runlen == count)
+				runlen = i;
 			break;
 		}
 
@@ -572,8 +568,8 @@ vm_pageout_flush(vm_page_t *mc, int count, int flags, int mreq, int *prunlen,
 			vm_page_sunbusy(mt);
 		}
 	}
-	if (prunlen != NULL)
-		*prunlen = runlen;
+	if (eio != NULL)
+		return (runlen);
 	return (numpagedout);
 }
 
@@ -1405,7 +1401,7 @@ vm_pageout_reinsert_inactive(struct scan_state *ss, struct vm_batchqueue *bq,
 	pq = ss->pq;
 
 	if (m != NULL) {
-		if (vm_batchqueue_insert(bq, m))
+		if (vm_batchqueue_insert(bq, m) != 0)
 			return;
 		vm_pagequeue_lock(pq);
 		delta += vm_pageout_reinsert_inactive_page(pq, marker, m);
@@ -1429,7 +1425,8 @@ vm_pageout_scan_inactive(struct vm_domain *vmd, int page_shortage)
 	struct vm_pagequeue *pq;
 	vm_object_t object;
 	vm_page_astate_t old, new;
-	int act_delta, addl_page_shortage, starting_page_shortage, refs;
+	int act_delta, addl_page_shortage, dirty_count, dirty_thresh;
+	int starting_page_shortage, refs;
 
 	object = NULL;
 	vm_batchqueue_init(&rq);
@@ -1444,6 +1441,18 @@ vm_pageout_scan_inactive(struct vm_domain *vmd, int page_shortage)
 	addl_page_shortage = 0;
 
 	/*
+	 * dirty_count is the number of pages encountered that require
+	 * laundering before reclamation is possible.  If we encounter a large
+	 * number of dirty pages, we may abort the scan without meeting the page
+	 * shortage in the hope that laundering will allow a future scan to meet
+	 * the target.
+	 */
+	dirty_count = 0;
+	dirty_thresh = inact_scan_laundry_weight * page_shortage;
+	if (dirty_thresh == 0)
+		dirty_thresh = INT_MAX;
+
+	/*
 	 * Start scanning the inactive queue for pages that we can free.  The
 	 * scan will stop when we reach the target or we have scanned the
 	 * entire queue.  (Note that m->a.act_count is not used to make
@@ -1455,7 +1464,21 @@ vm_pageout_scan_inactive(struct vm_domain *vmd, int page_shortage)
 	pq = &vmd->vmd_pagequeues[PQ_INACTIVE];
 	vm_pagequeue_lock(pq);
 	vm_pageout_init_scan(&ss, pq, marker, NULL, pq->pq_cnt);
-	while (page_shortage > 0 && (m = vm_pageout_next(&ss, true)) != NULL) {
+	while (page_shortage > 0 && dirty_count < dirty_thresh) {
+		/*
+		 * If we need to refill the scan batch queue, release any
+		 * optimistically held object lock.  This gives someone else a
+		 * chance to grab the lock, and also avoids holding it while we
+		 * do unrelated work.
+		 */
+		if (object != NULL && vm_batchqueue_empty(&ss.bq)) {
+			VM_OBJECT_WUNLOCK(object);
+			object = NULL;
+		}
+
+		m = vm_pageout_next(&ss, true);
+		if (m == NULL)
+			break;
 		KASSERT((m->flags & PG_MARKER) == 0,
 		    ("marker page %p was dequeued", m));
 
@@ -1615,8 +1638,20 @@ free_page:
 			page_shortage--;
 			continue;
 		}
-		if ((object->flags & OBJ_DEAD) == 0)
+		if ((object->flags & OBJ_DEAD) == 0) {
 			vm_page_launder(m);
+
+			/*
+			 * If the page would be paged out to a swap device, and
+			 * no devices are configured or they are all nearly
+			 * full, then don't count it against our threshold,
+			 * since it most likely can't be used to meet our
+			 * target.
+			 */
+			if ((object->flags & OBJ_SWAP) == 0 ||
+			    !atomic_load_bool(&swap_pager_almost_full))
+				dirty_count++;
+		}
 skip_page:
 		vm_page_xunbusy(m);
 		continue;
@@ -1659,8 +1694,9 @@ vm_pageout_inactive_dispatch(struct vm_domain *vmd, int shortage)
 	 * If we have more work than we can do in a quarter of our interval, we
 	 * fire off multiple threads to process it.
 	 */
-	threads = vmd->vmd_inactive_threads;
-	if (threads > 1 && vmd->vmd_inactive_pps != 0 &&
+	if ((threads = vmd->vmd_inactive_threads) > 1 &&
+	    vmd->vmd_helper_threads_enabled &&
+	    vmd->vmd_inactive_pps != 0 &&
 	    shortage > vmd->vmd_inactive_pps / VM_INACT_SCAN_RATE / 4) {
 		vmd->vmd_inactive_shortage /= threads;
 		slop = shortage % threads;
@@ -1755,22 +1791,10 @@ vm_pageout_inactive(struct vm_domain *vmd, int shortage, int *addl_shortage)
 	}
 
 	/*
-	 * Wakeup the swapout daemon if we didn't free the targeted number of
-	 * pages.
-	 */
-	if (page_shortage > 0)
-		vm_swapout_run();
-
-	/*
 	 * If the inactive queue scan fails repeatedly to meet its
 	 * target, kill the largest process.
 	 */
 	vm_pageout_mightbe_oom(vmd, page_shortage, starting_page_shortage);
-
-	/*
-	 * Reclaim pages by swapping out idle processes, if configured to do so.
-	 */
-	vm_swapout_run_idle();
 
 	/*
 	 * See the description of addl_page_shortage above.
@@ -1793,14 +1817,20 @@ vm_pageout_mightbe_oom(struct vm_domain *vmd, int page_shortage,
 {
 	int old_vote;
 
+	/*
+	 * Do not trigger an OOM kill if the page daemon is able to make
+	 * progress, or if there is no instantaneous shortage.  The latter case
+	 * can happen if the PID controller is still reacting to an acute
+	 * shortage, and the inactive queue is full of dirty pages.
+	 */
 	if (starting_page_shortage <= 0 || starting_page_shortage !=
-	    page_shortage)
+	    page_shortage || !vm_paging_needed(vmd, vmd->vmd_free_count))
 		vmd->vmd_oom_seq = 0;
 	else
 		vmd->vmd_oom_seq++;
 	if (vmd->vmd_oom_seq < vm_pageout_oom_seq) {
 		if (vmd->vmd_oom) {
-			vmd->vmd_oom = FALSE;
+			vmd->vmd_oom = false;
 			atomic_subtract_int(&vm_pageout_oom_vote, 1);
 		}
 		return;
@@ -1815,7 +1845,7 @@ vm_pageout_mightbe_oom(struct vm_domain *vmd, int page_shortage,
 	if (vmd->vmd_oom)
 		return;
 
-	vmd->vmd_oom = TRUE;
+	vmd->vmd_oom = true;
 	old_vote = atomic_fetchadd_int(&vm_pageout_oom_vote, 1);
 	if (old_vote != vm_ndomains - 1)
 		return;
@@ -1833,7 +1863,7 @@ vm_pageout_mightbe_oom(struct vm_domain *vmd, int page_shortage,
 	 * memory condition is still there, due to vmd_oom being
 	 * false.
 	 */
-	vmd->vmd_oom = FALSE;
+	vmd->vmd_oom = false;
 	atomic_subtract_int(&vm_pageout_oom_vote, 1);
 }
 
@@ -1871,7 +1901,7 @@ vm_pageout_oom_pagecount(struct vmspace *vmspace)
 	long res;
 
 	map = &vmspace->vm_map;
-	KASSERT(!map->system_map, ("system map"));
+	KASSERT(!vm_map_is_system(map), ("system map"));
 	sx_assert(&map->lock, SA_LOCKED);
 	res = 0;
 	VM_MAP_ENTRY_FOREACH(entry, map) {
@@ -1962,8 +1992,7 @@ vm_pageout_oom(int shortage)
 			if (!TD_ON_RUNQ(td) &&
 			    !TD_IS_RUNNING(td) &&
 			    !TD_IS_SLEEPING(td) &&
-			    !TD_IS_SUSPENDED(td) &&
-			    !TD_IS_SWAPPED(td)) {
+			    !TD_IS_SUSPENDED(td)) {
 				thread_unlock(td);
 				breakout = true;
 				break;
@@ -1982,7 +2011,7 @@ vm_pageout_oom(int shortage)
 			PROC_UNLOCK(p);
 			continue;
 		}
-		_PHOLD_LITE(p);
+		_PHOLD(p);
 		PROC_UNLOCK(p);
 		sx_sunlock(&allproc_lock);
 		if (!vm_map_trylock_read(&vm->vm_map)) {
@@ -2297,10 +2326,14 @@ vm_pageout_init_domain(int domain)
 	pidctrl_init_sysctl(&vmd->vmd_pid, SYSCTL_CHILDREN(oid));
 
 	vmd->vmd_inactive_threads = get_pageout_threads_per_domain(vmd);
+	SYSCTL_ADD_BOOL(NULL, SYSCTL_CHILDREN(vmd->vmd_oid), OID_AUTO,
+	    "pageout_helper_threads_enabled", CTLFLAG_RWTUN,
+	    &vmd->vmd_helper_threads_enabled, 0,
+	    "Enable multi-threaded inactive queue scanning");
 }
 
 static void
-vm_pageout_init(void)
+vm_pageout_init(void *dummy __unused)
 {
 	u_long freecount;
 	int i;
@@ -2308,9 +2341,6 @@ vm_pageout_init(void)
 	/*
 	 * Initialize some paging parameters.
 	 */
-	if (vm_cnt.v_page_count < 2000)
-		vm_pageout_page_count = 8;
-
 	freecount = 0;
 	for (i = 0; i < vm_ndomains; i++) {
 		struct vm_domain *vmd;

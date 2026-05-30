@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -29,14 +31,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#ifndef lint
-#if 0
-static char sccsid[] = "@(#)jobs.c	8.5 (Berkeley) 5/4/95";
-#endif
-#endif /* not lint */
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/ioctl.h>
 #include <sys/param.h>
@@ -101,7 +95,7 @@ struct job {
 	short nprocs;		/* number of processes */
 	pid_t pgrp;		/* process group of this job */
 	char state;		/* true if job is finished */
-	char used;		/* true if this entry is in used */
+	char used;		/* true if this entry is in use */
 	char changed;		/* true if status has changed */
 	char foreground;	/* true if running in the foreground */
 	char remembered;	/* true if $! referenced */
@@ -581,6 +575,7 @@ waitcmdloop(struct job *job)
 					freejob(job);
 				else {
 					job->remembered = 0;
+					deljob(job);
 					if (job == bgjob)
 						bgjob = NULL;
 				}
@@ -607,7 +602,7 @@ waitcmdloop(struct job *job)
 					break;
 			}
 		}
-	} while (dowait(DOWAIT_BLOCK | DOWAIT_SIG, (struct job *)NULL) != -1);
+	} while (dowait(DOWAIT_BLOCK | DOWAIT_SIG, job) != -1);
 
 	sig = pendingsig_waitcmd;
 	pendingsig_waitcmd = 0;
@@ -1085,6 +1080,7 @@ waitforjob(struct job *jp, int *signaled)
 #if JOBS
 	int propagate_int = jp->jobctl && jp->foreground;
 #endif
+	int jobindex;
 	int status;
 	int st;
 
@@ -1092,8 +1088,11 @@ waitforjob(struct job *jp, int *signaled)
 	TRACE(("waitforjob(%%%td) called\n", jp - jobtab + 1));
 	while (jp->state == 0)
 		if (dowait(DOWAIT_BLOCK | (Tflag ? DOWAIT_SIG |
-		    DOWAIT_SIG_TRAP : 0), jp) == -1)
+		    DOWAIT_SIG_TRAP : 0), jp) == -1) {
+			jobindex = jp - jobtab;
 			dotrap();
+			jp = jobtab + jobindex;
+		}
 #if JOBS
 	if (jp->jobctl) {
 		if (ttyfd >= 0 && tcsetpgrp(ttyfd, rootpid) < 0)

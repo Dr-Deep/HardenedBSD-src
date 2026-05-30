@@ -33,11 +33,9 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
+#define _WANT_P_OSREL
 #include "namespace.h"
-#include <sys/types.h>
+#include <sys/param.h>
 #include <sys/signalvar.h>
 #include <sys/ioctl.h>
 #include <sys/link_elf.h>
@@ -61,6 +59,7 @@ __FBSDID("$FreeBSD$");
 #include "libc_private.h"
 #include "thr_private.h"
 
+int		__getosreldate(void);
 char		*_usrstack;
 struct pthread	*_thr_initial;
 int		_libthr_debug;
@@ -170,7 +169,6 @@ STATIC_LIB_REQUIRE(_sem_trywait);
 STATIC_LIB_REQUIRE(_sem_wait);
 STATIC_LIB_REQUIRE(_sigaction);
 STATIC_LIB_REQUIRE(_sigprocmask);
-STATIC_LIB_REQUIRE(_sigsuspend);
 STATIC_LIB_REQUIRE(_sigtimedwait);
 STATIC_LIB_REQUIRE(_sigwait);
 STATIC_LIB_REQUIRE(_sigwaitinfo);
@@ -272,6 +270,9 @@ static pthread_func_t jmp_table[][2] = {
 	[PJT_MUTEXATTR_SETROBUST] = {DUAL_ENTRY(_thr_mutexattr_setrobust)},
 	[PJT_GETTHREADID_NP] = {DUAL_ENTRY(_thr_getthreadid_np)},
 	[PJT_ATTR_GET_NP] = {DUAL_ENTRY(_thr_attr_get_np)},
+	[PJT_GETNAME_NP] = {DUAL_ENTRY(_thr_getname_np)},
+	[PJT_SUSPEND_ALL_NP] = {DUAL_ENTRY(_thr_suspend_all_np)},
+	[PJT_RESUME_ALL_NP] = {DUAL_ENTRY(_thr_resume_all_np)},
 };
 
 static int init_once = 0;
@@ -333,6 +334,8 @@ _libpthread_init(struct pthread *curthread)
 	/* Set the initial thread. */
 	if (curthread == NULL) {
 		first = 1;
+		/* Force _get_curthread() return NULL until set. */
+		_tcb_get()->tcb_thread = NULL;
 		/* Create and initialize the initial thread. */
 		curthread = _thr_alloc(NULL);
 		if (curthread == NULL)
@@ -349,7 +352,7 @@ _libpthread_init(struct pthread *curthread)
 	_thread_active_threads = 1;
 
 	/* Setup the thread specific data */
-	_tcb_set(curthread->tcb);
+	__thr_setup_tsd(curthread);
 
 	if (first) {
 		_thr_initial = curthread;
@@ -430,6 +433,10 @@ init_main_thread(struct pthread *thread)
 	thread->unwind_stackend = _usrstack;
 #endif
 
+	thread->uexterr.ver = UEXTERROR_VER;
+	if (__getosreldate() >= P_OSREL_EXTERRCTL)
+		exterrctl(EXTERRCTL_ENABLE, EXTERRCTLF_FORCE, &thread->uexterr);
+
 	/* Others cleared to zero by thr_alloc() */
 }
 
@@ -466,7 +473,7 @@ init_private(void)
 		mib[0] = CTL_KERN;
 		mib[1] = KERN_USRSTACK;
 		len = sizeof (_usrstack);
-		if (sysctl(mib, 2, &_usrstack, &len, NULL, 0) == -1)
+		if (sysctl(mib, nitems(mib), &_usrstack, &len, NULL, 0) == -1)
 			PANIC("Cannot get kern.usrstack from sysctl");
 		env_bigstack = getenv("LIBPTHREAD_BIGSTACK_MAIN");
 		env_splitstack = getenv("LIBPTHREAD_SPLITSTACK_MAIN");
@@ -492,7 +499,17 @@ init_private(void)
 		env = getenv("LIBPTHREAD_QUEUE_FIFO");
 		if (env)
 			_thr_queuefifo = atoi(env);
-		TAILQ_INIT(&_thr_atfork_list);
+		env = getenv("LIBPTHREAD_UMTX_MIN_TIMEOUT");
+		if (env) {
+			char *endptr;
+			long mint;
+
+			mint = strtol(env, &endptr, 0);
+			if (*endptr == '\0' && mint >= 0) {
+				_umtx_op(NULL, UMTX_OP_SET_MIN_TIMEOUT,
+				    mint, NULL, NULL);
+			}
+		}
 	}
 	init_once = 1;
 }

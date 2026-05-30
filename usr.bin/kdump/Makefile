@@ -1,6 +1,3 @@
-#	@(#)Makefile	8.1 (Berkeley) 6/6/93
-# $FreeBSD$
-
 .include <src.opts.mk>
 
 .PATH: ${SRCTOP}/usr.bin/ktrace
@@ -8,6 +5,7 @@
 PROG=		kdump
 SRCS=		kdump.c subr.c
 CFLAGS+=	-I${SRCTOP}/usr.bin/ktrace
+CFLAGS+=	-I${SRCTOP}/lib/libc/gen
 
 LIBADD=		sysdecode
 .if ${MK_CASPER} != "no"

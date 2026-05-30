@@ -27,9 +27,6 @@
  */
 #include "opt_platform.h"
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
@@ -52,7 +49,7 @@ static MALLOC_DEFINE(M_MRMLB, "MRML bridge", "Cavium MRML bridge");
 static device_probe_t mrmlb_fdt_probe;
 static device_attach_t mrmlb_fdt_attach;
 
-static struct resource * mrmlb_ofw_bus_alloc_res(device_t, device_t, int, int *,
+static struct resource * mrmlb_ofw_bus_alloc_res(device_t, device_t, int, int,
     rman_res_t, rman_res_t, rman_res_t, u_int);
 
 static const struct ofw_bus_devinfo * mrmlb_ofw_get_devinfo(device_t, device_t);
@@ -111,7 +108,8 @@ mrmlb_fdt_attach(device_t dev)
 	if (err != 0)
 		return (err);
 
-	return (bus_generic_attach(dev));
+	bus_attach_children(dev);
+	return (0);
 }
 
 /* OFW bus interface */
@@ -130,7 +128,7 @@ mrmlb_ofw_get_devinfo(device_t bus __unused, device_t child)
 }
 
 static struct resource *
-mrmlb_ofw_bus_alloc_res(device_t bus, device_t child, int type, int *rid,
+mrmlb_ofw_bus_alloc_res(device_t bus, device_t child, int type, int rid,
     rman_res_t start, rman_res_t end, rman_res_t count, u_int flags)
 {
 	struct simplebus_softc *sc;
@@ -145,7 +143,7 @@ mrmlb_ofw_bus_alloc_res(device_t bus, device_t child, int type, int *rid,
 		    type = SYS_RES_MEMORY;
 
 		/* Find defaults for this rid */
-		rle = resource_list_find(&di->di_rl, type, *rid);
+		rle = resource_list_find(&di->di_rl, type, rid);
 		if (rle == NULL)
 			return (NULL);
 
@@ -264,7 +262,7 @@ mrmlb_ofw_bus_attach(device_t dev)
 		ofw_bus_intr_to_rl(dev, node, &di->di_rl, NULL);
 
 		/* Add newbus device for this FDT node */
-		child = device_add_child(dev, NULL, -1);
+		child = device_add_child(dev, NULL, DEVICE_UNIT_ANY);
 		if (child == NULL) {
 			resource_list_free(&di->di_rl);
 			ofw_bus_gen_destroy_devinfo(&di->di_dinfo);

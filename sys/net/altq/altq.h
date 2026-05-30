@@ -24,7 +24,6 @@
  * SUCH DAMAGE.
  *
  * $KAME: altq.h,v 1.10 2003/07/10 12:07:47 kjc Exp $
- * $FreeBSD$
  */
 #ifndef _ALTQ_ALTQ_H_
 #define	_ALTQ_ALTQ_H_
@@ -56,7 +55,7 @@
 #define	ALTQT_CODEL		14      /* CoDel */
 #define	ALTQT_MAX		15	/* should be max discipline type + 1 */
 
-/* simple token backet meter profile */
+/* simple token bucket meter profile */
 struct	tb_profile {
 	u_int64_t	rate;	/* rate in bit-per-sec */
 	u_int32_t	depth;	/* depth in bytes */

@@ -25,24 +25,17 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 #
 
 . $(atf_get_srcdir)/../common/vnet.subr
-
-load_divert_module() {
-	kldstat -q -m ipdivert
-	if [ $? -ne  0 ]; then
-		atf_skip "ipdivert module is not loaded"
-	fi
-}
 
 atf_test_case "ipdivert_ip_output_remote_success" "cleanup"
 ipdivert_ip_output_remote_success_head() {
 
 	atf_set descr 'Test diverting IPv4 packet to remote destination'
 	atf_set require.user root
-	atf_set require.progs scapy
+	atf_set require.progs python3 scapy
+	atf_set require.kmods ipdivert
 }
 
 ipdivert_ip_output_remote_success_body() {
@@ -63,7 +56,6 @@ ipdivert_ip_output_remote_success_body() {
 	fi
 
 	vnet_init
-	load_divert_module
 
 	ip4a="192.0.2.5"
 	ip4b="192.0.2.6"
@@ -97,7 +89,8 @@ ipdivert_ip_input_local_success_head() {
 
 	atf_set descr 'Test diverting IPv4 packet to remote destination'
 	atf_set require.user root
-	atf_set require.progs scapy
+	atf_set require.progs python3 scapy
+	atf_set require.kmods ipdivert
 }
 
 ipdivert_ip_input_local_success_body() {
@@ -118,7 +111,6 @@ ipdivert_ip_input_local_success_body() {
 	fi
 
 	vnet_init
-	load_divert_module
 
 	ip4a="192.0.2.5"
 	ip4b="192.0.2.6"

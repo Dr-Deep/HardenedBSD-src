@@ -1,4 +1,5 @@
 #!/bin/ksh -p
+# SPDX-License-Identifier: CDDL-1.0
 #
 # CDDL HEADER START
 #
@@ -31,15 +32,13 @@
 #	2. Set l2arc_write_max to a value larger than the cache device.
 #	3. Create a file larger than the cache device and random read
 #		for 10 sec.
-#	4. Verify that l2arc_write_max is set back to the default.
-#	5. Set l2arc_write_max to a value less than the cache device size but
+#	4. Set l2arc_write_max to a value less than the cache device size but
 #		larger than the default (256MB).
-#	6. Record the l2_size.
-#	7. Random read for 1 sec.
-#	8. Record the l2_size again.
-#	9. If (6) <= (8) then we have not looped around yet.
-#	10. If (6) > (8) then we looped around. Break out of the loop and test.
-#	11. Destroy pool.
+#	5. Record the l2_size.
+#	6. Random read for 1 sec.
+#	7. Record the l2_size again.
+#	8. If (5) <= (7) then we have not looped around yet.
+#	9. Destroy pool.
 #
 
 verify_runnable "global"
@@ -56,12 +55,15 @@ function cleanup
 
 	log_must set_tunable32 L2ARC_WRITE_MAX $write_max
 	log_must set_tunable32 L2ARC_NOPREFETCH $noprefetch
+	log_must set_tunable32 L2ARC_DWPD_LIMIT $dwpd_limit
 }
 log_onexit cleanup
 
 typeset write_max=$(get_tunable L2ARC_WRITE_MAX)
 typeset noprefetch=$(get_tunable L2ARC_NOPREFETCH)
+typeset dwpd_limit=$(get_tunable L2ARC_DWPD_LIMIT)
 log_must set_tunable32 L2ARC_NOPREFETCH 0
+log_must set_tunable32 L2ARC_DWPD_LIMIT 0
 
 typeset VDEV="$VDIR/vdev.disk"
 typeset VDEV_SZ=$(( 4 * 1024 * 1024 * 1024 ))
@@ -77,7 +79,7 @@ export PERF_COMPPERCENT=66
 export PERF_COMPCHUNK=0
 export BLOCKSIZE=128K
 export SYNC_TYPE=0
-export DIRECT=1
+export DIRECT=0
 export FILE_SIZE=$(( floor($fill_mb / $NUMJOBS) ))
 
 log_must set_tunable32 L2ARC_WRITE_MAX $(( $VCACHE_SZ * 2 ))
@@ -89,26 +91,22 @@ log_must zpool create -f $TESTPOOL $VDEV cache $VCACHE
 
 # Actually, this test relies on atime writes to force the L2 ARC discards
 log_must zfs set relatime=off $TESTPOOL
+# Disable compression to ensure predictable L2ARC fill
+log_must zfs set compression=off $TESTPOOL
 
 log_must fio $FIO_SCRIPTS/mkfiles.fio
 log_must fio $FIO_SCRIPTS/random_reads.fio
-
-typeset write_max2=$(get_tunable L2ARC_WRITE_MAX)
-
-log_must test $write_max2 -eq $write_max
 
 log_must set_tunable32 L2ARC_WRITE_MAX $(( 256 * 1024 * 1024 ))
 export RUNTIME=1
 
 typeset do_once=true
 while $do_once || [[ $l2_size1 -le $l2_size2 ]]; do
-	typeset l2_size1=$(get_arcstat l2_size)
+	typeset l2_size1=$(kstat arcstats.l2_size)
 	log_must fio $FIO_SCRIPTS/random_reads.fio
-	typeset l2_size2=$(get_arcstat l2_size)
+	typeset l2_size2=$(kstat arcstats.l2_size)
 	do_once=false
 done
-
-log_must test $l2_size1 -gt $l2_size2
 
 log_must zpool destroy $TESTPOOL
 

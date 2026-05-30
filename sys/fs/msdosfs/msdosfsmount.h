@@ -1,4 +1,3 @@
-/* $FreeBSD$ */
 /*	$NetBSD: msdosfsmount.h,v 1.17 1997/11/17 15:37:07 ws Exp $	*/
 
 /*-
@@ -53,14 +52,17 @@
 #ifndef _MSDOSFS_MSDOSFSMOUNT_H_
 #define	_MSDOSFS_MSDOSFSMOUNT_H_
 
-#if defined (_KERNEL) || defined(MAKEFS)
+#if defined(_KERNEL) || defined(_WANT_MSDOSFS_INTERNALS)
 
 #include <sys/types.h>
-#ifndef MAKEFS
+#ifdef _KERNEL
 #include <sys/lock.h>
 #include <sys/lockmgr.h>
-#include <sys/_task.h>
+#else
+#include <sys/_lock.h>
+#include <sys/_lockmgr.h>
 #endif
+#include <sys/_task.h>
 #include <sys/tree.h>
 
 #ifdef MALLOC_DECLARE
@@ -108,17 +110,15 @@ struct msdosfsmount {
 	u_int pm_fatmult;	/* these 2 values are used in FAT */
 	u_int pm_fatdiv;	/*	offset computation */
 	u_int pm_curfat;	/* current FAT for FAT32 (0 otherwise) */
+	int pm_rootdirfree;	/* number of free slots in FAT12/16 root directory */
 	u_int *pm_inusemap;	/* ptr to bitmap of in-use clusters */
 	uint64_t pm_flags;	/* see below */
 	void *pm_u2w;	/* Local->Unicode iconv handle */
 	void *pm_w2u;	/* Unicode->Local iconv handle */
 	void *pm_u2d;	/* Unicode->DOS iconv handle */
 	void *pm_d2u;	/* DOS->Local iconv handle */
-#ifndef MAKEFS
 	struct lock pm_fatlock;	/* lockmgr protecting allocations */
-	struct lock pm_checkpath_lock; /* protects doscheckpath result */
 	struct task pm_rw2ro_task; /* context for emergency remount ro */
-#endif
 };
 
 /*
@@ -222,6 +222,22 @@ struct msdosfs_fileno {
 	 ? roottobn((pmp), (dirofs)) \
 	 : cntobn((pmp), (dirclu)))
 
+/*
+ * Increment the number of used entries in a fixed size FAT12/16 root
+ * directory
+ */
+#define rootde_alloced(dep)			   \
+	if ((dep)->de_StartCluster == MSDOSFSROOT) \
+		(dep)->de_pmp->pm_rootdirfree--;
+
+/*
+ * Decrement the number of used entries in a fixed size FAT12/16 root
+ * directory
+ */
+#define rootde_freed(dep)			   \
+	if ((dep)->de_StartCluster == MSDOSFSROOT) \
+		(dep)->de_pmp->pm_rootdirfree++;
+
 #define	MSDOSFS_LOCK_MP(pmp) \
 	lockmgr(&(pmp)->pm_fatlock, LK_EXCLUSIVE, NULL)
 #define	MSDOSFS_UNLOCK_MP(pmp) \
@@ -229,9 +245,9 @@ struct msdosfs_fileno {
 #define	MSDOSFS_ASSERT_MP_LOCKED(pmp) \
 	lockmgr_assert(&(pmp)->pm_fatlock, KA_XLOCKED)
 
-#endif /* _KERNEL || MAKEFS */
+#endif /* _KERNEL || _WANT_MSDOSFS_INTERNALS */
 
-#ifndef MAKEFS
+#ifdef _KERNEL
 /*
  *  Arguments to mount MSDOS filesystems.
  */
@@ -249,7 +265,7 @@ struct msdosfs_args {
 	char	*cs_local;	/* Local Charset */
 	mode_t	dirmask;	/* dir  mask to be applied for msdosfs perms */
 };
-#endif /* MAKEFS */
+#endif /* _KERNEL */
 
 /*
  * Msdosfs mount options:

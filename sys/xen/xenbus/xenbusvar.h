@@ -22,8 +22,6 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
- *
- * $FreeBSD$
  */
 
 /**
@@ -41,8 +39,7 @@
 #include <sys/eventhandler.h>
 #include <sys/malloc.h>
 #include <sys/sbuf.h>
-
-#include <machine/stdarg.h>
+#include <sys/stdarg.h>
 
 #include <xen/xen-os.h>
 #include <contrib/xen/grant_table.h>
@@ -58,7 +55,7 @@ enum {
 	/**
 	 * Path of this device node.
 	 */
-	XENBUS_IVAR_NODE,
+	XENBUS_IVAR_NODE = BUS_IVARS_PRIVATE,
 
 	/**
 	 * The device type (e.g. vif, vbd).
@@ -154,7 +151,7 @@ int xenbus_grant_ring(device_t dev, unsigned long ring_mfn, grant_ref_t *refp);
  *             printf arguments.
  */
 void xenbus_dev_error(device_t dev, int err, const char *fmt, ...)
-	__attribute__((format(printf, 3, 4)));
+	__printflike(3, 4);
 
 /**
  * va_list version of xenbus_dev_error().
@@ -165,7 +162,7 @@ void xenbus_dev_error(device_t dev, int err, const char *fmt, ...)
  * \param ap   Va_list of printf arguments.
  */
 void xenbus_dev_verror(device_t dev, int err, const char *fmt, va_list ap)
-	__attribute__((format(printf, 3, 0)));
+	__printflike(3, 0);
 
 /**
  * Equivalent to xenbus_dev_error(), followed by
@@ -177,7 +174,7 @@ void xenbus_dev_verror(device_t dev, int err, const char *fmt, va_list ap)
  *             printf arguments.
  */
 void xenbus_dev_fatal(device_t dev, int err, const char *fmt, ...)
-	__attribute__((format(printf, 3, 4)));
+	__printflike(3, 4);
 
 /**
  * va_list version of xenbus_dev_fatal().
@@ -188,7 +185,7 @@ void xenbus_dev_fatal(device_t dev, int err, const char *fmt, ...)
  * \param ap   Va_list of printf arguments.
  */
 void xenbus_dev_vfatal(device_t dev, int err, const char *fmt, va_list)
-	__attribute__((format(printf, 3, 0)));
+	__printflike(3, 0);
 
 /**
  * Convert a member of the xenbus_state enum into an ASCII string.

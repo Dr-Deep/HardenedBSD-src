@@ -29,13 +29,7 @@
  * Mountain View, California  94043
  */
 
-#if defined(LIBC_SCCS) && !defined(lint)
-static char *sccsid2 = "@(#)xdr.c 1.35 87/08/12";
-static char *sccsid = "@(#)xdr.c	2.1 88/07/29 4.0 RPCSRC";
-#endif
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * xdr.c, Generic XDR routines implementation.
  *
@@ -90,9 +84,8 @@ xdr_free(xdrproc_t proc, void *objp)
  * XDR nothing
  */
 bool_t
-xdr_void(void)
+xdr_void(XDR *xrds __unused, void *ptr __unused)
 {
-
 	return (TRUE);
 }
 
@@ -358,13 +351,13 @@ xdr_uint16_t(XDR *xdrs, uint16_t *uint16_p)
 bool_t
 xdr_char(XDR *xdrs, char *cp)
 {
-	int i;
+	u_int i;
 
-	i = (*cp);
-	if (!xdr_int(xdrs, &i)) {
+	i = *((unsigned char *)cp);
+	if (!xdr_u_int(xdrs, &i)) {
 		return (FALSE);
 	}
-	*cp = i;
+	*((unsigned char *)cp) = i;
 	return (TRUE);
 }
 
@@ -627,6 +620,13 @@ xdr_string(XDR *xdrs, char **cpp, u_int maxsize)
 		if (sp == NULL) {
 			return(TRUE);	/* already free */
 		}
+		/*
+		 * XXX: buggy software may call this without a third
+		 * argument via xdr_free().  Ignore maxsize since it may
+		 * be invalid.  Otherwise, if it's very small, we might
+		 * fail to free the string.
+		 */
+		maxsize = RPC_MAXDATASIZE;
 		/* FALLTHROUGH */
 	case XDR_ENCODE:
 		size = strlen(sp);

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2001-2003, Shunsuke Akiyama <akiyama@FreeBSD.org>.
  * All rights reserved.
@@ -27,11 +27,8 @@
  *
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
- * driver for RealTek RTL8150 internal PHY
+ * driver for Realtek RTL8150 internal PHY
  */
 
 #include <sys/param.h>
@@ -79,11 +76,11 @@ static void ruephy_reset(struct mii_softc *);
 static void ruephy_status(struct mii_softc *);
 
 /*
- * The RealTek RTL8150 internal PHY doesn't have vendor/device ID
+ * The Realtek RTL8150 internal PHY doesn't have vendor/device ID
  * registers; rue(4) fakes up a return value of all zeros.
  */
 static const struct mii_phydesc ruephys[] = {
-	{ 0, 0, "RealTek RTL8150 internal media interface" },
+	{ 0, 0, "Realtek RTL8150 internal media interface" },
 	MII_PHY_END
 };
 
@@ -170,7 +167,7 @@ ruephy_reset(struct mii_softc *sc)
 	mii_phy_reset(sc);
 
 	/*
-	 * XXX RealTek RTL8150 PHY doesn't set the BMCR properly after
+	 * XXX Realtek RTL8150 PHY doesn't set the BMCR properly after
 	 * XXX reset, which breaks autonegotiation.
 	 */
 	PHY_WRITE(sc, MII_BMCR, (BMCR_S100 | BMCR_AUTOEN | BMCR_FDX));

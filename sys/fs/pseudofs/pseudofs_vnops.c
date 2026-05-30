@@ -1,7 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright (c) 2001 Dag-Erling Coïdan Smørgrav
+ * Copyright (c) 2001 Dag-Erling Smørgrav
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -29,8 +29,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_pseudofs.h"
 
 #include <sys/param.h>
@@ -90,21 +88,17 @@ pn_fileno(struct pfs_node *pn, pid_t pid)
 static int
 pfs_visible_proc(struct thread *td, struct pfs_node *pn, struct proc *proc)
 {
-	int visible;
 
 	if (proc == NULL)
 		return (0);
 
 	PROC_LOCK_ASSERT(proc, MA_OWNED);
 
-	visible = ((proc->p_flag & P_WEXIT) == 0);
-	if (visible)
-		visible = (p_cansee(td, proc) == 0);
-	if (visible && pn->pn_vis != NULL)
-		visible = pn_vis(td, proc, pn);
-	if (!visible)
+	if ((proc->p_flag & P_WEXIT) != 0)
 		return (0);
-	return (1);
+	if (p_cansee(td, proc) != 0)
+		return (0);
+	return (pn_vis(td, proc, pn));
 }
 
 static int
@@ -119,7 +113,7 @@ pfs_visible(struct thread *td, struct pfs_node *pn, pid_t pid,
 	if (p)
 		*p = NULL;
 	if (pid == NO_PID)
-		PFS_RETURN (1);
+		PFS_RETURN (pn_vis(td, NULL, pn));
 	proc = pfind(pid);
 	if (proc == NULL)
 		PFS_RETURN (0);
@@ -491,7 +485,7 @@ pfs_lookup(struct vop_cachedlookup_args *va)
 	if (namelen == 1 && pname[0] == '.') {
 		pn = pd;
 		*vpp = vn;
-		VREF(vn);
+		vref(vn);
 		PFS_RETURN (0);
 	}
 
@@ -541,8 +535,8 @@ pfs_lookup(struct vop_cachedlookup_args *va)
 	for (pn = pd->pn_nodes; pn != NULL; pn = pn->pn_next)
 		if (pn->pn_type == pfstype_procdir)
 			pdn = pn;
-		else if (pn->pn_name[namelen] == '\0' &&
-		    bcmp(pname, pn->pn_name, namelen) == 0) {
+		else if (strncmp(pname, pn->pn_name, namelen) == 0 &&
+		    pn->pn_name[namelen] == '\0') {
 			pfs_unlock(pd);
 			goto got_pnode;
 		}
@@ -826,7 +820,7 @@ pfs_iterate(struct thread *td, struct proc *proc, struct pfs_node *pd,
 	} else if (proc != NULL) {
 		visible = pfs_visible_proc(td, *pn, proc);
 	} else {
-		visible = 1;
+		visible = pn_vis(td, NULL, *pn);
 	}
 	if (!visible)
 		goto again;
@@ -856,7 +850,7 @@ pfs_readdir(struct vop_readdir_args *va)
 	struct uio *uio;
 	struct pfsentry *pfsent, *pfsent2;
 	struct pfsdirentlist lst;
-	off_t offset;
+	off_t coffset, offset;
 	int error, i, resid;
 
 	STAILQ_INIT(&lst);
@@ -865,6 +859,9 @@ pfs_readdir(struct vop_readdir_args *va)
 	    ("%s(): pn_info does not match mountpoint", __func__));
 	PFS_TRACE(("%s pid %lu", pd->pn_name, (unsigned long)pid));
 	pfs_assert_not_owned(pd);
+
+	if (va->a_eofflag != NULL)
+		*va->a_eofflag = 0;
 
 	if (vn->v_type != VDIR)
 		PFS_RETURN (ENOTDIR);
@@ -884,6 +881,10 @@ pfs_readdir(struct vop_readdir_args *va)
 	if (pid != NO_PID && !pfs_lookup_proc(pid, &proc))
 		PFS_RETURN (ENOENT);
 
+	/*
+	 * The allproc lock is required in pfs_iterate() for procdir
+	 * directories.
+	 */
 	sx_slock(&allproc_lock);
 	pfs_lock(pd);
 
@@ -897,29 +898,21 @@ pfs_readdir(struct vop_readdir_args *va)
 		if (!pfs_visible_proc(curthread, pd, proc)) {
 			_PRELE(proc);
 			PROC_UNLOCK(proc);
-			sx_sunlock(&allproc_lock);
 			pfs_unlock(pd);
+			sx_sunlock(&allproc_lock);
 			PFS_RETURN (ENOENT);
 		}
 	}
 
-	/* skip unwanted entries */
-	for (pn = NULL, p = NULL; offset > 0; offset -= PFS_DELEN) {
+	for (pn = NULL, p = NULL, coffset = 0; resid >= PFS_DELEN;
+	    coffset += PFS_DELEN) {
 		if (pfs_iterate(curthread, proc, pd, &pn, &p) == -1) {
-			/* nothing left... */
-			if (proc != NULL) {
-				_PRELE(proc);
-				PROC_UNLOCK(proc);
-			}
-			pfs_unlock(pd);
-			sx_sunlock(&allproc_lock);
-			PFS_RETURN (0);
+			if (va->a_eofflag != NULL)
+				*va->a_eofflag = 1;
+			break;
 		}
-	}
-
-	/* fill in entries */
-	while (pfs_iterate(curthread, proc, pd, &pn, &p) != -1 &&
-	    resid >= PFS_DELEN) {
+		if (coffset < offset)
+			continue;
 		if ((pfsent = malloc(sizeof(struct pfsentry), M_IOV,
 		    M_NOWAIT | M_ZERO)) == NULL) {
 			error = ENOMEM;

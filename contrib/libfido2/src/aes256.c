@@ -2,6 +2,7 @@
  * Copyright (c) 2021 Yubico AB. All rights reserved.
  * Use of this source code is governed by a BSD-style
  * license that can be found in the LICENSE file.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "fido.h"
@@ -127,7 +128,11 @@ aes256_gcm(const fido_blob_t *key, const fido_blob_t *nonce,
 		    nonce->len, key->len, aad->len);
 		goto fail;
 	}
-	if (in->len > UINT_MAX || in->len > SIZE_MAX - 16 || in->len < 16) {
+	if (in->len > UINT_MAX || in->len > SIZE_MAX - 16) {
+		fido_log_debug("%s: invalid input len %zu", __func__, in->len);
+		goto fail;
+	}
+	if (!encrypt && in->len < 16) {
 		fido_log_debug("%s: invalid input len %zu", __func__, in->len);
 		goto fail;
 	}

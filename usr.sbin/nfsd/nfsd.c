@@ -32,20 +32,6 @@
  * SUCH DAMAGE.
  */
 
-#ifndef lint
-static const char copyright[] =
-"@(#) Copyright (c) 1989, 1993, 1994\n\
-	The Regents of the University of California.  All rights reserved.\n";
-#endif /* not lint */
-
-#ifndef lint
-#if 0
-static char sccsid[] = "@(#)nfsd.c	8.9 (Berkeley) 3/29/95";
-#endif
-static const char rcsid[] =
-  "$FreeBSD$";
-#endif /* not lint */
-
 #include <sys/param.h>
 #include <sys/syslog.h>
 #include <sys/wait.h>
@@ -72,6 +58,7 @@ static const char rcsid[] =
 
 #include <err.h>
 #include <errno.h>
+#include <libutil.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -82,7 +69,9 @@ static const char rcsid[] =
 #include <getopt.h>
 
 static int	debug = 0;
+static int	nofork = 0;
 
+#define	DEFAULT_PIDFILE		"/var/run/nfsd.pid"
 #define	NFSD_STABLERESTART	"/var/db/nfs-stablerestart"
 #define	NFSD_STABLEBACKUP	"/var/db/nfs-stablerestart.bak"
 #define	MAXNFSDCNT	256
@@ -92,6 +81,7 @@ static int	debug = 0;
 #define NFS_VER4	 4
 static pid_t children[MAXNFSDCNT]; /* PIDs of children */
 static pid_t masterpid;		   /* PID of master/parent */
+static struct pidfh *masterpidfh = NULL;	/* pidfh of master/parent */
 static int nfsdcnt;		/* number of children */
 static int nfsdcnt_set;
 static int minthreads;
@@ -170,11 +160,12 @@ main(int argc, char **argv)
 	int udpflag, ecode, error, s;
 	int bindhostc, bindanyflag, rpcbreg, rpcbregcnt;
 	int nfssvc_addsock;
-	int longindex = 0;
-	size_t nfs_minvers_size;
+	int jailed, longindex = 0;
+	size_t jailed_size, nfs_minvers_size;
 	const char *lopt;
 	char **bindhost = NULL;
-	pid_t pid;
+	const char *pidfile_path = DEFAULT_PIDFILE;
+	pid_t pid, otherpid;
 	struct nfsd_nfsd_args nfsdargs;
 	const char *vhostname = NULL;
 
@@ -184,14 +175,14 @@ main(int argc, char **argv)
 	nfsdcnt = DEFNFSDCNT;
 	unregister = reregister = tcpflag = maxsock = 0;
 	bindanyflag = udpflag = connect_type_cnt = bindhostc = 0;
-	getopt_shortopts = "ah:n:rdtuep:m:V:";
+	getopt_shortopts = "ah:n:rdtuep:m:V:NP:";
 	getopt_usage =
 	    "usage:\n"
-	    "  nfsd [-ardtue] [-h bindip]\n"
+	    "  nfsd [-ardtueN] [-h bindip]\n"
 	    "       [-n numservers] [--minthreads #] [--maxthreads #]\n"
 	    "       [-p/--pnfs dsserver0:/dsserver0-mounted-on-dir,...,"
 	    "dsserverN:/dsserverN-mounted-on-dir] [-m mirrorlevel]\n"
-	    "       [-V virtual_hostname]\n";
+	    "       [-P pidfile ] [-V virtual_hostname]\n";
 	while ((ch = getopt_long(argc, argv, getopt_shortopts, longopts,
 		    &longindex)) != -1)
 		switch (ch) {
@@ -243,6 +234,12 @@ main(int argc, char **argv)
 				errx(1, "Mirror level out of range 2<-->%d",
 				    NFSDEV_MAXMIRRORS);
 			nfsdargs.mirrorcnt = i;
+			break;
+		case 'N':
+			nofork = 1;
+			break;
+		case 'P':
+			pidfile_path = optarg;
 			break;
 		case 0:
 			lopt = longopts[longindex].name;
@@ -425,7 +422,17 @@ main(int argc, char **argv)
 		}
 		exit (0);
 	}
-	if (debug == 0) {
+
+	if (pidfile_path != NULL) {
+		masterpidfh = pidfile_open(pidfile_path, 0600, &otherpid);
+		if (masterpidfh == NULL) {
+			if (errno == EEXIST)
+				errx(1, "daemon already running, pid: %jd.",
+				    (intmax_t)otherpid);
+			warn("cannot open pid file");
+		}
+	}
+	if (debug == 0 && nofork == 0) {
 		daemon(0, 0);
 		(void)signal(SIGHUP, SIG_IGN);
 		(void)signal(SIGINT, SIG_IGN);
@@ -443,6 +450,9 @@ main(int argc, char **argv)
 	(void)signal(SIGUSR2, backup_stable);
 
 	openlog("nfsd", LOG_PID | (debug ? LOG_PERROR : 0), LOG_DAEMON);
+
+	if (masterpidfh != NULL && pidfile_write(masterpidfh) != 0)
+		syslog(LOG_ERR, "pidfile_write(): %m");
 
 	/*
 	 * For V4, we open the stablerestart file and call nfssvc()
@@ -465,7 +475,21 @@ main(int argc, char **argv)
 	/* This system call will fail for old kernels, but that's ok. */
 	nfssvc(NFSSVC_BACKUPSTABLE, NULL);
 	if (nfssvc(NFSSVC_STABLERESTART, (caddr_t)&stablefd) < 0) {
-		syslog(LOG_ERR, "Can't read stable storage file: %m\n");
+		if (errno == EPERM) {
+			jailed = 0;
+			jailed_size = sizeof(jailed);
+			sysctlbyname("security.jail.jailed", &jailed,
+			    &jailed_size, NULL, 0);
+			if (jailed != 0)
+				syslog(LOG_ERR, "nfssvc stablerestart failed: "
+				    "allow.nfsd might not be configured");
+			else
+				syslog(LOG_ERR, "nfssvc stablerestart failed");
+		} else if (errno == ENXIO)
+			syslog(LOG_ERR, "nfssvc stablerestart failed: is nfsd "
+			    "already running?");
+		else
+			syslog(LOG_ERR, "Can't read stable storage file: %m\n");
 		exit(1);
 	}
 	nfssvc_addsock = NFSSVC_NFSDADDSOCK;
@@ -486,6 +510,7 @@ main(int argc, char **argv)
 		if (pid) {
 			children[0] = pid;
 		} else {
+			pidfile_close(masterpidfh);
 			(void)signal(SIGUSR1, child_cleanup);
 			setproctitle("server");
 			start_server(0, &nfsdargs, vhostname);
@@ -546,18 +571,24 @@ main(int argc, char **argv)
 				nfsd_exit(1);
 			}
 			nconf_udp = getnetconfigent("udp");
-			if (nconf_udp == NULL)
-				err(1, "getnetconfigent udp failed");
+			if (nconf_udp == NULL) {
+				syslog(LOG_ERR, "getnetconfigent udp failed");
+				nfsd_exit(1);
+			}
 			nb_udp.buf = ai_udp->ai_addr;
 			nb_udp.len = nb_udp.maxlen = ai_udp->ai_addrlen;
 			if (nfs_minvers == NFS_VER2)
 				if (!rpcb_set(NFS_PROGRAM, 2, nconf_udp,
-				    &nb_udp))
-					err(1, "rpcb_set udp failed");
+				    &nb_udp)) {
+					syslog(LOG_ERR, "rpcb_set udp failed");
+					nfsd_exit(1);
+				}
 			if (nfs_minvers <= NFS_VER3)
 				if (!rpcb_set(NFS_PROGRAM, 3, nconf_udp,
-				    &nb_udp))
-					err(1, "rpcb_set udp failed");
+				    &nb_udp)) {
+					syslog(LOG_ERR, "rpcb_set udp failed");
+					nfsd_exit(1);
+				}
 			freeaddrinfo(ai_udp);
 		}
 	}
@@ -620,20 +651,26 @@ main(int argc, char **argv)
 				nfsd_exit(1);
 			}
 			nconf_udp6 = getnetconfigent("udp6");
-			if (nconf_udp6 == NULL)
-				err(1, "getnetconfigent udp6 failed");
+			if (nconf_udp6 == NULL) {
+				syslog(LOG_ERR, "getnetconfigent udp6 failed");
+				nfsd_exit(1);
+			}
 			nb_udp6.buf = ai_udp6->ai_addr;
 			nb_udp6.len = nb_udp6.maxlen = ai_udp6->ai_addrlen;
 			if (nfs_minvers == NFS_VER2)
 				if (!rpcb_set(NFS_PROGRAM, 2, nconf_udp6,
-				    &nb_udp6))
-					err(1,
+				    &nb_udp6)) {
+					syslog(LOG_ERR,
 					    "rpcb_set udp6 failed");
+					nfsd_exit(1);
+				}
 			if (nfs_minvers <= NFS_VER3)
 				if (!rpcb_set(NFS_PROGRAM, 3, nconf_udp6,
-				    &nb_udp6))
-					err(1,
+				    &nb_udp6)) {
+					syslog(LOG_ERR,
 					    "rpcb_set udp6 failed");
+					nfsd_exit(1);
+				}
 			freeaddrinfo(ai_udp6);
 		}
 	}
@@ -692,18 +729,24 @@ main(int argc, char **argv)
 				nfsd_exit(1);
 			}
 			nconf_tcp = getnetconfigent("tcp");
-			if (nconf_tcp == NULL)
-				err(1, "getnetconfigent tcp failed");
+			if (nconf_tcp == NULL) {
+				syslog(LOG_ERR, "getnetconfigent tcp failed");
+				nfsd_exit(1);
+			}
 			nb_tcp.buf = ai_tcp->ai_addr;
 			nb_tcp.len = nb_tcp.maxlen = ai_tcp->ai_addrlen;
 			if (nfs_minvers == NFS_VER2)
 				if (!rpcb_set(NFS_PROGRAM, 2, nconf_tcp,
-				    &nb_tcp))
-					err(1, "rpcb_set tcp failed");
+				    &nb_tcp)) {
+					syslog(LOG_ERR, "rpcb_set tcp failed");
+					nfsd_exit(1);
+				}
 			if (nfs_minvers <= NFS_VER3)
 				if (!rpcb_set(NFS_PROGRAM, 3, nconf_tcp,
-				    &nb_tcp))
-					err(1, "rpcb_set tcp failed");
+				    &nb_tcp)) {
+					syslog(LOG_ERR, "rpcb_set tcp failed");
+					nfsd_exit(1);
+				}
 			freeaddrinfo(ai_tcp);
 		}
 	}
@@ -770,18 +813,24 @@ main(int argc, char **argv)
 				nfsd_exit(1);
 			}
 			nconf_tcp6 = getnetconfigent("tcp6");
-			if (nconf_tcp6 == NULL)
-				err(1, "getnetconfigent tcp6 failed");
+			if (nconf_tcp6 == NULL) {
+				syslog(LOG_ERR, "getnetconfigent tcp6 failed");
+				nfsd_exit(1);
+			}
 			nb_tcp6.buf = ai_tcp6->ai_addr;
 			nb_tcp6.len = nb_tcp6.maxlen = ai_tcp6->ai_addrlen;
 			if (nfs_minvers == NFS_VER2)
 				if (!rpcb_set(NFS_PROGRAM, 2, nconf_tcp6,
-				    &nb_tcp6))
-					err(1, "rpcb_set tcp6 failed");
+				    &nb_tcp6)) {
+					syslog(LOG_ERR, "rpcb_set tcp6 failed");
+					nfsd_exit(1);
+				}
 			if (nfs_minvers <= NFS_VER3)
 				if (!rpcb_set(NFS_PROGRAM, 3, nconf_tcp6,
-				    &nb_tcp6))
-					err(1, "rpcb_set tcp6 failed");
+				    &nb_tcp6)) {
+					syslog(LOG_ERR, "rpcb_set tcp6 failed");
+					nfsd_exit(1);
+				}
 			freeaddrinfo(ai_tcp6);
 		}
 	}
@@ -980,6 +1029,8 @@ nfsd_exit(int status)
 {
 	killchildren();
 	unregistration();
+	if (masterpidfh != NULL)
+		pidfile_remove(masterpidfh);
 	exit(status);
 }
 

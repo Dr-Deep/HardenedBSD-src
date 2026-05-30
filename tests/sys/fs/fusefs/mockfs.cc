@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2019 The FreeBSD Foundation
  *
@@ -26,8 +26,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 extern "C" {
@@ -41,13 +39,12 @@ extern "C" {
 
 #include <fcntl.h>
 #include <libutil.h>
+#include <mntopts.h>	// for build_iovec
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <unistd.h>
-
-#include "mntopts.h"	// for build_iovec
 }
 
 #include <cinttypes>
@@ -229,8 +226,26 @@ void MockFS::debug_request(const mockfs_buf_in &in, ssize_t buflen)
 		case FUSE_FSYNCDIR:
 			printf(" flags=%#x", in.body.fsyncdir.fsync_flags);
 			break;
+		case FUSE_GETLK:
+			printf(" fh=%#" PRIx64
+				" type=%u pid=%u",
+				in.body.getlk.fh,
+				in.body.getlk.lk.type,
+				in.body.getlk.lk.pid);
+			if (verbosity >= 2) {
+				printf(" range=[%" PRIi64 ":%" PRIi64 "]",
+					in.body.getlk.lk.start,
+					in.body.getlk.lk.end);
+			}
+			break;
 		case FUSE_INTERRUPT:
 			printf(" unique=%" PRIu64, in.body.interrupt.unique);
+			break;
+		case FUSE_IOCTL:
+			printf(" flags=%#x cmd=%#x in_size=%" PRIu32
+				" out_size=%" PRIu32,
+				in.body.ioctl.flags, in.body.ioctl.cmd,
+				in.body.ioctl.in_size, in.body.ioctl.out_size);
 			break;
 		case FUSE_LINK:
 			printf(" oldnodeid=%" PRIu64, in.body.link.oldnodeid);
@@ -338,7 +353,7 @@ void MockFS::debug_request(const mockfs_buf_in &in, ssize_t buflen)
 				in.body.setlk.lk.type,
 				in.body.setlk.lk.pid);
 			if (verbosity >= 2) {
-				printf(" range=[%" PRIu64 "-%" PRIu64 "]",
+				printf(" range=[%" PRIi64 ":%" PRIi64 "]",
 					in.body.setlk.lk.start,
 					in.body.setlk.lk.end);
 			}
@@ -406,32 +421,33 @@ void MockFS::debug_response(const mockfs_buf_out &out) {
 	}
 }
 
-MockFS::MockFS(int max_readahead, bool allow_other, bool default_permissions,
+MockFS::MockFS(int max_read, int max_readahead, bool allow_other,
+	bool default_permissions,
 	bool push_symlinks_in, bool ro, enum poll_method pm, uint32_t flags,
 	uint32_t kernel_minor_version, uint32_t max_write, bool async,
 	bool noclusterr, unsigned time_gran, bool nointr, bool noatime,
-	const char *fsname, const char *subtype)
+	const char *fsname, const char *subtype, bool no_auto_init,
+	bool auto_unmount)
+	: m_daemon_id(NULL),
+	  m_kernel_minor_version(kernel_minor_version),
+	  m_kq(pm == KQ ? kqueue() : -1),
+	  m_maxread(max_read),
+	  m_maxreadahead(max_readahead),
+	  m_pid(getpid()),
+	  m_uniques(new std::unordered_set<uint64_t>),
+	  m_pm(pm),
+	  m_time_gran(time_gran),
+	  m_child_pid(-1),
+	  m_maxwrite(MIN(max_write, max_max_write)),
+	  m_nready(-1),
+	  m_quit(false),
+	  m_expect_unmount(false)
 {
 	struct sigaction sa;
 	struct iovec *iov = NULL;
 	int iovlen = 0;
 	char fdstr[15];
 	const bool trueval = true;
-
-	m_daemon_id = NULL;
-	m_expected_write_errno = 0;
-	m_kernel_minor_version = kernel_minor_version;
-	m_maxreadahead = max_readahead;
-	m_maxwrite = MIN(max_write, max_max_write);
-	m_nready = -1;
-	m_pm = pm;
-	m_time_gran = time_gran;
-	m_quit = false;
-	m_last_unique = 0;
-	if (m_pm == KQ)
-		m_kq = kqueue();
-	else
-		m_kq = -1;
 
 	/*
 	 * Kyua sets pwd to a testcase-unique tempdir; no need to use
@@ -457,15 +473,18 @@ MockFS::MockFS(int max_readahead, bool allow_other, bool default_permissions,
 		throw(std::system_error(errno, std::system_category(),
 			"Couldn't open /dev/fuse"));
 
-	m_pid = getpid();
-	m_child_pid = -1;
-
 	build_iovec(&iov, &iovlen, "fstype", __DECONST(void *, "fusefs"), -1);
 	build_iovec(&iov, &iovlen, "fspath",
 		    __DECONST(void *, "mountpoint"), -1);
 	build_iovec(&iov, &iovlen, "from", __DECONST(void *, "/dev/fuse"), -1);
 	sprintf(fdstr, "%d", m_fuse_fd);
 	build_iovec(&iov, &iovlen, "fd", fdstr, -1);
+	if (m_maxread > 0) {
+		char val[12];
+
+		snprintf(val, sizeof(val), "%d", m_maxread);
+		build_iovec(&iov, &iovlen, "max_read=", &val, -1);
+	}
 	if (allow_other) {
 		build_iovec(&iov, &iovlen, "allow_other",
 			__DECONST(void*, &trueval), sizeof(bool));
@@ -501,6 +520,10 @@ MockFS::MockFS(int max_readahead, bool allow_other, bool default_permissions,
 		build_iovec(&iov, &iovlen, "intr",
 			__DECONST(void*, &trueval), sizeof(bool));
 	}
+	if (auto_unmount) {
+		build_iovec(&iov, &iovlen, "auto_unmount",
+			__DECONST(void*, &trueval), sizeof(bool));
+	}
 	if (*fsname) {
 		build_iovec(&iov, &iovlen, "fsname=",
 			__DECONST(void*, fsname), -1);
@@ -512,12 +535,15 @@ MockFS::MockFS(int max_readahead, bool allow_other, bool default_permissions,
 	if (nmount(iov, iovlen, 0))
 		throw(std::system_error(errno, std::system_category(),
 			"Couldn't mount filesystem"));
+	free_iovec(&iov, &iovlen);
 
 	// Setup default handler
 	ON_CALL(*this, process(_, _))
 		.WillByDefault(Invoke(this, &MockFS::process_default));
 
-	init(flags);
+	if (!no_auto_init)
+		init(flags);
+
 	bzero(&sa, sizeof(sa));
 	sa.sa_handler = sigint_handler;
 	sa.sa_flags = 0;	/* Don't set SA_RESTART! */
@@ -531,10 +557,7 @@ MockFS::MockFS(int max_readahead, bool allow_other, bool default_permissions,
 
 MockFS::~MockFS() {
 	kill_daemon();
-	if (m_daemon_id != NULL) {
-		pthread_join(m_daemon_id, NULL);
-		m_daemon_id = NULL;
-	}
+	join_daemon();
 	::unmount("mountpoint", MNT_FORCE);
 	rmdir("mountpoint");
 	if (m_kq >= 0)
@@ -666,6 +689,12 @@ void MockFS::audit_request(const mockfs_buf_in &in, ssize_t buflen) {
 		EXPECT_EQ(inlen, fih + sizeof(in.body.init));
 		EXPECT_EQ((size_t)buflen, inlen);
 		break;
+	case FUSE_IOCTL:
+		EXPECT_GE(inlen, fih + sizeof(in.body.ioctl));
+		EXPECT_EQ(inlen,
+			fih + sizeof(in.body.ioctl) + in.body.ioctl.in_size);
+		EXPECT_EQ((size_t)buflen, inlen);
+		break;
 	case FUSE_OPENDIR:
 		EXPECT_EQ(inlen, fih + sizeof(in.body.opendir));
 		EXPECT_EQ((size_t)buflen, inlen);
@@ -721,21 +750,16 @@ void MockFS::audit_request(const mockfs_buf_in &in, ssize_t buflen) {
 		break;
 	case FUSE_NOTIFY_REPLY:
 	case FUSE_BATCH_FORGET:
-	case FUSE_IOCTL:
 	case FUSE_POLL:
 	case FUSE_READDIRPLUS:
 		FAIL() << "Unsupported opcode?";
 	default:
 		FAIL() << "Unknown opcode " << in.header.opcode;
 	}
-	/*
-	 * Check that the ticket's unique value is sequential.  Technically it
-	 * doesn't need to be sequential, merely unique.  But the current
-	 * fusefs driver _does_ make it sequential, and that's easy to check
-	 * for.
-	 */
-	if (in.header.unique != ++m_last_unique)
-		FAIL() << "Non-sequential unique value";
+	/* Verify that the ticket's unique value is actually unique. */
+	if (m_uniques->find(in.header.unique) != m_uniques->end())
+		FAIL() << "Non-unique \"unique\" value";
+	m_uniques->insert(in.header.unique);
 }
 
 void MockFS::init(uint32_t flags) {
@@ -768,6 +792,11 @@ void MockFS::init(uint32_t flags) {
 	write(m_fuse_fd, out.get(), out->header.len);
 }
 
+int MockFS::dup_dev_fuse()
+{
+	return (dup(m_fuse_fd));
+}
+
 void MockFS::kill_daemon() {
 	m_quit = true;
 	if (m_daemon_id != NULL)
@@ -777,6 +806,13 @@ void MockFS::kill_daemon() {
 	// during the unmount sequence.
 	close(m_fuse_fd);
 	m_fuse_fd = -1;
+}
+
+void MockFS::join_daemon() {
+	if (m_daemon_id != NULL) {
+		pthread_join(m_daemon_id, NULL);
+		m_daemon_id = NULL;
+	}
 }
 
 void MockFS::loop() {
@@ -789,7 +825,6 @@ void MockFS::loop() {
 
 		bzero(in.get(), sizeof(*in));
 		read_request(*in, buflen);
-		m_expected_write_errno = 0;
 		if (m_quit)
 			break;
 		if (verbosity > 0)
@@ -814,10 +849,12 @@ void MockFS::loop() {
 	}
 }
 
-int MockFS::notify_inval_entry(ino_t parent, const char *name, size_t namelen)
+int MockFS::notify_inval_entry(ino_t parent, const char *name, size_t namelen,
+		int expected_errno)
 {
 	std::unique_ptr<mockfs_buf_out> out(new mockfs_buf_out);
 
+	out->expected_errno = expected_errno;
 	out->header.unique = 0;	/* 0 means asynchronous notification */
 	out->header.error = FUSE_NOTIFY_INVAL_ENTRY;
 	out->body.inval_entry.parent = parent;
@@ -964,7 +1001,11 @@ void MockFS::read_request(mockfs_buf_in &in, ssize_t &res) {
 	}
 	res = read(m_fuse_fd, &in, sizeof(in));
 
-	if (res < 0 && !m_quit) {
+	if (res < 0 && errno == ENODEV && m_expect_unmount) {
+		/* The kernel unmounted us, as expected. */
+		m_quit = true;
+	}
+	if (res < 0 && errno != EBADF && !m_quit) {
 		m_quit = true;
 		FAIL() << "read: " << strerror(errno);
 	}
@@ -1022,10 +1063,14 @@ void MockFS::write_response(const mockfs_buf_out &out) {
 		FAIL() << "not yet implemented";
 	}
 	r = write(m_fuse_fd, &out, out.header.len);
-	if (m_expected_write_errno) {
+	if (out.expected_errno) {
 		ASSERT_EQ(-1, r);
-		ASSERT_EQ(m_expected_write_errno, errno) << strerror(errno);
+		ASSERT_EQ(out.expected_errno, errno) << strerror(errno);
 	} else {
+		if (r <= 0 && errno == EINVAL) {
+			printf("Failed to write response.  unique=%" PRIu64
+			    ":\n", out.header.unique);
+		}
 		ASSERT_TRUE(r > 0 || errno == EAGAIN) << strerror(errno);
 	}
 }

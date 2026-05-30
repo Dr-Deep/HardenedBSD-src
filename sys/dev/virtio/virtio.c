@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2011, Bryan Venteicher <bryanv@FreeBSD.org>
  * All rights reserved.
@@ -26,13 +26,11 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
+#include <sys/sysctl.h>
 #include <sys/module.h>
 #include <sys/sbuf.h>
 
@@ -69,6 +67,13 @@ static struct virtio_ident {
 	{ VIRTIO_ID_INPUT,		"Input"				},
 	{ VIRTIO_ID_VSOCK,		"VSOCK Transport"		},
 	{ VIRTIO_ID_CRYPTO,		"Crypto"			},
+	{ VIRTIO_ID_IOMMU,		"IOMMU"				},
+	{ VIRTIO_ID_SOUND,		"Sound"				},
+	{ VIRTIO_ID_FS,			"Filesystem"			},
+	{ VIRTIO_ID_PMEM,		"Persistent Memory"		},
+	{ VIRTIO_ID_RPMB,		"RPMB"				},
+	{ VIRTIO_ID_SCMI,		"SCMI"				},
+	{ VIRTIO_ID_GPIO,		"GPIO"				},
 
 	{ 0, NULL }
 };
@@ -85,6 +90,9 @@ static struct virtio_feature_desc virtio_common_feature_desc[] = {
 
 	{ 0, NULL }
 };
+
+SYSCTL_NODE(_hw, OID_AUTO, virtio, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
+    "VirtIO driver parameters");
 
 const char *
 virtio_device_name(uint16_t devid)
@@ -202,7 +210,7 @@ virtio_filter_transport_features(uint64_t features)
 	return (features & mask);
 }
 
-int
+bool
 virtio_bus_is_modern(device_t dev)
 {
 	uintptr_t modern;
@@ -262,12 +270,11 @@ virtio_finalize_features(device_t dev)
 }
 
 int
-virtio_alloc_virtqueues(device_t dev, int flags, int nvqs,
+virtio_alloc_virtqueues(device_t dev, int nvqs,
     struct vq_alloc_info *info)
 {
 
-	return (VIRTIO_BUS_ALLOC_VIRTQUEUES(device_get_parent(dev), flags,
-	    nvqs, info));
+	return (VIRTIO_BUS_ALLOC_VIRTQUEUES(device_get_parent(dev), nvqs, info));
 }
 
 int
@@ -277,7 +284,7 @@ virtio_setup_intr(device_t dev, enum intr_type type)
 	return (VIRTIO_BUS_SETUP_INTR(device_get_parent(dev), type));
 }
 
-int
+bool
 virtio_with_feature(device_t dev, uint64_t feature)
 {
 

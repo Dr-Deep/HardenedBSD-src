@@ -50,9 +50,6 @@
  * information, know-how or other confidential information to any third party.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
@@ -114,6 +111,8 @@ mmc_wait_for_app_cmd(device_t busdev, device_t dev, uint16_t rca,
 	int err;
 
 	sc = device_get_softc(busdev);
+
+	cmd->flags |= MMC_CMD_IS_APP;
 
 	/* Squelch error reporting at lower levels, we report below. */
 	sc->squelched++;

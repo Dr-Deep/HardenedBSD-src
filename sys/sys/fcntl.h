@@ -32,9 +32,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)fcntl.h	8.3 (Berkeley) 1/21/94
- * $FreeBSD$
  */
 
 #ifndef _SYS_FCNTL_H_
@@ -143,7 +140,30 @@ typedef	__pid_t		pid_t;
 #define	O_DSYNC		0x01000000	/* POSIX data sync */
 #if __BSD_VISIBLE
 #define	O_EMPTY_PATH	0x02000000
+#define	O_NAMEDATTR	0x04000000	/* NFSv4 named attributes */
+#define	O_XATTR		O_NAMEDATTR	/* Solaris compatibility */
+
+/*
+ * Emulate MacOSX compatibility flag without consuming a flags bit.
+ * It is not fully correct since reads over regular files opened with
+ * this definition fail.
+ */
+#define	O_SYMLINK	(O_PATH | O_NOFOLLOW)
 #endif
+
+#if __POSIX_VISIBLE >= 202405
+#define	O_CLOFORK	0x08000000
+#endif
+
+/*
+ * !!! DANGER !!!
+ *
+ * There are very few bits left for O_* flags.  Every bit we consume for
+ * local features is one bit we can't use for future source compatibility
+ * with other operating systems.
+ *
+ * All additions should be coordinated with srcmgr@.
+ */
 
 /*
  * XXX missing O_RSYNC.
@@ -158,6 +178,12 @@ typedef	__pid_t		pid_t;
 #define	FOPENFAILED	O_TTY_INIT
 /* Only for O_PATH files which passed ACCESS FREAD check on open */
 #define	FKQALLOWED	O_RESOLVE_BENEATH
+/* Flags userspace is allowed to pass to openat() */
+#define	FUSERALLOWED	(O_ACCMODE | O_NONBLOCK | O_APPEND | O_SHLOCK | \
+    O_EXLOCK | O_ASYNC | O_SYNC | O_NOFOLLOW | O_CREAT | O_TRUNC | \
+    O_EXCL | O_NOCTTY | O_DIRECT | O_DIRECTORY | O_EXEC | O_TTY_INIT | \
+    O_CLOEXEC | O_VERIFY | O_PATH | O_RESOLVE_BENEATH | O_DSYNC | \
+    O_EMPTY_PATH | O_NAMEDATTR | O_CLOFORK)
 
 /* convert from open() flags to/from fflags; convert O_RD/WR to FREAD/FWRITE */
 #define	FFLAGS(oflags)	((oflags) & O_EXEC ? (oflags) : (oflags) + 1)
@@ -232,6 +258,9 @@ typedef	__pid_t		pid_t;
 #define	AT_RESOLVE_BENEATH	0x2000	/* Do not allow name resolution
 					   to walk out of dirfd */
 #define	AT_EMPTY_PATH		0x4000	/* Operate on dirfd if path is empty */
+
+#define	AT_RENAME_NOREPLACE	0x0001	/* Fail rename if target exists */
+#define	RENAME_NOREPLACE	AT_RENAME_NOREPLACE
 #endif	/* __BSD_VISIBLE */
 
 /*
@@ -271,6 +300,16 @@ typedef	__pid_t		pid_t;
 #define	F_GET_SEALS	20
 #define	F_ISUNIONSTACK	21		/* Kludge for libc, don't use it. */
 #define	F_KINFO		22		/* Return kinfo_file for this fd */
+#endif	/* __BSD_VISIBLE */
+
+#if __POSIX_VISIBLE >= 202405
+#define	F_DUPFD_CLOFORK	23		/* Like F_DUPFD, but FD_CLOFORK is set */
+#endif
+
+#if __BSD_VISIBLE
+#define F_DUP3FD	24		/* Used with dup3() */
+
+#define F_DUP3FD_SHIFT	16		/* Shift used for F_DUP3FD */
 
 /* Seals (F_ADD_SEALS, F_GET_SEALS). */
 #define	F_SEAL_SEAL	0x0001		/* Prevent adding sealings */
@@ -281,6 +320,11 @@ typedef	__pid_t		pid_t;
 
 /* file descriptor flags (F_GETFD, F_SETFD) */
 #define	FD_CLOEXEC	1		/* close-on-exec flag */
+#define	FD_RESOLVE_BENEATH 2		/* all lookups relative to fd have
+					   O_RESOLVE_BENEATH semantics */
+#if __POSIX_VISIBLE >= 202405
+#define	FD_CLOFORK	4		/* close-on-fork flag */
+#endif
 
 /* record locking flags (F_GETLK, F_SETLK, F_SETLKW) */
 #define	F_RDLCK		1		/* shared or read lock */

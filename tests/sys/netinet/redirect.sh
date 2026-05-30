@@ -25,7 +25,6 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 #
 
 . $(atf_get_srcdir)/../common/vnet.subr
@@ -35,7 +34,7 @@ valid_redirect_head() {
 
 	atf_set descr 'Test valid IPv4 redirect'
 	atf_set require.user root
-	atf_set require.progs scapy
+	atf_set require.progs python3 scapy
 }
 
 valid_redirect_body() {

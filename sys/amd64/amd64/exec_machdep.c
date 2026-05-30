@@ -36,13 +36,9 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	from: @(#)machdep.c	7.4 (Berkeley) 6/3/91
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_cpu.h"
 #include "opt_ddb.h"
 #include "opt_kstack_pages.h"
@@ -63,9 +59,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/reg.h>
 #include <sys/rwlock.h>
 #include <sys/signalvar.h>
-#ifdef SMP
 #include <sys/smp.h>
-#endif
 #include <sys/syscallsubr.h>
 #include <sys/sysctl.h>
 #include <sys/sysent.h>
@@ -98,6 +92,15 @@ __FBSDID("$FreeBSD$");
 _Static_assert(sizeof(mcontext_t) == 800, "mcontext_t size incorrect");
 _Static_assert(sizeof(ucontext_t) == 880, "ucontext_t size incorrect");
 _Static_assert(sizeof(siginfo_t) == 80, "siginfo_t size incorrect");
+
+/*
+ * Check that the value r is 16bit, i.e. fits into a segment register.
+ */
+static bool
+is_seg_val(register_t r)
+{
+	return ((uint64_t)r <= 0xffff);
+}
 
 /*
  * Send an interrupt to process.
@@ -139,7 +142,34 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	sf.sf_uc.uc_stack.ss_flags = (td->td_pflags & TDP_ALTSTACK)
 	    ? ((oonstack) ? SS_ONSTACK : 0) : SS_DISABLE;
 	sf.sf_uc.uc_mcontext.mc_onstack = (oonstack) ? 1 : 0;
-	bcopy(regs, &sf.sf_uc.uc_mcontext.mc_rdi, sizeof(*regs));
+	sf.sf_uc.uc_mcontext.mc_rdi = regs->tf_rdi;
+	sf.sf_uc.uc_mcontext.mc_rsi = regs->tf_rsi;
+	sf.sf_uc.uc_mcontext.mc_rdx = regs->tf_rdx;
+	sf.sf_uc.uc_mcontext.mc_rcx = regs->tf_rcx;
+	sf.sf_uc.uc_mcontext.mc_r8 = regs->tf_r8;
+	sf.sf_uc.uc_mcontext.mc_r9 = regs->tf_r9;
+	sf.sf_uc.uc_mcontext.mc_rax = regs->tf_rax;
+	sf.sf_uc.uc_mcontext.mc_rbx = regs->tf_rbx;
+	sf.sf_uc.uc_mcontext.mc_rbp = regs->tf_rbp;
+	sf.sf_uc.uc_mcontext.mc_r10 = regs->tf_r10;
+	sf.sf_uc.uc_mcontext.mc_r11 = regs->tf_r11;
+	sf.sf_uc.uc_mcontext.mc_r12 = regs->tf_r12;
+	sf.sf_uc.uc_mcontext.mc_r13 = regs->tf_r13;
+	sf.sf_uc.uc_mcontext.mc_r14 = regs->tf_r14;
+	sf.sf_uc.uc_mcontext.mc_r15 = regs->tf_r15;
+	sf.sf_uc.uc_mcontext.mc_trapno = regs->tf_trapno;
+	sf.sf_uc.uc_mcontext.mc_fs = regs->tf_fs;
+	sf.sf_uc.uc_mcontext.mc_gs = regs->tf_gs;
+	sf.sf_uc.uc_mcontext.mc_addr = regs->tf_addr;
+	sf.sf_uc.uc_mcontext.mc_flags = regs->tf_flags;
+	sf.sf_uc.uc_mcontext.mc_es = regs->tf_es;
+	sf.sf_uc.uc_mcontext.mc_ds = regs->tf_ds;
+	sf.sf_uc.uc_mcontext.mc_err = regs->tf_err;
+	sf.sf_uc.uc_mcontext.mc_rip = regs->tf_rip;
+	sf.sf_uc.uc_mcontext.mc_cs = regs->tf_cs;
+	sf.sf_uc.uc_mcontext.mc_rflags = regs->tf_rflags;
+	sf.sf_uc.uc_mcontext.mc_rsp = regs->tf_rsp;
+	sf.sf_uc.uc_mcontext.mc_ss = regs->tf_ss;
 	sf.sf_uc.uc_mcontext.mc_len = sizeof(sf.sf_uc.uc_mcontext); /* magic */
 	get_fpcontext(td, &sf.sf_uc.uc_mcontext, &xfpusave, &xfpusave_len);
 	update_pcb_bases(pcb);
@@ -156,7 +186,7 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 		td->td_sigstk.ss_flags |= SS_ONSTACK;
 #endif
 	} else
-		sp = (char *)regs->tf_rsp - 128;
+		sp = (char *)regs->tf_rsp - REDZONE_SZ;
 	if (xfpusave != NULL) {
 		sp -= xfpusave_len;
 		sp = (char *)((unsigned long)sp & ~0x3Ful);
@@ -164,7 +194,7 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	}
 	sp -= sizeof(struct sigframe);
 	/* Align to 16 bytes. */
-	sfp = (struct sigframe *)((unsigned long)sp & ~0xFul);
+	sfp = (struct sigframe *)STACKALIGN(sp);
 
 	/* Build the argument list for the signal handler. */
 	regs->tf_rdi = sig;			/* arg 1 in %rdi */
@@ -212,6 +242,8 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	regs->tf_fs = _ufssel;
 	regs->tf_gs = _ugssel;
 	regs->tf_flags = TF_HASSEGS;
+	if ((pcb->pcb_flags & PCB_TLSBASE) != 0)
+		pcb->pcb_fsbase = pcb->pcb_tlsbase;
 	PROC_LOCK(p);
 	mtx_lock(&psp->ps_mtx);
 }
@@ -262,6 +294,14 @@ sys_sigreturn(struct thread *td, struct sigreturn_args *uap)
 	if (!EFL_SECURE(rflags, regs->tf_rflags)) {
 		uprintf("pid %d (%s): sigreturn rflags = 0x%lx\n", p->p_pid,
 		    td->td_name, rflags);
+		return (EINVAL);
+	}
+
+	if (!is_seg_val(ucp->uc_mcontext.mc_ss) ||
+	    !is_seg_val(ucp->uc_mcontext.mc_cs)) {
+		uprintf("pid %d (%s): sigreturn cs = %#lx ss = %#lx\n",
+		    p->p_pid, td->td_name, ucp->uc_mcontext.mc_cs,
+		    ucp->uc_mcontext.mc_ss);
 		return (EINVAL);
 	}
 
@@ -382,9 +422,9 @@ exec_setregs(struct thread *td, struct image_params *imgp, uintptr_t stack)
 		user_ldt_free(td);
 
 	update_pcb_bases(pcb);
-	pcb->pcb_fsbase = 0;
+	pcb->pcb_fsbase = pcb->pcb_tlsbase = 0;
 	pcb->pcb_gsbase = 0;
-	clear_pcb_flags(pcb, PCB_32BIT);
+	clear_pcb_flags(pcb, PCB_32BIT | PCB_TLSBASE);
 	pcb->pcb_initial_fpucw = __INITIAL_FPUCW__;
 
 	saved_rflags = regs->tf_rflags & PSL_T;
@@ -636,6 +676,8 @@ get_mcontext(struct thread *td, mcontext_t *mcp, int flags)
 	mcp->mc_gsbase = pcb->pcb_gsbase;
 	mcp->mc_xfpustate = 0;
 	mcp->mc_xfpustate_len = 0;
+	mcp->mc_tlsbase = (pcb->pcb_flags & PCB_TLSBASE) != 0 ?
+	    pcb->pcb_tlsbase : 0;
 	bzero(mcp->mc_spare, sizeof(mcp->mc_spare));
 	return (0);
 }
@@ -659,6 +701,8 @@ set_mcontext(struct thread *td, mcontext_t *mcp)
 	tp = td->td_frame;
 	if (mcp->mc_len != sizeof(*mcp) ||
 	    (mcp->mc_flags & ~_MC_FLAG_MASK) != 0)
+		return (EINVAL);
+	if (!is_seg_val(mcp->mc_ss) || !is_seg_val(mcp->mc_cs))
 		return (EINVAL);
 	rflags = (mcp->mc_rflags & PSL_USERCHANGE) |
 	    (tp->tf_rflags & ~PSL_USERCHANGE);
@@ -709,6 +753,10 @@ set_mcontext(struct thread *td, mcontext_t *mcp)
 	if (mcp->mc_flags & _MC_HASBASES) {
 		pcb->pcb_fsbase = mcp->mc_fsbase;
 		pcb->pcb_gsbase = mcp->mc_gsbase;
+	}
+	if ((mcp->mc_flags & _MC_HASTLSBASE) != 0) {
+		pcb->pcb_tlsbase = mcp->mc_tlsbase;
+		set_pcb_flags(pcb, PCB_TLSBASE);
 	}
 	return (0);
 }

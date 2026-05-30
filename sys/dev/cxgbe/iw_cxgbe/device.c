@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2009-2013 Chelsio, Inc. All rights reserved.
  *
@@ -32,8 +32,6 @@
  * SOFTWARE.
  */
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_inet.h"
 
 #include <sys/ktr.h>
@@ -134,26 +132,21 @@ c4iw_rdev_open(struct c4iw_rdev *rdev)
 	rdev->stats.rqt.total = sc->vres.rq.size;
 	rdev->stats.qid.total = sc->vres.qp.size;
 
-	rc = c4iw_init_resource(rdev, c4iw_num_stags(rdev), T4_MAX_NUM_PD);
+	rc = c4iw_init_resource(rdev, T4_MAX_NUM_PD);
 	if (rc) {
 		device_printf(sc->dev, "error %d initializing resources\n", rc);
 		goto err1;
 	}
-	rc = c4iw_pblpool_create(rdev);
-	if (rc) {
-		device_printf(sc->dev, "error %d initializing pbl pool\n", rc);
-		goto err2;
-	}
 	rc = c4iw_rqtpool_create(rdev);
 	if (rc) {
 		device_printf(sc->dev, "error %d initializing rqt pool\n", rc);
-		goto err3;
+		goto err2;
 	}
 	rdev->status_page = (struct t4_dev_status_page *)
 				__get_free_page(GFP_KERNEL);
 	if (!rdev->status_page) {
 		rc = -ENOMEM;
-		goto err4;
+		goto err3;
 	}
 	rdev->status_page->qp_start = sc->vres.qp.start;
 	rdev->status_page->qp_size = sc->vres.qp.size;
@@ -170,15 +163,13 @@ c4iw_rdev_open(struct c4iw_rdev *rdev)
 	rdev->free_workq = create_singlethread_workqueue("iw_cxgb4_free");
 	if (!rdev->free_workq) {
 		rc = -ENOMEM;
-		goto err5;
+		goto err4;
 	}
 	return (0);
-err5:
-	free_page((unsigned long)rdev->status_page);
 err4:
-	c4iw_rqtpool_destroy(rdev);
+	free_page((unsigned long)rdev->status_page);
 err3:
-	c4iw_pblpool_destroy(rdev);
+	c4iw_rqtpool_destroy(rdev);
 err2:
 	c4iw_destroy_resource(&rdev->resource);
 err1:
@@ -188,7 +179,6 @@ err1:
 static void c4iw_rdev_close(struct c4iw_rdev *rdev)
 {
 	free_page((unsigned long)rdev->status_page);
-	c4iw_pblpool_destroy(rdev);
 	c4iw_rqtpool_destroy(rdev);
 	c4iw_destroy_resource(&rdev->resource);
 }
@@ -261,13 +251,14 @@ static int c4iw_mod_load(void);
 static int c4iw_mod_unload(void);
 static int c4iw_activate(struct adapter *);
 static int c4iw_deactivate(struct adapter *);
-static void c4iw_async_event(struct adapter *);
+static int c4iw_stop(struct adapter *);
+static int c4iw_restart(struct adapter *);
 
 static struct uld_info c4iw_uld_info = {
-	.uld_id = ULD_IWARP,
-	.activate = c4iw_activate,
-	.deactivate = c4iw_deactivate,
-	.async_event = c4iw_async_event,
+	.uld_activate = c4iw_activate,
+	.uld_deactivate = c4iw_deactivate,
+	.uld_stop = c4iw_stop,
+	.uld_restart = c4iw_restart,
 };
 
 static int
@@ -285,7 +276,7 @@ c4iw_activate(struct adapter *sc)
 	}
 
 	if (uld_active(sc, ULD_IWARP)) {
-		KASSERT(0, ("%s: RDMA already eanbled on sc %p", __func__, sc));
+		KASSERT(0, ("%s: RDMA already enabled on sc %p", __func__, sc));
 		return (0);
 	}
 
@@ -328,21 +319,34 @@ c4iw_deactivate(struct adapter *sc)
 	return (0);
 }
 
-static void
-c4iw_async_event(struct adapter *sc)
+static int
+c4iw_stop(struct adapter *sc)
 {
 	struct c4iw_dev *iwsc = sc->iwarp_softc;
 
 	if (iwsc) {
 		struct ib_event event = {0};
 
-		device_printf(sc->dev,
-			      "iWARP driver received FATAL ERROR event.\n");
-		iwsc->rdev.flags |= T4_FATAL_ERROR;
+		device_printf(sc->dev, "iWARP driver stopped.\n");
+		iwsc->rdev.flags |= T4_IW_STOPPED;
 		event.event  = IB_EVENT_DEVICE_FATAL;
 		event.device = &iwsc->ibdev;
 		ib_dispatch_event(&event);
 	}
+
+	return (0);
+}
+
+static int
+c4iw_restart(struct adapter *sc)
+{
+	struct c4iw_dev *iwsc = sc->iwarp_softc;
+
+	if (iwsc) {
+		device_printf(sc->dev, "iWARP driver restarted.\n");
+		iwsc->rdev.flags &= ~T4_IW_STOPPED;
+	}
+	return (0);
 }
 
 static void
@@ -381,7 +385,7 @@ c4iw_mod_load(void)
 	if (rc != 0)
 		return (rc);
 
-	rc = t4_register_uld(&c4iw_uld_info);
+	rc = t4_register_uld(&c4iw_uld_info, ULD_IWARP);
 	if (rc != 0) {
 		c4iw_cm_term();
 		return (rc);
@@ -400,7 +404,7 @@ c4iw_mod_unload(void)
 
 	c4iw_cm_term();
 
-	if (t4_unregister_uld(&c4iw_uld_info) == EBUSY)
+	if (t4_unregister_uld(&c4iw_uld_info, ULD_IWARP) == EBUSY)
 		return (EBUSY);
 
 	return (0);

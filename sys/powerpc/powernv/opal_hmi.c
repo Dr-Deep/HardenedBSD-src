@@ -23,9 +23,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/types.h>
 #include <sys/eventhandler.h>
@@ -92,7 +89,7 @@ opal_hmi_handler2(struct trapframe *frame)
 	int err;
 
 	*flags = 0;
-	err = opal_call(OPAL_HANDLE_HMI2, DMAP_TO_PHYS((vm_offset_t)flags));
+	err = opal_call(OPAL_HANDLE_HMI2, DMAP_TO_PHYS(flags));
 
 	if (be64toh(*flags) & OPAL_HMI_FLAGS_TOD_TB_FAIL)
 		panic("TOD/TB recovery failure");

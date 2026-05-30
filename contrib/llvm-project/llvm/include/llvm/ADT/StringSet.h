@@ -14,20 +14,25 @@
 #ifndef LLVM_ADT_STRINGSET_H
 #define LLVM_ADT_STRINGSET_H
 
+#include "llvm/ADT/ADL.h"
+#include "llvm/ADT/STLForwardCompat.h"
 #include "llvm/ADT/StringMap.h"
 
 namespace llvm {
 
 /// StringSet - A wrapper for StringMap that provides set-like functionality.
 template <class AllocatorTy = MallocAllocator>
-class StringSet : public StringMap<NoneType, AllocatorTy> {
-  using Base = StringMap<NoneType, AllocatorTy>;
+class StringSet : public StringMap<std::nullopt_t, AllocatorTy> {
+  using Base = StringMap<std::nullopt_t, AllocatorTy>;
 
 public:
   StringSet() = default;
   StringSet(std::initializer_list<StringRef> initializer) {
     for (StringRef str : initializer)
       insert(str);
+  }
+  template <typename Range> StringSet(llvm::from_range_t, Range &&R) {
+    insert(adl_begin(R), adl_end(R));
   }
   explicit StringSet(AllocatorTy a) : Base(a) {}
 
@@ -36,9 +41,13 @@ public:
   }
 
   template <typename InputIt>
-  void insert(const InputIt &begin, const InputIt &end) {
+  void insert(InputIt begin, InputIt end) {
     for (auto it = begin; it != end; ++it)
       insert(*it);
+  }
+
+  template <typename Range> void insert_range(Range &&R) {
+    insert(adl_begin(R), adl_end(R));
   }
 
   template <typename ValueTy>

@@ -7,8 +7,6 @@
  * This code is derived from software contributed
  * to Berkeley by John Heidemann of the UCLA Ficus project.
  *
- * Source: * @(#)i405_init.c 2.10 92/04/27 UCLA Ficus project
- *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -32,12 +30,7 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)vfs_init.c	8.3 (Berkeley) 1/4/94
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -80,7 +73,7 @@ SX_SYSINIT(vfsconf, &vfsconf_sx, "vfsconf");
 static int	vfs_typenumhash = 1;
 SYSCTL_INT(_vfs, OID_AUTO, typenumhash, CTLFLAG_RDTUN, &vfs_typenumhash, 0,
     "Set vfc_typenum using a hash calculation on vfc_name, so that it does not"
-    "change when file systems are loaded in a different order.");
+    " change when file systems are loaded in a different order.");
 
 /*
  * A Zen vnode attribute structure.
@@ -110,6 +103,16 @@ struct vattr va_null;
  * Routines having to do with the management of the vnode table.
  */
 
+void
+vfs_unref_vfsconf(struct vfsconf *vfsp)
+{
+	vfsconf_lock();
+	KASSERT(vfsp->vfc_refcount > 0,
+	    ("vfs %p refcount underflow %d", vfsp, vfsp->vfc_refcount));
+	vfsp->vfc_refcount--;
+	vfsconf_unlock();
+}
+
 static struct vfsconf *
 vfs_byname_locked(const char *name)
 {
@@ -130,9 +133,11 @@ vfs_byname(const char *name)
 {
 	struct vfsconf *vfsp;
 
-	vfsconf_slock();
+	vfsconf_lock();
 	vfsp = vfs_byname_locked(name);
-	vfsconf_sunlock();
+	if (vfsp != NULL)
+		vfsp->vfc_refcount++;
+	vfsconf_unlock();
 	return (vfsp);
 }
 
@@ -151,8 +156,10 @@ vfs_byname_kld(const char *fstype, struct thread *td, int *error)
 	loaded = (*error == 0);
 	if (*error == EEXIST)
 		*error = 0;
-	if (*error)
+	if (*error) {
+		*error = ENODEV;
 		return (NULL);
+	}
 
 	/* Look up again to see if the VFS was loaded. */
 	vfsp = vfs_byname(fstype);
@@ -392,7 +399,7 @@ vfs_register(struct vfsconf *vfc)
 	static int once;
 	struct vfsconf *tvfc;
 	uint32_t hashval;
-	int secondpass;
+	int error, prevmaxconf, secondpass;
 
 	if (!once) {
 		vattr_null(&va_null);
@@ -410,6 +417,7 @@ vfs_register(struct vfsconf *vfc)
 		return (EEXIST);
 	}
 
+	prevmaxconf = maxvfsconf;
 	if (vfs_typenumhash != 0) {
 		/*
 		 * Calculate a hash on vfc_name to use for vfc_typenum. Unless
@@ -502,16 +510,24 @@ vfs_register(struct vfsconf *vfc)
 		vfc->vfc_vfsops = &vfsops_sigdefer;
 	}
 
-	if (vfc->vfc_flags & VFCF_JAIL)
-		prison_add_vfs(vfc);
-
 	/*
 	 * Call init function for this VFS...
 	 */
 	if ((vfc->vfc_flags & VFCF_SBDRY) != 0)
-		vfc->vfc_vfsops_sd->vfs_init(vfc);
+		error = vfc->vfc_vfsops_sd->vfs_init(vfc);
 	else
-		vfc->vfc_vfsops->vfs_init(vfc);
+		error = vfc->vfc_vfsops->vfs_init(vfc);
+
+	if (error != 0) {
+		maxvfsconf = prevmaxconf;
+		TAILQ_REMOVE(&vfsconf, vfc, vfc_list);
+		vfsconf_unlock();
+		return (error);
+	}
+
+	if ((vfc->vfc_flags & VFCF_JAIL) != 0)
+		prison_add_vfs(vfc);
+
 	vfsconf_unlock();
 
 	/*
@@ -525,7 +541,7 @@ vfs_register(struct vfsconf *vfc)
 	 * number.
 	 */
 	sysctl_wlock();
-	SLIST_FOREACH(oidp, SYSCTL_CHILDREN(&sysctl___vfs), oid_link) {
+	RB_FOREACH(oidp, sysctl_oid_list, SYSCTL_CHILDREN(&sysctl___vfs)) {
 		if (strcmp(oidp->oid_name, vfc->vfc_name) == 0) {
 			sysctl_unregister_oid(oidp);
 			oidp->oid_number = vfc->vfc_typenum;

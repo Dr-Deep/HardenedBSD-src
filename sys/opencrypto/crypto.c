@@ -27,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Cryptographic Subsystem.
  *
@@ -58,7 +56,6 @@ __FBSDID("$FreeBSD$");
  * PURPOSE.
  */
 
-#include "opt_compat.h"
 #include "opt_ddb.h"
 
 #include <sys/param.h>
@@ -149,8 +146,8 @@ SYSCTL_NODE(_kern, OID_AUTO, crypto, CTLFLAG_RW, 0,
     "In-kernel cryptography");
 
 /*
- * Taskqueue used to dispatch the crypto requests
- * that have the CRYPTO_F_ASYNC flag
+ * Taskqueue used to dispatch the crypto requests submitted with
+ * crypto_dispatch_async .
  */
 static struct taskqueue *crypto_tq;
 
@@ -256,14 +253,7 @@ static struct keybuf empty_keybuf = {
 static void
 keybuf_init(void)
 {
-	caddr_t kmdp;
-
-	kmdp = preload_search_by_type("elf kernel");
-
-	if (kmdp == NULL)
-		kmdp = preload_search_by_type("elf64 kernel");
-
-	keybuf = (struct keybuf *)preload_search_info(kmdp,
+	keybuf = (struct keybuf *)preload_search_info(preload_kmdp,
 	    MODINFO_METADATA | MODINFOMD_KEYBUF);
 
         if (keybuf == NULL)
@@ -1273,8 +1263,6 @@ crp_sanity(struct cryptop *crp)
 	    crp->crp_obuf.cb_type <= CRYPTO_BUF_LAST,
 	    ("incoming crp with invalid output buffer type"));
 	KASSERT(crp->crp_etype == 0, ("incoming crp with error"));
-	KASSERT(!(crp->crp_flags & CRYPTO_F_DONE),
-	    ("incoming crp already done"));
 
 	csp = &crp->crp_session->csp;
 	cb_sanity(&crp->crp_buf, "input");
@@ -1633,17 +1621,11 @@ crypto_freereq(struct cryptop *crp)
 	uma_zfree(cryptop_zone, crp);
 }
 
-static void
-_crypto_initreq(struct cryptop *crp, crypto_session_t cses)
-{
-	crp->crp_session = cses;
-}
-
 void
 crypto_initreq(struct cryptop *crp, crypto_session_t cses)
 {
 	memset(crp, 0, sizeof(*crp));
-	_crypto_initreq(crp, cses);
+	crp->crp_session = cses;
 }
 
 struct cryptop *
@@ -1652,9 +1634,9 @@ crypto_getreq(crypto_session_t cses, int how)
 	struct cryptop *crp;
 
 	MPASS(how == M_WAITOK || how == M_NOWAIT);
-	crp = uma_zalloc(cryptop_zone, how | M_ZERO);
+	crp = uma_zalloc(cryptop_zone, how);
 	if (crp != NULL)
-		_crypto_initreq(crp, cses);
+		crypto_initreq(crp, cses);
 	return (crp);
 }
 
@@ -1669,7 +1651,6 @@ crypto_clonereq(struct cryptop *crp, crypto_session_t cses, int how)
 {
 	struct cryptop *new;
 
-	MPASS((crp->crp_flags & CRYPTO_F_DONE) == 0);
 	new = crypto_getreq(cses, how);
 	if (new == NULL)
 		return (NULL);
@@ -1685,9 +1666,6 @@ crypto_clonereq(struct cryptop *crp, crypto_session_t cses, int how)
 void
 crypto_done(struct cryptop *crp)
 {
-	KASSERT((crp->crp_flags & CRYPTO_F_DONE) == 0,
-		("crypto_done: op already done, flags 0x%x", crp->crp_flags));
-	crp->crp_flags |= CRYPTO_F_DONE;
 	if (crp->crp_etype != 0)
 		CRYPTOSTAT_INC(cs_errs);
 

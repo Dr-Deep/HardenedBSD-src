@@ -28,10 +28,9 @@
  *
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_capsicum.h"
+#include "opt_inet.h"
+#include "opt_inet6.h"
 #include "opt_sctp.h"
 #include "opt_ktrace.h"
 
@@ -78,6 +77,11 @@ __FBSDID("$FreeBSD$");
 #include <security/mac/mac_framework.h>
 
 #include <netinet/sctp.h>
+#include <netinet/sctp_pcb.h>
+#include <netinet/sctp_var.h>
+#ifdef INET6
+#include <netinet6/sctp6_var.h>
+#endif
 #include <netinet/sctp_os_bsd.h>
 #include <netinet/sctp_peeloff.h>
 
@@ -139,24 +143,21 @@ sctp_syscalls_uninit(void)
  * SCTP syscalls.
  */
 int
-sys_sctp_peeloff(td, uap)
-	struct thread *td;
-	struct sctp_peeloff_args /* {
-		int	sd;
-		caddr_t	name;
-	} */ *uap;
+sys_sctp_peeloff(struct thread *td, struct sctp_peeloff_args *uap)
 {
 	struct file *headfp, *nfp = NULL;
 	struct socket *head, *so;
+	struct filecaps fcaps;
 	cap_rights_t rights;
 	u_int fflag;
 	int error, fd;
 
 	AUDIT_ARG_FD(uap->sd);
-	error = getsock_cap(td, uap->sd, cap_rights_init_one(&rights, CAP_PEELOFF),
-	    &headfp, &fflag, NULL);
+	error = getsock_cap(td, uap->sd,
+	    cap_rights_init_one(&rights, CAP_PEELOFF), &headfp, &fcaps);
 	if (error != 0)
 		goto done2;
+	fflag = atomic_load_int(&headfp->f_flag);
 	head = headfp->f_data;
 	if (head->so_proto->pr_protocol != IPPROTO_SCTP) {
 		error = EOPNOTSUPP;
@@ -171,13 +172,27 @@ sys_sctp_peeloff(td, uap)
 	 * but that is ok.
 	 */
 
-	error = falloc(td, &nfp, &fd, 0);
+	error = falloc_caps(td, &nfp, &fd, 0, &fcaps);
 	if (error != 0)
 		goto done;
 	td->td_retval[0] = fd;
 
 	CURVNET_SET(head->so_vnet);
-	so = sopeeloff(head);
+	switch (head->so_proto->pr_domain->dom_family) {
+#ifdef INET
+	case AF_INET:
+		so = sopeeloff(head, &sctp_stream_protosw);
+		break;
+#endif
+#ifdef INET6
+	case AF_INET6:
+		so = sopeeloff(head, &sctp6_stream_protosw);
+		break;
+#endif
+	default:
+		error = EOPNOTSUPP;
+		goto noconnection;
+	}
 	if (so == NULL) {
 		error = ENOMEM;
 		goto noconnection;
@@ -210,17 +225,7 @@ done2:
 }
 
 int
-sys_sctp_generic_sendmsg (td, uap)
-	struct thread *td;
-	struct sctp_generic_sendmsg_args /* {
-		int sd,
-		caddr_t msg,
-		int mlen,
-		caddr_t to,
-		__socklen_t tolen,
-		struct sctp_sndrcvinfo *sinfo,
-		int flags
-	} */ *uap;
+sys_sctp_generic_sendmsg(struct thread *td, struct sctp_generic_sendmsg_args *uap)
 {
 	struct sctp_sndrcvinfo sinfo, *u_sinfo = NULL;
 	struct socket *so;
@@ -252,7 +257,7 @@ sys_sctp_generic_sendmsg (td, uap)
 	}
 
 	AUDIT_ARG_FD(uap->sd);
-	error = getsock_cap(td, uap->sd, &rights, &fp, NULL, NULL);
+	error = getsock(td, uap->sd, &rights, &fp);
 	if (error != 0)
 		goto sctp_bad;
 #ifdef KTRACE
@@ -306,7 +311,8 @@ sys_sctp_generic_sendmsg (td, uap)
 		td->td_retval[0] = len - auio.uio_resid;
 #ifdef KTRACE
 	if (ktruio != NULL) {
-		ktruio->uio_resid = td->td_retval[0];
+		if (error == 0)
+			ktruio->uio_resid = td->td_retval[0];
 		ktrgenio(uap->sd, UIO_WRITE, ktruio, error);
 	}
 #endif /* KTRACE */
@@ -319,17 +325,7 @@ sctp_bad2:
 }
 
 int
-sys_sctp_generic_sendmsg_iov(td, uap)
-	struct thread *td;
-	struct sctp_generic_sendmsg_iov_args /* {
-		int sd,
-		struct iovec *iov,
-		int iovlen,
-		caddr_t to,
-		__socklen_t tolen,
-		struct sctp_sndrcvinfo *sinfo,
-		int flags
-	} */ *uap;
+sys_sctp_generic_sendmsg_iov(struct thread *td, struct sctp_generic_sendmsg_iov_args *uap)
 {
 	struct sctp_sndrcvinfo sinfo, *u_sinfo = NULL;
 	struct socket *so;
@@ -361,7 +357,7 @@ sys_sctp_generic_sendmsg_iov(td, uap)
 	}
 
 	AUDIT_ARG_FD(uap->sd);
-	error = getsock_cap(td, uap->sd, &rights, &fp, NULL, NULL);
+	error = getsock(td, uap->sd, &rights, &fp);
 	if (error != 0)
 		goto sctp_bad1;
 
@@ -430,7 +426,8 @@ sys_sctp_generic_sendmsg_iov(td, uap)
 		td->td_retval[0] = len - auio.uio_resid;
 #ifdef KTRACE
 	if (ktruio != NULL) {
-		ktruio->uio_resid = td->td_retval[0];
+		if (error == 0)
+			ktruio->uio_resid = td->td_retval[0];
 		ktrgenio(uap->sd, UIO_WRITE, ktruio, error);
 	}
 #endif /* KTRACE */
@@ -445,17 +442,7 @@ sctp_bad2:
 }
 
 int
-sys_sctp_generic_recvmsg(td, uap)
-	struct thread *td;
-	struct sctp_generic_recvmsg_args /* {
-		int sd,
-		struct iovec *iov,
-		int iovlen,
-		struct sockaddr *from,
-		__socklen_t *fromlenaddr,
-		struct sctp_sndrcvinfo *sinfo,
-		int *msg_flags
-	} */ *uap;
+sys_sctp_generic_recvmsg(struct thread *td, struct sctp_generic_recvmsg_args *uap)
 {
 	uint8_t sockbufstore[256];
 	struct uio auio;
@@ -472,8 +459,8 @@ sys_sctp_generic_recvmsg(td, uap)
 	int error, fromlen, i, msg_flags;
 
 	AUDIT_ARG_FD(uap->sd);
-	error = getsock_cap(td, uap->sd, cap_rights_init_one(&rights, CAP_RECV),
-	    &fp, NULL, NULL);
+	error = getsock(td, uap->sd, cap_rights_init_one(&rights, CAP_RECV),
+	    &fp);
 	if (error != 0)
 		return (error);
 #ifdef COMPAT_FREEBSD32

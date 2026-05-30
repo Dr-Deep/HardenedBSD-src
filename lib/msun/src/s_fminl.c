@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2004 David Schultz <das@FreeBSD.ORG>
  * All rights reserved.
@@ -26,9 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <math.h>
 
 #include "fpmath.h"
@@ -44,9 +41,9 @@ fminl(long double x, long double y)
 	mask_nbit_l(u[1]);
 
 	/* Check for NaNs to avoid raising spurious exceptions. */
-	if (u[0].bits.exp == 32767 && (u[0].bits.manh | u[0].bits.manl) != 0)
+	if (isnan(x))
 		return (y);
-	if (u[1].bits.exp == 32767 && (u[1].bits.manh | u[1].bits.manl) != 0)
+	if (isnan(y))
 		return (x);
 
 	/* Handle comparisons of signed zeroes. */

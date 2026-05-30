@@ -1,5 +1,4 @@
 #
-# $FreeBSD$
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -30,5 +29,7 @@ SRCS=	if_vtnet.c
 SRCS+=	virtio_bus_if.h virtio_if.h
 SRCS+=	bus_if.h device_if.h 
 SRCS+=	opt_inet.h opt_inet6.h
+
+TRIVIAL_VAR_AUTO_INIT_ZERO_SAFE=	yes
 
 .include <bsd.kmod.mk>

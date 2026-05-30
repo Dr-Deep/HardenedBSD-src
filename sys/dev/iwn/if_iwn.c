@@ -25,8 +25,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_wlan.h"
 #include "opt_iwn.h"
 
@@ -585,6 +583,11 @@ iwn_attach(device_t dev)
 		| IEEE80211_C_WME		/* WME */
 		| IEEE80211_C_PMGT		/* Station-side power mgmt */
 		;
+
+	/* Driver / firmware assigned sequence numbers */
+	ic->ic_flags_ext |= IEEE80211_FEXT_SEQNO_OFFLOAD;
+	/* Don't originate null data frames in net80211 */
+	ic->ic_flags_ext |= IEEE80211_FEXT_NO_NULLDATA;
 
 	/* Read MAC address, channels, etc from EEPROM. */
 	if ((error = iwn_read_eeprom(sc, ic->ic_macaddr)) != 0) {
@@ -2815,22 +2818,17 @@ iwn_rate_to_plcp(struct iwn_softc *sc, struct ieee80211_node *ni,
 		plcp = IEEE80211_RV(rate) | IWN_RFLAG_MCS;
 
 		/*
-		 * XXX the following should only occur if both
-		 * the local configuration _and_ the remote node
-		 * advertise these capabilities.  Thus this code
-		 * may need fixing!
-		 */
-
-		/*
 		 * Set the channel width and guard interval.
+		 *
+		 * Take into account the local configuration and
+		 * the node/peer advertised abilities.
 		 */
 		if (IEEE80211_IS_CHAN_HT40(ni->ni_chan)) {
 			plcp |= IWN_RFLAG_HT40;
-			if (ni->ni_htcap & IEEE80211_HTCAP_SHORTGI40)
+			if (ieee80211_ht_check_tx_shortgi_40(ni))
 				plcp |= IWN_RFLAG_SGI;
-		} else if (ni->ni_htcap & IEEE80211_HTCAP_SHORTGI20) {
+		} else if (ieee80211_ht_check_tx_shortgi_20(ni))
 			plcp |= IWN_RFLAG_SGI;
-		}
 
 		/*
 		 * Ensure the selected rate matches the link quality
@@ -3021,7 +3019,6 @@ static void
 iwn_rx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
     struct iwn_rx_data *data)
 {
-	struct epoch_tracker et;
 	struct iwn_ops *ops = &sc->ops;
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct iwn_rx_ring *ring = &sc->rxq;
@@ -3181,7 +3178,6 @@ iwn_rx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 	}
 
 	IWN_UNLOCK(sc);
-	NET_EPOCH_ENTER(et);
 
 	/* Send the frame to the 802.11 layer. */
 	if (ni != NULL) {
@@ -3193,7 +3189,6 @@ iwn_rx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 	} else
 		(void)ieee80211_input_all(ic, m, rssi - nf, nf);
 
-	NET_EPOCH_EXIT(et);
 	IWN_LOCK(sc);
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s: end\n",__func__);
@@ -4490,7 +4485,7 @@ iwn_tx_rate_to_linkq_offset(struct iwn_softc *sc, struct ieee80211_node *ni,
 	/*
 	 * Figure out if we're using 11n or not here.
 	 */
-	if (IEEE80211_IS_CHAN_HT(ni->ni_chan) && ni->ni_htrates.rs_nrates > 0)
+	if (ieee80211_ht_check_tx_ht(ni))
 		is_11n = 1;
 	else
 		is_11n = 0;
@@ -4580,13 +4575,16 @@ iwn_tx_data(struct iwn_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 	else {
 		/* XXX pass pktlen */
 		(void) ieee80211_ratectl_rate(ni, NULL, 0);
-		rate = ni->ni_txrate;
+		rate = ieee80211_node_get_txrate_dot11rate(ni);
 	}
 
 	/*
 	 * XXX TODO: Group addressed frames aren't aggregated and must
 	 * go to the normal non-aggregation queue, and have a NONQOS TID
 	 * assigned from net80211.
+	 *
+	 * TODO: same with NULL QOS frames, which we shouldn't be sending
+	 * anyway ourselves (and should stub out / warn / etc.)
 	 */
 
 	ac = M_WME_GETAC(m);
@@ -4598,6 +4596,10 @@ iwn_tx_data(struct iwn_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 
 		ac = *(int *)tap->txa_private;
 	}
+
+	/* Only assign if not A-MPDU; the A-MPDU TX path will do its own */
+	if ((m->m_flags & M_AMPDU_MPDU) == 0)
+		ieee80211_output_seqno_assign(ni, -1, m);
 
 	/* Encrypt the frame if need be. */
 	if (wh->i_fc[1] & IEEE80211_FC1_PROTECTED) {
@@ -4629,9 +4631,7 @@ iwn_tx_data(struct iwn_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 		    IEEE80211_QOS_ACKPOLICY_NOACK)
 			flags |= IWN_TX_NEED_ACK;
 	}
-	if ((wh->i_fc[0] &
-	    (IEEE80211_FC0_TYPE_MASK | IEEE80211_FC0_SUBTYPE_MASK)) ==
-	    (IEEE80211_FC0_TYPE_CTL | IEEE80211_FC0_SUBTYPE_BAR))
+	if (IEEE80211_IS_CTL_BAR(wh))
 		flags |= IWN_TX_IMM_BA;		/* Cannot happen yet. */
 
 	if (wh->i_fc[1] & IEEE80211_FC1_MORE_FRAG)
@@ -5370,7 +5370,7 @@ iwn_set_link_quality(struct iwn_softc *sc, struct ieee80211_node *ni)
 	 * 11n _and_ we have some 11n rates, or don't
 	 * try.
 	 */
-	if (IEEE80211_IS_CHAN_HT(ni->ni_chan) && ni->ni_htrates.rs_nrates > 0) {
+	if (ieee80211_ht_check_tx_ht(ni)) {
 		rs = (struct ieee80211_rateset *) &ni->ni_htrates;
 		is_11n = 1;
 	} else {
@@ -7152,9 +7152,9 @@ iwn_scan(struct iwn_softc *sc, struct ieee80211vap *vap,
 	wh->i_fc[0] = IEEE80211_FC0_VERSION_0 | IEEE80211_FC0_TYPE_MGT |
 	    IEEE80211_FC0_SUBTYPE_PROBE_REQ;
 	wh->i_fc[1] = IEEE80211_FC1_DIR_NODS;
-	IEEE80211_ADDR_COPY(wh->i_addr1, vap->iv_ifp->if_broadcastaddr);
-	IEEE80211_ADDR_COPY(wh->i_addr2, IF_LLADDR(vap->iv_ifp));
-	IEEE80211_ADDR_COPY(wh->i_addr3, vap->iv_ifp->if_broadcastaddr);
+	IEEE80211_ADDR_COPY(wh->i_addr1, if_getbroadcastaddr(vap->iv_ifp));
+	IEEE80211_ADDR_COPY(wh->i_addr2, if_getlladdr(vap->iv_ifp));
+	IEEE80211_ADDR_COPY(wh->i_addr3, if_getbroadcastaddr(vap->iv_ifp));
 	*(uint16_t *)&wh->i_dur[0] = 0;	/* filled by HW */
 	*(uint16_t *)&wh->i_seq[0] = 0;	/* filled by HW */
 
@@ -7537,7 +7537,7 @@ iwn_addba_request(struct ieee80211_node *ni, struct ieee80211_tx_ampdu *tap,
 			break;
 	}
 	if (qid == sc->ntxqs) {
-		DPRINTF(sc, IWN_DEBUG_XMIT, "%s: not free aggregation queue\n",
+		DPRINTF(sc, IWN_DEBUG_XMIT, "%s: no free aggregation queue\n",
 		    __func__);
 		return 0;
 	}
@@ -9123,7 +9123,7 @@ iwn_set_channel(struct ieee80211com *ic)
 		error = iwn_config(sc);
 		if (error != 0)
 		device_printf(sc->sc_dev,
-		    "%s: error %d settting channel\n", __func__, error);
+		    "%s: error %d setting channel\n", __func__, error);
 	}
 	IWN_UNLOCK(sc);
 }

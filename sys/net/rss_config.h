@@ -25,8 +25,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _NET_RSS_CONFIG_H_
@@ -106,6 +104,7 @@
 
 extern int	rss_debug;
 
+#ifdef RSS
 /*
  * Device driver interfaces to query RSS properties that must be programmed
  * into hardware.
@@ -114,16 +113,8 @@ u_int	rss_getbits(void);
 u_int	rss_getbucket(u_int hash);
 u_int	rss_get_indirection_to_bucket(u_int index);
 u_int	rss_getcpu(u_int bucket);
-void	rss_getkey(uint8_t *key);
-u_int	rss_gethashalgo(void);
 u_int	rss_getnumbuckets(void);
 u_int	rss_getnumcpus(void);
-u_int	rss_gethashconfig(void);
-
-/*
- * Hash calculation functions.
- */
-uint32_t	rss_hash(u_int datalen, const uint8_t *data);
 
 /*
  * Network stack interface to query desired CPU affinity of a packet.
@@ -133,5 +124,16 @@ u_int	rss_hash2cpuid(uint32_t hash_val, uint32_t hash_type);
 int	rss_hash2bucket(uint32_t hash_val, uint32_t hash_type,
 	    uint32_t *bucket_id);
 int	rss_m2bucket(struct mbuf *m, uint32_t *bucket_id);
+
+#endif /* RSS */
+
+void	rss_getkey(uint8_t *key);
+u_int	rss_gethashalgo(void);
+u_int	rss_gethashconfig(void);
+/*
+ * Hash calculation functions.
+ */
+uint32_t	rss_hash(u_int datalen, const uint8_t *data);
+
 
 #endif /* !_NET_RSS_CONFIG_H_ */

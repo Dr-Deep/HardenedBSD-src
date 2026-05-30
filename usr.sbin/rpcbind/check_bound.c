@@ -1,5 +1,4 @@
 /*	$NetBSD: check_bound.c,v 1.2 2000/06/22 08:09:26 fvdl Exp $	*/
-/*	$FreeBSD$ */
 
 /*-
  * SPDX-License-Identifier: BSD-3-Clause
@@ -34,14 +33,6 @@
  * Copyright (c) 1986 - 1991 by Sun Microsystems, Inc.
  */
 
-/* #ident	"@(#)check_bound.c	1.15	93/07/05 SMI" */
-
-#if 0
-#ifndef lint
-static	char sccsid[] = "@(#)check_bound.c 1.11 89/04/21 Copyr 1989 Sun Micro";
-#endif
-#endif
-
 /*
  * check_bound.c
  * Checks to see whether the program is still bound to the
@@ -51,13 +42,16 @@ static	char sccsid[] = "@(#)check_bound.c 1.11 89/04/21 Copyr 1989 Sun Micro";
 
 #include <sys/types.h>
 #include <sys/socket.h>
+
 #include <rpc/rpc.h>
 #include <rpc/svc_dg.h>
+
 #include <netconfig.h>
-#include <syslog.h>
-#include <string.h>
-#include <unistd.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <syslog.h>
+#include <unistd.h>
 
 #include "rpcbind.h"
 
@@ -70,9 +64,9 @@ struct fdlist {
 
 static struct fdlist *fdhead;	/* Link list of the check fd's */
 static struct fdlist *fdtail;
-static char *nullstring = "";
+static char nullstring[] = "";
 
-static bool_t check_bound(struct fdlist *, char *uaddr);
+static bool_t check_bound(struct fdlist *, const char *uaddr);
 
 /*
  * Returns 1 if the given address is bound for the given addr & transport
@@ -80,7 +74,7 @@ static bool_t check_bound(struct fdlist *, char *uaddr);
  * Returns 0 for success.
  */
 static bool_t
-check_bound(struct fdlist *fdl, char *uaddr)
+check_bound(struct fdlist *fdl, const char *uaddr)
 {
 	int fd;
 	struct netbuf *na;
@@ -110,7 +104,7 @@ check_bound(struct fdlist *fdl, char *uaddr)
 }
 
 int
-add_bndlist(struct netconfig *nconf, struct netbuf *baddr __unused)
+add_bndlist(const struct netconfig *nconf, struct netbuf *baddr __unused)
 {
 	struct fdlist *fdl;
 	struct netconfig *newnconf;
@@ -118,7 +112,7 @@ add_bndlist(struct netconfig *nconf, struct netbuf *baddr __unused)
 	newnconf = getnetconfigent(nconf->nc_netid);
 	if (newnconf == NULL)
 		return (-1);
-	fdl = malloc(sizeof (struct fdlist));
+	fdl = malloc(sizeof(*fdl));
 	if (fdl == NULL) {
 		freenetconfigent(newnconf);
 		syslog(LOG_ERR, "no memory!");
@@ -140,7 +134,7 @@ add_bndlist(struct netconfig *nconf, struct netbuf *baddr __unused)
 }
 
 bool_t
-is_bound(char *netid, char *uaddr)
+is_bound(const char *netid, const char *uaddr)
 {
 	struct fdlist *fdl;
 
@@ -198,7 +192,7 @@ mergeaddr(SVCXPRT *xprt, char *netid, char *uaddr, char *saddr)
 		return (NULL);
 	}
 
-#ifdef ND_DEBUG
+#ifdef RPCBIND_DEBUG
 	if (debugging) {
 		if (saddr == NULL) {
 			fprintf(stderr, "mergeaddr: client uaddr = %s\n",
@@ -214,7 +208,7 @@ mergeaddr(SVCXPRT *xprt, char *netid, char *uaddr, char *saddr)
 	 * This is all we should need for IP 4 and 6
 	 */
 	m_uaddr = addrmerge(svc_getrpccaller(xprt), s_uaddr, c_uaddr, netid);
-#ifdef ND_DEBUG
+#ifdef RPCBIND_DEBUG
 	if (debugging)
 		fprintf(stderr, "mergeaddr: uaddr = %s, merged uaddr = %s\n",
 				uaddr, m_uaddr);

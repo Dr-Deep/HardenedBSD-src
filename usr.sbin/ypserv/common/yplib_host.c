@@ -1,6 +1,8 @@
 /*	$OpenBSD: yplib_host.c,v 1.18 2015/01/16 06:40:22 deraadt Exp $ */
 
 /*
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 1992, 1993 Theo de Raadt <deraadt@theos.com>
  * All rights reserved.
  *
@@ -25,9 +27,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/socket.h>
@@ -54,10 +53,10 @@ __FBSDID("$FreeBSD$");
 
 #include "yplib_host.h"
 
+extern bool_t xdr_ypresp_all_seq(XDR *, unsigned long *);
+
 extern int (*ypresp_allfn)(u_long, char *, int, char *, int, void *);
 extern void *ypresp_data;
-extern bool_t xdr_ypreq_key(), xdr_ypresp_val();
-extern bool_t xdr_ypresp_all_seq();
 
 static int _yplib_host_timeout = 10;
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -52,11 +53,13 @@ const zfs_deleg_perm_tab_t zfs_deleg_perm_tab[] = {
 	{ZFS_DELEG_PERM_MOUNT},
 	{ZFS_DELEG_PERM_PROMOTE},
 	{ZFS_DELEG_PERM_RECEIVE},
+	{ZFS_DELEG_PERM_RECEIVE_APPEND},
 	{ZFS_DELEG_PERM_RENAME},
 	{ZFS_DELEG_PERM_ROLLBACK},
 	{ZFS_DELEG_PERM_SNAPSHOT},
 	{ZFS_DELEG_PERM_SHARE},
 	{ZFS_DELEG_PERM_SEND},
+	{ZFS_DELEG_PERM_SEND_RAW},
 	{ZFS_DELEG_PERM_USERPROP},
 	{ZFS_DELEG_PERM_USERQUOTA},
 	{ZFS_DELEG_PERM_GROUPQUOTA},
@@ -102,9 +105,9 @@ zfs_deleg_canonicalize_perm(const char *perm)
 }
 
 static int
-zfs_validate_who(char *who)
+zfs_validate_who(const char *who)
 {
-	char *p;
+	const char *p;
 
 	if (who[2] != ZFS_DELEG_FIELD_SEP_CHR)
 		return (-1);

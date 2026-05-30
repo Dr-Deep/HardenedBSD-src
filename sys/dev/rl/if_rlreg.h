@@ -28,12 +28,10 @@
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
- * RealTek 8129/8139 register offsets
+ * Realtek 8129/8139 register offsets
  */
 #define	RL_IDR0		0x0000		/* ID register 0 (station addr) */
 #define	RL_IDR1		0x0001		/* Must use 32-bit accesses (?) */
@@ -196,6 +194,7 @@
 #define	RL_HWREV_8168EP		0x50000000
 #define	RL_HWREV_8168GU		0x50800000
 #define	RL_HWREV_8168H		0x54000000
+#define	RL_HWREV_8168FP		0x54800000
 #define	RL_HWREV_8411B		0x5C800000
 #define	RL_HWREV_8139		0x60000000
 #define	RL_HWREV_8139A		0x70000000
@@ -545,8 +544,8 @@
 #define	RL_GMEDIASTAT_TBI	0x80	/* TBI enabled */
 
 /*
- * The RealTek doesn't use a fragment-based descriptor mechanism.
- * Instead, there are only four register sets, each or which represents
+ * The Realtek doesn't use a fragment-based descriptor mechanism.
+ * Instead, there are only four register sets, each of which represents
  * one 'descriptor.' Basically, each TX descriptor is just a contiguous
  * packet buffer (32-bit aligned!) and we place the buffer addresses in
  * the registers so the chip knows where they are.
@@ -802,7 +801,7 @@ struct rl_stats {
 #define	RL_ADDR_HI(y)		((uint64_t) (y) >> 32)
 
 /*
- * The number of bits reserved for MSS in RealTek controllers is
+ * The number of bits reserved for MSS in Realtek controllers is
  * 11bits. This limits the maximum interface MTU size in TSO case
  * as upper stack should not generate TCP segments with MSS greater
  * than the limit.
@@ -863,7 +862,7 @@ struct rl_list_data {
 enum rl_twist { DONE, CHK_LINK, FIND_ROW, SET_PARAM, RECHK_LONG, RETUNE };
 
 struct rl_softc {
-	struct ifnet		*rl_ifp;	/* interface info */
+	if_t			rl_ifp;	/* interface info */
 	bus_space_handle_t	rl_bhandle;	/* bus space handle */
 	bus_space_tag_t		rl_btag;	/* bus space tag */
 	device_t		rl_dev;
@@ -986,13 +985,14 @@ struct rl_softc {
 /*
  * General constants that are fun to know.
  *
- * RealTek PCI vendor ID
+ * Realtek PCI vendor ID
  */
 #define	RT_VENDORID				0x10EC
 
 /*
- * RealTek chip device IDs.
+ * Realtek chip device IDs.
  */
+#define	RT_DEVICEID_2600          		0x2600
 #define	RT_DEVICEID_8139D			0x8039
 #define	RT_DEVICEID_8129			0x8129
 #define	RT_DEVICEID_8101E			0x8136

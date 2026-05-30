@@ -1,4 +1,3 @@
-# $FreeBSD$
 .include <src.opts.mk>
 
 PACKAGE=lib${LIB}
@@ -14,8 +13,7 @@ CFLAGS+=	-I${.OBJDIR}
 CFLAGS+=	-I${SRCTOP}/sys/contrib/zstd/lib
 .include "Makefile.inc"
 
-.if ${MACHINE_ARCH:Marm*} != "" || ${MACHINE_ARCH:Mmips*} != "" || \
-	${MACHINE_ARCH:Mpowerpc*} != ""
+.if ${MACHINE_ARCH:Marm*} != "" || ${MACHINE_ARCH:Mpowerpc*} != ""
 NO_WCAST_ALIGN=	yes
 .if ${MACHINE_ARCH:M*64*} == ""
 CFLAGS+=	-DPPMD_32BIT
@@ -44,11 +42,11 @@ SRCS=	archive_acl.c					\
 	archive_entry_stat.c				\
 	archive_entry_strmode.c				\
 	archive_entry_xattr.c				\
-	archive_getdate.c				\
 	archive_hmac.c					\
 	archive_match.c					\
 	archive_options.c				\
 	archive_pack_dev.c				\
+	archive_parse_date.c				\
 	archive_pathmatch.c				\
 	archive_ppmd7.c					\
 	archive_ppmd8.c					\
@@ -103,6 +101,7 @@ SRCS=	archive_acl.c					\
 	archive_read_support_format_zip.c		\
 	archive_string.c				\
 	archive_string_sprintf.c			\
+	archive_time.c					\
 	archive_util.c					\
 	archive_version_details.c			\
 	archive_virtual.c				\
@@ -185,12 +184,13 @@ MAN=	archive_entry.3					\
 	archive_write_new.3				\
 	archive_write_open.3				\
 	archive_write_set_options.3			\
-	cpio.5						\
 	libarchive.3					\
 	libarchive_changes.3				\
-	libarchive_internals.3				\
-	libarchive-formats.5				\
-	tar.5
+	libarchive_internals.3
+
+MANNODEV=	cpio.5			\
+		libarchive-formats.5	\
+		tar.5
 
 # Symlink the man pages under each function name.
 MLINKS+=	archive_entry.3 archive_entry_clear.3
@@ -389,6 +389,7 @@ MLINKS+=	archive_write_filter.3 archive_write_add_filter_lzma.3
 MLINKS+=	archive_write_filter.3 archive_write_add_filter_none.3
 MLINKS+=	archive_write_filter.3 archive_write_add_filter_program.3
 MLINKS+=	archive_write_filter.3 archive_write_add_filter_xz.3
+MLINKS+=	archive_write_filter.3 archive_write_add_filter_zstd.3
 MLINKS+=	archive_write_format.3 archive_write_set_format_cpio.3
 MLINKS+=	archive_write_format.3 archive_write_set_format_pax.3
 MLINKS+=	archive_write_format.3 archive_write_set_format_pax_restricted.3

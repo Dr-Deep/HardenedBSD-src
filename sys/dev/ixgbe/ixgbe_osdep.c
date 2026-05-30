@@ -30,9 +30,14 @@
   POSSIBILITY OF SUCH DAMAGE.
 
 ******************************************************************************/
-/*$FreeBSD$*/
 
 #include "ixgbe.h"
+
+inline device_t
+ixgbe_dev_from_hw(struct ixgbe_hw *hw)
+{
+	return ((struct ixgbe_softc *)hw->back)->dev;
+}
 
 inline u16
 ixgbe_read_pci_cfg(struct ixgbe_hw *hw, u32 reg)
@@ -75,4 +80,99 @@ ixgbe_write_reg_array(struct ixgbe_hw *hw, u32 reg, u32 offset, u32 val)
 	bus_space_write_4(((struct ixgbe_softc *)hw->back)->osdep.mem_bus_space_tag,
 	    ((struct ixgbe_softc *)hw->back)->osdep.mem_bus_space_handle,
 	    reg + (offset << 2), val);
+}
+
+uint64_t
+ixgbe_link_speed_to_baudrate(ixgbe_link_speed speed)
+{
+	uint64_t baudrate;
+
+	switch (speed) {
+	case IXGBE_LINK_SPEED_10GB_FULL:
+		baudrate = IF_Gbps(10);
+		break;
+	case IXGBE_LINK_SPEED_5GB_FULL:
+		baudrate = IF_Gbps(5);
+		break;
+	case IXGBE_LINK_SPEED_2_5GB_FULL:
+		baudrate = IF_Mbps(2500);
+		break;
+	case IXGBE_LINK_SPEED_1GB_FULL:
+		baudrate = IF_Gbps(1);
+		break;
+	case IXGBE_LINK_SPEED_100_FULL:
+		baudrate = IF_Mbps(100);
+		break;
+	case IXGBE_LINK_SPEED_10_FULL:
+		baudrate = IF_Mbps(10);
+		break;
+	case IXGBE_LINK_SPEED_UNKNOWN:
+	default:
+		baudrate = 0;
+		break;
+	}
+
+	return baudrate;
+}
+
+void
+ixgbe_init_lock(struct ixgbe_lock *lock)
+{
+	mtx_init(&lock->mutex, "mutex",
+	    "ixgbe ACI lock", MTX_DEF | MTX_DUPOK);
+}
+
+void
+ixgbe_acquire_lock(struct ixgbe_lock *lock)
+{
+	mtx_lock(&lock->mutex);
+}
+
+void
+ixgbe_release_lock(struct ixgbe_lock *lock)
+{
+	mtx_unlock(&lock->mutex);
+}
+
+void
+ixgbe_destroy_lock(struct ixgbe_lock *lock)
+{
+	if (mtx_initialized(&lock->mutex))
+		mtx_destroy(&lock->mutex);
+}
+
+/**
+ * ixgbe_info_fwlog - Format and print an array of values to the console
+ * @hw: private hardware structure
+ * @rowsize: preferred number of rows to use
+ * @groupsize: preferred size in bytes to print each chunk
+ * @buf: the array buffer to print
+ * @len: size of the array buffer
+ *
+ * Format the given array as a series of uint8_t values with hexadecimal
+ * notation and log the contents to the console log.  This variation is
+ * specific to firmware logging.
+ *
+ * TODO: Currently only supports a group size of 1, due to the way hexdump is
+ * implemented.
+ */
+void
+ixgbe_info_fwlog(struct ixgbe_hw *hw, uint32_t rowsize, uint32_t __unused groupsize,
+	       uint8_t *buf, size_t len)
+{
+	device_t dev = ((struct ixgbe_softc *)hw->back)->dev;
+	char prettyname[20];
+
+	if (!ixgbe_fwlog_supported(hw))
+		return;
+
+	/* Format the device header to a string */
+	snprintf(prettyname, sizeof(prettyname), "%s: FWLOG: ",
+	    device_get_nameunit(dev));
+
+	/* Make sure the row-size isn't too large */
+	if (rowsize > 0xFF)
+		rowsize = 0xFF;
+
+	hexdump(buf, len, prettyname, HD_OMIT_CHARS | rowsize);
 }

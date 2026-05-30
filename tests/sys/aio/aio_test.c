@@ -22,8 +22,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -41,6 +39,7 @@
 
 #include <sys/param.h>
 #include <sys/event.h>
+#include <sys/mman.h>
 #include <sys/mdioctl.h>
 #include <sys/module.h>
 #include <sys/resource.h>
@@ -65,7 +64,6 @@
 
 #include <atf-c.h>
 
-#include "freebsd_test_suite/macros.h"
 #include "local.h"
 
 /*
@@ -454,7 +452,6 @@ aio_file_test(completion comp, struct sigevent *sev, bool vectored)
 	struct aio_context ac;
 	int fd;
 
-	ATF_REQUIRE_KERNEL_MODULE("aio");
 	ATF_REQUIRE_UNSAFE_AIO();
 
 	fd = open(FILE_PATHNAME, O_RDWR | O_CREAT, 0600);
@@ -516,7 +513,6 @@ aio_fifo_test(completion comp, struct sigevent *sev)
 	int error, read_fd = -1, write_fd = -1;
 	struct aio_context ac;
 
-	ATF_REQUIRE_KERNEL_MODULE("aio");
 	ATF_REQUIRE_UNSAFE_AIO();
 
 	ATF_REQUIRE_MSG(mkfifo(FIFO_PATHNAME, 0600) != -1,
@@ -590,8 +586,6 @@ aio_unix_socketpair_test(completion comp, struct sigevent *sev, bool vectored)
 	struct rusage ru_before, ru_after;
 	int sockets[2];
 
-	ATF_REQUIRE_KERNEL_MODULE("aio");
-
 	ATF_REQUIRE_MSG(socketpair(PF_UNIX, SOCK_STREAM, 0, sockets) != -1,
 	    "socketpair failed: %s", strerror(errno));
 
@@ -664,7 +658,6 @@ aio_pty_test(completion comp, struct sigevent *sev)
 	struct termios ts;
 	int error;
 
-	ATF_REQUIRE_KERNEL_MODULE("aio");
 	ATF_REQUIRE_UNSAFE_AIO();
 
 	ATF_REQUIRE_MSG(openpty(&read_fd, &write_fd, NULL, NULL, NULL) == 0,
@@ -734,7 +727,6 @@ aio_pipe_test(completion comp, struct sigevent *sev)
 	struct aio_context ac;
 	int pipes[2];
 
-	ATF_REQUIRE_KERNEL_MODULE("aio");
 	ATF_REQUIRE_UNSAFE_AIO();
 
 	ATF_REQUIRE_MSG(pipe(pipes) != -1,
@@ -784,7 +776,7 @@ ATF_TC_BODY(pipe_waitcomplete, tc)
 	aio_pipe_test(waitcomplete, NULL);
 }
 
-#define	MD_LEN		GLOBAL_MAX
+#define	DEVICE_IO_LEN	GLOBAL_MAX
 #define	MDUNIT_LINK	"mdunit_link"
 
 static int
@@ -795,8 +787,6 @@ aio_md_setup(void)
 	struct md_ioctl mdio;
 	char buf[80];
 
-	ATF_REQUIRE_KERNEL_MODULE("aio");
-
 	mdctl_fd = open("/dev/" MDCTL_NAME, O_RDWR, 0);
 	ATF_REQUIRE_MSG(mdctl_fd != -1,
 	    "opening /dev/%s failed: %s", MDCTL_NAME, strerror(errno));
@@ -805,7 +795,7 @@ aio_md_setup(void)
 	mdio.md_version = MDIOVERSION;
 	mdio.md_type = MD_MALLOC;
 	mdio.md_options = MD_AUTOUNIT | MD_COMPRESS;
-	mdio.md_mediasize = GLOBAL_MAX;
+	mdio.md_mediasize = 1024 * 1024;  /* 1 MB, enough for max_buf_aio up to 2047 */
 	mdio.md_sectorsize = 512;
 	strlcpy(buf, __func__, sizeof(buf));
 	mdio.md_label = buf;
@@ -867,7 +857,7 @@ aio_md_test(completion comp, struct sigevent *sev, bool vectored)
 	int fd;
 
 	fd = aio_md_setup();
-	aio_context_init(&ac, fd, fd, MD_LEN);
+	aio_context_init(&ac, fd, fd, DEVICE_IO_LEN);
 	if (vectored) {
 		aio_writev_test(&ac, comp, sev);
 		aio_readv_test(&ac, comp, sev);
@@ -976,53 +966,55 @@ ATF_TC_CLEANUP(md_waitcomplete, tc)
 #define ZVOL_NAME		"aio_testvol"
 
 static int
-aio_zvol_setup(void)
+aio_zvol_setup(const char *unique)
 {
 	FILE *pidfile;
 	int fd;
 	pid_t pid;
+	char vdev_name[160];
 	char pool_name[80];
 	char cmd[160];
 	char zvol_name[160];
 	char devname[160];
 
-	ATF_REQUIRE_KERNEL_MODULE("aio");
-	ATF_REQUIRE_KERNEL_MODULE("zfs");
+	pid = getpid();
+	snprintf(vdev_name, sizeof(vdev_name), "%s", ZVOL_VDEV_PATHNAME);
+	snprintf(pool_name, sizeof(pool_name), "%s_%s.%d", POOL_NAME, unique,
+	    pid);
+	snprintf(zvol_name, sizeof(zvol_name), "%s/%s_%s", pool_name, ZVOL_NAME,
+	    unique);
 
-	fd = open(ZVOL_VDEV_PATHNAME, O_RDWR | O_CREAT, 0600);
+	fd = open(vdev_name, O_RDWR | O_CREAT, 0600);
 	ATF_REQUIRE_MSG(fd != -1, "open failed: %s", strerror(errno));
 	ATF_REQUIRE_EQ_MSG(0,
 	    ftruncate(fd, POOL_SIZE), "ftruncate failed: %s", strerror(errno));
 	close(fd);
 
-	pid = getpid();
 	pidfile = fopen("pidfile", "w");
 	ATF_REQUIRE_MSG(NULL != pidfile, "fopen: %s", strerror(errno));
 	fprintf(pidfile, "%d", pid);
 	fclose(pidfile);
 
-	snprintf(pool_name, sizeof(pool_name), POOL_NAME ".%d", pid);
-	snprintf(zvol_name, sizeof(zvol_name), "%s/" ZVOL_NAME, pool_name);
-	snprintf(cmd, sizeof(cmd), "zpool create %s $PWD/" ZVOL_VDEV_PATHNAME,
-	    pool_name);
+	snprintf(cmd, sizeof(cmd), "zpool create %s $PWD/%s", pool_name,
+	    vdev_name);
 	ATF_REQUIRE_EQ_MSG(0, system(cmd),
 	    "zpool create failed: %s", strerror(errno));
 	snprintf(cmd, sizeof(cmd),
-	    "zfs create -o volblocksize=8192 -o volmode=dev -V "
-		ZVOL_SIZE " %s", zvol_name);
+	    "zfs create -o volblocksize=8192 -o volmode=dev -V %s %s",
+	    ZVOL_SIZE, zvol_name);
 	ATF_REQUIRE_EQ_MSG(0, system(cmd),
 	    "zfs create failed: %s", strerror(errno));
 
 	snprintf(devname, sizeof(devname), "/dev/zvol/%s", zvol_name);
 	do {
 		fd = open(devname, O_RDWR);
-	} while (fd == -1 && errno == EINTR) ;
+	} while (fd == -1 && errno == EINTR);
 	ATF_REQUIRE_MSG(fd != -1, "open failed: %s", strerror(errno));
 	return (fd);
 }
 
 static void
-aio_zvol_cleanup(void)
+aio_zvol_cleanup(const char *unique)
 {
 	FILE *pidfile;
 	pid_t testpid;
@@ -1037,7 +1029,8 @@ aio_zvol_cleanup(void)
 	ATF_REQUIRE_EQ(1, fscanf(pidfile, "%d", &testpid));
 	fclose(pidfile);
 
-	snprintf(cmd, sizeof(cmd), "zpool destroy " POOL_NAME ".%d", testpid);
+	snprintf(cmd, sizeof(cmd), "zpool destroy %s_%s.%d", POOL_NAME, unique,
+	    testpid);
 	system(cmd);
 }
 
@@ -1053,7 +1046,6 @@ ATF_TC_BODY(aio_large_read_test, tc)
 	int clamped;
 #endif
 
-	ATF_REQUIRE_KERNEL_MODULE("aio");
 	ATF_REQUIRE_UNSAFE_AIO();
 
 #ifdef __LP64__
@@ -1129,7 +1121,6 @@ ATF_TC_BODY(aio_socket_two_reads, tc)
 	int s[2];
 	char c;
 
-	ATF_REQUIRE_KERNEL_MODULE("aio");
 #if __FreeBSD_version < 1100101
 	aft_tc_skip("kernel version %d is too old (%d required)",
 	    __FreeBSD_version, 1100101);
@@ -1182,8 +1173,6 @@ aio_socket_blocking_short_write_test(bool vectored)
 	int buffer_size, sb_size;
 	socklen_t len;
 	int s[2];
-
-	ATF_REQUIRE_KERNEL_MODULE("aio");
 
 	ATF_REQUIRE(socketpair(PF_UNIX, SOCK_STREAM, 0, s) != -1);
 
@@ -1352,8 +1341,6 @@ ATF_TC_BODY(aio_socket_short_write_cancel, tc)
 	socklen_t len;
 	int s[2];
 
-	ATF_REQUIRE_KERNEL_MODULE("aio");
-
 	ATF_REQUIRE(socketpair(PF_UNIX, SOCK_STREAM, 0, s) != -1);
 
 	len = sizeof(sb_size);
@@ -1419,8 +1406,6 @@ ATF_TC_BODY(aio_socket_shutdown, tc)
 	size_t bsz;
 	int error, s[2];
 
-	ATF_REQUIRE_KERNEL_MODULE("aio");
-
 	ATF_REQUIRE(socketpair(PF_UNIX, SOCK_STREAM, 0, s) != -1);
 
 	bsz = 1024;
@@ -1481,7 +1466,6 @@ ATF_TC_BODY(aio_fsync_errors, tc)
 	int fd;
 	struct aiocb iocb;
 
-	ATF_REQUIRE_KERNEL_MODULE("aio");
 	ATF_REQUIRE_UNSAFE_AIO();
 
 	fd = open(FILE_PATHNAME, O_RDWR | O_CREAT, 0600);
@@ -1525,7 +1509,6 @@ aio_fsync_test(int op)
 	unsigned i;
 	int fd;
 
-	ATF_REQUIRE_KERNEL_MODULE("aio");
 	ATF_REQUIRE_UNSAFE_AIO();
 
 	fd = open(FILE_PATHNAME, O_RDWR | O_CREAT, 0600);
@@ -1614,7 +1597,6 @@ ATF_TC_BODY(aio_writev_dos_iov_len, tc)
 	ssize_t r;
 	int fd;
 
-	ATF_REQUIRE_KERNEL_MODULE("aio");
 	ATF_REQUIRE_UNSAFE_AIO();
 
 	fd = open("testfile", O_RDWR | O_CREAT, 0600);
@@ -1652,7 +1634,6 @@ ATF_TC_BODY(aio_writev_dos_iovcnt, tc)
 	ssize_t len;
 	int fd;
 
-	ATF_REQUIRE_KERNEL_MODULE("aio");
 	ATF_REQUIRE_UNSAFE_AIO();
 
 	fd = open("testfile", O_RDWR | O_CREAT, 0600);
@@ -1685,14 +1666,17 @@ ATF_TC_BODY(aio_writev_efault, tc)
 	struct aiocb aio;
 	ssize_t buflen;
 	char *buffer;
+	void *unmapped;
 	struct iovec iov[2];
 	long seed;
 	int fd;
 
-	ATF_REQUIRE_KERNEL_MODULE("aio");
 	ATF_REQUIRE_UNSAFE_AIO();
 
 	fd = aio_md_setup();
+
+	unmapped = mmap(NULL, PAGE_SIZE, PROT_NONE, MAP_GUARD, -1, 0);
+	ATF_REQUIRE(unmapped != MAP_FAILED);
 
 	seed = random();
 	buflen = 4096;
@@ -1700,7 +1684,7 @@ ATF_TC_BODY(aio_writev_efault, tc)
 	aio_fill_buffer(buffer, buflen, seed);
 	iov[0].iov_base = buffer;
 	iov[0].iov_len = buflen;
-	iov[1].iov_base = (void*)-1;	/* Invalid! */
+	iov[1].iov_base = (void*)unmapped;	/* Invalid! */
 	iov[1].iov_len = buflen;
 	bzero(&aio, sizeof(aio));
 	aio.aio_fildes = fd;
@@ -1724,7 +1708,6 @@ ATF_TC_BODY(aio_writev_empty_file_poll, tc)
 	struct aiocb aio;
 	int fd;
 
-	ATF_REQUIRE_KERNEL_MODULE("aio");
 	ATF_REQUIRE_UNSAFE_AIO();
 
 	fd = open("testfile", O_RDWR | O_CREAT, 0600);
@@ -1747,7 +1730,6 @@ ATF_TC_BODY(aio_writev_empty_file_signal, tc)
 	struct aiocb aio;
 	int fd;
 
-	ATF_REQUIRE_KERNEL_MODULE("aio");
 	ATF_REQUIRE_UNSAFE_AIO();
 
 	fd = open("testfile", O_RDWR | O_CREAT, 0600);
@@ -1776,8 +1758,6 @@ ATF_TC_BODY(ev_oneshot, tc)
 	struct aiocb iocb;
 	struct kevent events[1];
 	struct timespec timeout;
-
-	ATF_REQUIRE_KERNEL_MODULE("aio");
 
 	kq = kqueue();
 	ATF_REQUIRE(kq >= 0);
@@ -1840,7 +1820,6 @@ ATF_TC_BODY(vectored_big_iovcnt, tc)
 	int fd, i;
 	ssize_t sysctl_len = sizeof(max_buf_aio);
 
-	ATF_REQUIRE_KERNEL_MODULE("aio");
 	ATF_REQUIRE_UNSAFE_AIO();
 
 	if (sysctlbyname(oid, &max_buf_aio, &sysctl_len, NULL, 0) == -1)
@@ -1872,7 +1851,9 @@ ATF_TC_BODY(vectored_big_iovcnt, tc)
 		atf_tc_fail("aio failed: %s", strerror(errno));
 
 	if (len != buflen)
-		atf_tc_fail("aio short write (%jd)", (intmax_t)len);
+		atf_tc_fail("aio short write: got %jd, expected: %jd "
+			"(max_buf_aio=%d, iovcnt=%zu)",
+			(intmax_t)len, (intmax_t)buflen, max_buf_aio, aio.aio_iovcnt);
 
 	bzero(&aio, sizeof(aio));
 	aio.aio_fildes = fd;
@@ -1942,6 +1923,7 @@ ATF_TC_HEAD(vectored_unaligned, tc)
 	    "Vectored AIO should still work even if the iov contains elements "
 	    "that aren't a multiple of the sector size.");
 	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "zfs");
 }
 ATF_TC_BODY(vectored_unaligned, tc)
 {
@@ -1951,17 +1933,13 @@ ATF_TC_BODY(vectored_unaligned, tc)
 	ssize_t len, total_len;
 	int fd;
 
-	if (atf_tc_get_config_var_as_bool_wd(tc, "ci", false))
-		atf_tc_skip("https://bugs.freebsd.org/258766");
-
-	ATF_REQUIRE_KERNEL_MODULE("aio");
 	ATF_REQUIRE_UNSAFE_AIO();
 
 	/* 
 	 * Use a zvol with volmode=dev, so it will allow .d_write with
 	 * unaligned uio.  geom devices use physio, which doesn't allow that.
 	 */
-	fd = aio_zvol_setup();
+	fd = aio_zvol_setup(atf_tc_get_ident(tc));
 	aio_context_init(&ac, fd, fd, FILE_LEN);
 
 	/* Break the buffer into 3 parts:
@@ -2010,17 +1988,18 @@ ATF_TC_BODY(vectored_unaligned, tc)
 }
 ATF_TC_CLEANUP(vectored_unaligned, tc)
 {
-	aio_zvol_cleanup();
+	aio_zvol_cleanup(atf_tc_get_ident(tc));
 }
 
 static void
-aio_zvol_test(completion comp, struct sigevent *sev, bool vectored)
+aio_zvol_test(completion comp, struct sigevent *sev, bool vectored,
+    const char *unique)
 {
 	struct aio_context ac;
 	int fd;
 
-	fd = aio_zvol_setup();
-	aio_context_init(&ac, fd, fd, MD_LEN);
+	fd = aio_zvol_setup(unique);
+	aio_context_init(&ac, fd, fd, DEVICE_IO_LEN);
 	if (vectored) {
 		aio_writev_test(&ac, comp, sev);
 		aio_readv_test(&ac, comp, sev);
@@ -2040,16 +2019,15 @@ ATF_TC_WITH_CLEANUP(vectored_zvol_poll);
 ATF_TC_HEAD(vectored_zvol_poll, tc)
 {
 	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "zfs");
 }
 ATF_TC_BODY(vectored_zvol_poll, tc)
 {
-	if (atf_tc_get_config_var_as_bool_wd(tc, "ci", false))
-		atf_tc_skip("https://bugs.freebsd.org/258766");
-	aio_zvol_test(poll, NULL, true);
+	aio_zvol_test(poll, NULL, true, atf_tc_get_ident(tc));
 }
 ATF_TC_CLEANUP(vectored_zvol_poll, tc)
 {
-	aio_zvol_cleanup();
+	aio_zvol_cleanup(atf_tc_get_ident(tc));
 }
 
 ATF_TP_ADD_TCS(tp)

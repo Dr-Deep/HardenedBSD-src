@@ -32,16 +32,12 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *      @(#)bpf.h	8.1 (Berkeley) 6/10/93
- *	@(#)bpf.h	1.34 (LBL)     6/16/96
- *
- * $FreeBSD$
  */
 
 #ifndef _NET_BPF_H_
 #define _NET_BPF_H_
 
+#include <sys/types.h>
 #include <sys/_eventhandler.h>
 #include <sys/ck.h>
 #include <net/dlt.h>
@@ -53,13 +49,14 @@ typedef	int32_t	  bpf_int32;
 typedef	u_int32_t bpf_u_int32;
 typedef	int64_t	  bpf_int64;
 typedef	u_int64_t bpf_u_int64;
+struct ifnet;
 
 /*
  * Alignment macros.  BPF_WORDALIGN rounds up to the next multiple of
  * BPF_ALIGNMENT.
  */
 #define BPF_ALIGNMENT sizeof(long)
-#define BPF_WORDALIGN(x) (((x)+(BPF_ALIGNMENT-1))&~(BPF_ALIGNMENT-1))
+#define BPF_WORDALIGN(x) (((x) + (BPF_ALIGNMENT - 1)) & ~(BPF_ALIGNMENT - 1))
 
 #define BPF_MAXINSNS 512
 #define BPF_MAXBUFSIZE 0x80000
@@ -121,6 +118,15 @@ struct bpf_zbuf {
 	size_t	 bz_buflen;	/* Size of zero-copy buffers. */
 };
 
+/*
+ * Struct used by BIOCGETIFLIST.
+ */
+struct bpf_iflist {
+	u_int	 bi_size;
+	u_int	 bi_count;
+	void	*bi_ubuf;
+};
+
 #define	BIOCGBLEN	_IOR('B', 102, u_int)
 #define	BIOCSBLEN	_IOWR('B', 102, u_int)
 #define	BIOCSETF	_IOW('B', 103, struct bpf_program)
@@ -154,6 +160,7 @@ struct bpf_zbuf {
 #define	BIOCGTSTAMP	_IOR('B', 131, u_int)
 #define	BIOCSTSTAMP	_IOW('B', 132, u_int)
 #define	BIOCSETVLANPCP	_IOW('B', 133, u_int)
+#define	BIOCGETIFLIST	_IOWR('B', 134, struct bpf_iflist)
 
 /* Obsolete */
 #define	BIOCGSEESENT	BIOCGDIRECTION
@@ -371,8 +378,8 @@ struct bpf_insn {
 /*
  * Macros for insn array initializers.
  */
-#define BPF_STMT(code, k) { (u_short)(code), 0, 0, k }
-#define BPF_JUMP(code, k, jt, jf) { (u_short)(code), jt, jf, k }
+#define BPF_STMT(code, k)		{ (u_short)(code), 0, 0, k }
+#define BPF_JUMP(code, k, jt, jf)	{ (u_short)(code), jt, jf, k }
 
 /*
  * Structure to retrieve available DLTs for the interface.
@@ -410,57 +417,71 @@ SYSCTL_DECL(_net_bpf);
  * Part of this structure is exposed to external callers to speed up
  * bpf_peers_present() calls.
  */
+struct mbuf;
 struct bpf_if;
+struct bif_methods;
 CK_LIST_HEAD(bpfd_list, bpf_d);
 
-struct bpf_if_ext {
-	CK_LIST_ENTRY(bpf_if)	bif_next;	/* list of all interfaces */
-	struct bpfd_list	bif_dlist;	/* descriptor list */
-};
-
-void	 bpf_bufheld(struct bpf_d *d);
-int	 bpf_validate(const struct bpf_insn *, int);
-void	 bpf_tap(struct bpf_if *, u_char *, u_int);
-void	 bpf_mtap(struct bpf_if *, struct mbuf *);
-void	 bpf_mtap2(struct bpf_if *, void *, u_int, struct mbuf *);
-void	 bpfattach(struct ifnet *, u_int, u_int);
-void	 bpfattach2(struct ifnet *, u_int, u_int, struct bpf_if **);
-void	 bpfdetach(struct ifnet *);
+struct bpf_if *	bpf_attach(const char *, u_int, u_int,
+	    const struct bif_methods *, void *);
+void	bpf_detach(struct bpf_if *);
+void	bpf_vmove(struct bpf_if *bp);
+void	bpf_bufheld(struct bpf_d *d);
+int	bpf_validate(const struct bpf_insn *, int);
+void	bpf_tap(struct bpf_if *, u_char *, u_int);
+void	bpf_tap_if(struct ifnet *, u_char *, u_int);
+void	bpf_mtap(struct bpf_if *, struct mbuf *);
+void	bpf_mtap_if(struct ifnet *, struct mbuf *);
+void	bpf_mtap2(struct bpf_if *, void *, u_int, struct mbuf *);
+void	bpf_mtap2_if(struct ifnet *, void *, u_int, struct mbuf *);
+void	bpfattach(struct ifnet *, u_int, u_int);
+void	bpfdetach(struct ifnet *);
+bool	bpf_peers_present_if(struct ifnet *);
 #ifdef VIMAGE
-int	 bpf_get_bp_params(struct bpf_if *, u_int *, u_int *);
+void	bpf_ifdetach(struct ifnet *);
 #endif
 
-void	 bpfilterattach(int);
-u_int	 bpf_filter(const struct bpf_insn *, u_char *, u_int, u_int);
+void	bpfilterattach(int);
+u_int	bpf_filter(const struct bpf_insn *, u_char *, u_int, u_int);
 
-static __inline int
-bpf_peers_present(struct bpf_if *bpf)
+static __inline bool
+bpf_peers_present(const struct bpf_if *bpf)
 {
-	struct bpf_if_ext *ext;
+	const struct bpfd_list *dlist;
 
-	ext = (struct bpf_if_ext *)bpf;
-	if (!CK_LIST_EMPTY(&ext->bif_dlist))
-		return (1);
-	return (0);
+	dlist = (const struct bpfd_list *)bpf;
+	return (!CK_LIST_EMPTY(dlist));
 }
 
-#define	BPF_TAP(_ifp,_pkt,_pktlen) do {				\
-	if (bpf_peers_present((_ifp)->if_bpf))			\
-		bpf_tap((_ifp)->if_bpf, (_pkt), (_pktlen));	\
-} while (0)
-#define	BPF_MTAP(_ifp,_m) do {					\
-	if (bpf_peers_present((_ifp)->if_bpf)) {		\
-		M_ASSERTVALID(_m);				\
-		bpf_mtap((_ifp)->if_bpf, (_m));			\
-	}							\
-} while (0)
-#define	BPF_MTAP2(_ifp,_data,_dlen,_m) do {			\
-	if (bpf_peers_present((_ifp)->if_bpf)) {		\
-		M_ASSERTVALID(_m);				\
-		bpf_mtap2((_ifp)->if_bpf,(_data),(_dlen),(_m));	\
-	}							\
-} while (0)
-#endif
+#define BPF_TAP(_ifp, _pkt, _pktlen)				\
+	bpf_tap_if((_ifp), (_pkt), (_pktlen))
+#define BPF_MTAP(_ifp, _m) 					\
+	bpf_mtap_if((_ifp), (_m))
+#define BPF_MTAP2(_ifp, _data, _dlen, _m) 			\
+	bpf_mtap2_if((_ifp), (_data), (_dlen), (_m))
+
+typedef void		bif_attachd_t(void *);
+typedef void		bif_detachd_t(void *);
+typedef bool		bif_chkdir_t(void *, const struct mbuf *, int);
+typedef int		bif_write_t(void *, struct mbuf *, struct mbuf *, int);
+typedef uint32_t	bif_wrsize_t(void *);
+typedef int		bif_promisc_t(void *, bool);
+typedef int		bif_mac_check_receive_t(void *, struct bpf_d *);
+struct bif_methods {
+	bif_attachd_t	*bif_attachd;
+	bif_detachd_t	*bif_detachd;
+	bif_chkdir_t	*bif_chkdir;
+	bif_promisc_t	*bif_promisc;
+	/* Writable taps shall implement the below methods. */
+	bif_write_t	*bif_write;
+	bif_wrsize_t	*bif_wrsize;
+	bif_mac_check_receive_t *bif_mac_check_receive;
+};
+
+/* Ifnet methods implemented in bpf_ifnet.c are shared with net80211. */
+extern bif_wrsize_t bpf_ifnet_wrsize;
+extern bif_promisc_t bpf_ifnet_promisc;
+#endif /* _KERNEL */
 
 /*
  * Number of scratch memory words (for BPF_LD|BPF_MEM and BPF_ST).
@@ -468,7 +489,6 @@ bpf_peers_present(struct bpf_if *bpf)
 #define BPF_MEMWORDS 16
 
 /* BPF attach/detach events */
-struct ifnet;
 typedef void (*bpf_track_fn)(void *, struct ifnet *, int /* dlt */,
     int /* 1 =>'s attach */);
 EVENTHANDLER_DECLARE(bpf_track, bpf_track_fn);

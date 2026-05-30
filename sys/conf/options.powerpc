@@ -1,4 +1,3 @@
-# $FreeBSD$
 # Options specific to the powerpc platform kernels
 
 AIM			opt_global.h
@@ -9,7 +8,6 @@ CELL
 POWERPC
 POWERPC64
 POWERPC64LE
-POWERPCSPE
 
 FPU_EMU
 

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2007, 2008 Rui Paulo <rpaulo@FreeBSD.org>
  * All rights reserved.
@@ -31,9 +31,6 @@
  * First introduced in Intel's Core line of processors.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/bus.h>
 #include <sys/conf.h>
@@ -53,6 +50,8 @@ __FBSDID("$FreeBSD$");
 
 #define	TZ_ZEROC			2731
 
+#define	THERM_CRITICAL_STATUS_LOG       0x20
+#define	THERM_CRITICAL_STATUS           0x10
 #define	THERM_STATUS_LOG		0x02
 #define	THERM_STATUS			0x01
 #define	THERM_STATUS_TEMP_SHIFT		16
@@ -113,7 +112,7 @@ coretemp_identify(driver_t *driver, device_t parent)
 	u_int regs[4];
 
 	/* Make sure we're not being doubly invoked. */
-	if (device_find_child(parent, "coretemp", -1) != NULL)
+	if (device_find_child(parent, "coretemp", DEVICE_UNIT_ANY) != NULL)
 		return;
 
 	/* Check that CPUID 0x06 is supported and the vendor is Intel.*/
@@ -393,7 +392,7 @@ coretemp_get_val_sysctl(SYSCTL_HANDLER_ARGS)
 		 * If we reach a critical level, allow devctl(4)
 		 * to catch this and shutdown the system.
 		 */
-		if (msr & THERM_STATUS) {
+		if (msr & THERM_CRITICAL_STATUS) {
 			tmp = (msr >> THERM_STATUS_TEMP_SHIFT) &
 			    THERM_STATUS_TEMP_MASK;
 			tmp = (sc->sc_tjmax - tmp) * 10 + TZ_ZEROC;

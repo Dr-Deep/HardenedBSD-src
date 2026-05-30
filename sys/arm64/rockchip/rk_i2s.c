@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2019 Oleksandr Tymoshenko <gonzo@FreeBSD.org>
  *
@@ -23,12 +23,7 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -44,9 +39,9 @@ __FBSDID("$FreeBSD$");
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
-#include <dev/extres/clk/clk.h>
-#include <dev/extres/hwreset/hwreset.h>
-#include <dev/extres/syscon/syscon.h>
+#include <dev/clk/clk.h>
+#include <dev/hwreset/hwreset.h>
+#include <dev/syscon/syscon.h>
 
 #include "syscon_if.h"
 
@@ -54,8 +49,6 @@ __FBSDID("$FreeBSD$");
 #include <dev/sound/pcm/sound.h>
 #include <dev/sound/fdt/audio_dai.h>
 #include "audio_dai_if.h"
-
-#define	AUDIO_BUFFER_SIZE	48000 * 4
 
 #define	I2S_TXCR	0x0000
 #define		I2S_CSR_2		(0 << 15)
@@ -98,16 +91,20 @@ __FBSDID("$FreeBSD$");
 #define		TXFIFO0LR_MASK		0x3f
 #define	I2S_DMACR	0x0010
 #define		I2S_DMACR_RDE_ENABLE	(1 << 24)
-#define		I2S_DMACR_RDL(n)	((n) << 16)
+#define		I2S_DMACR_RDL(n)	(((n) - 1) << 16)
 #define		I2S_DMACR_TDE_ENABLE	(1 << 8)
 #define		I2S_DMACR_TDL(n)	((n) << 0)
 #define	I2S_INTCR	0x0014
 #define		I2S_INTCR_RFT(n)	(((n) - 1) << 20)
-#define		I2S_INTCR_TFT(n)	(((n) - 1) << 4)
+#define		I2S_INTCR_TFT(n)	((n) << 4)
+#define		I2S_INTCR_RXOIC		(1 << 18)
+#define		I2S_INTCR_RXOIE		(1 << 17)
 #define		I2S_INTCR_RXFIE		(1 << 16)
 #define		I2S_INTCR_TXUIC		(1 << 2)
+#define		I2S_INTCR_TXUIE		(1 << 1)
 #define		I2S_INTCR_TXEIE		(1 << 0)
 #define	I2S_INTSR	0x0018
+#define		I2S_INTSR_RXOI		(1 << 17)
 #define		I2S_INTSR_RXFI		(1 << 16)
 #define		I2S_INTSR_TXUI		(1 << 1)
 #define		I2S_INTSR_TXEI		(1 << 0)
@@ -406,10 +403,10 @@ rk_i2s_dai_intr(device_t dev, struct snd_dbuf *play_buf, struct snd_dbuf *rec_bu
 		count = sndbuf_getready(play_buf);
 		if (count > FIFO_SIZE - 1)
 			count = FIFO_SIZE - 1;
-		size = sndbuf_getsize(play_buf);
+		size = play_buf->bufsize;
 		readyptr = sndbuf_getreadyptr(play_buf);
 
-		samples = (uint8_t*)sndbuf_getbuf(play_buf);
+		samples = play_buf->buf;
 		written = 0;
 		for (; level < count; level++) {
 			val  = (samples[readyptr++ % size] << 0);
@@ -429,9 +426,9 @@ rk_i2s_dai_intr(device_t dev, struct snd_dbuf *play_buf, struct snd_dbuf *rec_bu
 		uint8_t *samples;
 		uint32_t count, size, freeptr, recorded;
 		count = sndbuf_getfree(rec_buf);
-		size = sndbuf_getsize(rec_buf);
+		size = rec_buf->bufsize;
 		freeptr = sndbuf_getfreeptr(rec_buf);
-		samples = (uint8_t*)sndbuf_getbuf(rec_buf);
+		samples = rec_buf->buf;
 		recorded = 0;
 		if (level > count / 4)
 			level = count / 4;
@@ -549,7 +546,7 @@ rk_i2s_dai_setup_intr(device_t dev, driver_intr_t intr_handler, void *intr_arg)
 	struct rk_i2s_softc 	*sc = device_get_softc(dev);
 
 	if (bus_setup_intr(dev, sc->res[1],
-	    INTR_TYPE_MISC | INTR_MPSAFE, NULL, intr_handler, intr_arg,
+	    INTR_TYPE_AV | INTR_MPSAFE, NULL, intr_handler, intr_arg,
 	    &sc->intrhand)) {
 		device_printf(dev, "cannot setup interrupt handler\n");
 		return (ENXIO);

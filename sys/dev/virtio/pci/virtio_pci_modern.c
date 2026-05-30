@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2017, Bryan Venteicher <bryanv@FreeBSD.org>
  * All rights reserved.
@@ -28,14 +28,12 @@
 
 /* Driver for the modern VirtIO PCI interface. */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
 #include <sys/lock.h>
 #include <sys/kernel.h>
+#include <sys/sysctl.h>
 #include <sys/module.h>
 
 #include <machine/bus.h>
@@ -113,8 +111,8 @@ static int	vtpci_modern_register_vq_msix(device_t, int idx,
 
 static uint64_t	vtpci_modern_negotiate_features(device_t, uint64_t);
 static int	vtpci_modern_finalize_features(device_t);
-static int	vtpci_modern_with_feature(device_t, uint64_t);
-static int	vtpci_modern_alloc_virtqueues(device_t, int, int,
+static bool	vtpci_modern_with_feature(device_t, uint64_t);
+static int	vtpci_modern_alloc_virtqueues(device_t, int,
 		    struct vq_alloc_info *);
 static int	vtpci_modern_setup_interrupts(device_t, enum intr_type);
 static void	vtpci_modern_stop(device_t);
@@ -191,8 +189,12 @@ static void	vtpci_modern_write_device_8(struct vtpci_modern_softc *,
 		    bus_size_t, uint64_t);
 
 /* Tunables. */
-static int vtpci_modern_transitional = 0;
-TUNABLE_INT("hw.virtio.pci.transitional", &vtpci_modern_transitional);
+SYSCTL_DECL(_hw_virtio_pci);
+
+static int vtpci_modern_transitional = 1;
+SYSCTL_INT(_hw_virtio_pci, OID_AUTO, transitional, CTLFLAG_RDTUN,
+    &vtpci_modern_transitional, 0,
+    "If 0, a transitional VirtIO device is used in legacy mode; otherwise, in modern mode.");
 
 static device_method_t vtpci_modern_methods[] = {
 	/* Device interface. */
@@ -247,7 +249,6 @@ DRIVER_MODULE(virtio_pci_modern, pci, vtpci_modern_driver, 0, 0);
 static int
 vtpci_modern_probe(device_t dev)
 {
-	char desc[64];
 	const char *name;
 	uint16_t devid;
 
@@ -272,8 +273,7 @@ vtpci_modern_probe(device_t dev)
 	if (name == NULL)
 		name = "Unknown";
 
-	snprintf(desc, sizeof(desc), "VirtIO PCI (modern) %s adapter", name);
-	device_set_desc_copy(dev, desc);
+	device_set_descf(dev, "VirtIO PCI (modern) %s adapter", name);
 
 	return (BUS_PROBE_DEFAULT);
 }
@@ -471,7 +471,7 @@ vtpci_modern_finalize_features(device_t dev)
 	return (0);
 }
 
-static int
+static bool
 vtpci_modern_with_feature(device_t dev, uint64_t feature)
 {
 	struct vtpci_modern_softc *sc;
@@ -509,7 +509,7 @@ vtpci_modern_write_features(struct vtpci_modern_softc *sc, uint64_t features)
 }
 
 static int
-vtpci_modern_alloc_virtqueues(device_t dev, int flags, int nvqs,
+vtpci_modern_alloc_virtqueues(device_t dev, int nvqs,
     struct vq_alloc_info *vq_info)
 {
 	struct vtpci_modern_softc *sc;
@@ -526,7 +526,7 @@ vtpci_modern_alloc_virtqueues(device_t dev, int flags, int nvqs,
 		return (E2BIG);
 	}
 
-	return (vtpci_alloc_virtqueues(cn, flags, nvqs, vq_info));
+	return (vtpci_alloc_virtqueues(cn, nvqs, vq_info));
 }
 
 static int

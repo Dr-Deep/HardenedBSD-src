@@ -29,8 +29,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <dev/drm2/drmP.h>
@@ -53,7 +51,7 @@ struct vt_kms_softc {
 	struct task		 fb_mode_task;
 };
 
-/* Call restore out of vt(9) locks. */
+/* Call restore out of vt(4) locks. */
 static void
 vt_restore_fbdev_mode(void *arg, int pending)
 {

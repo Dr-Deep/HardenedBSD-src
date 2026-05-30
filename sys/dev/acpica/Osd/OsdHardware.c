@@ -30,14 +30,14 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <contrib/dev/acpica/include/acpi.h>
 
 #include <machine/iodev.h>
 #include <machine/pci_cfgreg.h>
 
 extern int	acpi_susp_bounce;
+
+int (*acpi_prepare_sleep)(uint8_t state, uint32_t a, uint32_t b, bool ext);
 
 ACPI_STATUS
 AcpiOsEnterSleep(UINT8 SleepState, UINT32 RegaValue, UINT32 RegbValue)
@@ -46,6 +46,17 @@ AcpiOsEnterSleep(UINT8 SleepState, UINT32 RegaValue, UINT32 RegbValue)
 	/* If testing device suspend only, back out of everything here. */
 	if (acpi_susp_bounce)
 		return (AE_CTRL_TERMINATE);
+
+	if (acpi_prepare_sleep != NULL)
+	{
+		int ret = acpi_prepare_sleep(SleepState, RegaValue, RegbValue,
+		    ACPI_REDUCED_HARDWARE ? true : AcpiGbl_ReducedHardware);
+
+		if (ret < 0)
+			return (AE_ERROR);
+		if (ret > 0)
+			return (AE_CTRL_TERMINATE);
+	}
 
 	return (AE_OK);
 }
@@ -112,7 +123,7 @@ AcpiOsReadPciConfiguration(ACPI_PCI_ID *PciId, UINT32 Register, UINT64 *Value,
     if (!pci_cfgregopen())
 	return (AE_NOT_EXIST);
 
-    *(UINT64 *)Value = pci_cfgregread(PciId->Bus, PciId->Device,
+    *(UINT64 *)Value = pci_cfgregread(PciId->Segment, PciId->Bus, PciId->Device,
 	PciId->Function, Register, Width / 8);
 
     return (AE_OK);
@@ -134,8 +145,8 @@ AcpiOsWritePciConfiguration (ACPI_PCI_ID *PciId, UINT32 Register,
     if (!pci_cfgregopen())
     	return (AE_NOT_EXIST);
 
-    pci_cfgregwrite(PciId->Bus, PciId->Device, PciId->Function, Register,
-	Value, Width / 8);
+    pci_cfgregwrite(PciId->Segment, PciId->Bus, PciId->Device, PciId->Function,
+	Register, Value, Width / 8);
 
     return (AE_OK);
 #endif

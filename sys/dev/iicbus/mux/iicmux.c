@@ -26,8 +26,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_platform.h"
 
 #include <sys/param.h>
@@ -64,7 +62,7 @@ iicmux_callback(device_t dev, int index, caddr_t data)
 
 	/* If it's not one of the operations we know about, bail early. */
 	if (index != IIC_REQUEST_BUS && index != IIC_RELEASE_BUS)
-		return (iic2errno(EOPNOTSUPP));
+		return (errno2iic(EOPNOTSUPP));
 
 	/*
 	 * Ensure that the data passed to us includes the device_t of the child
@@ -74,12 +72,12 @@ iicmux_callback(device_t dev, int index, caddr_t data)
 	 */
 	rd = (struct iic_reqbus_data *)data;
 	if (!(rd->flags & IIC_REQBUS_DEV))
-		return (iic2errno(EINVAL));
+		return (errno2iic(EINVAL));
 
 	for (i = 0; i <= sc->maxbus && sc->childdevs[i] != rd->bus; ++i)
 		continue;
 	if (i > sc->maxbus)
-		return (iic2errno(ENOENT));
+		return (errno2iic(ENOENT));
 
 	/*
 	 * If the operation is a release it "cannot fail".  Idle the downstream
@@ -281,7 +279,7 @@ iicmux_attach_children(struct iicmux_softc *sc)
 			    idx, sc->numbuses);
 			continue;
 		}
-		sc->childdevs[idx] = device_add_child(sc->dev, "iicbus", -1);
+		sc->childdevs[idx] = device_add_child(sc->dev, "iicbus", DEVICE_UNIT_ANY);
 		sc->childnodes[idx] = child;
 		if (sc->maxbus < (int)idx)
 			sc->maxbus = idx;
@@ -297,7 +295,7 @@ iicmux_attach_children(struct iicmux_softc *sc)
 	 * Add an iicbus child for every downstream bus supported by the mux.
 	 */
 	for (i = 0; i < sc->numbuses; ++i) {
-		sc->childdevs[i] = device_add_child(sc->dev, "iicbus", -1);
+		sc->childdevs[i] = device_add_child(sc->dev, "iicbus", DEVICE_UNIT_ANY);
 		sc->maxbus = i;
 	}
 

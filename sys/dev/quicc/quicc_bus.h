@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2006 Marcel Moolenaar
  * All rights reserved.
@@ -24,16 +24,16 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _DEV_QUICC_BUS_H_
 #define	_DEV_QUICC_BUS_H_
 
-#define	QUICC_IVAR_CLOCK	1	/* The CPM clock. */
-#define	QUICC_IVAR_BRGCLK	2	/* The BRG clock affected by SCCR. */
-#define	QUICC_IVAR_DEVTYPE	3
+enum {
+	QUICC_IVAR_CLOCK = BUS_IVARS_PRIVATE,	/* The CPM clock. */
+	QUICC_IVAR_BRGCLK,		/* The BRG clock affected by SCCR. */
+	QUICC_IVAR_DEVTYPE
+};
 
 /* Device types. */
 #define	QUICC_DEVTYPE_SCC	1

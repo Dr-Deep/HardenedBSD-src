@@ -32,20 +32,6 @@
  * SUCH DAMAGE.
  */
 
-#ifndef lint
-static const char copyright[] =
-"@(#) Copyright (c) 1989, 1993, 1994\n\
-	The Regents of the University of California.  All rights reserved.\n";
-#endif /* not lint */
-
-#if 0
-#ifndef lint
-static char sccsid[] = "@(#)ls.c	8.5 (Berkeley) 4/2/94";
-#endif /* not lint */
-#endif
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
@@ -101,12 +87,24 @@ static void	 display(const FTSENT *, FTSENT *, int);
 static int	 mastercmp(const FTSENT * const *, const FTSENT * const *);
 static void	 traverse(int, char **, int);
 
-#define	COLOR_OPT	(CHAR_MAX + 1)
+enum {
+	GRP_NONE = 0,
+	GRP_DIR_FIRST = -1,
+	GRP_DIR_LAST = 1
+};
+
+enum {
+	BIN_OPT = CHAR_MAX,
+	COLOR_OPT,
+	GROUP_OPT
+};
 
 static const struct option long_opts[] =
 {
-        {"color",       optional_argument,      NULL, COLOR_OPT},
-        {NULL,          no_argument,            NULL, 0}
+        {"color",        optional_argument,      NULL, COLOR_OPT},
+        {"group-directories", optional_argument, NULL, GROUP_OPT},
+        {"group-directories-first", no_argument, NULL, GROUP_OPT},
+        {NULL,           no_argument,            NULL, 0}
 };
 
 static void (*printfcn)(const DISPLAY *);
@@ -119,6 +117,7 @@ int termwidth = 80;		/* default terminal width */
        int f_accesstime;	/* use time of last access */
        int f_birthtime;		/* use time of birth */
        int f_flags;		/* show flags associated with a file */
+static int f_groupdir = GRP_NONE;/* group directories first/last */
        int f_humanval;		/* show human-readable file sizes */
        int f_inode;		/* print inode */
 static int f_kblocks;		/* print size in kilobytes */
@@ -136,6 +135,7 @@ static int f_numericonly;	/* don't convert uid/gid to name */
        int f_octal_escape;	/* like f_octal but use C escapes if possible */
 static int f_recursive;		/* ls subdirectories also */
 static int f_reversesort;	/* reverse whatever sort is used */
+static int f_verssort;		/* sort names using strverscmp(3) rather than strcoll(3) */
        int f_samesort;		/* sort time and name in same direction */
        int f_sectime;		/* print full time information */
 static int f_singlecol;		/* use single column output */
@@ -143,6 +143,7 @@ static int f_singlecol;		/* use single column output */
 static int f_sizesort;
        int f_slash;		/* similar to f_type, but only for dirs */
        int f_sortacross;	/* sort across rows, not down columns */
+       int f_sowner;		/* disable showing owner's name */
        int f_statustime;	/* use time of last mode change */
 static int f_stream;		/* stream the output, separate with commas */
        int f_thousands;		/* show file sizes with thousands separators */
@@ -275,7 +276,7 @@ main(int argc, char *argv[])
 		colorflag = COLORFLAG_AUTO;
 #endif
 	while ((ch = getopt_long(argc, argv,
-	    "+1ABCD:FGHILPRSTUWXZabcdfghiklmnopqrstuwxy,", long_opts,
+	    "+1ABCD:FGHILPRSTUWXZabcdfghiklmnopqrstuvwxy,", long_opts,
 	    NULL)) != -1) {
 		switch (ch) {
 		/*
@@ -325,14 +326,21 @@ main(int argc, char *argv[])
 		case 'A':
 			f_listdot = 1;
 			break;
-		/* The -t and -S options override each other. */
+		/* The -S, -t and -v options override each other. */
 		case 'S':
 			f_sizesort = 1;
 			f_timesort = 0;
+			f_verssort = 0;
 			break;
 		case 't':
 			f_timesort = 1;
 			f_sizesort = 0;
+			f_verssort = 0;
+			break;
+		case 'v':
+			f_verssort = 1;
+			f_sizesort = 0;
+			f_timesort = 0;
 			break;
 		/* Other flags.  Please keep alphabetic. */
 		case ',':
@@ -401,7 +409,11 @@ main(int argc, char *argv[])
 			f_listdir = 1;
 			f_recursive = 0;
 			break;
-		case 'g':	/* Compatibility with 4.3BSD. */
+		case 'g':
+			f_longform = 1;
+			f_singlecol = 0;
+			f_stream = 0;
+			f_sowner = 1;
 			break;
 		case 'h':
 			f_humanval = 1;
@@ -420,6 +432,9 @@ main(int argc, char *argv[])
 			break;
 		case 'n':
 			f_numericonly = 1;
+			f_longform = 1;
+			f_singlecol = 0;
+			f_stream = 0;
 			break;
 		case 'o':
 			f_flags = 1;
@@ -446,6 +461,15 @@ main(int argc, char *argv[])
 			break;
 		case 'y':
 			f_samesort = 1;
+			break;
+		case GROUP_OPT:
+			if (optarg == NULL || strcmp(optarg, "first") == 0)
+				f_groupdir = GRP_DIR_FIRST;
+			else if (strcmp(optarg, "last") == 0)
+				f_groupdir = GRP_DIR_LAST;
+			else
+				errx(2, "unsupported --group-directories value '%s' (must be first or last)",
+				    optarg);
 			break;
 		case COLOR_OPT:
 #ifdef COLORLS
@@ -523,12 +547,12 @@ main(int argc, char *argv[])
 #endif
 
 	/*
-	 * If not -F, -i, -l, -s, -S or -t options, don't require stat
-	 * information, unless in color mode in which case we do
-	 * need this to determine which colors to display.
+	 * If not -F, -i, -l, -s, -S, -t or --group-directories options,
+	 * don't require stat information, unless in color mode in which case
+	 * we do need this to determine which colors to display.
 	 */
 	if (!f_inode && !f_longform && !f_size && !f_timesort &&
-	    !f_sizesort && !f_type
+	    !f_sizesort && !f_type && f_groupdir == GRP_NONE
 #ifdef COLORLS
 	    && !f_color
 #endif
@@ -564,12 +588,15 @@ main(int argc, char *argv[])
 			blocksize /= 512;
 		}
 	}
+
 	/* Select a sort function. */
 	if (f_reversesort) {
-		if (!f_timesort && !f_sizesort)
-			sortfcn = revnamecmp;
-		else if (f_sizesort)
+		if (f_sizesort)
 			sortfcn = revsizecmp;
+		else if (f_verssort)
+			sortfcn = revverscmp;
+		else if (!f_timesort)
+			sortfcn = revnamecmp;
 		else if (f_accesstime)
 			sortfcn = revacccmp;
 		else if (f_birthtime)
@@ -579,10 +606,12 @@ main(int argc, char *argv[])
 		else		/* Use modification time. */
 			sortfcn = revmodcmp;
 	} else {
-		if (!f_timesort && !f_sizesort)
-			sortfcn = namecmp;
-		else if (f_sizesort)
+		if (f_sizesort)
 			sortfcn = sizecmp;
+		else if (f_verssort)
+			sortfcn = verscmp;
+		else if (!f_timesort)
+			sortfcn = namecmp;
 		else if (f_accesstime)
 			sortfcn = acccmp;
 		else if (f_birthtime)
@@ -636,8 +665,10 @@ traverse(int argc, char *argv[], int options)
 	chp = fts_children(ftsp, 0);
 	if (chp != NULL)
 		display(NULL, chp, options);
-	if (f_listdir)
+	if (f_listdir) {
+		fts_close(ftsp);
 		return;
+	}
 
 	/*
 	 * If not recursing down this tree and don't need stat info, just get
@@ -676,6 +707,23 @@ traverse(int argc, char *argv[], int options)
 				output = 1;
 			}
 			chp = fts_children(ftsp, ch_options);
+			if (chp == NULL && errno != 0) {
+				warn("%s", p->fts_path);
+				rval = 1;
+
+				/*
+				 * Avoid further errors on this entry.  We won't
+				 * always get an FTS_ERR/FTS_DNR for errors
+				 * in fts_children(), because opendir could
+				 * have failed early on and that only flags an
+				 * error for fts_read() when we try to recurse
+				 * into it.  We catch both the non-recursive and
+				 * the recursive case here.
+				 */
+				(void)fts_set(ftsp, p, FTS_SKIP);
+				break;
+			}
+
 			display(p, chp, options);
 
 			if (!f_recursive && chp != NULL)
@@ -686,6 +734,7 @@ traverse(int argc, char *argv[], int options)
 		}
 	if (errno)
 		err(1, "fts_read");
+	fts_close(ftsp);
 }
 
 /*
@@ -962,7 +1011,8 @@ label_out:
 	d.maxlen = maxlen;
 	if (needstats) {
 		d.btotal = btotal;
-		d.s_block = snprintf(NULL, 0, "%lu", howmany(maxblock, blocksize));
+		d.s_block = snprintf(NULL, 0, f_thousands ? "%'ld" : "%ld",
+		    howmany(maxblock, blocksize));
 		d.s_flags = maxflags;
 		d.s_label = maxlabelstr;
 		d.s_group = maxgroup;
@@ -993,7 +1043,7 @@ label_out:
 static int
 mastercmp(const FTSENT * const *a, const FTSENT * const *b)
 {
-	int a_info, b_info;
+	int a_info, b_info, dir;
 
 	a_info = (*a)->fts_info;
 	if (a_info == FTS_ERR)
@@ -1012,5 +1062,10 @@ mastercmp(const FTSENT * const *a, const FTSENT * const *b)
 		if (b_info == FTS_D)
 			return (-1);
 	}
+
+	if (f_groupdir != GRP_NONE)
+		if ((dir = (a_info == FTS_D) - (b_info == FTS_D)) != 0)
+			return (f_groupdir * dir);
+
 	return (sortfcn(*a, *b));
 }

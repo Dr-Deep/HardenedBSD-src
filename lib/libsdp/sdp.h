@@ -1,7 +1,7 @@
 /*-
  * sdp.h
  *
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2001-2003 Maksim Yevmenkin <m_evmenkin@yahoo.com>
  * All rights reserved.
@@ -28,7 +28,6 @@
  * SUCH DAMAGE.
  *
  * $Id: sdp.h,v 1.3 2003/09/05 00:33:59 max Exp $
- * $FreeBSD$
  */
 
 #ifndef _SDP_H_
@@ -703,7 +702,7 @@ typedef struct sdp_panu_profile		sdp_panu_profile_t;
 typedef struct sdp_panu_profile *	sdp_panu_profile_p;
 
 int32_t	sdp_register_service	(void *xss, uint16_t uuid,
-				 bdaddr_p const bdaddr, uint8_t const *data,
+				 const bdaddr_t *bdaddr, uint8_t const *data,
 				 uint32_t datalen, uint32_t *handle);
 int32_t	sdp_unregister_service	(void *xss, uint32_t handle);
 int32_t	sdp_change_service	(void *xss, uint32_t handle,

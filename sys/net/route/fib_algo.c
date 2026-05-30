@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2020 Alexander V. Chernikov
  *
@@ -26,7 +26,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 #include "opt_inet.h"
 #include "opt_inet6.h"
 #include "opt_route.h"
@@ -45,6 +44,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/proc.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
+#include <sys/stdarg.h>
 #include <sys/sysctl.h>
 #include <sys/syslog.h>
 #include <sys/queue.h>
@@ -67,8 +67,6 @@ __FBSDID("$FreeBSD$");
 #include <net/route/route_ctl.h>
 #include <net/route/route_var.h>
 #include <net/route/fib_algo.h>
-
-#include <machine/stdarg.h>
 
 /*
  * Fib lookup framework.
@@ -1383,7 +1381,7 @@ rebuild_fd_flm(struct fib_data *fd, struct fib_lookup_module *flm_new)
 	if (flm_new == fd->fd_flm)
 		fd_tmp = fd;
 	else
-		FD_PRINTF(LOG_NOTICE, fd, "switching algo to %s", flm_new->flm_name);
+		FD_PRINTF(LOG_INFO, fd, "switching algo to %s", flm_new->flm_name);
 
 	result = setup_fd_instance(flm_new, fd->fd_rh, fd_tmp, &fd_new, true);
 	if (result != FLM_SUCCESS) {
@@ -1716,9 +1714,7 @@ fib_get_rtable_info(struct rib_head *rh, struct rib_rtable_info *rinfo)
 	bzero(rinfo, sizeof(struct rib_rtable_info));
 	rinfo->num_prefixes = rh->rnh_prefixes;
 	rinfo->num_nhops = nhops_get_count(rh);
-#ifdef ROUTE_MPATH
 	rinfo->num_nhgrp = nhgrp_get_count(rh);
-#endif
 }
 
 /*
@@ -1738,7 +1734,7 @@ fib_set_algo_ptr(struct fib_data *fd, void *algo_data)
 void
 fib_epoch_call(epoch_callback_t callback, epoch_context_t ctx)
 {
-	epoch_call(net_epoch_preempt, callback, ctx);
+	NET_EPOCH_CALL(callback, ctx);
 }
 
 /*
@@ -1764,12 +1760,10 @@ fib_get_nhop_array(struct fib_data *fd)
 static uint32_t
 get_nhop_idx(struct nhop_object *nh)
 {
-#ifdef ROUTE_MPATH
 	if (NH_IS_NHGRP(nh))
 		return (nhgrp_get_idx((struct nhgrp_object *)nh));
-	else
-#endif
-		return (nhop_get_idx(nh));
+
+	return (nhop_get_idx(nh));
 }
 
 uint32_t

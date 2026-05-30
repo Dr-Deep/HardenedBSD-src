@@ -35,9 +35,6 @@
  * Chapter 22, Cyclone V Device Handbook (CV-5V2 2014.07.22)
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
@@ -170,12 +167,13 @@ dwgpio_attach(device_t dev)
 		snprintf(sc->gpio_pins[i].gp_name, GPIOMAXNAME,
 		    "dwgpio%d.%d", device_get_unit(dev), i);
 	}
-	sc->busdev = gpiobus_attach_bus(dev);
+	sc->busdev = gpiobus_add_bus(dev);
 	if (sc->busdev == NULL) {
 		mtx_destroy(&sc->sc_mtx);
 		return (ENXIO);
 	}
 
+	bus_attach_children(dev);
 	return (0);
 }
 
@@ -410,7 +408,7 @@ static device_method_t dwgpio_methods[] = {
 	DEVMETHOD(gpio_pin_toggle,	dwgpio_pin_toggle),
 	DEVMETHOD(gpio_pin_setflags,	dwgpio_pin_setflags),
 	DEVMETHOD(gpio_pin_set,		dwgpio_pin_set),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t dwgpio_driver = {

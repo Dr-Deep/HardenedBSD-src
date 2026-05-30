@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2001 Charles Mott <cm@linktel.net>
  * All rights reserved.
@@ -27,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /* Alias_irc.c intercepts packages contain IRC CTCP commands, and
 	changes DCC commands to export a port on the aliasing host instead
 	of an aliased host.
@@ -362,9 +360,9 @@ AliasHandleIrcOut(struct libalias *la,
 			 * matter, and this would probably allow it through
 			 * at least _some_ firewalls.
 			 */
-			dcc_lnk = FindUdpTcpOut(la, true_addr, destaddr,
+			(void)FindUdpTcpOut(la, true_addr, destaddr,
 			    true_port, 0,
-			    IPPROTO_TCP, 1);
+			    IPPROTO_TCP, 1, &dcc_lnk);
 			DBprintf(("Got a DCC link\n"));
 			if (dcc_lnk) {
 				struct in_addr alias_address;	/* Address from aliasing */
@@ -458,7 +456,7 @@ AliasHandleIrcOut(struct libalias *la,
 		/* Compute TCP checksum for revised packet */
 		tc->th_sum = 0;
 #ifdef _KERNEL
-		tc->th_x2 = 1;
+		tcp_set_flags(tc, tcp_get_flags(tc) | TH_RES1);
 #else
 		tc->th_sum = TcpChecksum(pip);
 #endif

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2001 Joerg Wunsch
  *
@@ -24,8 +24,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include <sys/types.h>
@@ -277,12 +275,13 @@ doread(int fd, FILE *of, const char *_devname)
 				errx(EX_OSERR, "unexpected read() result: %d",
 				     rv);
 			}
+			continue;
 		}
 		if ((unsigned)rv < tracksize) {
 			/* should not happen */
 			nbytes += rv;
 			if (!quiet)
-				fprintf(stderr, "\nshort after %5d KB\r",
+				fprintf(stderr, "\nshort after %5d KB\n",
 					nbytes / 1024);
 			fwrite(trackbuf, sizeof(unsigned char), rv, of);
 			fflush(of);

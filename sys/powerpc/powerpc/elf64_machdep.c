@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright 1996-1998 John D. Polstra.
  * All rights reserved.
@@ -23,8 +23,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include "opt_pax.h"
@@ -76,7 +74,6 @@ struct sysentvec elf64_freebsd_sysvec_v1 = {
 	.sv_elf_core_osabi = ELFOSABI_FREEBSD,
 	.sv_elf_core_abi_vendor = FREEBSD_ABI_VENDOR,
 	.sv_elf_core_prepare_notes = __elfN(prepare_notes),
-	.sv_imgact_try	= NULL,
 	.sv_minsigstksz	= MINSIGSTKSZ,
 	.sv_minuser	= VM_MIN_ADDRESS,
 	.sv_maxuser	= VM_MAXUSER_ADDRESS,
@@ -90,7 +87,7 @@ struct sysentvec elf64_freebsd_sysvec_v1 = {
 	.sv_fixlimit	= NULL,
 	.sv_maxssiz	= NULL,
 	.sv_flags	= SV_ABI_FREEBSD | SV_LP64 | SV_SHP |
-			    SV_TIMEKEEP | SV_RNG_SEED_VER,
+			    SV_TIMEKEEP | SV_RNG_SEED_VER | SV_SIGSYS,
 	.sv_set_syscall_retval = cpu_set_syscall_retval,
 	.sv_fetch_syscall_args = cpu_fetch_syscall_args,
 	.sv_syscallnames = syscallnames,
@@ -101,6 +98,8 @@ struct sysentvec elf64_freebsd_sysvec_v1 = {
 	.sv_trap	= NULL,
 	.sv_hwcap	= &cpu_features,
 	.sv_hwcap2	= &cpu_features2,
+	.sv_hwcap3	= NULL,
+	.sv_hwcap4	= NULL,
 	.sv_onexec_old	= exec_onexec_old,
 	.sv_onexit	= exit_onexit,
 	.sv_regset_begin = SET_BEGIN(__elfN(regset)),
@@ -119,7 +118,6 @@ struct sysentvec elf64_freebsd_sysvec_v2 = {
 	.sv_elf_core_osabi = ELFOSABI_FREEBSD,
 	.sv_elf_core_abi_vendor = FREEBSD_ABI_VENDOR,
 	.sv_elf_core_prepare_notes = __elfN(prepare_notes),
-	.sv_imgact_try	= NULL,
 	.sv_minsigstksz	= MINSIGSTKSZ,
 	.sv_minuser	= VM_MIN_ADDRESS,
 	.sv_maxuser	= VM_MAXUSER_ADDRESS,
@@ -133,7 +131,7 @@ struct sysentvec elf64_freebsd_sysvec_v2 = {
 	.sv_fixlimit	= NULL,
 	.sv_maxssiz	= NULL,
 	.sv_flags	= SV_ABI_FREEBSD | SV_LP64 | SV_SHP |
-			    SV_TIMEKEEP | SV_RNG_SEED_VER,
+			    SV_TIMEKEEP | SV_RNG_SEED_VER | SV_SIGSYS,
 	.sv_set_syscall_retval = cpu_set_syscall_retval,
 	.sv_fetch_syscall_args = cpu_fetch_syscall_args,
 	.sv_syscallnames = syscallnames,
@@ -145,22 +143,23 @@ struct sysentvec elf64_freebsd_sysvec_v2 = {
 	.sv_hwcap	= &cpu_features,
 	.sv_hwcap2	= &cpu_features2,
 	.sv_pax_aslr_init = pax_aslr_init_vmspace,
+	.sv_hwcap3	= NULL,
+	.sv_hwcap4	= NULL,
 	.sv_onexec_old	= exec_onexec_old,
 	.sv_onexit	= exit_onexit,
 	.sv_regset_begin = SET_BEGIN(__elfN(regset)),
 	.sv_regset_end  = SET_LIMIT(__elfN(regset)),
 };
 
-static boolean_t ppc64_elfv1_header_match(struct image_params *params,
-    int32_t *, uint32_t *);
-static boolean_t ppc64_elfv2_header_match(struct image_params *params,
-    int32_t *, uint32_t *);
+static bool ppc64_elfv1_header_match(const struct image_params *params,
+    const int32_t *, const uint32_t *);
+static bool ppc64_elfv2_header_match(const struct image_params *params,
+    const int32_t *, const uint32_t *);
 
-static Elf64_Brandinfo freebsd_brand_info_elfv1 = {
+static const Elf64_Brandinfo freebsd_brand_info_elfv1 = {
 	.brand		= ELFOSABI_FREEBSD,
 	.machine	= EM_PPC64,
 	.compat_3_brand	= "FreeBSD",
-	.emul_path	= NULL,
 	.interp_path	= "/libexec/ld-elf.so.1",
 	.sysvec		= &elf64_freebsd_sysvec_v1,
 	.interp_newpath	= NULL,
@@ -169,15 +168,14 @@ static Elf64_Brandinfo freebsd_brand_info_elfv1 = {
 	.header_supported = &ppc64_elfv1_header_match
 };
 
-SYSINIT(elf64v1, SI_SUB_EXEC, SI_ORDER_ANY,
+C_SYSINIT(elf64v1, SI_SUB_EXEC, SI_ORDER_ANY,
     (sysinit_cfunc_t) elf64_insert_brand_entry,
     &freebsd_brand_info_elfv1);
 
-static Elf64_Brandinfo freebsd_brand_info_elfv2 = {
+static const Elf64_Brandinfo freebsd_brand_info_elfv2 = {
 	.brand		= ELFOSABI_FREEBSD,
 	.machine	= EM_PPC64,
 	.compat_3_brand	= "FreeBSD",
-	.emul_path	= NULL,
 	.interp_path	= "/libexec/ld-elf.so.1",
 	.sysvec		= &elf64_freebsd_sysvec_v2,
 	.interp_newpath	= NULL,
@@ -186,15 +184,14 @@ static Elf64_Brandinfo freebsd_brand_info_elfv2 = {
 	.header_supported = &ppc64_elfv2_header_match
 };
 
-SYSINIT(elf64v2, SI_SUB_EXEC, SI_ORDER_ANY,
+C_SYSINIT(elf64v2, SI_SUB_EXEC, SI_ORDER_ANY,
     (sysinit_cfunc_t) elf64_insert_brand_entry,
     &freebsd_brand_info_elfv2);
 
-static Elf64_Brandinfo freebsd_brand_oinfo = {
+static const Elf64_Brandinfo freebsd_brand_oinfo = {
 	.brand		= ELFOSABI_FREEBSD,
 	.machine	= EM_PPC64,
 	.compat_3_brand	= "FreeBSD",
-	.emul_path	= NULL,
 	.interp_path	= "/usr/libexec/ld-elf.so.1",
 	.sysvec		= &elf64_freebsd_sysvec_v1,
 	.interp_newpath	= NULL,
@@ -203,7 +200,7 @@ static Elf64_Brandinfo freebsd_brand_oinfo = {
 	.header_supported = &ppc64_elfv1_header_match
 };
 
-SYSINIT(oelf64, SI_SUB_EXEC, SI_ORDER_ANY,
+C_SYSINIT(oelf64, SI_SUB_EXEC, SI_ORDER_ANY,
 	(sysinit_cfunc_t) elf64_insert_brand_entry,
 	&freebsd_brand_oinfo);
 
@@ -229,9 +226,9 @@ ppc64_init_sysvecs(void *arg)
 }
 SYSINIT(elf64_sysvec, SI_SUB_EXEC, SI_ORDER_ANY, ppc64_init_sysvecs, NULL);
 
-static boolean_t
-ppc64_elfv1_header_match(struct image_params *params, int32_t *osrel __unused,
-    uint32_t *fctl0 __unused)
+static bool
+ppc64_elfv1_header_match(const struct image_params *params,
+    const int32_t *osrel __unused, const uint32_t *fctl0 __unused)
 {
 	const Elf64_Ehdr *hdr = (const Elf64_Ehdr *)params->image_header;
 	int abi = (hdr->e_flags & 3);
@@ -239,9 +236,9 @@ ppc64_elfv1_header_match(struct image_params *params, int32_t *osrel __unused,
 	return (abi == 0 || abi == 1);
 }
 
-static boolean_t
-ppc64_elfv2_header_match(struct image_params *params, int32_t *osrel __unused,
-    uint32_t *fctl0 __unused)
+static bool
+ppc64_elfv2_header_match(const struct image_params *params,
+    const int32_t *osrel __unused, const uint32_t *fctl0 __unused)
 {
 	const Elf64_Ehdr *hdr = (const Elf64_Ehdr *)params->image_header;
 	int abi = (hdr->e_flags & 3);
@@ -288,7 +285,6 @@ elf64_dump_thread(struct thread *td, void *dst, size_t *off)
 	pcb = td->td_pcb;
 
 	if (pcb->pcb_flags & PCB_VEC) {
-		save_vec_nodrop(td);
 		if (dst != NULL) {
 			len += elf64_populate_note(NT_PPC_VMX,
 			    &pcb->pcb_vec, (char *)dst + len,
@@ -299,7 +295,6 @@ elf64_dump_thread(struct thread *td, void *dst, size_t *off)
 	}
 
 	if (pcb->pcb_flags & PCB_VSX) {
-		save_fpu_nodrop(td);
 		if (dst != NULL) {
 			/*
 			 * Doubleword 0 of VSR0-VSR31 overlap with FPR0-FPR31 and

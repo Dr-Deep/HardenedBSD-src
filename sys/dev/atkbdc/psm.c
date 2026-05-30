@@ -59,8 +59,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_isa.h"
 #include "opt_psm.h"
 #include "opt_evdev.h"
@@ -68,6 +66,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
+#include <sys/lock.h>
 #include <sys/module.h>
 #include <sys/bus.h>
 #include <sys/conf.h>
@@ -299,6 +298,16 @@ enum {
 typedef struct trackpointinfo {
 	struct sysctl_ctx_list sysctl_ctx;
 	struct sysctl_oid *sysctl_tree;
+	enum {
+		TRACKPOINT_VENDOR_IBM	= 0x01,
+		TRACKPOINT_VENDOR_ALPS	= 0x02,
+		TRACKPOINT_VENDOR_ELAN	= 0x03,
+		TRACKPOINT_VENDOR_NXP	= 0x04,
+		TRACKPOINT_VENDOR_JYT	= 0x05,
+		TRACKPOINT_VENDOR_SYNAPTICS = 0x06,
+		TRACKPOINT_VENDOR_UNKNOWN = 0x07,
+	}	vendor;
+	int	firmware;
 	int	sensitivity;
 	int	inertia;
 	int	uplateau;
@@ -343,6 +352,8 @@ typedef struct elantechhw {
 	int			dptracey;
 	int			issemimt;
 	int			isclickpad;
+	int			hassmbusnotify;
+	int			has3buttons;
 	int			hascrc;
 	int			hastrackpoint;
 	int			haspressure;
@@ -408,7 +419,7 @@ enum {
     ((pb)->ipacket[0] & 0x0c) == 0x0c && ((pb)->ipacket[3] & 0xce) == 0x0c)
 #define	ELANTECH_PKT_IS_V4(pb, hascrc) ((hascrc) ? 			\
     ((pb)->ipacket[3] & 0x08) == 0x00 :					\
-    ((pb)->ipacket[0] & 0x0c) == 0x04 && ((pb)->ipacket[3] & 0x1c) == 0x10)
+    ((pb)->ipacket[0] & 0x08) == 0x00 && ((pb)->ipacket[3] & 0x1c) == 0x10)
 
 typedef struct elantechaction {
 	finger_t		fingers[ELANTECH_MAX_FINGERS];
@@ -433,7 +444,6 @@ struct psm_softc {		/* Driver status information */
 	gesture_t	gesture;	/* Gesture context */
 	elantechhw_t	elanhw;		/* Elantech hardware information */
 	elantechaction_t elanaction;	/* Elantech action context */
-	int		tphw;		/* TrackPoint hardware information */
 	trackpointinfo_t tpinfo;	/* TrackPoint configuration */
 	mousemode_t	mode;		/* operation mode */
 	mousemode_t	dflt_mode;	/* default operation mode */
@@ -600,6 +610,7 @@ static d_read_t		psmread;
 static d_write_t	psmwrite;
 static d_ioctl_t	psmioctl;
 static d_poll_t		psmpoll;
+static d_kqfilter_t	psmkqfilter;
 
 static int	psmopen(struct psm_softc *);
 static int	psmclose(struct psm_softc *);
@@ -734,7 +745,7 @@ static device_method_t psm_methods[] = {
 	DEVMETHOD(device_attach,	psmattach),
 	DEVMETHOD(device_detach,	psmdetach),
 	DEVMETHOD(device_resume,	psmresume),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t psm_driver = {
@@ -752,6 +763,7 @@ static struct cdevsw psm_cdevsw = {
 	.d_write =	psmwrite,
 	.d_ioctl =	psmioctl,
 	.d_poll =	psmpoll,
+	.d_kqfilter =	psmkqfilter,
 	.d_name =	PSM_DRIVER_NAME,
 };
 
@@ -1920,8 +1932,11 @@ psm_register_elantech(device_t dev)
 	evdev_support_key(evdev_a, BTN_TOUCH);
 	evdev_support_nfingers(evdev_a, ELANTECH_MAX_FINGERS);
 	evdev_support_key(evdev_a, BTN_LEFT);
-	if (!sc->elanhw.isclickpad)
+	if (!sc->elanhw.isclickpad) {
 		evdev_support_key(evdev_a, BTN_RIGHT);
+		if (sc->elanhw.has3buttons)
+			evdev_support_key(evdev_a, BTN_MIDDLE);
+	}
 	psm_support_abs_bulk(evdev_a, elantech_absinfo);
 
 	error = evdev_register_mtx(evdev_a, &Giant);
@@ -1948,6 +1963,7 @@ psmattach(device_t dev)
 	sc->state = PSM_VALID;
 	callout_init(&sc->callout, 0);
 	callout_init(&sc->softcallout, 0);
+	knlist_init_mtx(&sc->rsel.si_note, &Giant);
 
 	/* Setup our interrupt handler */
 	rid = KBDC_RID_AUX;
@@ -1997,7 +2013,7 @@ psmattach(device_t dev)
 		sc->config |= PSM_CONFIG_INITAFTERSUSPEND;
 		break;
 	default:
-		if (sc->synhw.infoMajor >= 4 || sc->tphw > 0)
+		if (sc->synhw.infoMajor >= 4 || sc->tpinfo.sysctl_tree != NULL)
 			sc->config |= PSM_CONFIG_INITAFTERSUSPEND;
 		break;
 	}
@@ -2059,6 +2075,8 @@ psmdetach(device_t dev)
 	destroy_dev(sc->cdev);
 	destroy_dev(sc->bdev);
 
+	knlist_clear(&sc->rsel.si_note, 1);
+	knlist_destroy(&sc->rsel.si_note);
 	callout_drain(&sc->callout);
 	callout_drain(&sc->softcallout);
 
@@ -4653,6 +4671,13 @@ proc_elantech(struct psm_softc *sc, packetbuf_t *pb, mousestatus_t *ms,
 		mask = sc->elanaction.mask;
 		nfingers = bitcount(mask);
 
+		/* The motion packet can only update two fingers at a time.
+		 * Copy the previous state to get all active fingers. */
+		for (id = 0; id < ELANTECH_MAX_FINGERS; id++)
+			if (sc->elanaction.mask & (1 << id))
+				f[id] = sc->elanaction.fingers[id];
+
+		/* Update finger positions from the new packet */
 		scale = (pb->ipacket[0] & 0x10) ? 5 : 1;
 		for (i = 0; i <= 3; i += 3) {
 			id = ((pb->ipacket[i] & 0xe0) >> 5) - 1;
@@ -4735,6 +4760,9 @@ proc_elantech(struct psm_softc *sc, packetbuf_t *pb, mousestatus_t *ms,
 		touchpad_button =
 		    ((pb->ipacket[0] & 0x01) ? MOUSE_BUTTON1DOWN : 0) |
 		    ((pb->ipacket[0] & 0x02) ? MOUSE_BUTTON3DOWN : 0);
+		if (sc->elanhw.has3buttons)
+			touchpad_button |=
+			    ((pb->ipacket[0] & 0x04) ? MOUSE_BUTTON2DOWN : 0);
 	}
 
 #ifdef EVDEV_SUPPORT
@@ -5111,6 +5139,10 @@ psmsoftintr(void *arg)
 			break;
 		}
 
+	/* Store last packet for reinjection if it has not been set already */
+	if (timevalisset(&sc->idletimeout) && sc->idlepacket.inputbytes == 0)
+		sc->idlepacket = *pb;
+
 #ifdef EVDEV_SUPPORT
 	if (evdev_rcpt_mask & EVDEV_RCPT_HW_MOUSE &&
 	    sc->hw.model != MOUSE_MODEL_ELANTECH &&
@@ -5144,6 +5176,10 @@ psmsoftintr(void *arg)
 		evdev_push_mouse_btn(sc->evdev_r, ms.button);
 		evdev_sync(sc->evdev_r);
 	}
+
+	if ((sc->evdev_a != NULL && evdev_is_grabbed(sc->evdev_a)) ||
+	    (sc->evdev_r != NULL && evdev_is_grabbed(sc->evdev_r)))
+		goto next;
 #endif
 
 	/* scale values */
@@ -5163,10 +5199,6 @@ psmsoftintr(void *arg)
 				y = -y;
 		}
 	}
-
-	/* Store last packet for reinjection if it has not been set already */
-	if (timevalisset(&sc->idletimeout) && sc->idlepacket.inputbytes == 0)
-		sc->idlepacket = *pb;
 
 	ms.dx = x;
 	ms.dy = y;
@@ -5210,6 +5242,7 @@ next:
 		wakeup(sc);
 	}
 	selwakeuppri(&sc->rsel, PZERO);
+	KNOTE_LOCKED(&sc->rsel.si_note, 0);
 	if (sc->async != NULL) {
 		pgsigio(&sc->async, SIGIO, 0);
 	}
@@ -5245,6 +5278,46 @@ psmpoll(struct cdev *dev, int events, struct thread *td)
 	splx(s);
 
 	return (revents);
+}
+
+static void
+psmfilter_detach(struct knote *kn)
+{
+	struct psm_softc *sc = kn->kn_hook;
+
+	knlist_remove(&sc->rsel.si_note, kn, 0);
+}
+
+static int
+psmfilter(struct knote *kn, long hint)
+{
+	struct psm_softc *sc = kn->kn_hook;
+
+	GIANT_REQUIRED;
+
+	return (sc->queue.count != 0 ? 1 : 0);
+}
+
+static const struct filterops psmfiltops = {
+	.f_isfd = 1,
+	.f_detach = psmfilter_detach,
+	.f_event = psmfilter,
+	.f_copy = knote_triv_copy,
+};
+
+static int
+psmkqfilter(struct cdev *dev, struct knote *kn)
+{
+	struct psm_softc *sc = dev->si_drv1;
+
+	if (kn->kn_filter != EVFILT_READ)
+		return(EOPNOTSUPP);
+
+	kn->kn_fop = &psmfiltops;
+	kn->kn_hook = sc;
+	knlist_add(&sc->rsel.si_note, kn, 1);
+
+	return (0);
 }
 
 /* vendor/model specific routines */
@@ -5437,7 +5510,7 @@ enable_kmouse(struct psm_softc *sc, enum probearg arg)
 	if ((status[1] == PSMD_RES_LOW) || (status[2] == rate[i - 1]))
 		return (FALSE);
 
-	/* the device appears be enabled by this sequence, diable it for now */
+	/* the device appears be enabled by this sequence, disable it for now */
 	disable_aux_dev(kbdc);
 	empty_aux_buffer(kbdc, 5);
 
@@ -6948,7 +7021,7 @@ static int
 enable_trackpoint(struct psm_softc *sc, enum probearg arg)
 {
 	KBDC kbdc = sc->kbdc;
-	int id;
+	int vendor, firmware;
 
 	/*
 	 * If called from enable_synaptics(), make sure that passthrough
@@ -6960,14 +7033,14 @@ enable_trackpoint(struct psm_softc *sc, enum probearg arg)
 	if (sc->synhw.capPassthrough)
 		synaptics_passthrough_on(sc);
 
-	if (send_aux_command(kbdc, 0xe1) != PSM_ACK ||
-	    read_aux_data(kbdc) != 0x01)
+	if (send_aux_command(kbdc, 0xe1) != PSM_ACK)
 		goto no_trackpoint;
-	id = read_aux_data(kbdc);
-	if (id < 0x01)
+	vendor = read_aux_data(kbdc);
+	if (vendor <= 0 || vendor >= TRACKPOINT_VENDOR_UNKNOWN)
 		goto no_trackpoint;
-	if (arg == PROBE)
-		sc->tphw = id;
+	firmware = read_aux_data(kbdc);
+	if (firmware < 0x01)
+		goto no_trackpoint;
 	if (!trackpoint_support)
 		goto no_trackpoint;
 
@@ -6981,9 +7054,13 @@ enable_trackpoint(struct psm_softc *sc, enum probearg arg)
 		 * a guest device.
 		 */
 		if (!sc->synhw.capPassthrough) {
-			sc->hw.hwid = id;
+			sc->hw.hwid = firmware;
 			sc->hw.buttons = 3;
 		}
+		VDLOG(2, sc->dev, LOG_NOTICE, "Trackpoint v=0x%x f=0x%x",
+		    vendor, firmware);
+		sc->tpinfo.vendor = vendor;
+		sc->tpinfo.firmware = firmware;
 	}
 
 	set_trackpoint_parameters(sc);
@@ -7278,6 +7355,9 @@ enable_elantech(struct psm_softc *sc, enum probearg arg)
 	elanhw.hwversion = hwversion;
 	elanhw.issemimt = hwversion == 2;
 	elanhw.isclickpad = (resp[1] & 0x10) != 0;
+	elanhw.hassmbusnotify =
+	    icversion == 0x0f && (resp[1] & 0x20) != 0 && resp[2] != 0;
+	elanhw.has3buttons = elanhw.hassmbusnotify;
 	elanhw.hascrc = (resp[1] & 0x40) != 0;
 	elanhw.haspressure = elanhw.fwversion >= 0x020800;
 
@@ -7391,9 +7471,8 @@ found:
  * All values should be numbers derived from getmicrouptime().
  */
 static int
-timeelapsed(start, secs, usecs, now)
-	const struct timeval *start, *now;
-	int secs, usecs;
+timeelapsed(const struct timeval *start, int secs, int usecs,
+    const struct timeval *now)
 {
 	struct timeval snow, tv;
 
@@ -7464,7 +7543,7 @@ static	device_attach_t			psmcpnp_attach;
 static device_method_t psmcpnp_methods[] = {
 	DEVMETHOD(device_probe,		psmcpnp_probe),
 	DEVMETHOD(device_attach,	psmcpnp_attach),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t psmcpnp_driver = {

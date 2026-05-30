@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1997, Stefan Esser <se@FreeBSD.ORG>
  * Copyright (c) 1997, 1998, 1999, Kenneth D. Merry <ken@FreeBSD.ORG>
@@ -25,8 +25,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- *	$FreeBSD$
  *
  */
 
@@ -68,10 +66,10 @@ struct pci_conf {
 	struct pcisel	pc_sel;		/* domain+bus+slot+function */
 	u_int8_t	pc_hdr;		/* PCI header type */
 	u_int16_t	pc_subvendor;	/* card vendor ID */
-	u_int16_t	pc_subdevice;	/* card device ID, assigned by 
+	u_int16_t	pc_subdevice;	/* card device ID, assigned by
 					   card vendor */
 	u_int16_t	pc_vendor;	/* chip vendor ID */
-	u_int16_t	pc_device;	/* chip device ID, assigned by 
+	u_int16_t	pc_device;	/* chip device ID, assigned by
 					   chip vendor */
 	u_int8_t	pc_class;	/* chip PCI class */
 	u_int8_t	pc_subclass;	/* chip PCI subclass */
@@ -79,6 +77,11 @@ struct pci_conf {
 	u_int8_t	pc_revid;	/* chip revision ID */
 	char		pd_name[PCI_MAXNAMELEN + 1];  /* device name */
 	u_long		pd_unit;	/* device unit number */
+	int		pd_numa_domain;	/* device NUMA domain */
+	size_t		pc_reported_len;/* length of PCI data reported */
+	uint8_t		pc_secbus;	/* secondary bus number */
+	uint8_t		pc_subbus;	/* subordinate bus number */
+	char		pc_spare[62];	/* space for future fields */
 };
 
 struct pci_match_conf {
@@ -167,7 +170,6 @@ struct pci_bar_ioreq {
 #define	PCIIO_BAR_MMAP_RW	0x04
 #define	PCIIO_BAR_MMAP_ACTIVATE	0x08
 
-#define	PCIOCGETCONF	_IOWR('p', 5, struct pci_conf_io)
 #define	PCIOCREAD	_IOWR('p', 2, struct pci_io)
 #define	PCIOCWRITE	_IOWR('p', 3, struct pci_io)
 #define	PCIOCATTACHED	_IOWR('p', 4, struct pci_io)
@@ -175,5 +177,6 @@ struct pci_bar_ioreq {
 #define	PCIOCLISTVPD	_IOWR('p', 7, struct pci_list_vpd_io)
 #define	PCIOCBARMMAP	_IOWR('p', 8, struct pci_bar_mmap)
 #define	PCIOCBARIO	_IOWR('p', 9, struct pci_bar_ioreq)
+#define	PCIOCGETCONF	_IOWR('p', 10, struct pci_conf_io)
 
 #endif /* !_SYS_PCIIO_H_ */

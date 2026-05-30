@@ -1,4 +1,5 @@
 #!/bin/ksh -p
+# SPDX-License-Identifier: CDDL-1.0
 #
 # CDDL HEADER START
 #
@@ -117,7 +118,9 @@ usage:
 
 For the property list, run: zfs set|get
 
-For the delegated permission list, run: zfs allow|unallow")
+For the delegated permission list, run: zfs allow|unallow
+
+For further help on a command or topic, run: zfs help [<topic>]")
 cnt=0
 for cmd in ${neg_cmds[@]}; do
 	log_mustnot zfs program $cmd $TESTPOOL $TESTZCP $TESTDS 2>&1

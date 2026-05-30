@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2019 Ian Lepore <ian@FreeBSD.org>
  *
@@ -23,8 +23,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _PWMBUS_H_
@@ -40,7 +38,7 @@ struct pwmbus_ivars {
 };
 
 enum {
-	PWMBUS_IVAR_CHANNEL,	/* Channel used by child dev */
+	PWMBUS_IVAR_CHANNEL = BUS_IVARS_PRIVATE, /* Channel used by child dev */
 };
 
 #define PWMBUS_ACCESSOR(A, B, T)					\

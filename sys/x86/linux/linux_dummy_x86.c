@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2013 Dmitry Chagin <dchagin@FreeBSD.org>
  *
@@ -25,16 +25,10 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
-#include "opt_compat.h"
-
 #include <sys/param.h>
 #include <sys/kernel.h>
-#include <sys/sdt.h>
-#include <sys/systm.h>
 #include <sys/proc.h>
+#include <sys/sdt.h>
 
 #ifdef COMPAT_LINUX32
 #include <machine/../linux32/linux.h>
@@ -52,7 +46,5 @@ LIN_SDT_PROVIDER_DECLARE(LINUX_DTRACE);
 
 DUMMY(sysfs);
 DUMMY(quotactl);
-/* Linux 2.6.13: */
-DUMMY(inotify_init);
 /* Linux 2.6.22: */
 DUMMY(signalfd);

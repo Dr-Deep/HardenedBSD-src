@@ -27,16 +27,11 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
  * Allwinner USB Dual-Role Device (DRD) controller
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -45,6 +40,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/kernel.h>
 #include <sys/condvar.h>
 #include <sys/module.h>
+
 #include <machine/bus.h>
 
 #include <dev/ofw/ofw_bus.h>
@@ -62,10 +58,10 @@ __FBSDID("$FreeBSD$");
 #include <dev/usb/usb_bus.h>
 #include <dev/usb/controller/musb_otg.h>
 
-#include <dev/extres/clk/clk.h>
-#include <dev/extres/hwreset/hwreset.h>
-#include <dev/extres/phy/phy.h>
-#include <dev/extres/phy/phy_usb.h>
+#include <dev/clk/clk.h>
+#include <dev/hwreset/hwreset.h>
+#include <dev/phy/phy.h>
+#include <dev/phy/phy_usb.h>
 
 #ifdef __arm__
 #include <arm/allwinner/aw_machdep.h>
@@ -81,7 +77,7 @@ __FBSDID("$FreeBSD$");
 #if defined(__arm__)
 #define	bs_parent_space(bs)	((bs)->bs_parent)
 typedef bus_space_tag_t	awusb_bs_tag;
-#elif defined(__aarch64__)
+#elif defined(__aarch64__) || defined(__riscv)
 #define	bs_parent_space(bs)	(bs)
 typedef void *		awusb_bs_tag;
 #endif
@@ -93,6 +89,7 @@ static struct ofw_compat_data compat_data[] = {
 	{ "allwinner,sun6i-a31-musb",	AWUSB_OKAY },
 	{ "allwinner,sun8i-a33-musb",	AWUSB_OKAY | AWUSB_NO_CONFDATA },
 	{ "allwinner,sun8i-h3-musb",	AWUSB_OKAY | AWUSB_NO_CONFDATA },
+	{ "allwinner,sun20i-d1-musb",	AWUSB_OKAY | AWUSB_NO_CONFDATA },
 	{ NULL,				0 }
 };
 
@@ -245,7 +242,7 @@ awusbdrd_filt(bus_size_t o)
 static uint8_t
 awusbdrd_bs_r_1(awusb_bs_tag t, bus_space_handle_t h, bus_size_t o)
 {
-	const struct bus_space *bs = t;
+	struct bus_space *bs = t;
 
 	switch (o) {
 	case MUSB2_REG_HWVERS:
@@ -273,7 +270,7 @@ awusbdrd_bs_r_1_noconf(awusb_bs_tag t, bus_space_handle_t h, bus_size_t o)
 static uint16_t
 awusbdrd_bs_r_2(awusb_bs_tag t, bus_space_handle_t h, bus_size_t o)
 {
-	const struct bus_space *bs = t;
+	struct bus_space *bs = t;
 
 	if (awusbdrd_filt(o) != 0)
 		return (0);
@@ -284,7 +281,7 @@ static void
 awusbdrd_bs_w_1(awusb_bs_tag t, bus_space_handle_t h, bus_size_t o,
     uint8_t v)
 {
-	const struct bus_space *bs = t;
+	struct bus_space *bs = t;
 
 	if (awusbdrd_filt(o) != 0)
 		return;
@@ -296,7 +293,7 @@ static void
 awusbdrd_bs_w_2(awusb_bs_tag t, bus_space_handle_t h, bus_size_t o,
     uint16_t v)
 {
-	const struct bus_space *bs = t;
+	struct bus_space *bs = t;
 
 	if (awusbdrd_filt(o) != 0)
 		return;
@@ -308,7 +305,7 @@ static void
 awusbdrd_bs_rm_1(awusb_bs_tag t, bus_space_handle_t h, bus_size_t o,
     uint8_t *d, bus_size_t c)
 {
-	const struct bus_space *bs = t;
+	struct bus_space *bs = t;
 
 	bus_space_read_multi_1(bs_parent_space(bs), h, awusbdrd_reg(o), d, c);
 }
@@ -317,7 +314,7 @@ static void
 awusbdrd_bs_rm_4(awusb_bs_tag t, bus_space_handle_t h, bus_size_t o,
     uint32_t *d, bus_size_t c)
 {
-	const struct bus_space *bs = t;
+	struct bus_space *bs = t;
 
 	bus_space_read_multi_4(bs_parent_space(bs), h, awusbdrd_reg(o), d, c);
 }
@@ -326,7 +323,7 @@ static void
 awusbdrd_bs_wm_1(awusb_bs_tag t, bus_space_handle_t h, bus_size_t o,
     const uint8_t *d, bus_size_t c)
 {
-	const struct bus_space *bs = t;
+	struct bus_space *bs = t;
 
 	if (awusbdrd_filt(o) != 0)
 		return;
@@ -338,7 +335,7 @@ static void
 awusbdrd_bs_wm_4(awusb_bs_tag t, bus_space_handle_t h, bus_size_t o,
     const uint32_t *d, bus_size_t c)
 {
-	const struct bus_space *bs = t;
+	struct bus_space *bs = t;
 
 	if (awusbdrd_filt(o) != 0)
 		return;
@@ -478,7 +475,7 @@ awusbdrd_attach(device_t dev)
 
 #if defined(__arm__)
 	sc->bs.bs_parent = rman_get_bustag(sc->res[0]);
-#elif defined(__aarch64__)
+#elif defined(__aarch64__) || defined(__riscv)
 	sc->bs.bs_cookie = rman_get_bustag(sc->res[0]);
 #endif
 
@@ -498,7 +495,7 @@ awusbdrd_attach(device_t dev)
 	sc->sc.sc_io_hdl = rman_get_bushandle(sc->res[0]);
 	sc->sc.sc_io_size = rman_get_size(sc->res[0]);
 
-	sc->sc.sc_bus.bdev = device_add_child(dev, "usbus", -1);
+	sc->sc.sc_bus.bdev = device_add_child(dev, "usbus", DEVICE_UNIT_ANY);
 	if (sc->sc.sc_bus.bdev == NULL) {
 		error = ENXIO;
 		goto fail;
@@ -565,16 +562,13 @@ static int
 awusbdrd_detach(device_t dev)
 {
 	struct awusbdrd_softc *sc;
-	device_t bdev;
 	int error;
 
-	sc = device_get_softc(dev);
+	error = bus_generic_detach(dev);
+	if (error != 0)
+		return (error);
 
-	if (sc->sc.sc_bus.bdev != NULL) {
-		bdev = sc->sc.sc_bus.bdev;
-		device_detach(bdev);
-		device_delete_child(dev, bdev);
-	}
+	sc = device_get_softc(dev);
 
 	musbotg_uninit(&sc->sc);
 	error = bus_teardown_intr(dev, sc->res[1], sc->sc.sc_intr_hdl);
@@ -597,8 +591,6 @@ awusbdrd_detach(device_t dev)
 		clk_release(sc->clk);
 
 	bus_release_resources(dev, awusbdrd_spec, sc->res);
-
-	device_delete_children(dev);
 
 	return (0);
 }

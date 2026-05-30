@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2015 Ruslan Bukin <br@bsdpad.com>
  * Copyright (c) 2018 The FreeBSD Foundation
@@ -36,9 +36,6 @@
 /*
  * This file contains the USB template for USB Networking and Serial
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #ifdef USB_GLOBAL_INCLUDE_FILE
 #include USB_GLOBAL_INCLUDE_FILE

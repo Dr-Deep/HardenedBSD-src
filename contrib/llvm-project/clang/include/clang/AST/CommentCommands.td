@@ -18,6 +18,7 @@ class Command<string name> {
   bit IsThrowsCommand = 0;
   bit IsDeprecatedCommand = 0;
   bit IsHeaderfileCommand = 0;
+  bit IsParCommand = 0;
 
   bit IsEmptyParagraphAllowed = 0;
 
@@ -31,6 +32,7 @@ class Command<string name> {
 }
 
 class InlineCommand<string name> : Command<name> {
+  let NumArgs = 1;
   let IsInlineCommand = 1;
 }
 
@@ -62,6 +64,11 @@ class VerbatimLineCommand<string name> : Command<name> {
   let IsVerbatimLineCommand = 1;
 }
 
+class PropertyCommand<string name> : Command<name> {
+  let NumArgs = 0;
+  let IsInlineCommand = 1;
+}
+
 class DeclarationVerbatimLineCommand<string name> :
       VerbatimLineCommand<name> {
   let IsDeclarationCommand = 1;
@@ -86,6 +93,7 @@ def C      : InlineCommand<"c">;
 def P      : InlineCommand<"p">;
 def A      : InlineCommand<"a">;
 def E      : InlineCommand<"e">;
+def N      : InlineCommand<"n"> { let NumArgs = 0; }
 def Em     : InlineCommand<"em">;
 def Emoji  : InlineCommand<"emoji">;
 
@@ -102,6 +110,11 @@ def CopyDoc     : InlineCommand<"copydoc">;
 def Extends    : InlineCommand<"extends">;
 def Implements : InlineCommand<"implements">;
 def MemberOf   : InlineCommand<"memberof">;
+
+def Relates     : InlineCommand<"relates">;
+def Related     : InlineCommand<"related">;
+def RelatesAlso : InlineCommand<"relatesalso">;
+def RelatedAlso : InlineCommand<"relatedalso">;
 
 //===----------------------------------------------------------------------===//
 // BlockCommand
@@ -125,9 +138,9 @@ def Tparam : BlockCommand<"tparam"> { let IsTParamCommand = 1; }
 // HeaderDoc command for template parameter documentation.
 def Templatefield : BlockCommand<"templatefield"> { let IsTParamCommand = 1; }
 
-def Throws    : BlockCommand<"throws"> { let IsThrowsCommand = 1; }
-def Throw     : BlockCommand<"throw"> { let IsThrowsCommand = 1; }
-def Exception : BlockCommand<"exception"> { let IsThrowsCommand = 1; }
+def Throws    : BlockCommand<"throws"> { let IsThrowsCommand = 1; let NumArgs = 1; }
+def Throw     : BlockCommand<"throw"> { let IsThrowsCommand = 1; let NumArgs = 1; }
+def Exception : BlockCommand<"exception"> { let IsThrowsCommand = 1; let NumArgs = 1;}
 
 def Deprecated : BlockCommand<"deprecated"> {
   let IsEmptyParagraphAllowed = 1;
@@ -149,12 +162,12 @@ def Date       : BlockCommand<"date">;
 def Invariant  : BlockCommand<"invariant">;
 def Li         : BlockCommand<"li">;
 def Note       : BlockCommand<"note">;
-def Par        : BlockCommand<"par">;
+def Par        : BlockCommand<"par"> { let IsParCommand = 1; let NumArgs = 1; }
 def Post       : BlockCommand<"post">;
 def Pre        : BlockCommand<"pre">;
 def Remark     : BlockCommand<"remark">;
 def Remarks    : BlockCommand<"remarks">;
-def Retval     : BlockCommand<"retval">;
+def Retval     : BlockCommand<"retval"> { let NumArgs = 1; }
 def Sa         : BlockCommand<"sa">;
 def See        : BlockCommand<"see">;
 def Since      : BlockCommand<"since">;
@@ -162,7 +175,7 @@ def Test       : BlockCommand<"test">;
 def Todo       : BlockCommand<"todo">;
 def Version    : BlockCommand<"version">;
 def Warning    : BlockCommand<"warning">;
-def XRefItem   : BlockCommand<"xrefitem">;
+def XRefItem   : BlockCommand<"xrefitem"> { let NumArgs = 3; }
 // HeaderDoc commands
 def Abstract      : BlockCommand<"abstract"> { let IsBriefCommand = 1; }
 def ClassDesign   : RecordLikeDetailCommand<"classdesign">;
@@ -240,11 +253,6 @@ def Page     : VerbatimLineCommand<"page">;
 def Mainpage : VerbatimLineCommand<"mainpage">;
 def Subpage  : VerbatimLineCommand<"subpage">;
 
-def Relates     : VerbatimLineCommand<"relates">;
-def Related     : VerbatimLineCommand<"related">;
-def RelatesAlso : VerbatimLineCommand<"relatesalso">;
-def RelatedAlso : VerbatimLineCommand<"relatedalso">;
-
 def AddIndex : VerbatimLineCommand<"addindex">;
 
 // These take a single argument mostly, but since they include a file they'll
@@ -273,31 +281,6 @@ def Until    : VerbatimLineCommand<"until">;
 
 def NoOp : VerbatimLineCommand<"noop">;
 
-// These have actually no arguments, but we can treat them as line commands.
-def CallGraph       : VerbatimLineCommand<"callgraph">;
-def HideCallGraph   : VerbatimLineCommand<"hidecallgraph">;
-def CallerGraph     : VerbatimLineCommand<"callergraph">;
-def HideCallerGraph : VerbatimLineCommand<"hidecallergraph">;
-def ShowInitializer : VerbatimLineCommand<"showinitializer">;
-def HideInitializer : VerbatimLineCommand<"hideinitializer">;
-def ShowRefBy       : VerbatimLineCommand<"showrefby">;
-def HideRefBy       : VerbatimLineCommand<"hiderefby">;
-def ShowRefs        : VerbatimLineCommand<"showrefs">;
-def HideRefs        : VerbatimLineCommand<"hiderefs">;
-
-// These also have no argument.
-def Private   : VerbatimLineCommand<"private">;
-def Protected : VerbatimLineCommand<"protected">;
-def Public    : VerbatimLineCommand<"public">;
-def Pure      : VerbatimLineCommand<"pure">;
-def Static    : VerbatimLineCommand<"static">;
-
-// These also have no argument.
-def NoSubgrouping    : VerbatimLineCommand<"nosubgrouping">;
-def PrivateSection   : VerbatimLineCommand<"privatesection">;
-def ProtectedSection : VerbatimLineCommand<"protectedsection">;
-def PublicSection    : VerbatimLineCommand<"publicsection">;
-
 // We might also build proper support for if/ifnot/else/elseif/endif.
 def If     : VerbatimLineCommand<"if">;
 def IfNot  : VerbatimLineCommand<"ifnot">;
@@ -308,6 +291,32 @@ def Endif  : VerbatimLineCommand<"endif">;
 // Not treated as VerbatimBlockCommand because it spans multiple comments.
 def Cond    : VerbatimLineCommand<"cond">;
 def EndCond : VerbatimLineCommand<"endcond">;
+
+//===----------------------------------------------------------------------===//
+// PropertyCommand
+//===----------------------------------------------------------------------===//
+
+def CallGraph       : PropertyCommand<"callgraph">;
+def HideCallGraph   : PropertyCommand<"hidecallgraph">;
+def CallerGraph     : PropertyCommand<"callergraph">;
+def HideCallerGraph : PropertyCommand<"hidecallergraph">;
+def ShowInitializer : PropertyCommand<"showinitializer">;
+def HideInitializer : PropertyCommand<"hideinitializer">;
+def ShowRefBy       : PropertyCommand<"showrefby">;
+def HideRefBy       : PropertyCommand<"hiderefby">;
+def ShowRefs        : PropertyCommand<"showrefs">;
+def HideRefs        : PropertyCommand<"hiderefs">;
+
+def Private   : PropertyCommand<"private">;
+def Protected : PropertyCommand<"protected">;
+def Public    : PropertyCommand<"public">;
+def Pure      : PropertyCommand<"pure">;
+def Static    : PropertyCommand<"static">;
+
+def NoSubgrouping    : PropertyCommand<"nosubgrouping">;
+def PrivateSection   : PropertyCommand<"privatesection">;
+def ProtectedSection : PropertyCommand<"protectedsection">;
+def PublicSection    : PropertyCommand<"publicsection">;
 
 //===----------------------------------------------------------------------===//
 // DeclarationVerbatimLineCommand

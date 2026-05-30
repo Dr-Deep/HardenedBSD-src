@@ -25,8 +25,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #ifndef	_LINUXKPI_LINUX_IO_H_
 #define	_LINUXKPI_LINUX_IO_H_
@@ -37,6 +35,8 @@
 #include <machine/vm.h>
 
 #include <linux/compiler.h>
+#include <linux/err.h>
+#include <asm-generic/io.h>
 #include <linux/types.h>
 #if !defined(__arm__)
 #include <asm/set_memory.h>
@@ -351,6 +351,16 @@ ioread32be(const volatile void *addr)
 }
 #define	ioread32be(addr)	ioread32be(addr)
 
+#ifdef __LP64__
+#undef ioread64
+static inline uint64_t
+ioread64(const volatile void *addr)
+{
+	return (readq(addr));
+}
+#define	ioread64(addr)		ioread64(addr)
+#endif
+
 #undef iowrite8
 static inline void
 iowrite8(uint8_t v, volatile void *addr)
@@ -386,11 +396,7 @@ iowrite32be(uint32_t v, volatile void *addr)
 #define	iowrite32be(v, addr)	iowrite32be(v, addr)
 
 #if defined(__i386__) || defined(__amd64__)
-static inline void
-_outb(u_char data, u_int port)
-{
-	__asm __volatile("outb %0, %w1" : : "a" (data), "Nd" (port));
-}
+#define	_outb(data, port) outb((data), (port))
 #endif
 
 #if defined(__i386__) || defined(__amd64__) || defined(__powerpc__) || defined(__aarch64__) || defined(__riscv)
@@ -402,6 +408,13 @@ _ioremap_attr(vm_paddr_t _phys_addr, unsigned long _size, int _attr)
 	return (NULL);
 }
 #endif
+
+struct device;
+static inline void *
+devm_ioremap(struct device *dev, resource_size_t offset, resource_size_t size)
+{
+	return (NULL);
+}
 
 #ifdef VM_MEMATTR_DEVICE
 #define	ioremap_nocache(addr, size)					\
@@ -424,7 +437,7 @@ _ioremap_attr(vm_paddr_t _phys_addr, unsigned long _size, int _attr)
 #else
 #define	ioremap_wc(addr, size)	ioremap_nocache(addr, size)
 #endif
-#define	ioremap_wb(addr, size)						\
+#define	ioremap_cache(addr, size)					\
     _ioremap_attr((addr), (size), VM_MEMATTR_WRITE_BACK)
 void iounmap(void *addr);
 
@@ -433,9 +446,9 @@ void iounmap(void *addr);
 #define	memcpy_toio(a, b, c)	memcpy((a), (b), (c))
 
 static inline void
-__iowrite32_copy(void *to, void *from, size_t count)
+__iowrite32_copy(void *to, const void *from, size_t count)
 {
-	uint32_t *src;
+	const uint32_t *src;
 	uint32_t *dst;
 	int i;
 
@@ -444,10 +457,10 @@ __iowrite32_copy(void *to, void *from, size_t count)
 }
 
 static inline void
-__iowrite64_copy(void *to, void *from, size_t count)
+__iowrite64_copy(void *to, const void *from, size_t count)
 {
 #ifdef __LP64__
-	uint64_t *src;
+	const uint64_t *src;
 	uint64_t *dst;
 	int i;
 
@@ -455,6 +468,32 @@ __iowrite64_copy(void *to, void *from, size_t count)
 		__raw_writeq(*src, dst);
 #else
 	__iowrite32_copy(to, from, count * 2);
+#endif
+}
+
+static inline void
+__ioread32_copy(void *to, const void *from, size_t count)
+{
+	const uint32_t *src;
+	uint32_t *dst;
+	int i;
+
+	for (i = 0, src = from, dst = to; i < count; i++, src++, dst++)
+		*dst = __raw_readl(src);
+}
+
+static inline void
+__ioread64_copy(void *to, const void *from, size_t count)
+{
+#ifdef __LP64__
+	const uint64_t *src;
+	uint64_t *dst;
+	int i;
+
+	for (i = 0, src = from, dst = to; i < count; i++, src++, dst++)
+		*dst = __raw_readq(src);
+#else
+	__ioread32_copy(to, from, count * 2);
 #endif
 }
 
@@ -470,7 +509,7 @@ memremap(resource_size_t offset, size_t size, unsigned long flags)
 	void *addr = NULL;
 
 	if ((flags & MEMREMAP_WB) &&
-	    (addr = ioremap_wb(offset, size)) != NULL)
+	    (addr = ioremap_cache(offset, size)) != NULL)
 		goto done;
 	if ((flags & MEMREMAP_WT) &&
 	    (addr = ioremap_wt(offset, size)) != NULL)
@@ -489,6 +528,8 @@ memunmap(void *addr)
 	iounmap(addr);
 }
 
+#define	IOMEM_ERR_PTR(err)	(void __iomem *)ERR_PTR(err)
+
 #define	__MTRR_ID_BASE	1
 int lkpi_arch_phys_wc_add(unsigned long, unsigned long);
 void lkpi_arch_phys_wc_del(int);
@@ -497,19 +538,34 @@ void lkpi_arch_phys_wc_del(int);
 #define	arch_phys_wc_index(x)	\
 	(((x) < __MTRR_ID_BASE) ? -1 : ((x) - __MTRR_ID_BASE))
 
-#if defined(__amd64__) || defined(__i386__) || defined(__aarch64__) || defined(__powerpc__) || defined(__riscv)
 static inline int
 arch_io_reserve_memtype_wc(resource_size_t start, resource_size_t size)
 {
+#if defined(__amd64__)
+	void *va;
 
-	return (set_memory_wc(start, size >> PAGE_SHIFT));
+	if (!PHYS_IN_DMAP(start) || !PHYS_IN_DMAP(start + size))
+		return (-EINVAL);
+
+	va = PHYS_TO_DMAP(start);
+	return (-pmap_change_attr(va, size, VM_MEMATTR_WRITE_COMBINING));
+#else
+	return (0);
+#endif
 }
 
 static inline void
 arch_io_free_memtype_wc(resource_size_t start, resource_size_t size)
 {
-	set_memory_wb(start, size >> PAGE_SHIFT);
-}
+#if defined(__amd64__)
+	void *va;
+
+	if (!PHYS_IN_DMAP(start) || !PHYS_IN_DMAP(start + size))
+		return;
+
+	va = PHYS_TO_DMAP(start);
+	pmap_change_attr(va, size, VM_MEMATTR_WRITE_BACK);
 #endif
+}
 
 #endif	/* _LINUXKPI_LINUX_IO_H_ */

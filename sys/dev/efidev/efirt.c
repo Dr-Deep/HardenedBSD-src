@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
+#include "opt_acpi.h"
 
 #include <sys/param.h>
 #include <sys/efi.h>
@@ -60,6 +60,10 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm.h>
 #include <vm/pmap.h>
 #include <vm/vm_map.h>
+
+#ifdef DEV_ACPI
+#include <contrib/dev/acpica/include/acpi.h>
+#endif
 
 #define EFI_TABLE_ALLOC_MAX 0x800000
 
@@ -103,7 +107,8 @@ static int efi_status2err[25] = {
 
 enum efi_table_type {
 	TYPE_ESRT = 0,
-	TYPE_PROP
+	TYPE_PROP,
+	TYPE_MEMORY_ATTR
 };
 
 static int efi_enter(void);
@@ -119,11 +124,20 @@ efi_status_to_errno(efi_status status)
 }
 
 static struct mtx efi_lock;
-static SYSCTL_NODE(_hw, OID_AUTO, efi, CTLFLAG_RWTUN | CTLFLAG_MPSAFE, NULL,
+SYSCTL_NODE(_hw, OID_AUTO, efi, CTLFLAG_RWTUN | CTLFLAG_MPSAFE, NULL,
     "EFI");
 static bool efi_poweroff = true;
 SYSCTL_BOOL(_hw_efi, OID_AUTO, poweroff, CTLFLAG_RWTUN, &efi_poweroff, 0,
     "If true, use EFI runtime services to power off in preference to ACPI");
+extern int print_efirt_faults;
+SYSCTL_INT(_hw_efi, OID_AUTO, print_faults, CTLFLAG_RWTUN,
+    &print_efirt_faults, 0,
+    "Print fault  information upon trap from EFIRT calls: "
+    "0 - never, 1 - once, 2 - always");
+extern u_long cnt_efirt_faults;
+SYSCTL_ULONG(_hw_efi, OID_AUTO, total_faults, CTLFLAG_RD,
+    &cnt_efirt_faults, 0,
+    "Total number of faults that occurred during EFIRT calls");
 
 static bool
 efi_is_in_map(struct efi_md *map, int ndesc, int descsz, vm_offset_t addr)
@@ -137,7 +151,7 @@ efi_is_in_map(struct efi_md *map, int ndesc, int descsz, vm_offset_t addr)
 			continue;
 
 		if (addr >= p->md_virt &&
-		    addr < p->md_virt + p->md_pages * PAGE_SIZE)
+		    addr < p->md_virt + p->md_pages * EFI_PAGE_SIZE)
 			return (true);
 	}
 
@@ -163,7 +177,6 @@ efi_init(void)
 	struct efi_map_header *efihdr;
 	struct efi_md *map;
 	struct efi_rt *rtdm;
-	caddr_t kmdp;
 	size_t efisz;
 	int ndesc, rt_disabled;
 
@@ -179,7 +192,7 @@ efi_init(void)
 		return (0);
 	}
 
-	efi_systbl = (struct efi_systbl *)efi_phys_to_kva(efi_systbl_phys);
+	efi_systbl = efi_phys_to_kva(efi_systbl_phys);
 	if (efi_systbl == NULL || efi_systbl->st_hdr.th_sig != EFI_SYSTBL_SIG) {
 		efi_systbl = NULL;
 		if (bootverbose)
@@ -193,10 +206,7 @@ efi_init(void)
 			printf("EFI config table is not present\n");
 	}
 
-	kmdp = preload_search_by_type("elf kernel");
-	if (kmdp == NULL)
-		kmdp = preload_search_by_type("elf64 kernel");
-	efihdr = (struct efi_map_header *)preload_search_info(kmdp,
+	efihdr = (struct efi_map_header *)preload_search_info(preload_kmdp,
 	    MODINFO_METADATA | MODINFOMD_EFI_MAP);
 	if (efihdr == NULL) {
 		if (bootverbose)
@@ -233,7 +243,7 @@ efi_init(void)
 	 * with an old loader.efi, check if the RS->GetTime function is within
 	 * the EFI map, and fail to attach if not.
 	 */
-	rtdm = (struct efi_rt *)efi_phys_to_kva((uintptr_t)efi_runtime);
+	rtdm = efi_phys_to_kva((uintptr_t)efi_runtime);
 	if (rtdm == NULL || !efi_is_in_map(map, ndesc, efihdr->descriptor_size,
 	    (vm_offset_t)rtdm->rt_gettime)) {
 		if (bootverbose)
@@ -281,6 +291,11 @@ rt_ok(void)
 	return (0);
 }
 
+/*
+ * The fpu_kern_enter() call in allows firmware to use FPU, as
+ * mandated by the specification.  It also enters a critical section,
+ * giving us neccessary protection against context switches.
+ */
 static int
 efi_enter(void)
 {
@@ -300,6 +315,9 @@ efi_enter(void)
 		fpu_kern_leave(td, NULL);
 		mtx_unlock(&efi_lock);
 		PMAP_UNLOCK(curpmap);
+	} else {
+		MPASS((td->td_pflags & TDP_EFIRT) == 0);
+		td->td_pflags |= TDP_EFIRT;
 	}
 	return (error);
 }
@@ -310,17 +328,20 @@ efi_leave(void)
 	struct thread *td;
 	pmap_t curpmap;
 
+	td = curthread;
+	MPASS((td->td_pflags & TDP_EFIRT) != 0);
+	td->td_pflags &= ~TDP_EFIRT;
+
 	efi_arch_leave();
 
 	curpmap = &curproc->p_vmspace->vm_pmap;
-	td = curthread;
 	fpu_kern_leave(td, NULL);
 	mtx_unlock(&efi_lock);
 	PMAP_UNLOCK(curpmap);
 }
 
 static int
-get_table(struct uuid *uuid, void **ptr)
+get_table(efi_guid_t *guid, void **ptr)
 {
 	struct efi_cfgtbl *ct;
 	u_long count;
@@ -334,7 +355,7 @@ get_table(struct uuid *uuid, void **ptr)
 	count = efi_systbl->st_entries;
 	ct = efi_cfgtbl;
 	while (count--) {
-		if (!bcmp(&ct->ct_uuid, uuid, sizeof(*uuid))) {
+		if (!bcmp(&ct->ct_guid, guid, sizeof(*guid))) {
 			*ptr = ct->ct_data;
 			efi_leave();
 			return (0);
@@ -353,13 +374,13 @@ get_table_length(enum efi_table_type type, size_t *table_len, void **taddr)
 	case TYPE_ESRT:
 	{
 		struct efi_esrt_table *esrt = NULL;
-		struct uuid uuid = EFI_TABLE_ESRT;
+		efi_guid_t guid = EFI_TABLE_ESRT;
 		uint32_t fw_resource_count = 0;
 		size_t len = sizeof(*esrt);
 		int error;
 		void *buf;
 
-		error = efi_get_table(&uuid, (void **)&esrt);
+		error = efi_get_table(&guid, (void **)&esrt);
 		if (error != 0)
 			return (error);
 
@@ -395,14 +416,14 @@ get_table_length(enum efi_table_type type, size_t *table_len, void **taddr)
 	}
 	case TYPE_PROP:
 	{
-		struct uuid uuid = EFI_PROPERTIES_TABLE;
+		efi_guid_t guid = EFI_PROPERTIES_TABLE;
 		struct efi_prop_table *prop;
 		size_t len = sizeof(*prop);
 		uint32_t prop_len;
 		int error;
 		void *buf;
 
-		error = efi_get_table(&uuid, (void **)&prop);
+		error = efi_get_table(&guid, (void **)&prop);
 		if (error != 0)
 			return (error);
 
@@ -425,26 +446,63 @@ get_table_length(enum efi_table_type type, size_t *table_len, void **taddr)
 		free(buf, M_TEMP);
 		return (0);
 	}
+	case TYPE_MEMORY_ATTR:
+	{
+		efi_guid_t guid = EFI_MEMORY_ATTRIBUTES_TABLE;
+		struct efi_memory_attribute_table *tbl_addr, *mem_addr;
+		int error;
+		void *buf;
+		size_t len = sizeof(struct efi_memory_attribute_table);
+
+		error = efi_get_table(&guid, (void **)&tbl_addr);
+		if (error)
+			return (error);
+
+		buf = malloc(len, M_TEMP, M_WAITOK);
+		error = physcopyout((vm_paddr_t)tbl_addr, buf, len);
+		if (error) {
+			free(buf, M_TEMP);
+			return (error);
+		}
+
+		mem_addr = (struct efi_memory_attribute_table *)buf;
+		if (mem_addr->version != 2) {
+			free(buf, M_TEMP);
+			return (EINVAL);
+		}
+		len += mem_addr->descriptor_size * mem_addr->num_ents;
+		if (len > EFI_TABLE_ALLOC_MAX) {
+			free(buf, M_TEMP);
+			return (ENOMEM);
+		}
+
+		*table_len = len;
+		if (taddr != NULL)
+			*taddr = tbl_addr;
+		free(buf, M_TEMP);
+		return (0);
+	}
 	}
 	return (ENOENT);
 }
 
 static int
-copy_table(struct uuid *uuid, void **buf, size_t buf_len, size_t *table_len)
+copy_table(efi_guid_t *guid, void **buf, size_t buf_len, size_t *table_len)
 {
 	static const struct known_table {
-		struct uuid uuid;
+		efi_guid_t guid;
 		enum efi_table_type type;
 	} tables[] = {
 		{ EFI_TABLE_ESRT,       TYPE_ESRT },
-		{ EFI_PROPERTIES_TABLE, TYPE_PROP }
+		{ EFI_PROPERTIES_TABLE, TYPE_PROP },
+		{ EFI_MEMORY_ATTRIBUTES_TABLE, TYPE_MEMORY_ATTR }
 	};
 	size_t table_idx;
 	void *taddr;
 	int rc;
 
 	for (table_idx = 0; table_idx < nitems(tables); table_idx++) {
-		if (!bcmp(&tables[table_idx].uuid, uuid, sizeof(*uuid)))
+		if (!bcmp(&tables[table_idx].guid, guid, sizeof(*guid)))
 			break;
 	}
 
@@ -475,31 +533,32 @@ efi_rt_arch_call_nofault(struct efirt_callinfo *ec)
 
 	switch (ec->ec_argcnt) {
 	case 0:
-		ec->ec_efi_status = ((register_t (*)(void))ec->ec_fptr)();
+		ec->ec_efi_status = ((register_t EFIABI_ATTR (*)(void))
+		    ec->ec_fptr)();
 		break;
 	case 1:
-		ec->ec_efi_status = ((register_t (*)(register_t))ec->ec_fptr)
-		    (ec->ec_arg1);
+		ec->ec_efi_status = ((register_t EFIABI_ATTR (*)(register_t))
+		    ec->ec_fptr)(ec->ec_arg1);
 		break;
 	case 2:
-		ec->ec_efi_status = ((register_t (*)(register_t, register_t))
-		    ec->ec_fptr)(ec->ec_arg1, ec->ec_arg2);
+		ec->ec_efi_status = ((register_t EFIABI_ATTR (*)(register_t,
+		    register_t))ec->ec_fptr)(ec->ec_arg1, ec->ec_arg2);
 		break;
 	case 3:
-		ec->ec_efi_status = ((register_t (*)(register_t, register_t,
-		    register_t))ec->ec_fptr)(ec->ec_arg1, ec->ec_arg2,
-		    ec->ec_arg3);
+		ec->ec_efi_status = ((register_t EFIABI_ATTR (*)(register_t,
+		    register_t, register_t))ec->ec_fptr)(ec->ec_arg1,
+		    ec->ec_arg2, ec->ec_arg3);
 		break;
 	case 4:
-		ec->ec_efi_status = ((register_t (*)(register_t, register_t,
-		    register_t, register_t))ec->ec_fptr)(ec->ec_arg1,
-		    ec->ec_arg2, ec->ec_arg3, ec->ec_arg4);
+		ec->ec_efi_status = ((register_t EFIABI_ATTR (*)(register_t,
+		    register_t, register_t, register_t))ec->ec_fptr)(
+		    ec->ec_arg1, ec->ec_arg2, ec->ec_arg3, ec->ec_arg4);
 		break;
 	case 5:
-		ec->ec_efi_status = ((register_t (*)(register_t, register_t,
-		    register_t, register_t, register_t))ec->ec_fptr)(
-		    ec->ec_arg1, ec->ec_arg2, ec->ec_arg3, ec->ec_arg4,
-		    ec->ec_arg5);
+		ec->ec_efi_status = ((register_t EFIABI_ATTR (*)(register_t,
+		    register_t, register_t, register_t, register_t))
+		    ec->ec_fptr)(ec->ec_arg1, ec->ec_arg2, ec->ec_arg3,
+		    ec->ec_arg4, ec->ec_arg5);
 		break;
 	default:
 		panic("efi_rt_arch_call: %d args", (int)ec->ec_argcnt);
@@ -568,6 +627,74 @@ get_time(struct efi_tm *tm)
 	 */
 	error = efi_get_time_locked(tm, &dummy);
 	EFI_TIME_UNLOCK();
+	return (error);
+}
+
+static int
+get_waketime(uint8_t *enabled, uint8_t *pending, struct efi_tm *tm)
+{
+	struct efirt_callinfo ec;
+	int error;
+#ifdef DEV_ACPI
+	UINT32 acpiRtcEnabled;
+#endif
+
+	if (efi_runtime == NULL)
+		return (ENXIO);
+
+	EFI_TIME_LOCK();
+	bzero(&ec, sizeof(ec));
+	ec.ec_name = "rt_getwaketime";
+	ec.ec_argcnt = 3;
+	ec.ec_arg1 = (uintptr_t)enabled;
+	ec.ec_arg2 = (uintptr_t)pending;
+	ec.ec_arg3 = (uintptr_t)tm;
+	ec.ec_fptr = EFI_RT_METHOD_PA(rt_getwaketime);
+	error = efi_call(&ec);
+	EFI_TIME_UNLOCK();
+
+#ifdef DEV_ACPI
+	if (error == 0) {
+		error = AcpiReadBitRegister(ACPI_BITREG_RT_CLOCK_ENABLE,
+		    &acpiRtcEnabled);
+		if (ACPI_SUCCESS(error)) {
+			*enabled = *enabled && acpiRtcEnabled;
+		} else
+			error = EIO;
+	}
+#endif
+
+	return (error);
+}
+
+static int
+set_waketime(uint8_t enable, struct efi_tm *tm)
+{
+	struct efirt_callinfo ec;
+	int error;
+
+	if (efi_runtime == NULL)
+		return (ENXIO);
+
+	EFI_TIME_LOCK();
+	bzero(&ec, sizeof(ec));
+	ec.ec_name = "rt_setwaketime";
+	ec.ec_argcnt = 2;
+	ec.ec_arg1 = (uintptr_t)enable;
+	ec.ec_arg2 = (uintptr_t)tm;
+	ec.ec_fptr = EFI_RT_METHOD_PA(rt_setwaketime);
+	error = efi_call(&ec);
+	EFI_TIME_UNLOCK();
+
+#ifdef DEV_ACPI
+	if (error == 0) {
+		error = AcpiWriteBitRegister(ACPI_BITREG_RT_CLOCK_ENABLE,
+		    (enable != 0) ? 1 : 0);
+		if (ACPI_FAILURE(error))
+			error = EIO;
+	}
+#endif
+
 	return (error);
 }
 
@@ -641,7 +768,7 @@ set_time(struct efi_tm *tm)
 }
 
 static int
-var_get(efi_char *name, struct uuid *vendor, uint32_t *attrib,
+var_get(efi_char *name, efi_guid_t *vendor, uint32_t *attrib,
     size_t *datasize, void *data)
 {
 	struct efirt_callinfo ec;
@@ -665,7 +792,7 @@ var_get(efi_char *name, struct uuid *vendor, uint32_t *attrib,
 }
 
 static int
-var_nextname(size_t *namesize, efi_char *name, struct uuid *vendor)
+var_nextname(size_t *namesize, efi_char *name, efi_guid_t *vendor)
 {
 	struct efirt_callinfo ec;
 	int error;
@@ -686,7 +813,7 @@ var_nextname(size_t *namesize, efi_char *name, struct uuid *vendor)
 }
 
 static int
-var_set(efi_char *name, struct uuid *vendor, uint32_t attrib,
+var_set(efi_char *name, efi_guid_t *vendor, uint32_t attrib,
     size_t datasize, void *data)
 {
 	struct efirt_callinfo ec;
@@ -713,6 +840,8 @@ const static struct efi_ops efi_ops = {
 	.get_time_capabilities = get_time_capabilities,
 	.reset_system = reset_system,
 	.set_time = set_time,
+	.get_waketime = get_waketime,
+	.set_waketime = set_waketime,
 	.var_get = var_get,
 	.var_nextname = var_nextname,
 	.var_set = var_set,

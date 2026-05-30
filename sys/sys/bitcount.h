@@ -32,15 +32,34 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)types.h	8.6 (Berkeley) 2/19/95
- * $FreeBSD$
  */
 
 #ifndef _SYS_BITCOUNT_H_
 #define	_SYS_BITCOUNT_H_
 
 #include <sys/_types.h>
+
+#define	__const_bitcount8(x) ( \
+    !!((x) & (1 << 0)) + \
+    !!((x) & (1 << 1)) + \
+    !!((x) & (1 << 2)) + \
+    !!((x) & (1 << 3)) + \
+    !!((x) & (1 << 4)) + \
+    !!((x) & (1 << 5)) + \
+    !!((x) & (1 << 6)) + \
+    !!((x) & (1 << 7)))
+
+#define	__const_bitcount16(x) ( \
+    __const_bitcount8(x) + \
+    __const_bitcount8((x) >> 8))
+
+#define	__const_bitcount32(x) ( \
+    __const_bitcount16(x) + \
+    __const_bitcount16((x) >> 16))
+
+#define	__const_bitcount64(x) ( \
+    __const_bitcount32(x) + \
+    __const_bitcount32((x) >> 32))
 
 #ifdef __POPCNT__
 #define	__bitcount64(x)	__builtin_popcountll((__uint64_t)(x))

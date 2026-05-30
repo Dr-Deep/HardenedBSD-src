@@ -25,8 +25,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -151,7 +149,7 @@ struct ksz8995ma_softc {
 	int		*portphy;
 	char		**ifname;
 	device_t	**miibus;
-	struct ifnet	**ifp;
+	if_t *ifp;
 	struct callout	callout_tick;
 	etherswitch_info_t	info;
 };
@@ -173,8 +171,8 @@ struct ksz8995ma_softc {
 
 static inline int ksz8995ma_portforphy(struct ksz8995ma_softc *, int);
 static void ksz8995ma_tick(void *);
-static int ksz8995ma_ifmedia_upd(struct ifnet *);
-static void ksz8995ma_ifmedia_sts(struct ifnet *, struct ifmediareq *);
+static int ksz8995ma_ifmedia_upd(if_t);
+static void ksz8995ma_ifmedia_sts(if_t, struct ifmediareq *);
 static int ksz8995ma_readreg(device_t dev, int addr);
 static int ksz8995ma_writereg(device_t dev, int addr, int value);
 static void ksz8995ma_portvlanreset(device_t dev);
@@ -199,7 +197,7 @@ ksz8995ma_probe(device_t dev)
 		return (ENXIO);
 	}
 
-	device_set_desc_copy(dev, "Micrel KSZ8995MA SPI switch driver");
+	device_set_desc(dev, "Micrel KSZ8995MA SPI switch driver");
 	return (BUS_PROBE_DEFAULT);
 }
 
@@ -221,28 +219,18 @@ ksz8995ma_attach_phys(struct ksz8995ma_softc *sc)
 		sc->ifpport[phy] = port;
 		sc->portphy[port] = phy;
 		sc->ifp[port] = if_alloc(IFT_ETHER);
-		if (sc->ifp[port] == NULL) {
-			device_printf(sc->sc_dev, "couldn't allocate ifnet structure\n");
-			err = ENOMEM;
-			break;
-		}
-
-		sc->ifp[port]->if_softc = sc;
-		sc->ifp[port]->if_flags |= IFF_UP | IFF_BROADCAST |
-		    IFF_DRV_RUNNING | IFF_SIMPLEX;
+		if_setsoftc(sc->ifp[port], sc);
+		if_setflagbits(sc->ifp[port], IFF_UP | IFF_BROADCAST |
+		    IFF_DRV_RUNNING | IFF_SIMPLEX, 0);
 		if_initname(sc->ifp[port], name, port);
 		sc->miibus[port] = malloc(sizeof(device_t), M_KSZ8995MA,
 		    M_WAITOK | M_ZERO);
-		if (sc->miibus[port] == NULL) {
-			err = ENOMEM;
-			goto failed;
-		}
 		err = mii_attach(sc->sc_dev, sc->miibus[port], sc->ifp[port],
 		    ksz8995ma_ifmedia_upd, ksz8995ma_ifmedia_sts, \
 		    BMSR_DEFCAPMASK, phy, MII_OFFSET_ANY, 0);
 		DPRINTF(sc->sc_dev, "%s attached to pseudo interface %s\n",
 		    device_get_nameunit(*sc->miibus[port]),
-		    sc->ifp[port]->if_xname);
+		    if_name(sc->ifp[port]));
 		if (err != 0) {
 			device_printf(sc->sc_dev,
 			    "attaching PHY %d failed\n",
@@ -304,7 +292,7 @@ ksz8995ma_attach(device_t dev)
 	sc->info.es_nvlangroups = 16;
 	sc->info.es_vlan_caps = ETHERSWITCH_VLAN_PORT | ETHERSWITCH_VLAN_DOT1Q;
 
-	sc->ifp = malloc(sizeof(struct ifnet *) * sc->numports, M_KSZ8995MA,
+	sc->ifp = malloc(sizeof(if_t) * sc->numports, M_KSZ8995MA,
 	    M_WAITOK | M_ZERO);
 	sc->ifname = malloc(sizeof(char *) * sc->numports, M_KSZ8995MA,
 	    M_WAITOK | M_ZERO);
@@ -313,12 +301,6 @@ ksz8995ma_attach(device_t dev)
 	sc->portphy = malloc(sizeof(int) * sc->numports, M_KSZ8995MA,
 	    M_WAITOK | M_ZERO);
 
-	if (sc->ifp == NULL || sc->ifname == NULL || sc->miibus == NULL ||
-	    sc->portphy == NULL) {
-		err = ENOMEM;
-		goto failed;
-	}
-
 	/*
 	 * Attach the PHYs and complete the bus enumeration.
 	 */
@@ -326,11 +308,9 @@ ksz8995ma_attach(device_t dev)
 	if (err != 0)
 		goto failed;
 
-	bus_generic_probe(dev);
+	bus_identify_children(dev);
 	bus_enumerate_hinted_children(dev);
-	err = bus_generic_attach(dev);
-	if (err != 0)
-		goto failed;
+	bus_attach_children(dev);
 	
 	callout_init(&sc->callout_tick, 0);
 
@@ -347,14 +327,10 @@ ksz8995ma_attach(device_t dev)
 	return (0);
 
 failed:
-	if (sc->portphy != NULL)
-		free(sc->portphy, M_KSZ8995MA);
-	if (sc->miibus != NULL)
-		free(sc->miibus, M_KSZ8995MA);
-	if (sc->ifname != NULL)
-		free(sc->ifname, M_KSZ8995MA);
-	if (sc->ifp != NULL)
-		free(sc->ifp, M_KSZ8995MA);
+	free(sc->portphy, M_KSZ8995MA);
+	free(sc->miibus, M_KSZ8995MA);
+	free(sc->ifname, M_KSZ8995MA);
+	free(sc->ifp, M_KSZ8995MA);
 
 	return (err);
 }
@@ -363,7 +339,11 @@ static int
 ksz8995ma_detach(device_t dev)
 {
 	struct ksz8995ma_softc	*sc;
-	int			 i, port;
+	int			 error, i, port;
+
+	error = bus_generic_detach(dev);
+	if (error != 0)
+		return (error);
 
 	sc = device_get_softc(dev);
 
@@ -373,8 +353,6 @@ ksz8995ma_detach(device_t dev)
 		if (((1 << i) & sc->phymask) == 0)
 			continue;
 		port = ksz8995ma_portforphy(sc, i);
-		if (sc->miibus[port] != NULL)
-			device_delete_child(dev, (*sc->miibus[port]));
 		if (sc->ifp[port] != NULL)
 			if_free(sc->ifp[port]);
 		free(sc->ifname[port], M_KSZ8995MA);
@@ -386,7 +364,6 @@ ksz8995ma_detach(device_t dev)
 	free(sc->ifname, M_KSZ8995MA);
 	free(sc->ifp, M_KSZ8995MA);
 
-	bus_generic_detach(dev);
 	mtx_destroy(&sc->sc_mtx);
 
 	return (0);
@@ -413,7 +390,7 @@ ksz8995ma_miiforport(struct ksz8995ma_softc *sc, int port)
 	return (device_get_softc(*sc->miibus[port]));
 }
 
-static inline struct ifnet *
+static inline if_t 
 ksz8995ma_ifpforport(struct ksz8995ma_softc *sc, int port)
 {
 
@@ -565,7 +542,7 @@ ksz8995ma_setport(device_t dev, etherswitch_port_t *p)
 	struct ksz8995ma_softc *sc;
 	struct mii_data *mii;
         struct ifmedia *ifm;
-        struct ifnet *ifp;
+        if_t ifp;
 	int phy, err;
 	int portreg;
 
@@ -771,13 +748,13 @@ ksz8995ma_statchg(device_t dev)
 }
 
 static int
-ksz8995ma_ifmedia_upd(struct ifnet *ifp)
+ksz8995ma_ifmedia_upd(if_t ifp)
 {
 	struct ksz8995ma_softc *sc;
 	struct mii_data *mii;
 
-	sc = ifp->if_softc;
-	mii = ksz8995ma_miiforport(sc, ifp->if_dunit);
+	sc = if_getsoftc(ifp);
+	mii = ksz8995ma_miiforport(sc, if_getdunit(ifp));
 
 	DPRINTF(sc->sc_dev, "%s\n", __func__);
 	if (mii == NULL)
@@ -787,13 +764,13 @@ ksz8995ma_ifmedia_upd(struct ifnet *ifp)
 }
 
 static void
-ksz8995ma_ifmedia_sts(struct ifnet *ifp, struct ifmediareq *ifmr)
+ksz8995ma_ifmedia_sts(if_t ifp, struct ifmediareq *ifmr)
 {
 	struct ksz8995ma_softc *sc;
 	struct mii_data *mii;
 
-	sc = ifp->if_softc;
-	mii = ksz8995ma_miiforport(sc, ifp->if_dunit);
+	sc = if_getsoftc(ifp);
+	mii = ksz8995ma_miiforport(sc, if_getdunit(ifp));
 
 	DPRINTF(sc->sc_dev, "%s\n", __func__);
 

@@ -28,7 +28,7 @@
  *
  *	from: @(#)rpc_msg.h 1.7 86/07/16 SMI
  *	from: @(#)rpc_msg.h	2.1 88/07/29 4.0 RPCSRC
- * $FreeBSD: projects/clang400-import/contrib/tcpdump/rpc_msg.h 276788 2015-01-07 19:55:18Z delphij $
+ * $FreeBSD: src/include/rpc/rpc_msg.h,v 1.11.2.1 1999/08/29 14:39:07 peter Exp $
  */
 
 /*
@@ -42,7 +42,7 @@
 
 /*
  * Bottom up definition of an rpc message.
- * NOTE: call and reply use the same overall stuct but
+ * NOTE: call and reply use the same overall struct but
  * different parts of unions within it.
  */
 
@@ -78,13 +78,13 @@ enum sunrpc_reject_stat {
  * Reply to an rpc request that was rejected by the server.
  */
 struct sunrpc_rejected_reply {
-	uint32_t		 rj_stat;	/* enum reject_stat */
+	nd_uint32_t		 rj_stat;	/* enum reject_stat */
 	union {
 		struct {
-			uint32_t low;
-			uint32_t high;
+			nd_uint32_t low;
+			nd_uint32_t high;
 		} RJ_versions;
-		uint32_t RJ_why;  /* enum auth_stat - why authentication did not work */
+		nd_uint32_t RJ_why;  /* enum auth_stat - why authentication did not work */
 	} ru;
 #define	rj_vers	ru.RJ_versions
 #define	rj_why	ru.RJ_why
@@ -94,7 +94,7 @@ struct sunrpc_rejected_reply {
  * Body of a reply to an rpc request.
  */
 struct sunrpc_reply_body {
-	uint32_t	rp_stat;		/* enum reply_stat */
+	nd_uint32_t	rp_stat;		/* enum reply_stat */
 	struct sunrpc_rejected_reply rp_reject;	/* if rejected */
 };
 
@@ -102,10 +102,10 @@ struct sunrpc_reply_body {
  * Body of an rpc request call.
  */
 struct sunrpc_call_body {
-	uint32_t cb_rpcvers;	/* must be equal to two */
-	uint32_t cb_prog;
-	uint32_t cb_vers;
-	uint32_t cb_proc;
+	nd_uint32_t cb_rpcvers;	/* must be equal to two */
+	nd_uint32_t cb_prog;
+	nd_uint32_t cb_vers;
+	nd_uint32_t cb_proc;
 	struct sunrpc_opaque_auth cb_cred;
 	/* followed by opaque verifier */
 };
@@ -114,8 +114,8 @@ struct sunrpc_call_body {
  * The rpc message
  */
 struct sunrpc_msg {
-	uint32_t		rm_xid;
-	uint32_t		rm_direction;	/* enum msg_type */
+	nd_uint32_t		rm_xid;
+	nd_uint32_t		rm_direction;	/* enum msg_type */
 	union {
 		struct sunrpc_call_body RM_cmb;
 		struct sunrpc_reply_body RM_rmb;

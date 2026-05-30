@@ -27,9 +27,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
@@ -39,6 +36,7 @@ __FBSDID("$FreeBSD$");
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_private.h>
 #include <net/route.h>
 #include <net/route/route_ctl.h>
 #include <net/route/route_var.h>
@@ -73,7 +71,7 @@ rib4_set_nh_pfxflags(u_int fibnum, const struct sockaddr *addr, const struct soc
 		 * add these routes to support some cases with active-active
 		 * load balancing. Given that, retain this support.
 		 */
-		if (in_broadcast(addr4->sin_addr, nh->nh_ifp))
+		if (in_ifnet_broadcast(addr4->sin_addr, nh->nh_ifp))
 			is_broadcast = true;
 	} else if (mask4->sin_addr.s_addr == 0)
 		nhop_set_pxtype_flag(nh, NHF_DEFAULT);
@@ -121,9 +119,6 @@ in_inithead(uint32_t fibnum)
 	struct rib_head *rh;
 
 	rh = rt_table_init(32, AF_INET, fibnum);
-	if (rh == NULL)
-		return (NULL);
-
 	rh->rnh_set_nh_pfxflags = rib4_set_nh_pfxflags;
 	rh->rnh_augment_nh = rib4_augment_nh;
 

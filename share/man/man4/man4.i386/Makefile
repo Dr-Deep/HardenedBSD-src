@@ -1,8 +1,4 @@
-# $FreeBSD$
-
 MAN=	apm.4 \
-	ce.4 \
-	cp.4 \
 	CPU_ELAN.4 \
 	glxiic.4 \
 	glxsb.4 \
@@ -10,7 +6,6 @@ MAN=	apm.4 \
 	npx.4 \
 	pae.4 \
 	pbio.4 \
-	perfmon.4 \
 	pnp.4 \
 	pnpbios.4 \
 	sbni.4 \

@@ -26,8 +26,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _DEV_UART_CPU_ACPI_H_
@@ -37,11 +35,18 @@
 
 struct uart_class;
 
+struct acpi_spcr_compat_data {
+	struct uart_class *cd_class;
+	uint16_t cd_port_subtype;
+};
+SET_DECLARE(uart_acpi_spcr_class_set, struct acpi_spcr_compat_data);
+#define	UART_ACPI_SPCR_CLASS(data)					\
+	DATA_SET(uart_acpi_spcr_class_set, data)
+
 struct acpi_uart_compat_data {
 	const char *cd_hid;
 	struct uart_class *cd_class;
 
-	uint16_t cd_port_subtype;
 	int cd_regshft;
 	int cd_regiowidth;
 	int cd_rclk;
@@ -58,15 +63,7 @@ SET_DECLARE(uart_acpi_class_and_device_set, struct acpi_uart_compat_data);
 #define UART_ACPI_CLASS_AND_DEVICE(data)				\
 	DATA_SET(uart_acpi_class_and_device_set, data)
 
-/*
- * If your UART driver implements uart_class and custom device layer,
- * then use UART_ACPI_CLASS for its declaration
- */
-SET_DECLARE(uart_acpi_class_set, struct acpi_uart_compat_data);
-#define UART_ACPI_CLASS(data)				\
-	DATA_SET(uart_acpi_class_set, data)
-
-/* Try to initialize UART device from SPCR data. */
-int uart_cpu_acpi_spcr(int devtype, struct uart_devinfo *di);
+/* Try to initialize UART device from ACPI tables */
+int uart_cpu_acpi_setup(int devtype, struct uart_devinfo *di);
 
 #endif /* _DEV_UART_CPU_ACPI_H_ */

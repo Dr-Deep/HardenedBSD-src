@@ -32,11 +32,8 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- *	@(#)procfs_status.c	8.4 (Berkeley) 6/15/94
- *
  * From:
  *	$Id: procfs_status.c,v 3.1 1993/12/15 09:40:17 jsp Exp $
- * $FreeBSD$
  */
 
 #include <sys/param.h>
@@ -64,6 +61,7 @@
 int
 procfs_doprocstatus(PFS_FILL_ARGS)
 {
+	struct timeval start, ut, st;
 	struct session *sess;
 	struct thread *tdfirst;
 	struct tty *tp;
@@ -124,21 +122,16 @@ procfs_doprocstatus(PFS_FILL_ARGS)
 		wmesg = "nochan";
 	thread_unlock(tdfirst);
 
-	if (p->p_flag & P_INMEM) {
-		struct timeval start, ut, st;
-
-		PROC_STATLOCK(p);
-		calcru(p, &ut, &st);
-		PROC_STATUNLOCK(p);
-		start = p->p_stats->p_start;
-		getboottime(&boottime);
-		timevaladd(&start, &boottime);
-		sbuf_printf(sb, " %jd,%ld %jd,%ld %jd,%ld",
-		    (intmax_t)start.tv_sec, start.tv_usec,
-		    (intmax_t)ut.tv_sec, ut.tv_usec,
-		    (intmax_t)st.tv_sec, st.tv_usec);
-	} else
-		sbuf_printf(sb, " -1,-1 -1,-1 -1,-1");
+	PROC_STATLOCK(p);
+	calcru(p, &ut, &st);
+	PROC_STATUNLOCK(p);
+	start = p->p_stats->p_start;
+	getboottime(&boottime);
+	timevaladd(&start, &boottime);
+	sbuf_printf(sb, " %jd,%ld %jd,%ld %jd,%ld",
+	    (intmax_t)start.tv_sec, start.tv_usec,
+	    (intmax_t)ut.tv_sec, ut.tv_usec,
+	    (intmax_t)st.tv_sec, st.tv_usec);
 
 	sbuf_printf(sb, " %s", wmesg);
 
@@ -148,13 +141,9 @@ procfs_doprocstatus(PFS_FILL_ARGS)
 		(u_long)cr->cr_uid,
 		(u_long)cr->cr_ruid,
 		(u_long)cr->cr_rgid);
-
-	/* egid (cr->cr_svgid) is equal to cr_ngroups[0]
-	   see also getegid(2) in /sys/kern/kern_prot.c */
-
-	for (i = 0; i < cr->cr_ngroups; i++) {
+	sbuf_printf(sb, ",%lu", (u_long)cr->cr_gid);
+	for (i = 0; i < cr->cr_ngroups; i++)
 		sbuf_printf(sb, ",%lu", (u_long)cr->cr_groups[i]);
-	}
 
 	if (jailed(cr)) {
 		mtx_lock(&cr->cr_prison->pr_mtx);

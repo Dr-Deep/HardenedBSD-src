@@ -22,8 +22,6 @@
  * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
  * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _LIBGPIO_H_
@@ -83,8 +81,8 @@ int		gpio_pin_set_flags(gpio_handle_t, gpio_config_t *);
 /*
  * GPIO pin values.
  */
-int		gpio_pin_get(gpio_handle_t, gpio_pin_t);
-int		gpio_pin_set(gpio_handle_t, gpio_pin_t, int);
+gpio_value_t	gpio_pin_get(gpio_handle_t, gpio_pin_t);
+int		gpio_pin_set(gpio_handle_t, gpio_pin_t, gpio_value_t);
 int		gpio_pin_toggle(gpio_handle_t, gpio_pin_t);
 /*
  * Helper functions to set pin states.
@@ -104,6 +102,19 @@ int		gpio_pin_pulldown(gpio_handle_t, gpio_pin_t);
 int		gpio_pin_invin(gpio_handle_t, gpio_pin_t);
 int		gpio_pin_invout(gpio_handle_t, gpio_pin_t);
 int		gpio_pin_pulsate(gpio_handle_t, gpio_pin_t);
+/*
+ * GPIO event reporting configuration
+ *
+ * Set the event reporting type, the default being GPIO_EVENT_REPORT_DETAIL,
+ * and fifo size of 2 * number of pins belonging to the gpioc device instance.
+ * FIFO size can only be changed when report_type is GPIO_EVENT_REPORT_DETAIL.
+ */
+int 		gpio_configure_events(gpio_handle_t, uint32_t, uint32_t);
+/*
+ * Retrieve the file descriptor associated with gpio_handle_t, which can
+ * be used for gpio interrupts.
+ */
+int		gpio_fileno(gpio_handle_t);
 
 __END_DECLS
 

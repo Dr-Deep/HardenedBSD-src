@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2001 Atsushi Onoe
  * Copyright (c) 2002-2009 Sam Leffler, Errno Consulting
@@ -27,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_inet.h"
 #include "opt_inet6.h"
 #include "opt_wlan.h"
@@ -48,6 +46,7 @@ __FBSDID("$FreeBSD$");
 #include <net/if_var.h>
 #include <net/if_llc.h>
 #include <net/if_media.h>
+#include <net/if_private.h>
 #include <net/if_vlan_var.h>
 
 #include <net80211/ieee80211_var.h>
@@ -215,7 +214,7 @@ ieee80211_vap_pkt_send_dest(struct ieee80211vap *vap, struct mbuf *m,
 	 * frames will always have sequence numbers allocated from the NON_QOS
 	 * TID.
 	 */
-	if (do_ampdu) {
+	if (!IEEE80211_CONF_AMPDU_OFFLOAD(ic) && do_ampdu) {
 		if ((m->m_flags & M_EAPOL) == 0 && (! mcast)) {
 			int tid = WME_AC_TO_TID(M_WME_GETAC(m));
 			struct ieee80211_tx_ampdu *tap = &ni->ni_tx_ampdu[tid];
@@ -604,8 +603,7 @@ ieee80211_validate_frame(struct mbuf *m,
 		return (EINVAL);
 
 	wh = mtod(m, struct ieee80211_frame *);
-	if ((wh->i_fc[0] & IEEE80211_FC0_VERSION_MASK) !=
-	    IEEE80211_FC0_VERSION_0)
+	if (!IEEE80211_IS_FC0_CHECK_VER(wh, IEEE80211_FC0_VERSION_0))
 		return (EINVAL);
 
 	type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
@@ -779,7 +777,7 @@ ieee80211_output(struct ifnet *ifp, struct mbuf *m,
 	if (error)
 		senderr(error);
 #endif
-	if (ifp->if_flags & IFF_MONITOR)
+	if (ieee80211_vap_ifp_check_is_monitor(vap))
 		senderr(ENETDOWN);
 	if (!IFNET_IS_UP_RUNNING(ifp))
 		senderr(ENETDOWN);
@@ -894,7 +892,6 @@ ieee80211_send_setup(
 	struct ieee80211vap *vap = ni->ni_vap;
 	struct ieee80211_tx_ampdu *tap;
 	struct ieee80211_frame *wh = mtod(m, struct ieee80211_frame *);
-	ieee80211_seq seqno;
 
 	IEEE80211_TX_LOCK_ASSERT(ni->ni_ic);
 
@@ -977,25 +974,8 @@ ieee80211_send_setup(
 
 		/* NB: zero out i_seq field (for s/w encryption etc) */
 		*(uint16_t *)&wh->i_seq[0] = 0;
-	} else {
-		if (IEEE80211_HAS_SEQ(type & IEEE80211_FC0_TYPE_MASK,
-				      type & IEEE80211_FC0_SUBTYPE_MASK))
-			/*
-			 * 802.11-2012 9.3.2.10 - QoS multicast frames
-			 * come out of a different seqno space.
-			 */
-			if (IEEE80211_IS_MULTICAST(wh->i_addr1)) {
-				seqno = ni->ni_txseqs[IEEE80211_NONQOS_TID]++;
-			} else {
-				seqno = ni->ni_txseqs[tid]++;
-			}
-		else
-			seqno = 0;
-
-		*(uint16_t *)&wh->i_seq[0] =
-		    htole16(seqno << IEEE80211_SEQ_SEQ_SHIFT);
-		M_SEQNO_SET(m, seqno);
-	}
+	} else if (!IEEE80211_CONF_SEQNO_OFFLOAD(ni->ni_ic))
+		ieee80211_output_seqno_assign(ni, tid, m);
 
 	if (IEEE80211_IS_MULTICAST(wh->i_addr1))
 		m->m_flags |= M_MCAST;
@@ -1102,10 +1082,16 @@ ieee80211_send_nulldata(struct ieee80211_node *ni)
 	uint8_t *frm;
 	int ret;
 
+	/* Don't send NULL frames if we've been configured not to do so. */
+	if ((ic->ic_flags_ext & IEEE80211_FEXT_NO_NULLDATA) != 0) {
+		ieee80211_node_decref(ni);
+		return (0);
+	}
+
 	if (vap->iv_state == IEEE80211_S_CAC) {
 		IEEE80211_NOTE(vap, IEEE80211_MSG_OUTPUT | IEEE80211_MSG_DOTH,
 		    ni, "block %s frame in CAC state", "null data");
-		ieee80211_unref_node(&ni);
+		ieee80211_node_decref(ni);
 		vap->iv_stats.is_tx_badstate++;
 		return EIO;		/* XXX */
 	}
@@ -1123,7 +1109,7 @@ ieee80211_send_nulldata(struct ieee80211_node *ni)
 	m = ieee80211_getmgtframe(&frm, ic->ic_headroom + hdrlen, 0);
 	if (m == NULL) {
 		/* XXX debug msg */
-		ieee80211_unref_node(&ni);
+		ieee80211_node_decref(ni);
 		vap->iv_stats.is_tx_nobuf++;
 		return ENOMEM;
 	}
@@ -1269,9 +1255,14 @@ ieee80211_classify(struct ieee80211_node *ni, struct mbuf *m)
 		v_wme_ac = TID_TO_WME_AC(EVL_PRIOFTAG(ni->ni_vlan));
 	}
 
+	if (eh == NULL)
+		goto no_eh;
+
 	/* XXX m_copydata may be too slow for fast path */
+	switch (ntohs(eh->ether_type)) {
 #ifdef INET
-	if (eh && eh->ether_type == htons(ETHERTYPE_IP)) {
+	case ETHERTYPE_IP:
+	{
 		uint8_t tos;
 		/*
 		 * IP frame, map the DSCP bits from the TOS field.
@@ -1281,10 +1272,12 @@ ieee80211_classify(struct ieee80211_node *ni, struct mbuf *m)
 		    offsetof(struct ip, ip_tos), sizeof(tos), &tos);
 		tos >>= 5;		/* NB: ECN + low 3 bits of DSCP */
 		d_wme_ac = TID_TO_WME_AC(tos);
-	} else {
-#endif /* INET */
+		break;
+	}
+#endif
 #ifdef INET6
-	if (eh && eh->ether_type == htons(ETHERTYPE_IPV6)) {
+	case ETHERTYPE_IPV6:
+	{
 		uint32_t flow;
 		uint8_t tos;
 		/*
@@ -1296,15 +1289,15 @@ ieee80211_classify(struct ieee80211_node *ni, struct mbuf *m)
 		tos = (uint8_t)(ntohl(flow) >> 20);
 		tos >>= 5;		/* NB: ECN + low 3 bits of DSCP */
 		d_wme_ac = TID_TO_WME_AC(tos);
-	} else {
-#endif /* INET6 */
+		break;
+	}
+#endif
+	default:
+no_eh:
 		d_wme_ac = WME_AC_BE;
-#ifdef INET6
+		break;
 	}
-#endif
-#ifdef INET
-	}
-#endif
+
 	/*
 	 * Use highest priority AC.
 	 */
@@ -1478,7 +1471,6 @@ ieee80211_encap(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	struct ieee80211_key *key;
 	struct llc *llc;
 	int hdrsize, hdrspace, datalen, addqos, txfrag, is4addr, is_mcast;
-	ieee80211_seq seqno;
 	int meshhdrsize, meshae;
 	uint8_t *qos;
 	int is_amsdu = 0;
@@ -1809,7 +1801,7 @@ ieee80211_encap(struct ieee80211vap *vap, struct ieee80211_node *ni,
 		else
 #endif
 			qos[1] = 0;
-		wh->i_fc[0] |= IEEE80211_FC0_SUBTYPE_QOS;
+		wh->i_fc[0] |= IEEE80211_FC0_SUBTYPE_QOS_DATA;
 
 		/*
 		 * If this is an A-MSDU then ensure we set the
@@ -1824,22 +1816,9 @@ ieee80211_encap(struct ieee80211vap *vap, struct ieee80211_node *ni,
 		 * and we don't need the TX lock held.
 		 */
 		if ((m->m_flags & M_AMPDU_MPDU) == 0) {
-			/*
-			 * 802.11-2012 9.3.2.10 -
-			 *
-			 * If this is a multicast frame then we need
-			 * to ensure that the sequence number comes from
-			 * a separate seqno space and not the TID space.
-			 *
-			 * Otherwise multicast frames may actually cause
-			 * holes in the TX blockack window space and
-			 * upset various things.
-			 */
-			if (IEEE80211_IS_MULTICAST(wh->i_addr1))
-				seqno = ni->ni_txseqs[IEEE80211_NONQOS_TID]++;
-			else
-				seqno = ni->ni_txseqs[tid]++;
-
+			if (!IEEE80211_CONF_SEQNO_OFFLOAD(ic))
+				ieee80211_output_seqno_assign(ni, tid, m);
+		} else {
 			/*
 			 * NB: don't assign a sequence # to potential
 			 * aggregates; we expect this happens at the
@@ -1852,30 +1831,20 @@ ieee80211_encap(struct ieee80211vap *vap, struct ieee80211_node *ni,
 			 * capability; this may also change when we pull
 			 * aggregation up into net80211
 			 */
-			*(uint16_t *)wh->i_seq =
-			    htole16(seqno << IEEE80211_SEQ_SEQ_SHIFT);
-			M_SEQNO_SET(m, seqno);
-		} else {
 			/* NB: zero out i_seq field (for s/w encryption etc) */
 			*(uint16_t *)wh->i_seq = 0;
 		}
 	} else {
-		/*
-		 * XXX TODO TX lock is needed for atomic updates of sequence
-		 * numbers.  If the driver does it, then don't do it here;
-		 * and we don't need the TX lock held.
-		 */
-		seqno = ni->ni_txseqs[IEEE80211_NONQOS_TID]++;
-		*(uint16_t *)wh->i_seq =
-		    htole16(seqno << IEEE80211_SEQ_SEQ_SHIFT);
-		M_SEQNO_SET(m, seqno);
-
+		if (!IEEE80211_CONF_SEQNO_OFFLOAD(ic))
+			ieee80211_output_seqno_assign(ni, IEEE80211_NONQOS_TID,
+			    m);
 		/*
 		 * XXX TODO: we shouldn't allow EAPOL, etc that would
 		 * be forced to be non-QoS traffic to be A-MSDU encapsulated.
 		 */
 		if (is_amsdu)
-			printf("%s: XXX ERROR: is_amsdu set; not QoS!\n",
+			net80211_vap_printf(vap,
+			    "%s: XXX ERROR: is_amsdu set; not QoS!\n",
 			    __func__);
 	}
 
@@ -1884,6 +1853,10 @@ ieee80211_encap(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	 *
 	 * If the hardware does fragmentation offload, then don't bother
 	 * doing it here.
+	 *
+	 * Don't send AMPDU/FF/AMSDU through fragmentation.
+	 *
+	 * 802.11-2016 10.2.7 (Fragmentation/defragmentation overview)
 	 */
 	if (IEEE80211_CONF_FRAG_OFFLOAD(ic))
 		txfrag = 0;
@@ -1936,6 +1909,15 @@ bad:
 #undef MC01
 }
 
+/**
+ * @brief Free an 802.11 frame mbuf.
+ *
+ * Note that since a "frame" may consist of an mbuf packet
+ * list containing the 802.11 fragments that make up said
+ * frame, it will free everything in the mbuf packet list.
+ *
+ * @param m     mbuf packet list to free
+ */
 void
 ieee80211_free_mbuf(struct mbuf *m)
 {
@@ -1951,13 +1933,40 @@ ieee80211_free_mbuf(struct mbuf *m)
 	} while ((m = next) != NULL);
 }
 
-/*
- * Fragment the frame according to the specified mtu.
+/**
+ * @brief Fragment the frame according to the specified mtu.
+ *
+ * This implements the fragmentation part of 802.11-2016 10.2.7
+ * (Fragmentation/defragmentation overview.)
+ *
  * The size of the 802.11 header (w/o padding) is provided
  * so we don't need to recalculate it.  We create a new
  * mbuf for each fragment and chain it through m_nextpkt;
  * we might be able to optimize this by reusing the original
  * packet's mbufs but that is significantly more complicated.
+ *
+ * A node reference is NOT acquired for each fragment in
+ * the list - the caller is assumed to have taken a node
+ * reference for the whole list.  The fragment mbufs do not
+ * have a node pointer.
+ *
+ * Fragments will have the sequence number and fragment numbers
+ * assigned.  However, Fragments will NOT have a sequence number
+ * assigned via M_SEQNO_SET.
+ *
+ * This must be called after assigning sequence numbers; it
+ * modifies the i_seq field in the 802.11 header to include
+ * the fragment number.
+ *
+ * @param vap		ieee80211vap interface
+ * @param m0		pointer to mbuf list to fragment
+ * @param hdrsize	header size to reserver
+ * @param ciphdrsize	crypto cipher header size to reserve
+ * @param mtu		maximum fragment size
+ * @retval 1 if successful, with the mbuf pointed at by m0
+ *   turned into an mbuf list of fragments (with the original
+ *   mbuf being truncated.)
+ * @retval 0 if failure, the mbuf needs to be freed by the caller
  */
 static int
 ieee80211_fragment(struct ieee80211vap *vap, struct mbuf *m0,
@@ -2450,7 +2459,7 @@ ieee80211_probereq_ie_len(struct ieee80211vap *vap, struct ieee80211com *ic)
 	                sizeof(struct ieee80211_ie_htcap) : 0)
 #ifdef notyet
 	       + sizeof(struct ieee80211_ie_htinfo)	/* XXX not needed? */
-	       + sizeof(struct ieee80211_ie_vhtcap)
+	       + 2 + sizeof(struct ieee80211_vht_cap)
 #endif
 	       + ((vap->iv_flags & IEEE80211_F_WPA1 && vap->iv_wpa_ie != NULL) ?
 	           vap->iv_wpa_ie[1] : 0)
@@ -2518,12 +2527,12 @@ ieee80211_probereq_ie(struct ieee80211vap *vap, struct ieee80211com *ic,
 	 * VHT channel.
 	 */
 #ifdef notyet
-	if (vap->iv_flags_vht & IEEE80211_FVHT_VHT) {
+	if (vap->iv_vht_flags & IEEE80211_FVHT_VHT) {
 		struct ieee80211_channel *c;
 
 		c = ieee80211_ht_adjust_channel(ic, ic->ic_curchan,
 		    vap->iv_flags_ht);
-		c = ieee80211_vht_adjust_channel(ic, c, vap->iv_flags_vht);
+		c = ieee80211_vht_adjust_channel(ic, c, vap->iv_vht_flags);
 		frm = ieee80211_add_vhtcap_ch(frm, vap, c);
 	}
 #endif
@@ -2644,6 +2653,12 @@ ieee80211_send_probereq(struct ieee80211_node *ni,
 
 /*
  * Calculate capability information for mgt frames.
+ *
+ * This fills out the 16 bit capability field in various management
+ * frames for non-DMG STAs.  DMG STAs are not supported.
+ *
+ * See 802.11-2020 9.4.1.4 (Capability Information Field) for the
+ * field definitions.
  */
 uint16_t
 ieee80211_getcapinfo(struct ieee80211vap *vap, struct ieee80211_channel *chan)
@@ -2815,7 +2830,7 @@ ieee80211_send_mgmt(struct ieee80211_node *ni, int type, int arg)
 		       + 2 + 26
 		       + sizeof(struct ieee80211_wme_info)
 		       + sizeof(struct ieee80211_ie_htcap)
-		       + sizeof(struct ieee80211_ie_vhtcap)
+		       + 2 + sizeof(struct ieee80211_vht_cap)
 		       + 4 + sizeof(struct ieee80211_ie_htcap)
 #ifdef IEEE80211_SUPPORT_SUPERG
 		       + sizeof(struct ieee80211_ath_ie)
@@ -2881,7 +2896,7 @@ ieee80211_send_mgmt(struct ieee80211_node *ni, int type, int arg)
 			frm = ieee80211_add_htcap(frm, ni);
 		}
 
-		if ((vap->iv_flags_vht & IEEE80211_FVHT_VHT) &&
+		if ((vap->iv_vht_flags & IEEE80211_FVHT_VHT) &&
 		    IEEE80211_IS_CHAN_VHT(ni->ni_chan) &&
 		    ni->ni_ies.vhtcap_ie != NULL &&
 		    ni->ni_ies.vhtcap_ie[0] == IEEE80211_ELEMID_VHT_CAP) {
@@ -2889,7 +2904,7 @@ ieee80211_send_mgmt(struct ieee80211_node *ni, int type, int arg)
 		}
 
 		frm = ieee80211_add_wpa(frm, vap);
-		if ((ic->ic_flags & IEEE80211_F_WME) &&
+		if ((vap->iv_flags & IEEE80211_F_WME) &&
 		    ni->ni_ies.wme_ie != NULL)
 			frm = ieee80211_add_wme_info(frm, &ic->ic_wme, ni);
 
@@ -2948,8 +2963,8 @@ ieee80211_send_mgmt(struct ieee80211_node *ni, int type, int arg)
 		       + 2 + (IEEE80211_RATE_MAXSIZE - IEEE80211_RATE_SIZE)
 		       + sizeof(struct ieee80211_ie_htcap) + 4
 		       + sizeof(struct ieee80211_ie_htinfo) + 4
-		       + sizeof(struct ieee80211_ie_vhtcap)
-		       + sizeof(struct ieee80211_ie_vht_operation)
+		       + 2 + sizeof(struct ieee80211_vht_cap)
+		       + 2 + sizeof(struct ieee80211_vht_operation)
 		       + sizeof(struct ieee80211_wme_param)
 #ifdef IEEE80211_SUPPORT_SUPERG
 		       + sizeof(struct ieee80211_ath_ie)
@@ -3107,8 +3122,8 @@ ieee80211_alloc_proberesp(struct ieee80211_node *bss, int legacy)
 	       + sizeof(struct ieee80211_wme_param)
 	       + 4 + sizeof(struct ieee80211_ie_htcap)
 	       + 4 + sizeof(struct ieee80211_ie_htinfo)
-	       +  sizeof(struct ieee80211_ie_vhtcap)
-	       +  sizeof(struct ieee80211_ie_vht_operation)
+	       + 2 + sizeof(struct ieee80211_vht_cap)
+	       + 2 + sizeof(struct ieee80211_vht_operation)
 #ifdef IEEE80211_SUPPORT_SUPERG
 	       + sizeof(struct ieee80211_ath_ie)
 #endif
@@ -3654,7 +3669,6 @@ ieee80211_beacon_alloc(struct ieee80211_node *ni)
 {
 	struct ieee80211vap *vap = ni->ni_vap;
 	struct ieee80211com *ic = ni->ni_ic;
-	struct ifnet *ifp = vap->iv_ifp;
 	struct ieee80211_frame *wh;
 	struct mbuf *m;
 	int pktlen;
@@ -3722,8 +3736,8 @@ ieee80211_beacon_alloc(struct ieee80211_node *ni)
 		 /* XXX conditional? */
 		 + 4+2*sizeof(struct ieee80211_ie_htcap)/* HT caps */
 		 + 4+2*sizeof(struct ieee80211_ie_htinfo)/* HT info */
-		 + sizeof(struct ieee80211_ie_vhtcap)/* VHT caps */
-		 + sizeof(struct ieee80211_ie_vht_operation)/* VHT info */
+		 + 2 + sizeof(struct ieee80211_vht_cap)/* VHT caps */
+		 + 2 + sizeof(struct ieee80211_vht_operation)/* VHT info */
 		 + (vap->iv_caps & IEEE80211_C_WME ?	/* WME */
 			sizeof(struct ieee80211_wme_param) : 0)
 #ifdef IEEE80211_SUPPORT_SUPERG
@@ -3756,7 +3770,8 @@ ieee80211_beacon_alloc(struct ieee80211_node *ni)
 	    IEEE80211_FC0_SUBTYPE_BEACON;
 	wh->i_fc[1] = IEEE80211_FC1_DIR_NODS;
 	*(uint16_t *)wh->i_dur = 0;
-	IEEE80211_ADDR_COPY(wh->i_addr1, ifp->if_broadcastaddr);
+	IEEE80211_ADDR_COPY(wh->i_addr1,
+	    ieee80211_vap_get_broadcast_address(vap));
 	IEEE80211_ADDR_COPY(wh->i_addr2, vap->iv_myaddr);
 	IEEE80211_ADDR_COPY(wh->i_addr3, ni->ni_bssid);
 	*(uint16_t *)wh->i_seq = 0;
@@ -3775,8 +3790,6 @@ ieee80211_beacon_update(struct ieee80211_node *ni, struct mbuf *m, int mcast)
 	struct ieee80211com *ic = ni->ni_ic;
 	int len_changed = 0;
 	uint16_t capinfo;
-	struct ieee80211_frame *wh;
-	ieee80211_seq seqno;
 
 	IEEE80211_LOCK(ic);
 	/*
@@ -3844,8 +3857,6 @@ ieee80211_beacon_update(struct ieee80211_node *ni, struct mbuf *m, int mcast)
 		return 1;		/* just assume length changed */
 	}
 
-	wh = mtod(m, struct ieee80211_frame *);
-
 	/*
 	 * XXX TODO Strictly speaking this should be incremented with the TX
 	 * lock held so as to serialise access to the non-qos TID sequence
@@ -3854,10 +3865,9 @@ ieee80211_beacon_update(struct ieee80211_node *ni, struct mbuf *m, int mcast)
 	 * If the driver identifies it does its own TX seqno management then
 	 * we can skip this (and still not do the TX seqno.)
 	 */
-	seqno = ni->ni_txseqs[IEEE80211_NONQOS_TID]++;
-	*(uint16_t *)&wh->i_seq[0] =
-		htole16(seqno << IEEE80211_SEQ_SEQ_SHIFT);
-	M_SEQNO_SET(m, seqno);
+
+	/* TODO: IEEE80211_CONF_SEQNO_OFFLOAD() */
+	ieee80211_output_beacon_seqno_assign(ni, m);
 
 	/* XXX faster to recalculate entirely or just changes? */
 	capinfo = ieee80211_getcapinfo(vap, ni->ni_chan);
@@ -4188,4 +4198,109 @@ ieee80211_tx_complete(struct ieee80211_node *ni, struct mbuf *m, int status)
 		ieee80211_free_node(ni);
 	}
 	m_freem(m);
+}
+
+/**
+ * @brief Assign a sequence number to the given frame.
+ *
+ * Check the frame type and TID and assign a suitable sequence number
+ * from the correct sequence number space.
+ *
+ * This implements the components of 802.11-2020 10.3.2.14.2
+ * (Transmitter Requirements) that net80211 currently supports.
+ *
+ * It assumes the mbuf has been encapsulated, and has the TID assigned
+ * if it is a QoS frame.
+ *
+ * Note this also clears any existing fragment ID in the header, so it
+ * must be called first before assigning fragment IDs.
+ *
+ * @param ni	ieee80211_node this frame will be transmitted to
+ * @param arg_tid	A temporary check, existing callers may set
+ *    this to a TID variable they were using, and this routine
+ *    will verify it against what's in the frame and complain if
+ *    they don't match.  For new callers, use -1.
+ * @param m	mbuf to populate the sequence number into
+ */
+void
+ieee80211_output_seqno_assign(struct ieee80211_node *ni, int arg_tid,
+    struct mbuf *m)
+{
+	struct ieee80211_frame *wh;
+	ieee80211_seq seqno;
+	uint8_t tid, type, subtype;
+
+	wh = mtod(m, struct ieee80211_frame *);
+	tid = ieee80211_gettid(wh);
+	type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
+	subtype = wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK;
+
+	/*
+	 * Find places where the passed in TID doesn't match gettid()
+	 * and log.  I'll have to then go and chase those down.
+	 *
+	 * If the caller knows its already setup the TID in the frame
+	 * correctly then it can pass in -1 and this check will be
+	 * skipped.
+	 */
+	if (arg_tid != -1 && tid != arg_tid)
+		ic_printf(ni->ni_vap->iv_ic,
+		    "%s: called; TID mismatch; tid=%u, arg_tid=%d\n",
+		    __func__, tid, arg_tid);
+
+
+	/* 802.11-2020 10.3.2.14.2 (Transmitter Requirements) sections */
+
+	/* SNS7 - unicast PV1 management frame */
+
+	/* SNS6 - unicast PV1 data frame */
+
+	/* SNS5 - QoS NULL frames */
+	if (IEEE80211_QOS_HAS_SEQ(wh) && IEEE80211_IS_QOS_NULL(wh))
+		seqno = ieee80211_tx_seqno_fetch_incr(ni, IEEE80211_NONQOS_TID);
+
+	/* SNS4 - QMF STA transmitting a QMF */
+
+	/* SNS3 - QoS STA; Time Priority Management frame */
+
+	/* SNS2 - unicast QoS STA, data frame, excluding SNS5 */
+	else if (IEEE80211_QOS_HAS_SEQ(wh) &&
+	    !IEEE80211_IS_MULTICAST(wh->i_addr1))
+		seqno = ieee80211_tx_seqno_fetch_incr(ni, tid);
+
+	/* SNS1 - Baseline (everything else) */
+	else if (IEEE80211_HAS_SEQ(type, subtype))
+		seqno = ieee80211_tx_seqno_fetch_incr(ni, IEEE80211_NONQOS_TID);
+	else
+		seqno = 0;
+
+	/*
+	 * Assign the sequence number, clearing out any existing
+	 * sequence and fragment numbers.
+	 */
+	*(uint16_t *)&wh->i_seq[0] =
+	    htole16(seqno << IEEE80211_SEQ_SEQ_SHIFT);
+	M_SEQNO_SET(m, seqno);
+}
+
+/**
+ * @brief Assign a sequence number to the given beacon frame.
+ *
+ * TODO: update to 802.11-2020 10.3.2.14.2 (Transmitter Requirements)
+ *
+ * @param ni	ieee80211_node this frame will be transmitted to
+ * @param m		mbuf to populate the sequence number into
+ */
+void
+ieee80211_output_beacon_seqno_assign(struct ieee80211_node *ni, struct mbuf *m)
+{
+	struct ieee80211_frame *wh;
+	ieee80211_seq seqno;
+
+	wh = mtod(m, struct ieee80211_frame *);
+
+	seqno = ieee80211_tx_seqno_fetch_incr(ni, IEEE80211_NONQOS_TID);
+	*(uint16_t *)&wh->i_seq[0] =
+		htole16(seqno << IEEE80211_SEQ_SEQ_SHIFT);
+	M_SEQNO_SET(m, seqno);
 }

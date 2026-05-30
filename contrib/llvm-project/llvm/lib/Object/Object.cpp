@@ -120,6 +120,8 @@ LLVMBinaryType LLVMBinaryGetType(LLVMBinaryRef BR) {
         return LLVMBinaryTypeMachO64L;
       case ID_MachO64B:
         return LLVMBinaryTypeMachO64B;
+      case ID_Offload:
+        return LLVMBinaryTypeOffload;
       case ID_Wasm:
         return LLVMBinaryTypeWasm;
       case ID_StartObjects:
@@ -180,7 +182,6 @@ LLVMObjectFileRef LLVMCreateObjectFile(LLVMMemoryBufferRef MemBuf) {
   std::unique_ptr<MemoryBuffer> Buf(unwrap(MemBuf));
   Expected<std::unique_ptr<ObjectFile>> ObjOrErr(
       ObjectFile::createObjectFile(Buf->getMemBufferRef()));
-  std::unique_ptr<ObjectFile> Obj;
   if (!ObjOrErr) {
     // TODO: Actually report errors helpfully.
     consumeError(ObjOrErr.takeError());

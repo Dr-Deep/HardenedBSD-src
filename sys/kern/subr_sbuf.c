@@ -1,8 +1,8 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2000-2008 Poul-Henning Kamp
- * Copyright (c) 2000-2008 Dag-Erling Coïdan Smørgrav
+ * Copyright (c) 2000-2008 Dag-Erling Smørgrav
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -28,9 +28,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 
 #ifdef _KERNEL
@@ -39,9 +36,9 @@ __FBSDID("$FreeBSD$");
 #include <sys/kernel.h>
 #include <sys/limits.h>
 #include <sys/malloc.h>
+#include <sys/stdarg.h>
 #include <sys/systm.h>
 #include <sys/uio.h>
-#include <machine/stdarg.h>
 #else /* _KERNEL */
 #include <ctype.h>
 #include <errno.h>
@@ -127,8 +124,8 @@ _assert_sbuf_state(const char *fun, struct sbuf *s, int state)
 {
 
 	KASSERT((s->s_flags & SBUF_FINISHED) == state,
-	    ("%s called with %sfinished or corrupt sbuf", fun,
-	    (state ? "un" : "")));
+	    ("%s called with %sfinished or corrupt sbuf %p { s_flags %#010x }, "
+		"state %#010x", fun, (state ? "un" : ""), s, s->s_flags, state));
 }
 
 #define	assert_sbuf_integrity(s) _assert_sbuf_integrity(__func__, (s))

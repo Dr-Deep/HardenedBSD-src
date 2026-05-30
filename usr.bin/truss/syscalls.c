@@ -31,9 +31,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * This file has routines used to print out system calls and their
  * arguments.
@@ -61,6 +58,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/wait.h>
 #include <netinet/in.h>
 #include <netinet/sctp.h>
+#include <netlink/netlink.h>
 #include <arpa/inet.h>
 
 #include <assert.h>
@@ -318,6 +316,9 @@ static const struct syscall_decode decoded_syscalls[] = {
 		    { Ptr | OUT, 3 }, { Ptr | OUT, 4 } } },
 	{ .name = "gettimeofday", .ret_type = 1, .nargs = 2,
 	  .args = { { Timeval | OUT, 0 }, { Ptr, 1 } } },
+	{ .name = "inotify_add_watch_at", .ret_type = 1, .nargs = 4,
+	  .args = { { Int, 0 }, { Atfd, 1 }, { Name | IN, 2 },
+	            { Inotifyflags, 3 } } },
 	{ .name = "ioctl", .ret_type = 1, .nargs = 3,
 	  .args = { { Int, 0 }, { Ioctl, 1 }, { Ptr, 2 } } },
 	{ .name = "kevent", .ret_type = 1, .nargs = 6,
@@ -403,7 +404,7 @@ static const struct syscall_decode decoded_syscalls[] = {
 	{ .name = "nanosleep", .ret_type = 1, .nargs = 1,
 	  .args = { { Timespec, 0 } } },
 	{ .name = "nmount", .ret_type = 1, .nargs = 3,
-	  .args = { { Ptr, 0 }, { UInt, 1 }, { Mountflags, 2 } } },
+	  .args = { { Iovec | IN, 0 }, { UInt, 1 }, { Mountflags, 2 } } },
 	{ .name = "open", .ret_type = 1, .nargs = 3,
 	  .args = { { Name | IN, 0 }, { Open, 1 }, { Octal, 2 } } },
 	{ .name = "openat", .ret_type = 1, .nargs = 4,
@@ -428,12 +429,18 @@ static const struct syscall_decode decoded_syscalls[] = {
 	{ .name = "pread", .ret_type = 1, .nargs = 4,
 	  .args = { { Int, 0 }, { BinString | OUT, 1 }, { Sizet, 2 },
 		    { QuadHex, 3 } } },
+	{ .name = "preadv", .ret_type = 1, .nargs = 4,
+	  .args = { { Int, 0 }, { Iovec | OUT, 1 }, { Int, 2 },
+		    { QuadHex, 3 } } },
 	{ .name = "procctl", .ret_type = 1, .nargs = 4,
 	  .args = { { Idtype, 0 }, { Quad, 1 }, { Procctl, 2 }, { Ptr, 3 } } },
 	{ .name = "ptrace", .ret_type = 1, .nargs = 4,
 	  .args = { { Ptraceop, 0 }, { Int, 1 }, { Ptr, 2 }, { Int, 3 } } },
 	{ .name = "pwrite", .ret_type = 1, .nargs = 4,
 	  .args = { { Int, 0 }, { BinString | IN, 1 }, { Sizet, 2 },
+		    { QuadHex, 3 } } },
+	{ .name = "pwritev", .ret_type = 1, .nargs = 4,
+	  .args = { { Int, 0 }, { Iovec | IN, 1 }, { Int, 2 },
 		    { QuadHex, 3 } } },
 	{ .name = "quotactl", .ret_type = 1, .nargs = 4,
 	  .args = { { Name, 0 }, { Quotactlcmd, 1 }, { Int, 2 }, { Ptr, 3 } } },
@@ -572,11 +579,6 @@ static const struct syscall_decode decoded_syscalls[] = {
 	  .args = { { Long, 0 }, { Name, 1 } } },
 	{ .name = "truncate", .ret_type = 1, .nargs = 2,
 	  .args = { { Name | IN, 0 }, { QuadHex | IN, 1 } } },
-#if 0
-	/* Does not exist */
-	{ .name = "umount", .ret_type = 1, .nargs = 2,
-	  .args = { { Name, 0 }, { Int, 2 } } },
-#endif
 	{ .name = "unlink", .ret_type = 1, .nargs = 1,
 	  .args = { { Name, 0 } } },
 	{ .name = "unlinkat", .ret_type = 1, .nargs = 3,
@@ -616,6 +618,8 @@ static const struct syscall_decode decoded_syscalls[] = {
 	  .args = { { Name | IN, 0 }, { Int, 1 } } },
 	{ .name = "linux_newfstat", .ret_type = 1, .nargs = 2,
 	  .args = { { Int, 0 }, { Ptr | OUT, 1 } } },
+	{ .name = "linux_newlstat", .ret_type = 1, .nargs = 2,
+	  .args = { { Name | IN, 0 }, { Ptr | OUT, 1 } } },
 	{ .name = "linux_newstat", .ret_type = 1, .nargs = 2,
 	  .args = { { Name | IN, 0 }, { Ptr | OUT, 1 } } },
 	{ .name = "linux_open", .ret_type = 1, .nargs = 3,
@@ -1557,17 +1561,72 @@ print_sysctl(FILE *fp, int *oid, size_t len)
 }
 
 /*
- * Convert a 32-bit user-space pointer to psaddr_t. Currently, this
- * sign-extends on MIPS and zero-extends on all other architectures.
+ * Convert a 32-bit user-space pointer to psaddr_t by zero-extending.
  */
 static psaddr_t
 user_ptr32_to_psaddr(int32_t user_pointer)
 {
-#if defined(__mips__)
-	return ((psaddr_t)(intptr_t)user_pointer);
-#else
 	return ((psaddr_t)(uintptr_t)user_pointer);
-#endif
+}
+
+#define NETLINK_MAX_DECODE 4096
+
+/*
+ * Reads the first IOV and attempts to print it as Netlink using libsysdecode.
+ * Returns true if successful, false if fallback to standard print is needed.
+ */
+static bool
+print_netlink(FILE *fp, struct trussinfo *trussinfo, struct msghdr *msg)
+{
+	struct sockaddr_storage ss;
+	struct iovec iov;
+	struct ptrace_io_desc piod;
+	char *buf;
+	pid_t pid = trussinfo->curthread->proc->pid;
+	bool success = false;
+
+	/* Only decode AF_NETLINK sockets. */
+	if (msg->msg_name == NULL || msg->msg_namelen < offsetof(struct sockaddr, sa_data)
+		|| msg->msg_iovlen == 0 || msg->msg_iov == NULL)
+		return (false);
+
+	if (get_struct(pid, (uintptr_t)msg->msg_name, &ss,
+	    MIN(sizeof(ss), msg->msg_namelen)) == -1)
+		return (false);
+
+	if (ss.ss_family != AF_NETLINK)
+		return (false);
+
+	if (get_struct(pid, (uintptr_t)msg->msg_iov, &iov, sizeof(iov)) == -1)
+		return (false);
+
+	/* Cap read size to avoid unbounded allocations. */
+	size_t read_len = MIN(iov.iov_len, NETLINK_MAX_DECODE);
+	if (read_len == 0)
+		return (false);
+
+	buf = malloc(read_len);
+	if (buf == NULL)
+		return (false);
+
+	/* Snapshot User Memory using PTRACE. */
+	piod.piod_op = PIOD_READ_D;
+	piod.piod_offs = iov.iov_base;
+	piod.piod_addr = buf;
+	piod.piod_len = read_len;
+
+	if (ptrace(PT_IO, pid, (caddr_t)&piod, 0) == -1) {
+		free(buf);
+		return (false);
+	}
+
+	/* Delegate Decoding to libsysdecode. */
+	if (sysdecode_netlink(fp, buf, read_len)) {
+		success = true;
+	}
+	free(buf);
+
+	return (success);
 }
 
 /*
@@ -2451,6 +2510,9 @@ print_arg(struct syscall_arg *sc, syscallarg_t *args, syscallarg_t *retval,
 		print_integer_arg(sysdecode_getfsstat_mode, fp,
 		    args[sc->offset]);
 		break;
+	case Inotifyflags:
+		print_mask_arg(sysdecode_inotifyflags, fp, args[sc->offset]);
+		break;
 	case Itimerwhich:
 		print_integer_arg(sysdecode_itimer, fp, args[sc->offset]);
 		break;
@@ -2705,7 +2767,11 @@ print_arg(struct syscall_arg *sc, syscallarg_t *args, syscallarg_t *retval,
 		fputs("{", fp);
 		print_sockaddr(fp, trussinfo, (uintptr_t)msghdr.msg_name, msghdr.msg_namelen);
 		fprintf(fp, ",%d,", msghdr.msg_namelen);
-		print_iovec(fp, trussinfo, (uintptr_t)msghdr.msg_iov, msghdr.msg_iovlen);
+		/* Attempt Netlink decode; fallback to standard iovec if it fails. */
+		if (!print_netlink(fp, trussinfo, &msghdr)) {
+			print_iovec(fp, trussinfo, (uintptr_t)msghdr.msg_iov,
+			    msghdr.msg_iovlen);
+		}
 		fprintf(fp, ",%d,", msghdr.msg_iovlen);
 		print_cmsgs(fp, pid, sc->type & OUT, &msghdr);
 		fprintf(fp, ",%u,", msghdr.msg_controllen);

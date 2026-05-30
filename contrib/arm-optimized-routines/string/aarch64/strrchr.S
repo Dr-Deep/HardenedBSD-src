@@ -1,8 +1,8 @@
 /*
  * strrchr - find last position of a character in a string.
  *
- * Copyright (c) 2014-2020, Arm Limited.
- * SPDX-License-Identifier: MIT
+ * Copyright (c) 2014-2022, Arm Limited.
+ * SPDX-License-Identifier: MIT OR Apache-2.0 WITH LLVM-exception
  */
 
 /* Assumptions:
@@ -11,7 +11,7 @@
  * Neon Available.
  */
 
-#include "../asmdefs.h"
+#include "asmdefs.h"
 
 /* Arguments and results.  */
 #define srcin		x0
@@ -55,7 +55,6 @@
    identify exactly which byte is causing the termination, and why.  */
 
 ENTRY (__strrchr_aarch64)
-	PTR_ARG (0)
 	/* Magic constant 0x40100401 to allow us to identify which lane
 	   matches the requested byte.  Magic constant 0x80200802 used
 	   similarly for NUL termination.  */

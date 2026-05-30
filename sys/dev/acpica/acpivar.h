@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _ACPIVAR_H_
@@ -42,6 +40,7 @@
 #include <sys/ktr.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
+#include <sys/power.h>
 #include <sys/selinfo.h>
 #include <sys/sx.h>
 #include <sys/sysctl.h>
@@ -55,21 +54,20 @@ struct acpi_softc {
     struct cdev		*acpi_dev_t;
 
     int			acpi_enabled;
-    int			acpi_sstate;
+    enum power_stype	acpi_stype;
     int			acpi_sleep_disabled;
-    int			acpi_resources_reserved;
 
     struct sysctl_ctx_list acpi_sysctl_ctx;
     struct sysctl_oid	*acpi_sysctl_tree;
-    int			acpi_power_button_sx;
-    int			acpi_sleep_button_sx;
-    int			acpi_lid_switch_sx;
+    enum power_stype	acpi_power_button_stype;
+    enum power_stype	acpi_sleep_button_stype;
+    enum power_stype	acpi_lid_switch_stype;
 
     int			acpi_standby_sx;
-    int			acpi_suspend_sx;
+    bool		acpi_s4bios;
+    bool		acpi_s4bios_supported;
 
     int			acpi_sleep_delay;
-    int			acpi_s4bios;
     int			acpi_do_disable;
     int			acpi_verbose;
     int			acpi_handle_reboot;
@@ -77,10 +75,13 @@ struct acpi_softc {
     vm_offset_t		acpi_wakeaddr;
     vm_paddr_t		acpi_wakephys;
 
-    int			acpi_next_sstate;	/* Next suspend Sx state. */
+    enum power_stype	acpi_next_stype;	/* Next suspend sleep type. */
     struct apm_clone_data *acpi_clone;		/* Pseudo-dev for devd(8). */
     STAILQ_HEAD(,apm_clone_data) apm_cdevs;	/* All apm/apmctl/acpi cdevs. */
     struct callout	susp_force_to;		/* Force suspend if no acks. */
+
+    /* System Resources */
+    struct resource_list sysres_rl;
 };
 
 struct acpi_device {
@@ -89,6 +90,7 @@ struct acpi_device {
     void			*ad_private;
     int				ad_flags;
     int				ad_cls_class;
+    int				ad_domain;
 
     ACPI_BUFFER			dsd;	/* Device Specific Data */
     const ACPI_OBJECT	*dsd_pkg;
@@ -190,6 +192,7 @@ extern struct mtx			acpi_mutex;
 #define	ACPI_THERMAL		0x01000000
 #define	ACPI_TIMER		0x02000000
 #define	ACPI_OEM		0x04000000
+#define	ACPI_SPMC		0x08000000
 
 /*
  * Constants for different interrupt models used with acpi_SetIntrModel().
@@ -227,12 +230,33 @@ extern struct mtx			acpi_mutex;
  * ACPI_Q_MADT_IRQ0: Specifies that ISA IRQ 0 is wired up to pin 0 of the
  *	first APIC and that the MADT should force that by ignoring the PC-AT
  *	compatible flag and ignoring overrides that redirect IRQ 0 to pin 2.
+ * ACPI_Q_AEI_NOPULL: Specifies that _AEI objects incorrectly designate pins
+ *	as "PullUp" and they should be treated as "NoPull" instead.
+ * ACPI_Q_CLEAR_PME_ON_DETACH: Specifies that PCIM_PSTAT_(PME & ~PMEENABLE)
+ *	should be written to the power status register as part of ACPI Eject.
+ * ACPI_Q_DELAY_BEFORE_EJECT_RESCAN: Specifies that we need a short (10ms)
+ *	delay after _EJ0 returns before rescanning the PCI bus.
  */
 extern int	acpi_quirks;
 #define ACPI_Q_OK		0
 #define ACPI_Q_BROKEN		(1 << 0)
 #define ACPI_Q_TIMER		(1 << 1)
 #define ACPI_Q_MADT_IRQ0	(1 << 2)
+#define ACPI_Q_AEI_NOPULL	(1 << 3)
+#define ACPI_Q_CLEAR_PME_ON_DETACH	(1 << 4)
+#define ACPI_Q_DELAY_BEFORE_EJECT_RESCAN	(1 << 5)
+
+#if defined(__amd64__) || defined(__i386__)
+/*
+ * Certain Intel BIOSes have buggy AML that specify an IRQ that is
+ * edge-sensitive and active-lo.  Normally, edge-sensitive IRQs should
+ * be active-hi.  If this value is non-zero, edge-sensitive ISA IRQs
+ * are forced to be active-hi instead.  At least some AMD systems use
+ * active-lo edge-sensitive ISA IRQs, so this setting is only enabled
+ * by default on systems with Intel CPUs.
+ */
+extern int	acpi_override_isa_irq_polarity;
+#endif
 
 /*
  * Plug and play information for device matching.  Matching table format
@@ -253,35 +277,22 @@ extern int	acpi_quirks;
  * interface compatibility with ISA drivers which can also
  * attach to ACPI.
  */
-#define ACPI_IVAR_HANDLE	0x100
-#define ACPI_IVAR_UNUSED	0x101	/* Unused/reserved. */
-#define ACPI_IVAR_PRIVATE	0x102
-#define ACPI_IVAR_FLAGS		0x103
+enum {
+	ACPI_IVAR_PRIVATE = 20,
+	ACPI_IVAR_DOMAIN,
+	ACPI_IVAR_HANDLE = BUS_IVARS_ACPI,
+	ACPI_IVAR_FLAGS
+};
 
 /*
- * Accessor functions for our ivars.  Default value for BUS_READ_IVAR is
- * (type) 0.  The <sys/bus.h> accessor functions don't check return values.
+ * ad_domain NUMA domain special value.
  */
-#define __ACPI_BUS_ACCESSOR(varp, var, ivarp, ivar, type)	\
-								\
-static __inline type varp ## _get_ ## var(device_t dev)		\
-{								\
-    uintptr_t v = 0;						\
-    BUS_READ_IVAR(device_get_parent(dev), dev,			\
-	ivarp ## _IVAR_ ## ivar, &v);				\
-    return ((type) v);						\
-}								\
-								\
-static __inline void varp ## _set_ ## var(device_t dev, type t)	\
-{								\
-    uintptr_t v = (uintptr_t) t;				\
-    BUS_WRITE_IVAR(device_get_parent(dev), dev,			\
-	ivarp ## _IVAR_ ## ivar, v);				\
-}
+#define	ACPI_DEV_DOMAIN_UNKNOWN	(-1)
 
-__ACPI_BUS_ACCESSOR(acpi, handle, ACPI, HANDLE, ACPI_HANDLE)
-__ACPI_BUS_ACCESSOR(acpi, private, ACPI, PRIVATE, void *)
-__ACPI_BUS_ACCESSOR(acpi, flags, ACPI, FLAGS, int)
+__BUS_ACCESSOR_DEFAULT(acpi, handle, ACPI, HANDLE, ACPI_HANDLE, NULL)
+__BUS_ACCESSOR(acpi, private, ACPI, PRIVATE, void *)
+__BUS_ACCESSOR(acpi, flags, ACPI, FLAGS, int)
+__BUS_ACCESSOR(acpi, domain, ACPI, DOMAIN, int)
 
 void acpi_fake_objhandler(ACPI_HANDLE h, void *data);
 static __inline device_t
@@ -382,7 +393,7 @@ ACPI_STATUS	acpi_EvaluateOSC(ACPI_HANDLE handle, uint8_t *uuid,
 		    uint32_t *caps_out, bool query);
 ACPI_STATUS	acpi_OverrideInterruptLevel(UINT32 InterruptNumber);
 ACPI_STATUS	acpi_SetIntrModel(int model);
-int		acpi_ReqSleepState(struct acpi_softc *sc, int state);
+int		acpi_ReqSleepState(struct acpi_softc *sc, enum power_stype stype);
 int		acpi_AckSleepState(struct apm_clone_data *clone, int error);
 ACPI_STATUS	acpi_SetSleepState(struct acpi_softc *sc, int state);
 int		acpi_wake_set_enable(device_t dev, int enable);
@@ -390,7 +401,7 @@ int		acpi_parse_prw(ACPI_HANDLE h, struct acpi_prw_data *prw);
 ACPI_STATUS	acpi_Startup(void);
 void		acpi_UserNotify(const char *subsystem, ACPI_HANDLE h,
 		    uint8_t notify);
-int		acpi_bus_alloc_gas(device_t dev, int *type, int *rid,
+int		acpi_bus_alloc_gas(device_t dev, int *type, int rid,
 		    ACPI_GENERIC_ADDRESS *gas, struct resource **res,
 		    u_int flags);
 void		acpi_walk_subtables(void *first, void *end,
@@ -441,9 +452,6 @@ ACPI_STATUS	acpi_lookup_irq_resource(device_t dev, int rid,
 		    struct resource *res, ACPI_RESOURCE *acpi_res);
 ACPI_STATUS	acpi_parse_resources(device_t dev, ACPI_HANDLE handle,
 		    struct acpi_parse_resource_set *set, void *arg);
-struct resource *acpi_alloc_sysres(device_t child, int type, int *rid,
-		    rman_res_t start, rman_res_t end, rman_res_t count,
-		    u_int flags);
 
 /* ACPI event handling */
 UINT32		acpi_event_power_button_sleep(void *context);
@@ -455,18 +463,19 @@ UINT32		acpi_event_sleep_button_wake(void *context);
 #define ACPI_EVENT_PRI_DEFAULT    10000
 #define ACPI_EVENT_PRI_LAST       20000
 
-typedef void (*acpi_event_handler_t)(void *, int);
+typedef void (*acpi_event_handler_t)(void *, enum power_stype);
 
 EVENTHANDLER_DECLARE(acpi_sleep_event, acpi_event_handler_t);
 EVENTHANDLER_DECLARE(acpi_wakeup_event, acpi_event_handler_t);
 EVENTHANDLER_DECLARE(acpi_acad_event, acpi_event_handler_t);
 EVENTHANDLER_DECLARE(acpi_video_event, acpi_event_handler_t);
+EVENTHANDLER_DECLARE(acpi_post_dev_suspend, acpi_event_handler_t);
+EVENTHANDLER_DECLARE(acpi_pre_dev_resume, acpi_event_handler_t);
 
 /* Device power control. */
 ACPI_STATUS	acpi_pwr_wake_enable(ACPI_HANDLE consumer, int enable);
 ACPI_STATUS	acpi_pwr_switch_consumer(ACPI_HANDLE consumer, int state);
-int		acpi_device_pwr_for_sleep(device_t bus, device_t dev,
-		    int *dstate);
+acpi_pwr_for_sleep_t	acpi_device_pwr_for_sleep;
 int		acpi_set_powerstate(device_t child, int state);
 
 /* APM emulation */
@@ -490,6 +499,25 @@ acpi_get_verbose(struct acpi_softc *sc)
     if (sc)
 	return (sc->acpi_verbose);
     return (0);
+}
+
+static __inline const char *
+acpi_d_state_to_str(int state)
+{
+    const char *strs[ACPI_D_STATE_COUNT] = {"D0", "D1", "D2", "D3hot",
+	"D3cold"};
+
+    if (state == ACPI_STATE_UNKNOWN)
+	return ("unknown D-state");
+    MPASS(state >= ACPI_STATE_D0 && state <= ACPI_D_STATES_MAX);
+    return (strs[state]);
+}
+
+static __inline bool
+acpi_should_do_s4bios(struct acpi_softc *sc)
+{
+    MPASS(!sc->acpi_s4bios || sc->acpi_s4bios_supported);
+    return (sc->acpi_s4bios);
 }
 
 char		*acpi_name(ACPI_HANDLE handle);
@@ -538,7 +566,7 @@ int		acpi_PkgInt32(ACPI_OBJECT *res, int idx, uint32_t *dst);
 int		acpi_PkgInt16(ACPI_OBJECT *res, int idx, uint16_t *dst);
 int		acpi_PkgStr(ACPI_OBJECT *res, int idx, void *dst, size_t size);
 int		acpi_PkgGas(device_t dev, ACPI_OBJECT *res, int idx, int *type,
-		    int *rid, struct resource **dst, u_int flags);
+		    int rid, struct resource **dst, u_int flags);
 int		acpi_PkgFFH_IntelCpu(ACPI_OBJECT *res, int idx, int *vendor,
 		    int *class, uint64_t *address, int *accsize);
 ACPI_HANDLE	acpi_GetReference(ACPI_HANDLE scope, ACPI_OBJECT *obj);
@@ -574,6 +602,7 @@ void		acpi_pxm_parse_tables(void);
 void		acpi_pxm_set_mem_locality(void);
 void		acpi_pxm_set_cpu_locality(void);
 int		acpi_pxm_get_cpu_locality(int apic_id);
+int		acpi_pxm_parse(device_t dev);
 
 /*
  * Map a PXM to a VM domain.
@@ -581,21 +610,33 @@ int		acpi_pxm_get_cpu_locality(int apic_id);
  * Returns the VM domain ID if found, or -1 if not found / invalid.
  */
 int		acpi_map_pxm_to_vm_domainid(int pxm);
-int		acpi_get_cpus(device_t dev, device_t child, enum cpu_sets op,
-		    size_t setsize, cpuset_t *cpuset);
-int		acpi_get_domain(device_t dev, device_t child, int *domain);
+bus_get_cpus_t		acpi_get_cpus;
+
+/*
+ * Hook for ACPI sleep routine.
+ */
+extern int (*acpi_prepare_sleep)(uint8_t state, uint32_t a, uint32_t b,
+    bool ext);
+
+static inline void
+acpi_set_prepare_sleep(
+    int (*hook)(uint8_t state, uint32_t a, uint32_t b, bool ext))
+{
+	acpi_prepare_sleep = hook;
+}
 
 #ifdef __aarch64__
 /*
  * ARM specific ACPI interfaces, relating to IORT table.
  */
 int	acpi_iort_map_pci_msi(u_int seg, u_int rid, u_int *xref, u_int *devid);
-int	acpi_iort_map_pci_smmuv3(u_int seg, u_int rid, u_int *xref, u_int *devid);
+int	acpi_iort_map_pci_smmuv3(u_int seg, u_int rid, uint64_t *xref,
+	    u_int *devid);
 int	acpi_iort_its_lookup(u_int its_id, u_int *xref, int *pxm);
 int	acpi_iort_map_named_msi(const char *devname, u_int rid, u_int *xref,
 	    u_int *devid);
-int	acpi_iort_map_named_smmuv3(const char *devname, u_int rid, u_int *xref,
-	    u_int *devid);
+int	acpi_iort_map_named_smmuv3(const char *devname, u_int rid,
+	    uint64_t *xref, u_int *devid);
 #endif
 #endif /* _KERNEL */
 #endif /* !_ACPIVAR_H_ */

@@ -1,7 +1,7 @@
 /*-
  * SPDX-License-Identifier: GPL-2.0 or Linux-OpenIB
  *
- * Copyright (c) 2021 - 2022 Intel Corporation
+ * Copyright (c) 2021 - 2026 Intel Corporation
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -31,7 +31,6 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-/*$FreeBSD$*/
 
 
 #include <sys/mman.h>
@@ -39,6 +38,7 @@
 #include <stdlib.h>
 #include "irdma_umain.h"
 #include "irdma-abi.h"
+#include "irdma_uquery.h"
 
 #include "ice_devids.h"
 #include "i40e_devids.h"
@@ -48,7 +48,7 @@
 /**
  *  Driver version
  */
-char libirdma_version[] = "0.0.51-k";
+char libirdma_version[] = "1.3.56-k";
 
 unsigned int irdma_dbg;
 
@@ -87,6 +87,18 @@ static const struct hca_info hca_table[] = {
 	INTEL_HCA(ICE_DEV_ID_E822L_SFP),
 	INTEL_HCA(ICE_DEV_ID_E822L_10G_BASE_T),
 	INTEL_HCA(ICE_DEV_ID_E822L_SGMII),
+	INTEL_HCA(ICE_DEV_ID_E830_BACKPLANE),
+	INTEL_HCA(ICE_DEV_ID_E830_QSFP56),
+	INTEL_HCA(ICE_DEV_ID_E830_SFP),
+	INTEL_HCA(ICE_DEV_ID_E830_SFP_DD),
+	INTEL_HCA(ICE_DEV_ID_E830C_BACKPLANE),
+	INTEL_HCA(ICE_DEV_ID_E830_XXV_BACKPLANE),
+	INTEL_HCA(ICE_DEV_ID_E830C_QSFP),
+	INTEL_HCA(ICE_DEV_ID_E830_XXV_QSFP),
+	INTEL_HCA(ICE_DEV_ID_E830C_SFP),
+	INTEL_HCA(ICE_DEV_ID_E830_XXV_SFP),
+	INTEL_HCA(ICE_DEV_ID_E835_XXV_SFP),
+	INTEL_HCA(ICE_DEV_ID_E835_QSFP),
 };
 
 static struct ibv_context_ops irdma_ctx_ops = {
@@ -118,6 +130,28 @@ static struct ibv_context_ops irdma_ctx_ops = {
 	.detach_mcast = irdma_udetach_mcast,
 };
 
+/**
+ * libirdma_query_device - fill libirdma_device structure
+ * @ctx_in - ibv_context identifying device
+ * @out - libirdma_device structure to fill quered info
+ *
+ * ctx_in is not used at the moment
+ */
+int
+libirdma_query_device(struct ibv_context *ctx_in, struct libirdma_device *out)
+{
+	if (!out)
+		return EIO;
+	if (sizeof(out->lib_ver) < sizeof(libirdma_version))
+		return ERANGE;
+
+	out->query_ver = 1;
+	snprintf(out->lib_ver, min(sizeof(libirdma_version), sizeof(out->lib_ver)),
+		 "%s", libirdma_version);
+
+	return 0;
+}
+
 static int
 irdma_init_context(struct verbs_device *vdev,
 		   struct ibv_context *ctx, int cmd_fd)
@@ -147,6 +181,7 @@ irdma_init_context(struct verbs_device *vdev,
 	iwvctx->uk_attrs.max_hw_sq_chunk = resp.max_hw_sq_chunk;
 	iwvctx->uk_attrs.max_hw_cq_size = resp.max_hw_cq_size;
 	iwvctx->uk_attrs.min_hw_cq_size = resp.min_hw_cq_size;
+	iwvctx->uk_attrs.min_hw_wq_size = IRDMA_QP_SW_MIN_WQSIZE;
 	iwvctx->abi_ver = IRDMA_ABI_VER;
 	mmap_key = resp.db_mmap_key;
 
@@ -179,8 +214,6 @@ irdma_cleanup_context(struct verbs_device *device,
 		      struct ibv_context *ibctx)
 {
 	struct irdma_uvcontext *iwvctx;
-
-	printf("%s %s CALL\n", __FILE__, __func__);
 
 	iwvctx = container_of(ibctx, struct irdma_uvcontext, ibv_ctx);
 	irdma_ufree_pd(&iwvctx->iwupd->ibv_pd);
@@ -218,7 +251,7 @@ irdma_driver_init(const char *uverbs_sys_path,
 
 	hca_size = sizeof(hca_table) / sizeof(struct hca_info);
 	while (i < hca_size && !device_found) {
-		if (device_id != hca_table[i].device)
+		if (device_id == hca_table[i].device)
 			device_found = 1;
 		++i;
 	}

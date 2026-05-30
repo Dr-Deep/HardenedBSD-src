@@ -281,7 +281,6 @@ ipf_p_pptp_nextmessage(fr_info_t *fin, nat_t *nat, pptp_pxy_t *pptp, int rev)
 	tcphdr_t *tcp;
 	int dlen, off;
 	u_short len;
-	char *msg;
 
 	tcp = fin->fin_dp;
 	dlen = fin->fin_dlen - (TCP_OFF(tcp) << 2);
@@ -310,8 +309,6 @@ ipf_p_pptp_nextmessage(fr_info_t *fin, nat_t *nat, pptp_pxy_t *pptp, int rev)
 		return (-1);
 	}
 
-	msg = (char *)fin->fin_dp + (TCP_OFF(tcp) << 2);
-
 	while (dlen > 0) {
 		off += pptps->pptps_bytes;
 		if (pptps->pptps_gothdr == 0) {
@@ -337,7 +334,6 @@ ipf_p_pptp_nextmessage(fr_info_t *fin, nat_t *nat, pptp_pxy_t *pptp, int rev)
 				}
 			}
 			dlen -= len;
-			msg += len;
 			off += len;
 
 			pptps->pptps_gothdr = 1;
@@ -381,7 +377,6 @@ ipf_p_pptp_nextmessage(fr_info_t *fin, nat_t *nat, pptp_pxy_t *pptp, int rev)
 		pptps->pptps_len = 0;
 
 		start += len;
-		msg += len;
 		dlen -= len;
 	}
 
@@ -515,7 +510,7 @@ ipf_p_pptp_inout(void *arg, fr_info_t *fin, ap_session_t *aps, nat_t *nat)
 		rev = 0;
 
 	tcp = (tcphdr_t *)fin->fin_dp;
-	if ((tcp->th_flags & TH_OPENING) == TH_OPENING) {
+	if ((tcp_get_flags(tcp) & TH_OPENING) == TH_OPENING) {
 		pptp = (pptp_pxy_t *)aps->aps_data;
 		pptp->pptp_side[1 - rev].pptps_next = ntohl(tcp->th_ack);
 		pptp->pptp_side[1 - rev].pptps_nexthdr = ntohl(tcp->th_ack);

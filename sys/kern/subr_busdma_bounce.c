@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1997, 1998 Justin T. Gibbs.
  * All rights reserved.
@@ -49,9 +49,9 @@
 #include <sys/sched.h>
 
 struct bounce_page {
-	vm_offset_t	vaddr;		/* kva of bounce buffer */
+	char		*vaddr;		/* kva of bounce buffer */
 	bus_addr_t	busaddr;	/* Physical address */
-	vm_offset_t	datavaddr;	/* kva of client data */
+	char		*datavaddr;	/* kva of client data */
 #if defined(__amd64__) || defined(__i386__)
 	vm_page_t	datapage[2];	/* physical page(s) of client data */
 #else
@@ -76,6 +76,7 @@ struct bounce_zone {
 #ifdef dmat_domain
 	int		domain;
 #endif
+	sbintime_t	total_deferred_time;
 	bus_size_t	alignment;
 	bus_addr_t	lowaddr;
 	char		zoneid[8];
@@ -85,11 +86,14 @@ struct bounce_zone {
 };
 
 static struct mtx bounce_lock;
+MTX_SYSINIT(bounce_lock, &bounce_lock, "bounce pages lock", MTX_DEF);
 static int total_bpages;
 static int busdma_zonecount;
 
-static STAILQ_HEAD(, bounce_zone) bounce_zone_list;
-static STAILQ_HEAD(, bus_dmamap) bounce_map_callbacklist;
+static STAILQ_HEAD(, bounce_zone) bounce_zone_list =
+    STAILQ_HEAD_INITIALIZER(bounce_zone_list);
+static STAILQ_HEAD(, bus_dmamap) bounce_map_callbacklist =
+    STAILQ_HEAD_INITIALIZER(bounce_map_callbacklist);
 
 static MALLOC_DEFINE(M_BOUNCE, "bounce", "busdma bounce pages");
 
@@ -119,6 +123,7 @@ _bus_dmamap_reserve_pages(bus_dma_tag_t dmat, bus_dmamap_t map, int flags)
 			bz = dmat->bounce_zone;
 			STAILQ_INSERT_TAIL(&bz->bounce_map_waitinglist, map,
 			    links);
+			map->queued_time = sbinuptime();
 			mtx_unlock(&bounce_lock);
 			return (EINPROGRESS);
 		}
@@ -127,17 +132,6 @@ _bus_dmamap_reserve_pages(bus_dma_tag_t dmat, bus_dmamap_t map, int flags)
 
 	return (0);
 }
-
-static void
-init_bounce_pages(void *dummy __unused)
-{
-
-	total_bpages = 0;
-	STAILQ_INIT(&bounce_zone_list);
-	STAILQ_INIT(&bounce_map_callbacklist);
-	mtx_init(&bounce_lock, "bounce pages lock", NULL, MTX_DEF);
-}
-SYSINIT(bpages, SI_SUB_LOCK, SI_ORDER_ANY, init_bounce_pages, NULL);
 
 static struct sysctl_ctx_list *
 busdma_sysctl_tree(struct bounce_zone *bz)
@@ -151,6 +145,22 @@ busdma_sysctl_tree_top(struct bounce_zone *bz)
 {
 
 	return (bz->sysctl_tree_top);
+}
+
+/*
+ * Returns true if the address falls within the tag's exclusion window, or
+ * fails to meet its alignment requirements.
+ */
+static bool
+addr_needs_bounce(bus_dma_tag_t dmat, bus_addr_t paddr)
+{
+
+	if (paddr > dmat_lowaddr(dmat) && paddr <= dmat_highaddr(dmat))
+		return (true);
+	if (!vm_addr_align_ok(paddr, dmat_alignment(dmat)))
+		return (true);
+
+	return (false);
 }
 
 static int
@@ -239,7 +249,10 @@ alloc_bounce_zone(bus_dma_tag_t dmat)
 	    "domain", CTLFLAG_RD, &bz->domain, 0,
 	    "memory domain");
 #endif
-
+	SYSCTL_ADD_SBINTIME_USEC(busdma_sysctl_tree(bz),
+	    SYSCTL_CHILDREN(busdma_sysctl_tree_top(bz)), OID_AUTO,
+	    "total_deferred_time", CTLFLAG_RD, &bz->total_deferred_time,
+	    "Cumulative time busdma requests are deferred (us)");
 	if (start_thread) {
 		if (kproc_create(busdma_thread, NULL, NULL, 0, 0, "busdma") !=
 		    0)
@@ -269,18 +282,18 @@ alloc_bounce_pages(bus_dma_tag_t dmat, u_int numpages)
 		if (bpage == NULL)
 			break;
 #ifdef dmat_domain
-		bpage->vaddr = (vm_offset_t)contigmalloc_domainset(PAGE_SIZE,
+		bpage->vaddr = contigmalloc_domainset(PAGE_SIZE,
 		    M_BOUNCE, DOMAINSET_PREF(bz->domain), M_NOWAIT,
 		    0ul, bz->lowaddr, PAGE_SIZE, 0);
 #else
-		bpage->vaddr = (vm_offset_t)contigmalloc(PAGE_SIZE, M_BOUNCE,
+		bpage->vaddr = contigmalloc(PAGE_SIZE, M_BOUNCE,
 		    M_NOWAIT, 0ul, bz->lowaddr, PAGE_SIZE, 0);
 #endif
-		if (bpage->vaddr == 0) {
+		if (bpage->vaddr == NULL) {
 			free(bpage, M_BUSDMA);
 			break;
 		}
-		bpage->busaddr = pmap_kextract(bpage->vaddr);
+		bpage->busaddr = pmap_kextract((vm_offset_t)bpage->vaddr);
 		mtx_lock(&bounce_lock);
 		STAILQ_INSERT_TAIL(&bz->bounce_page_list, bpage, links);
 		total_bpages++;
@@ -314,11 +327,11 @@ reserve_bounce_pages(bus_dma_tag_t dmat, bus_dmamap_t map, int commit)
 
 #if defined(__amd64__) || defined(__i386__)
 static bus_addr_t
-add_bounce_page(bus_dma_tag_t dmat, bus_dmamap_t map, vm_offset_t vaddr,
+add_bounce_page(bus_dma_tag_t dmat, bus_dmamap_t map, void *vaddr,
     vm_paddr_t addr1, vm_paddr_t addr2, bus_size_t size)
 #else
 static bus_addr_t
-add_bounce_page(bus_dma_tag_t dmat, bus_dmamap_t map, vm_offset_t vaddr,
+add_bounce_page(bus_dma_tag_t dmat, bus_dmamap_t map, void *vaddr,
     bus_addr_t addr, bus_size_t size)
 #endif
 {
@@ -357,13 +370,13 @@ add_bounce_page(bus_dma_tag_t dmat, bus_dmamap_t map, vm_offset_t vaddr,
 	if (dmat_flags(dmat) & BUS_DMA_KEEP_PG_OFFSET) {
 		/* Page offset needs to be preserved. */
 #if defined(__amd64__) || defined(__i386__)
-		bpage->vaddr |= addr1 & PAGE_MASK;
-		bpage->busaddr |= addr1 & PAGE_MASK;
+		bpage->vaddr += addr1 & PAGE_MASK;
+		bpage->busaddr += addr1 & PAGE_MASK;
 		KASSERT(addr2 == 0,
 	    ("Trying to bounce multiple pages with BUS_DMA_KEEP_PG_OFFSET"));
 #else
-		bpage->vaddr |= addr & PAGE_MASK;
-		bpage->busaddr |= addr & PAGE_MASK;
+		bpage->vaddr += addr & PAGE_MASK;
+		bpage->busaddr += addr & PAGE_MASK;
 #endif
 	}
 	bpage->datavaddr = vaddr;
@@ -396,7 +409,7 @@ free_bounce_pages(bus_dma_tag_t dmat, bus_dmamap_t map)
 	count = 0;
 	schedule_thread = false;
 	STAILQ_FOREACH(bpage, &map->bpages, links) {
-		bpage->datavaddr = 0;
+		bpage->datavaddr = NULL;
 		bpage->datacount = 0;
 
 		if (dmat_flags(dmat) & BUS_DMA_KEEP_PG_OFFSET) {
@@ -406,8 +419,8 @@ free_bounce_pages(bus_dma_tag_t dmat, bus_dmamap_t map)
 			 * store a full page of data and/or assume it
 			 * starts on a page boundary.
 			 */
-			bpage->vaddr &= ~PAGE_MASK;
-			bpage->busaddr &= ~PAGE_MASK;
+			bpage->vaddr = trunc_page(bpage->vaddr);
+			bpage->busaddr = trunc_page(bpage->busaddr);
 		}
 		count++;
 	}
@@ -430,12 +443,83 @@ free_bounce_pages(bus_dma_tag_t dmat, bus_dmamap_t map)
 		wakeup(&bounce_map_callbacklist);
 }
 
+/*
+ * Add a single contiguous physical range to the segment list.
+ */
+static bus_size_t
+_bus_dmamap_addseg(bus_dma_tag_t dmat, bus_dmamap_t map, bus_addr_t curaddr,
+    bus_size_t sgsize, bus_dma_segment_t *segs, int *segp)
+{
+	int seg;
+
+	KASSERT(curaddr <= BUS_SPACE_MAXADDR,
+	    ("ds_addr %#jx > BUS_SPACE_MAXADDR %#jx; dmat %p fl %#x low %#jx "
+	    "hi %#jx",
+	    (uintmax_t)curaddr, (uintmax_t)BUS_SPACE_MAXADDR,
+	    dmat, dmat_bounce_flags(dmat), (uintmax_t)dmat_lowaddr(dmat),
+	    (uintmax_t)dmat_highaddr(dmat)));
+
+	/*
+	 * Make sure we don't cross any boundaries.
+	 */
+	if (!vm_addr_bound_ok(curaddr, sgsize, dmat_boundary(dmat)))
+		sgsize = roundup2(curaddr, dmat_boundary(dmat)) - curaddr;
+
+	/*
+	 * Insert chunk into a segment, coalescing with
+	 * previous segment if possible.
+	 */
+	seg = *segp;
+	if (seg == -1) {
+		seg = 0;
+		segs[seg].ds_addr = curaddr;
+		segs[seg].ds_len = sgsize;
+	} else {
+		if (curaddr == segs[seg].ds_addr + segs[seg].ds_len &&
+		    (segs[seg].ds_len + sgsize) <= dmat_maxsegsz(dmat) &&
+		    vm_addr_bound_ok(segs[seg].ds_addr,
+		    segs[seg].ds_len + sgsize, dmat_boundary(dmat)))
+			segs[seg].ds_len += sgsize;
+		else {
+			if (++seg >= dmat_nsegments(dmat))
+				return (0);
+			segs[seg].ds_addr = curaddr;
+			segs[seg].ds_len = sgsize;
+		}
+	}
+	*segp = seg;
+	return (sgsize);
+}
+
+/*
+ * Add a contiguous physical range to the segment list, respecting the tag's
+ * maximum segment size and splitting it into multiple segments as necessary.
+ */
+static bool
+_bus_dmamap_addsegs(bus_dma_tag_t dmat, bus_dmamap_t map, bus_addr_t curaddr,
+    bus_size_t sgsize, bus_dma_segment_t *segs, int *segp)
+{
+	bus_size_t done, todo;
+
+	while (sgsize > 0) {
+		todo = MIN(sgsize, dmat_maxsegsz(dmat));
+		done = _bus_dmamap_addseg(dmat, map, curaddr, todo, segs,
+		    segp);
+		if (done == 0)
+			return (false);
+		curaddr += done;
+		sgsize -= done;
+	}
+	return (true);
+}
+
 static void
 busdma_thread(void *dummy __unused)
 {
 	STAILQ_HEAD(, bus_dmamap) callbacklist;
 	bus_dma_tag_t dmat;
 	struct bus_dmamap *map, *nmap;
+	struct bounce_zone *bz;
 
 	thread_lock(curthread);
 	sched_class(curthread, PRI_ITHD);
@@ -452,8 +536,10 @@ busdma_thread(void *dummy __unused)
 
 		STAILQ_FOREACH_SAFE(map, &callbacklist, links, nmap) {
 			dmat = map->dmat;
+			bz = dmat->bounce_zone;
 			dmat_lockfunc(dmat)(dmat_lockfuncarg(dmat),
 			    BUS_DMA_LOCK);
+			bz->total_deferred_time += (sbinuptime() - map->queued_time);
 			bus_dmamap_load_mem(map->dmat, map, &map->mem,
 			    map->callback, map->callback_arg, BUS_DMA_WAITOK);
 			dmat_lockfunc(dmat)(dmat_lockfuncarg(dmat),

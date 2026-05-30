@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2006 Marcel Moolenaar
  * All rights reserved.
@@ -24,8 +24,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _DEV_PUC_BUS_H_
@@ -34,8 +32,10 @@
 #include <sys/serial.h>
 #include <serdev_if.h>
 
-#define	PUC_IVAR_CLOCK		0
-#define	PUC_IVAR_TYPE		1
+enum {
+	PUC_IVAR_CLOCK = BUS_IVARS_PRIVATE,
+	PUC_IVAR_TYPE
+};
 
 /* Port types. */
 #define	PUC_TYPE_SERIAL		1

@@ -23,9 +23,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
-.Dd July 20, 2012
+.Dd July 25, 2025
 .Dt JLS 8
 .Os
 .Sh NAME
@@ -37,16 +35,20 @@
 .Op Fl dhNnqsv
 .Op Fl j Ar jail
 .Op Ar parameter ...
+.Nm
+.Fl c
+.Op Fl d
+.Fl j Ar jail
 .Sh DESCRIPTION
 The
 .Nm
 utility lists all active jails, or the specified jail.
-Each jail is represented by one row which contains space-separated values of
-the listed
+Each jail is represented by space-separated values of the listed
 .Ar parameters ,
-including the pseudo-parameter
+one jail per line (unless the parameters themselves contain newlines).
+The pseudo-parameter
 .Va all
-which will show all available jail parameters.
+will show all available jail parameters.
 A list of available parameters can be retrieved via
 .Dq Nm sysctl Fl d Va security.jail.param .
 See
@@ -56,10 +58,20 @@ for a description of some core parameters.
 If no
 .Ar parameters
 or any of the options
-.Fl hns
+.Fl chns
 are given, the following four columns will be printed:
 jail identifier (jid), IP address (ip4.addr), hostname (host.hostname),
 and path (path).
+.Pp
+When the
+.Fl c
+option is used,
+.Nm
+will not emit any output except for usage errors.
+This mode is intended solely to check for a single jail's existence, and it does
+not accept any
+.Ar parameter
+or print-option flags.
 .Pp
 The following options are available:
 .Bl -tag -width indent
@@ -68,8 +80,10 @@ Generate output via
 .Xr libxo 3
 in a selection of different human and machine readable formats.
 See
-.Xr xo_parse_args 3
+.Xr xo_options 7
 for details on command line arguments.
+.It Fl c
+Only check for the jail's existence.
 .It Fl d
 List
 .Va dying
@@ -114,7 +128,7 @@ Without this option, all active jails will be listed.
 .Sh SEE ALSO
 .Xr jail_get 2 ,
 .Xr libxo 3 ,
-.Xr xo_parse_args 3 ,
+.Xr xo_options 7 ,
 .Xr jail 8 ,
 .Xr jexec 8
 .Sh HISTORY

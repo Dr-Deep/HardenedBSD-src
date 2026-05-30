@@ -11,8 +11,6 @@
  * implied warranties, including, without limitation, the implied
  * warranties of merchantability and fitness for a particular
  * purpose.
- *
- * $FreeBSD$
  */
 
 #ifndef _BOOT_I386_ARGS_H_
@@ -90,7 +88,7 @@ struct bootargs
 
 /*
  * geli_boot_data is embedded in geli_boot_args (passed from gptboot to loader)
- * and in zfs_boot_args (passed from zfsboot and gptzfsboot to loader).
+ * and in zfs_boot_args (passed from gptzfsboot to loader).
  */
 struct geli_boot_data
 {

@@ -24,8 +24,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * IEEE 802.11 scanning support.
  */
@@ -195,15 +193,16 @@ ieee80211_swscan_start_scan_locked(const struct ieee80211_scanner *scan,
 			if ((flags & IEEE80211_SCAN_NOSSID) == 0)
 				ieee80211_scan_copy_ssid(vap, ss, nssid, ssids);
 
-			/* NB: top 4 bits for internal use */
-			ss->ss_flags = flags & 0xfff;
+			ss->ss_flags = flags & IEEE80211_SCAN_PUBLIC_MASK;
 			if (ss->ss_flags & IEEE80211_SCAN_ACTIVE)
 				vap->iv_stats.is_scan_active++;
 			else
 				vap->iv_stats.is_scan_passive++;
 			if (flags & IEEE80211_SCAN_FLUSH)
 				ss->ss_ops->scan_flush(ss);
-			if (flags & IEEE80211_SCAN_BGSCAN)
+			/* Only BGSCAN if enabled and requested. */
+			if ((vap->iv_flags & IEEE80211_F_BGSCAN) != 0 &&
+			    (flags & IEEE80211_SCAN_BGSCAN) != 0)
 				ic->ic_flags_ext |= IEEE80211_FEXT_BGSCAN;
 
 			/* Set duration for this particular scan */
@@ -306,7 +305,7 @@ ieee80211_swscan_check_scan(const struct ieee80211_scanner *scan,
 			ic->ic_flags |= IEEE80211_F_SCAN;
 
 			/* NB: need to use supplied flags in check */
-			ss->ss_flags = flags & 0xff;
+			ss->ss_flags = flags & IEEE80211_SCAN_PUBLIC_MASK;
 			result = ss->ss_ops->scan_end(ss, vap);
 
 			ic->ic_flags &= ~IEEE80211_F_SCAN;
@@ -335,12 +334,18 @@ ieee80211_swscan_bg_scan(const struct ieee80211_scanner *scan,
 {
 	struct ieee80211com *ic = vap->iv_ic;
 	struct ieee80211_scan_state *ss = ic->ic_scan;
+	bool scanning;
 
 	/* XXX assert unlocked? */
 	// IEEE80211_UNLOCK_ASSERT(ic);
 
 	IEEE80211_LOCK(ic);
-	if ((ic->ic_flags & IEEE80211_F_SCAN) == 0) {
+	KASSERT((vap->iv_flags & IEEE80211_F_BGSCAN) != 0,
+	    ("%s: vap %p iv_flags %#010x no IEEE80211_F_BGSCAN set",
+	    __func__, vap, vap->iv_flags));
+
+	scanning = ic->ic_flags & IEEE80211_F_SCAN;
+	if (!scanning) {
 		u_int duration;
 		/*
 		 * Go off-channel for a fixed interval that is large
@@ -388,9 +393,10 @@ ieee80211_swscan_bg_scan(const struct ieee80211_scanner *scan,
 				 *     scan_start method to populate it.
 				 */
 				ss->ss_next = 0;
-				if (ss->ss_last != 0)
+				if (ss->ss_last != 0) {
+					ieee80211_notify_scan_done(vap);
 					ss->ss_ops->scan_restart(ss, vap);
-				else {
+				} else {
 					ss->ss_ops->scan_start(ss, vap);
 #ifdef IEEE80211_DEBUG
 					if (ieee80211_msg_scan(vap))
@@ -404,6 +410,7 @@ ieee80211_swscan_bg_scan(const struct ieee80211_scanner *scan,
 			ic->ic_flags_ext |= IEEE80211_FEXT_BGSCAN;
 			ieee80211_runtask(ic,
 			    &SCAN_PRIVATE(ss)->ss_scan_start);
+			scanning = true;
 		} else {
 			/* XXX msg+stat */
 		}
@@ -414,8 +421,7 @@ ieee80211_swscan_bg_scan(const struct ieee80211_scanner *scan,
 	}
 	IEEE80211_UNLOCK(ic);
 
-	/* NB: racey, does it matter? */
-	return (ic->ic_flags & IEEE80211_F_SCAN);
+	return (scanning);
 }
 
 /*
@@ -521,11 +527,10 @@ ieee80211_swscan_scan_done(struct ieee80211vap *vap)
  * then we'll transmit a probe request.
  */
 static void
-ieee80211_swscan_probe_curchan(struct ieee80211vap *vap, int force)
+ieee80211_swscan_probe_curchan(struct ieee80211vap *vap, bool force __unused)
 {
 	struct ieee80211com *ic = vap->iv_ic;
 	struct ieee80211_scan_state *ss = ic->ic_scan;
-	struct ifnet *ifp = vap->iv_ifp;
 	int i;
 
 	/*
@@ -541,13 +546,15 @@ ieee80211_swscan_probe_curchan(struct ieee80211vap *vap, int force)
 	 */
 	for (i = 0; i < ss->ss_nssid; i++)
 		ieee80211_send_probereq(vap->iv_bss,
-			vap->iv_myaddr, ifp->if_broadcastaddr,
-			ifp->if_broadcastaddr,
+			vap->iv_myaddr,
+			ieee80211_vap_get_broadcast_address(vap),
+			ieee80211_vap_get_broadcast_address(vap),
 			ss->ss_ssid[i].ssid, ss->ss_ssid[i].len);
 	if ((ss->ss_flags & IEEE80211_SCAN_NOBCAST) == 0)
 		ieee80211_send_probereq(vap->iv_bss,
-			vap->iv_myaddr, ifp->if_broadcastaddr,
-			ifp->if_broadcastaddr,
+			vap->iv_myaddr,
+			ieee80211_vap_get_broadcast_address(vap),
+			ieee80211_vap_get_broadcast_address(vap),
 			"", 0);
 }
 
@@ -568,7 +575,7 @@ scan_curchan(struct ieee80211_scan_state *ss, unsigned long maxdwell)
 	    maxdwell);
 	IEEE80211_LOCK(ic);
 	if (ss->ss_flags & IEEE80211_SCAN_ACTIVE)
-		ieee80211_probe_curchan(vap, 0);
+		ieee80211_probe_curchan(vap, false);
 	taskqueue_enqueue_timeout(ic->ic_tq,
 	    &SCAN_PRIVATE(ss)->ss_scan_curchan, maxdwell);
 	IEEE80211_UNLOCK(ic);
@@ -674,7 +681,7 @@ scan_start(void *arg, int pending)
 }
 
 static void
-scan_curchan_task(void *arg, int pending)
+scan_curchan_task(void *arg, int pending __unused)
 {
 	struct ieee80211_scan_state *ss = arg;
 	struct scan_state *ss_priv = SCAN_PRIVATE(ss);
@@ -807,11 +814,9 @@ scan_end(struct ieee80211_scan_state *ss, int scandone)
 	 * driver calls (whilst unlocked), update scandone.
 	 */
 	if ((scandone == 0) && ((ss_priv->ss_iflags & ISCAN_PAUSE) == ISCAN_CANCEL)) {
-		/* XXX printf? */
-		if_printf(vap->iv_ifp,
+		net80211_vap_printf(vap,
 		    "%s: OOPS! scan cancelled during driver call (1) (ss_iflags=0x%x)!\n",
-		    __func__,
-		    ss_priv->ss_iflags);
+		    __func__, ss_priv->ss_iflags);
 		scandone = 1;
 	}
 
@@ -857,6 +862,7 @@ scan_end(struct ieee80211_scan_state *ss, int scandone)
 		else
 			vap->iv_stats.is_scan_passive++;
 
+		ieee80211_notify_scan_done(vap);
 		ss->ss_ops->scan_restart(ss, vap);	/* XXX? */
 		ieee80211_runtask(ic, &ss_priv->ss_scan_start);
 		IEEE80211_UNLOCK(ic);
@@ -877,11 +883,9 @@ scan_end(struct ieee80211_scan_state *ss, int scandone)
 	 * driver calls (whilst unlocked), update scandone.
 	 */
 	if (scandone == 0 && (ss_priv->ss_iflags & ISCAN_PAUSE) == ISCAN_CANCEL) {
-		/* XXX printf? */
-		if_printf(vap->iv_ifp,
+		net80211_vap_printf(vap,
 		    "%s: OOPS! scan cancelled during driver call (2) (ss_iflags=0x%x)!\n",
-		    __func__,
-		    ss_priv->ss_iflags);
+		    __func__, ss_priv->ss_iflags);
 		scandone = 1;
 	}
 

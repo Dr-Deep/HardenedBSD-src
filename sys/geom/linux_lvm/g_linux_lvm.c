@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008 Andrew Thompson <thompsa@FreeBSD.org>
  * All rights reserved.
@@ -27,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/ctype.h>
 #include <sys/param.h>
 #include <sys/bio.h>
@@ -69,7 +67,8 @@ static int	g_llvm_read_label(struct g_consumer *, struct g_llvm_label *);
 static int	g_llvm_read_md(struct g_consumer *, struct g_llvm_metadata *,
 		    struct g_llvm_label *);
 
-static int	llvm_label_decode(const u_char *, struct g_llvm_label *, int);
+static int	llvm_label_decode(const u_char *, struct g_llvm_label *,
+		    int, u_int);
 static int	llvm_md_decode(const u_char *, struct g_llvm_metadata *,
 		    struct g_llvm_label *);
 static int	llvm_textconf_decode(u_char *, int,
@@ -513,7 +512,6 @@ g_llvm_free_vg(struct g_llvm_vg *vg)
 		LIST_REMOVE(lv, lv_next);
 		free(lv, M_GLLVM);
 	}
-	LIST_REMOVE(vg, vg_next);
 	free(vg, M_GLLVM);
 }
 
@@ -539,7 +537,7 @@ g_llvm_taste(struct g_class *mp, struct g_provider *pp, int flags __unused)
 
 	g_topology_assert();
 	g_trace(G_T_TOPOLOGY, "%s(%s, %s)", __func__, mp->name, pp->name);
-	gp = g_new_geomf(mp, "linux_lvm:taste");
+	gp = g_new_geom(mp, "linux_lvm:taste");
 	/* This orphan function should be never called. */
 	gp->orphan = g_llvm_taste_orphan;
 	cp = g_new_consumer(gp);
@@ -559,7 +557,7 @@ g_llvm_taste(struct g_class *mp, struct g_provider *pp, int flags __unused)
 	vg = md.md_vg;
 	if (vg->vg_geom == NULL) {
 		/* new volume group */
-		gp = g_new_geomf(mp, "%s", vg->vg_name);
+		gp = g_new_geom(mp, vg->vg_name);
 		gp->start = g_llvm_start;
 		gp->spoiled = g_llvm_orphan;
 		gp->orphan = g_llvm_orphan;
@@ -597,7 +595,8 @@ g_llvm_destroy(struct g_llvm_vg *vg, int force)
 		}
 	}
 
-	g_llvm_free_vg(gp->softc);
+	LIST_REMOVE(vg, vg_next);
+	g_llvm_free_vg(vg);
 	gp->softc = NULL;
 	g_wither_geom(gp, ENXIO);
 	return (0);
@@ -639,7 +638,8 @@ g_llvm_read_label(struct g_consumer *cp, struct g_llvm_label *ll)
 
 	/* Search the four sectors for the LVM label. */
 	for (i = 0; i < 4; i++) {
-		error = llvm_label_decode(&buf[i * pp->sectorsize], ll, i);
+		error = llvm_label_decode(&buf[i * pp->sectorsize], ll, i,
+			    pp->sectorsize);
 		if (error == 0)
 			break;	/* found it */
 	}
@@ -705,7 +705,8 @@ g_llvm_read_md(struct g_consumer *cp, struct g_llvm_metadata *md,
 }
 
 static int
-llvm_label_decode(const u_char *data, struct g_llvm_label *ll, int sector)
+llvm_label_decode(const u_char *data, struct g_llvm_label *ll, int sector,
+    u_int sectorsize)
 {
 	uint64_t off;
 	char *uuid;
@@ -727,6 +728,13 @@ llvm_label_decode(const u_char *data, struct g_llvm_label *ll, int sector)
 	if (ll->ll_sector != sector) {
 		G_LLVM_DEBUG(0, "Expected sector %ju, found at %d",
 		    ll->ll_sector, sector);
+		return (EINVAL);
+	}
+
+	/* XXX The minimal possible size of physical volume header is 88 */
+	if (ll->ll_offset < 32 || ll->ll_offset > sectorsize - 88) {
+		G_LLVM_DEBUG(0, "Invalid physical volume header offset %u",
+		    ll->ll_offset);
 		return (EINVAL);
 	}
 

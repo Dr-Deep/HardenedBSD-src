@@ -1,6 +1,5 @@
-# $FreeBSD$
 #
-# SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+# SPDX-License-Identifier: BSD-2-Clause
 #
 # Copyright (c) 2017 Kristof Provost <kp@FreeBSD.org>
 #
@@ -36,7 +35,7 @@ v4_head()
 	atf_set require.user root
 
 	# We need scapy to be installed for out test scripts to work
-	atf_set require.progs scapy
+	atf_set require.progs python3 scapy
 }
 
 v4_body()
@@ -95,16 +94,12 @@ v6_head()
 {
 	atf_set descr 'Basic IPv6 forwarding test'
 	atf_set require.user root
-	atf_set require.progs scapy
+	atf_set require.progs python3 scapy
 }
 
 v6_body()
 {
 	pft_init
-
-	if [ "$(atf_config_get ci false)" = "true" ]; then
-		atf_skip "https://bugs.freebsd.org/260460"
-	fi
 
 	epair_send=$(vnet_mkepair)
 	epair_recv=$(vnet_mkepair)
@@ -122,7 +117,6 @@ v6_body()
 
 	# Sanity check, can we forward ICMP echo requests without pf?
 	atf_check -s exit:0 ${common_dir}/pft_ping.py \
-		--ip6 \
 		--sendif ${epair_send}a \
 		--to 2001:db8:43::3 \
 		--recvif ${epair_recv}a
@@ -133,7 +127,6 @@ v6_body()
 	pft_set_rules alcatraz \
 		"block in inet6 proto icmp6 icmp6-type echoreq"
 	atf_check -s exit:1 ${common_dir}/pft_ping.py \
-		--ip6 \
 		--sendif ${epair_send}a \
 		--to 2001:db8:43::3 \
 		--recvif ${epair_recv}a
@@ -142,7 +135,6 @@ v6_body()
 	pft_set_rules alcatraz \
 		"block out inet6 proto icmp6 icmp6-type echoreq"
 	atf_check -s exit:1 -e ignore ${common_dir}/pft_ping.py \
-		--ip6 \
 		--sendif ${epair_send}a \
 		--to 2001:db8:43::3 \
 		--recvif ${epair_recv}a
@@ -152,7 +144,6 @@ v6_body()
 		"block out" \
 		"pass out inet6 proto icmp6"
 	atf_check -s exit:0 ${common_dir}/pft_ping.py \
-		--ip6 \
 		--sendif ${epair_send}a \
 		--to 2001:db8:43::3 \
 		--recvif ${epair_recv}a
@@ -162,7 +153,6 @@ v6_body()
 		"block out inet6 proto icmp6 icmp6-type echoreq" \
 		"pass in proto icmp"
 	atf_check -s exit:1 ${common_dir}/pft_ping.py \
-		--ip6 \
 		--sendif ${epair_send}a \
 		--to 2001:db8:43::3 \
 		--recvif ${epair_recv}a

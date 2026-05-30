@@ -26,9 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
@@ -44,9 +41,9 @@ __FBSDID("$FreeBSD$");
 #include <sys/epoch.h>
 #include <sys/sched.h>
 #include <sys/smp.h>
+#include <sys/stdarg.h>
 #include <sys/gtaskqueue.h>
 #include <sys/unistd.h>
-#include <machine/stdarg.h>
 
 static MALLOC_DEFINE(M_GTASKQUEUE, "gtaskqueue", "Group Task Queues");
 static void	gtaskqueue_thread_enqueue(void *);
@@ -616,7 +613,7 @@ taskqgroup_cpu_create(struct taskqgroup *qgroup, int idx, int cpu)
 	qcpu = &qgroup->tqg_queue[idx];
 	LIST_INIT(&qcpu->tgc_tasks);
 	qcpu->tgc_taskq = gtaskqueue_create_fast(NULL, M_WAITOK,
-	    taskqueue_thread_enqueue, &qcpu->tgc_taskq);
+	    gtaskqueue_thread_enqueue, &qcpu->tgc_taskq);
 	gtaskqueue_start_threads(&qcpu->tgc_taskq, 1, PI_SOFT,
 	    "%s_%d", qgroup->tqg_name, idx);
 	qcpu->tgc_cpu = cpu;

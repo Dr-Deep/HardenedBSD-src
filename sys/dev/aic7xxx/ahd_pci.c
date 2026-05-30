@@ -31,9 +31,6 @@
  * $Id: //depot/aic7xxx/freebsd/dev/aic7xxx/ahd_pci.c#17 $
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <dev/aic7xxx/aic79xx_osm.h>
 
 static int ahd_pci_probe(device_t dev);
@@ -44,7 +41,7 @@ static device_method_t ahd_pci_device_methods[] = {
 	DEVMETHOD(device_probe,		ahd_pci_probe),
 	DEVMETHOD(device_attach,	ahd_pci_attach),
 	DEVMETHOD(device_detach,	ahd_detach),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t ahd_pci_driver = {

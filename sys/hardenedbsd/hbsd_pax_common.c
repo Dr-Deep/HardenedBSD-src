@@ -1,7 +1,7 @@
 /*-
  * Copyright (c) 2006 Elad Efrat <elad@NetBSD.org>
  * Copyright (c) 2013-2017, by Oliver Pinter <oliver.pinter@hardenedbsd.org>
- * Copyright (c) 2014-2022, by Shawn Webb <shawn.webb@hardenedbsd.org>
+ * Copyright (c) 2014-2025, by Shawn Webb <shawn.webb@hardenedbsd.org>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -143,17 +143,10 @@ void
 pax_get_flags(struct proc *p, pax_flag_t *flags)
 {
 
-	KASSERT(p == curthread->td_proc,
-	    ("%s: p != curthread->td_proc", __func__));
-
-#ifdef HBSD_DEBUG
-	struct thread *td;
-
-	FOREACH_THREAD_IN_PROC(p, td) {
-		KASSERT(td->td_pax == p->p_pax, ("%s: td->td_pax != p->p_pax",
-		    __func__));
-	}
-#endif
+	KASSERT(p != NULL,
+	    ("%s: p == NULL", __func__));
+	KASSERT(flags != NULL,
+	    ("%s: flags == NULL", __func__));
 
 	*flags = p->p_pax;
 }
@@ -162,22 +155,10 @@ void
 pax_get_flags_td(struct thread *td, pax_flag_t *flags)
 {
 
-	KASSERT(td == curthread,
-	    ("%s: td != curthread", __func__));
-
-#ifdef HBSD_DEBUG
-	struct proc *p;
-	struct thread *td0;
-
-	p = td->td_proc;
-
-	FOREACH_THREAD_IN_PROC(p, td0) {
-		KASSERT(td0->td_proc == p,
-		    ("%s: td0->td_proc != p", __func__));
-		KASSERT(td0->td_pax == p->p_pax, ("%s: td0->td_pax != p->p_pax",
-		    __func__));
-	}
-#endif
+	KASSERT(td != NULL,
+	    ("%s: td == NULL", __func__));
+	KASSERT(flags != NULL,
+	    ("%s: flags == NULL", __func__));
 
 	*flags = td->td_pax;
 }
@@ -317,6 +298,7 @@ pax_elf(struct thread *td, struct image_params *imgp)
 
 #ifdef PAX_HARDENING
 	flags |= pax_hardening_setup_flags(imgp, td, mode);
+	flags |= pax_tpe_setup_flags(imgp, td, mode);
 #endif
 
 	CTR3(KTR_PAX, "%s : flags = %x mode = %x",
@@ -360,9 +342,10 @@ pax_elf(struct thread *td, struct image_params *imgp)
 	pax_set_flags(imgp->proc, td, flags);
 
 	/*
-	 * if we enable/disable features with secadm, print out a warning
+	 * if we enable/disable features with a pax flag, print out a warning.
+	 * Only if HBSD started in verbose mode so as not to pollute the logs.
 	 */
-	if (mode != 0) {
+	if (bootverbose && mode != 0) {
 		pax_log_internal_imgp(imgp, PAX_LOG_DEFAULT,
 		   "the process started with non-default hardening settings");
 	}
@@ -433,6 +416,11 @@ pax_init_prison(struct prison *pr, struct vfsoptlist *opts)
 #endif
 
 	if (pax_log_init_prison(pr, opts) != 0) {
+		ret = false;
+		goto out;
+	}
+
+	if (pax_tpe_init_prison(pr, opts) != 0) {
 		ret = false;
 		goto out;
 	}

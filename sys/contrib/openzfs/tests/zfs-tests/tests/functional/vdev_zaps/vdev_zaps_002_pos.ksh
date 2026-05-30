@@ -1,4 +1,5 @@
 #!/bin/ksh
+# SPDX-License-Identifier: CDDL-1.0
 
 #
 # This file and its contents are supplied under the terms of the
@@ -36,6 +37,7 @@ conf="$TESTDIR/vz002"
 log_must eval "zdb -PC $TESTPOOL > $conf"
 
 assert_has_sentinel "$conf"
+assert_root_zap $TESTPOOL "$conf"
 for DISK in $DISKS; do
 	assert_top_zap $TESTPOOL $DISK "$conf"
 	assert_leaf_zap $TESTPOOL $DISK "$conf"

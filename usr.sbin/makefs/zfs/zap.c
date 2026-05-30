@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2022 The FreeBSD Foundation
  *
@@ -28,11 +28,12 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/types.h>
+#include <sys/param.h>
 #include <sys/endian.h>
 
 #include <assert.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -167,9 +168,18 @@ zap_add_uint64(zfs_zap_t *zap, const char *name, uint64_t val)
 }
 
 void
+zap_add_uint64_self(zfs_zap_t *zap, uint64_t val)
+{
+	char name[32];
+
+	(void)snprintf(name, sizeof(name), "%jx", (uintmax_t)val);
+	zap_add(zap, name, sizeof(uint64_t), 1, (uint8_t *)&val);
+}
+
+void
 zap_add_string(zfs_zap_t *zap, const char *name, const char *val)
 {
-	zap_add(zap, name, 1, strlen(val) + 1, val);
+	zap_add(zap, name, 1, strlen(val) + 1, (const uint8_t *)val);
 }
 
 bool
@@ -192,6 +202,10 @@ zap_micro_write(zfs_opt_t *zfs, zfs_zap_t *zap)
 	mzap_phys_t *mzap;
 	mzap_ent_phys_t *ment;
 	off_t bytes, loc;
+	uint16_t cd;
+
+	_Static_assert(MZAP_ENT_MAX <= UINT16_MAX,
+	    "micro ZAP collision differentiator must fit in 16 bits");
 
 	memset(zfs->filebuf, 0, sizeof(zfs->filebuf));
 	mzap = (mzap_phys_t *)&zfs->filebuf[0];
@@ -202,11 +216,13 @@ zap_micro_write(zfs_opt_t *zfs, zfs_zap_t *zap)
 	bytes = sizeof(*mzap) + (zap->kvpcnt - 1) * sizeof(*ment);
 	assert(bytes <= (off_t)MZAP_MAX_BLKSZ);
 
+	cd = 0;
 	ment = &mzap->mz_chunk[0];
 	STAILQ_FOREACH(ent, &zap->kvps, next) {
 		memcpy(&ment->mze_value, ent->valp, ent->intsz * ent->intcnt);
-		ment->mze_cd = 0; /* XXX-MJ */
-		strlcpy(ment->mze_name, ent->name, sizeof(ment->mze_name));
+		ment->mze_cd = cd++;
+		(void)strlcpy(ment->mze_name, ent->name,
+		    sizeof(ment->mze_name));
 		ment++;
 	}
 
@@ -232,6 +248,7 @@ zap_fat_write_array_chunk(zap_leaf_t *l, uint16_t li, size_t sz,
 	struct zap_leaf_array *la;
 
 	assert(sz <= ZAP_MAXVALUELEN);
+	assert(sz > 0);
 
 	for (uint16_t n, resid = sz; resid > 0; resid -= n, val += n, li++) {
 		n = MIN(resid, ZAP_LEAF_ARRAY_BYTES);
@@ -387,7 +404,7 @@ zap_fat_write(zfs_opt_t *zfs, zfs_zap_t *zap)
 	 * header.
 	 */
 	prefixlen = zap_fat_write_prefixlen(zap, &l);
-	lblkcnt = 1 << prefixlen;
+	lblkcnt = (uint64_t)1 << prefixlen;
 	leafblks = ecalloc(lblkcnt, blksz);
 	for (unsigned int li = 0; li < lblkcnt; li++) {
 		l.l_phys = (zap_leaf_phys_t *)(leafblks + li * blksz);
@@ -488,7 +505,8 @@ zap_fat_write(zfs_opt_t *zfs, zfs_zap_t *zap)
 		le->le_value_intlen = ent->intsz;
 		le->le_value_numints = ent->intcnt;
 		le->le_hash = ent->hash;
-		zap_fat_write_array_chunk(&l, *lptr + 1, namelen, ent->name);
+		zap_fat_write_array_chunk(&l, *lptr + 1, namelen,
+		    (uint8_t *)ent->name);
 		zap_fat_write_array_chunk(&l, *lptr + 1 + nnamechunks,
 		    ent->intcnt * ent->intsz, ent->valp);
 	}

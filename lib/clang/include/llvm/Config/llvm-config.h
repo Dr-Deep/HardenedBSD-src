@@ -1,4 +1,3 @@
-/* $FreeBSD$ */
 /*===------- llvm/Config/llvm-config.h - llvm configuration -------*- C -*-===*/
 /*                                                                            */
 /* Part of the LLVM Project, under the Apache License v2.0 with LLVM          */
@@ -19,6 +18,7 @@
 /* #undef LLVM_ENABLE_DUMP */
 
 /* Target triple LLVM will generate code for by default */
+/* Doesn't use `cmakedefine` because it is allowed to be empty. */
 /* #undef LLVM_DEFAULT_TARGET_TRIPLE */
 
 /* Define if threads enabled */
@@ -67,16 +67,16 @@
 #define LLVM_USE_PERF 0
 
 /* Major version of the LLVM API */
-#define LLVM_VERSION_MAJOR 14
+#define LLVM_VERSION_MAJOR 21
 
 /* Minor version of the LLVM API */
-#define LLVM_VERSION_MINOR 0
+#define LLVM_VERSION_MINOR 1
 
 /* Patch version of the LLVM API */
-#define LLVM_VERSION_PATCH 5
+#define LLVM_VERSION_PATCH 8
 
 /* LLVM version string */
-#define LLVM_VERSION_STRING "14.0.5"
+#define LLVM_VERSION_STRING "21.1.8"
 
 /* Whether LLVM records statistics for use with GetStatistics(),
  * PrintStatistics() or PrintStatisticsJSON()
@@ -89,22 +89,20 @@
 /* Define if we have curl and want to use it */
 /* #undef LLVM_ENABLE_CURL */
 
+/* Define if we have cpp-httplib and want to use it */
+/* #undef LLVM_ENABLE_HTTPLIB */
+
 /* Define if zlib compression is available */
 #define LLVM_ENABLE_ZLIB 1
 
-/* Define if LLVM was built with a dependency to the libtensorflow dynamic library */
-/* #undef LLVM_HAVE_TF_API */
+/* Define if zstd compression is available */
+#define LLVM_ENABLE_ZSTD 1
+
+/* Define if LLVM is using tflite */
+/* #undef LLVM_HAVE_TFLITE */
 
 /* Define to 1 if you have the <sysexits.h> header file. */
 #define HAVE_SYSEXITS_H 1
-
-/* Define to 1 to enable the experimental new pass manager by default */
-#define LLVM_ENABLE_NEW_PASS_MANAGER 1
-
-/* Define if the xar_open() function is supported on this platform. */
-#if defined(__APPLE__)
-#define LLVM_HAVE_LIBXAR 1
-#endif
 
 /* Define if building libLLVM shared library */
 /* #undef LLVM_BUILD_LLVM_DYLIB */
@@ -112,7 +110,37 @@
 /* Define if building LLVM with BUILD_SHARED_LIBS */
 /* #undef LLVM_BUILD_SHARED_LIBS */
 
+/* Define if exporting LLVM public interface for shared library */
+#define LLVM_ENABLE_LLVM_EXPORT_ANNOTATIONS
+
+/* Define if exporting LLVM-C public interface for shared library */
+#define LLVM_ENABLE_LLVM_C_EXPORT_ANNOTATIONS
+
 /* Define if building LLVM with LLVM_FORCE_USE_OLD_TOOLCHAIN_LIBS */
 /* #undef LLVM_FORCE_USE_OLD_TOOLCHAIN */
+
+/* Define if llvm_unreachable should be optimized with undefined behavior
+ * in non assert builds */
+#define LLVM_UNREACHABLE_OPTIMIZE 1
+
+/* Define to 1 if you have the DIA SDK installed, and to 0 if you don't. */
+#define LLVM_ENABLE_DIA_SDK 0
+
+/* Define if plugins enabled */
+/* #undef LLVM_ENABLE_PLUGINS */
+
+/* Define if logf128 is available */
+/* #undef LLVM_HAS_LOGF128 */
+
+/* Define if building LLVM with LLVM_ENABLE_TELEMETRY */
+#define LLVM_ENABLE_TELEMETRY 0
+
+/* Define to 1 to enable expensive checks for debug location coverage checking,
+   and to 0 otherwise. */
+#define LLVM_ENABLE_DEBUGLOC_TRACKING_COVERAGE 0
+
+/* Define to 1 to enable expensive tracking of the origin of debug location
+   coverage bugs, and to 0 otherwise. */
+#define LLVM_ENABLE_DEBUGLOC_TRACKING_ORIGIN 0
 
 #endif

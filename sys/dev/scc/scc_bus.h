@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2004-2006 Marcel Moolenaar
  * All rights reserved.
@@ -24,8 +24,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _DEV_SCC_BUS_H_
@@ -34,12 +32,14 @@
 #include <sys/serial.h>
 #include <serdev_if.h>
 
-#define	SCC_IVAR_CHANNEL	0
-#define	SCC_IVAR_CLASS		1
-#define	SCC_IVAR_CLOCK		2
-#define	SCC_IVAR_MODE		3
-#define	SCC_IVAR_REGSHFT	4
-#define	SCC_IVAR_HWMTX		5
+enum {
+	SCC_IVAR_CHANNEL = BUS_IVARS_PRIVATE,
+	SCC_IVAR_CLASS,
+	SCC_IVAR_CLOCK,
+	SCC_IVAR_MODE,
+	SCC_IVAR_REGSHFT,
+	SCC_IVAR_HWMTX
+};
 
 /* Hardware class -- the SCC type. */
 #define	SCC_CLASS_UNUSED	0

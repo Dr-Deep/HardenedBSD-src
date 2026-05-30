@@ -28,11 +28,6 @@
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) 
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE 
  * POSSIBILITY OF SUCH DAMAGE.
- *
- *	from: @(#)auth.h 1.17 88/02/08 SMI
- *	from: @(#)auth.h	2.3 88/08/07 4.0 RPCSRC
- *	from: @(#)auth.h	1.43 	98/02/02 SMI
- * $FreeBSD$
  */
 
 /*
@@ -358,6 +353,10 @@ __END_DECLS
 #define AUTH_KERB	4		/* kerberos style */
 #define RPCSEC_GSS	6		/* RPCSEC_GSS */
 #define	AUTH_TLS	7		/* Initiate RPC-over-TLS */
+
+/* RFC 5531's prescribed limits for variable-lenth arrays. */
+#define AUTH_SYS_MAX_HOSTNAME	255
+#define AUTH_SYS_MAX_GROUPS	16	/* Supplementary groups. */
 
 /*
  * Pseudo auth flavors for RPCSEC_GSS.

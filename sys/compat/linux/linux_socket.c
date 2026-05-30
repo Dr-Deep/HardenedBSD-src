@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1995 Søren Schmidt
  * All rights reserved.
@@ -26,32 +26,22 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
-/* XXX we use functions that might not exist. */
-#include "opt_compat.h"
 #include "opt_inet6.h"
 
 #include <sys/param.h>
-#include <sys/proc.h>
-#include <sys/systm.h>
-#include <sys/sysproto.h>
 #include <sys/capsicum.h>
-#include <sys/fcntl.h>
-#include <sys/file.h>
+#include <sys/domain.h>
 #include <sys/filedesc.h>
 #include <sys/limits.h>
-#include <sys/lock.h>
 #include <sys/malloc.h>
-#include <sys/mutex.h>
 #include <sys/mbuf.h>
+#include <sys/proc.h>
+#include <sys/protosw.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/syscallsubr.h>
-#include <sys/uio.h>
-#include <sys/stat.h>
-#include <sys/syslog.h>
+#include <sys/sysproto.h>
+#include <sys/vnode.h>
 #include <sys/un.h>
 #include <sys/unistd.h>
 
@@ -60,15 +50,16 @@ __FBSDID("$FreeBSD$");
 #include <net/if.h>
 #include <net/vnet.h>
 #include <netinet/in.h>
-#include <netinet/in_systm.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
 #ifdef INET6
+#include <netinet/icmp6.h>
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
 #endif
 
 #ifdef COMPAT_LINUX32
+#include <compat/freebsd32/freebsd32_util.h>
 #include <machine/../linux32/linux.h>
 #include <machine/../linux32/linux32_proto.h>
 #else
@@ -80,8 +71,18 @@ __FBSDID("$FreeBSD$");
 #include <compat/linux/linux_file.h>
 #include <compat/linux/linux_mib.h>
 #include <compat/linux/linux_socket.h>
-#include <compat/linux/linux_timer.h>
+#include <compat/linux/linux_time.h>
 #include <compat/linux/linux_util.h>
+
+_Static_assert(offsetof(struct l_ifreq, ifr_ifru) ==
+    offsetof(struct ifreq, ifr_ifru),
+    "Linux ifreq members names should be equal to FreeeBSD");
+_Static_assert(offsetof(struct l_ifreq, ifr_index) ==
+    offsetof(struct ifreq, ifr_index),
+    "Linux ifreq members names should be equal to FreeeBSD");
+_Static_assert(offsetof(struct l_ifreq, ifr_name) ==
+    offsetof(struct ifreq, ifr_name),
+    "Linux ifreq members names should be equal to FreeeBSD");
 
 #define	SECURITY_CONTEXT_STRING	"unconfined"
 
@@ -90,6 +91,8 @@ static int linux_sendmsg_common(struct thread *, l_int, struct l_msghdr *,
 static int linux_recvmsg_common(struct thread *, l_int, struct l_msghdr *,
 					l_uint, struct msghdr *);
 static int linux_set_socket_flags(int, int *);
+
+#define	SOL_NETLINK	270
 
 static int
 linux_to_bsd_sockopt_level(int level)
@@ -134,7 +137,6 @@ linux_to_bsd_ip_sockopt(int opt)
 		LINUX_RATELIMIT_MSG_NOTTESTED("IPv4 socket option IP_RECVTTL");
 		return (IP_RECVTTL);
 	case LINUX_IP_RECVTOS:
-		LINUX_RATELIMIT_MSG_NOTTESTED("IPv4 socket option IP_RECVTOS");
 		return (IP_RECVTOS);
 	case LINUX_IP_FREEBIND:
 		LINUX_RATELIMIT_MSG_NOTTESTED("IPv4 socket option IP_FREEBIND");
@@ -500,6 +502,11 @@ linux_to_bsd_ip6_sockopt(int opt)
 		    "unsupported IPv6 socket option IPV6_RECVFRAGSIZE (%d)",
 		    opt);
 		return (-2);
+	case LINUX_IPV6_RECVERR:
+		LINUX_RATELIMIT_MSG_OPT1(
+		    "unsupported IPv6 socket option IPV6_RECVERR (%d), you can not get extended reliability info in linux programs",
+		    opt);
+		return (-2);
 
 	/* unknown sockopts */
 	default:
@@ -589,9 +596,46 @@ linux_to_bsd_tcp_sockopt(int opt)
 		return (-2);
 	case LINUX_TCP_MD5SIG:
 		return (TCP_MD5SIG);
+	case LINUX_TCP_USER_TIMEOUT:
+		return (TCP_MAXUNACKTIME);
 	}
 	return (-1);
 }
+
+static u_int
+linux_to_bsd_tcp_user_timeout(l_uint linux_timeout)
+{
+
+	/*
+	 * Linux exposes TCP_USER_TIMEOUT in milliseconds while
+	 * TCP_MAXUNACKTIME uses whole seconds. Round up partial
+	 * seconds so a non-zero Linux timeout never becomes zero.
+	 */
+	return (howmany(linux_timeout, 1000U));
+}
+
+static l_uint
+bsd_to_linux_tcp_user_timeout(u_int bsd_timeout)
+{
+
+	if (bsd_timeout > UINT_MAX / 1000U)
+		return (UINT_MAX);
+
+	return (bsd_timeout * 1000U);
+}
+
+#ifdef INET6
+static int
+linux_to_bsd_icmp6_sockopt(int opt)
+{
+
+	switch (opt) {
+	case LINUX_ICMP6_FILTER:
+		return (ICMP6_FILTER);
+	}
+	return (-1);
+}
+#endif
 
 static int
 linux_to_bsd_msg_flags(int flags)
@@ -657,9 +701,25 @@ bsd_to_linux_ip_cmsg_type(int cmsg_type)
 	switch (cmsg_type) {
 	case IP_RECVORIGDSTADDR:
 		return (LINUX_IP_RECVORIGDSTADDR);
+	case IP_RECVTOS:
+		return (LINUX_IP_TOS);
 	}
 	return (-1);
 }
+
+#ifdef INET6
+static int
+bsd_to_linux_ip6_cmsg_type(int cmsg_type)
+{
+	switch (cmsg_type) {
+	case IPV6_2292HOPLIMIT:
+		return (LINUX_IPV6_2292HOPLIMIT);
+	case IPV6_HOPLIMIT:
+		return (LINUX_IPV6_HOPLIMIT);
+	}
+	return (-1);
+}
+#endif
 
 static int
 bsd_to_linux_cmsg_type(struct proc *p, int cmsg_type, int cmsg_level)
@@ -668,6 +728,10 @@ bsd_to_linux_cmsg_type(struct proc *p, int cmsg_type, int cmsg_level)
 
 	if (cmsg_level == IPPROTO_IP)
 		return (bsd_to_linux_ip_cmsg_type(cmsg_type));
+#ifdef INET6
+	if (cmsg_level == IPPROTO_IPV6)
+		return (bsd_to_linux_ip6_cmsg_type(cmsg_type));
+#endif
 	if (cmsg_level != SOL_SOCKET)
 		return (-1);
 
@@ -869,7 +933,8 @@ static const char *linux_netlink_names[] = {
 int
 linux_socket(struct thread *td, struct linux_socket_args *args)
 {
-	int domain, retval_socket, type;
+	int retval_socket, type;
+	sa_family_t domain;
 
 	type = args->type & LINUX_SOCK_TYPE_MASK;
 	if (type < 0 || type > LINUX_SOCK_MAX)
@@ -879,7 +944,7 @@ linux_socket(struct thread *td, struct linux_socket_args *args)
 	if (retval_socket != 0)
 		return (retval_socket);
 	domain = linux_to_bsd_domain(args->domain);
-	if (domain == -1) {
+	if (domain == AF_UNKNOWN) {
 		/* Mask off SOCK_NONBLOCK / CLOEXEC for error messages. */
 		type = args->type & LINUX_SOCK_TYPE_MASK;
 		if (args->domain == LINUX_AF_NETLINK &&
@@ -970,7 +1035,6 @@ linux_connect(struct thread *td, struct linux_connect_args *args)
 	struct socket *so;
 	struct sockaddr *sa;
 	struct file *fp;
-	u_int fflag;
 	int error;
 
 	error = linux_to_bsd_sockaddr(PTRIN(args->name), &sa,
@@ -988,14 +1052,13 @@ linux_connect(struct thread *td, struct linux_connect_args *args)
 	 * when on a non-blocking socket. Instead it returns the
 	 * error getsockopt(SOL_SOCKET, SO_ERROR) would return on BSD.
 	 */
-	error = getsock_cap(td, args->s, &cap_connect_rights,
-	    &fp, &fflag, NULL);
+	error = getsock(td, args->s, &cap_connect_rights, &fp);
 	if (error != 0)
 		return (error);
 
 	error = EISCONN;
 	so = fp->f_data;
-	if (fflag & FNONBLOCK) {
+	if (atomic_load_int(&fp->f_flag) & FNONBLOCK) {
 		SOCK_LOCK(so);
 		if (so->so_emuldata == 0)
 			error = so->so_error;
@@ -1018,31 +1081,29 @@ static int
 linux_accept_common(struct thread *td, int s, l_uintptr_t addr,
     l_uintptr_t namelen, int flags)
 {
-	struct sockaddr *sa;
+	struct sockaddr_storage ss = { .ss_len = sizeof(ss) };
 	struct file *fp, *fp1;
-	int bflags, len;
 	struct socket *so;
-	int error, error1;
+	socklen_t len;
+	int bflags, error, error1;
 
 	bflags = 0;
 	fp = NULL;
-	sa = NULL;
 
 	error = linux_set_socket_flags(flags, &bflags);
 	if (error != 0)
 		return (error);
 
-	if (PTRIN(addr) == NULL) {
-		len = 0;
-		error = kern_accept4(td, s, NULL, NULL, bflags, NULL);
-	} else {
+	if (PTRIN(addr) != NULL) {
 		error = copyin(PTRIN(namelen), &len, sizeof(len));
 		if (error != 0)
 			return (error);
 		if (len < 0)
 			return (EINVAL);
-		error = kern_accept4(td, s, &sa, &len, bflags, &fp);
-	}
+	} else
+		len = 0;
+
+	error = kern_accept4(td, s, (struct sockaddr *)&ss, bflags, &fp);
 
 	/*
 	 * Translate errno values into ones used by Linux.
@@ -1058,7 +1119,7 @@ linux_accept_common(struct thread *td, int s, l_uintptr_t addr,
 				error = EINVAL;
 			break;
 		case EINVAL:
-			error1 = getsock_cap(td, s, &cap_accept_rights, &fp1, NULL, NULL);
+			error1 = getsock(td, s, &cap_accept_rights, &fp1);
 			if (error1 != 0) {
 				error = error1;
 				break;
@@ -1072,11 +1133,14 @@ linux_accept_common(struct thread *td, int s, l_uintptr_t addr,
 		return (error);
 	}
 
-	if (len != 0) {
-		error = linux_copyout_sockaddr(sa, PTRIN(addr), len);
-		if (error == 0)
-			error = copyout(&len, PTRIN(namelen),
-			    sizeof(len));
+	if (PTRIN(addr) != NULL) {
+		len = min(ss.ss_len, len);
+		error = linux_copyout_sockaddr((struct sockaddr *)&ss,
+		    PTRIN(addr), len);
+		if (error == 0) {
+			len = ss.ss_len;
+			error = copyout(&len, PTRIN(namelen), sizeof(len));
+		}
 		if (error != 0) {
 			fdclose(td, fp, td->td_retval[0]);
 			td->td_retval[0] = 0;
@@ -1084,7 +1148,6 @@ linux_accept_common(struct thread *td, int s, l_uintptr_t addr,
 	}
 	if (fp != NULL)
 		fdrop(fp, td);
-	free(sa, M_SONAME);
 	return (error);
 }
 
@@ -1107,48 +1170,50 @@ linux_accept4(struct thread *td, struct linux_accept4_args *args)
 int
 linux_getsockname(struct thread *td, struct linux_getsockname_args *args)
 {
-	struct sockaddr *sa;
-	int len, error;
+	struct sockaddr_storage ss = { .ss_len = sizeof(ss) };
+	socklen_t len;
+	int error;
 
 	error = copyin(PTRIN(args->namelen), &len, sizeof(len));
 	if (error != 0)
 		return (error);
 
-	error = kern_getsockname(td, args->s, &sa, &len);
+	error = kern_getsockname(td, args->s, (struct sockaddr *)&ss);
 	if (error != 0)
 		return (error);
 
-	if (len != 0)
-		error = linux_copyout_sockaddr(sa, PTRIN(args->addr), len);
-
-	free(sa, M_SONAME);
-	if (error == 0)
+	len = min(ss.ss_len, len);
+	error = linux_copyout_sockaddr((struct sockaddr *)&ss,
+	    PTRIN(args->addr), len);
+	if (error == 0) {
+		len = ss.ss_len;
 		error = copyout(&len, PTRIN(args->namelen), sizeof(len));
+	}
 	return (error);
 }
 
 int
 linux_getpeername(struct thread *td, struct linux_getpeername_args *args)
 {
-	struct sockaddr *sa;
-	int len, error;
+	struct sockaddr_storage ss = { .ss_len = sizeof(ss) };
+	socklen_t len;
+	int error;
 
 	error = copyin(PTRIN(args->namelen), &len, sizeof(len));
 	if (error != 0)
 		return (error);
-	if (len < 0)
-		return (EINVAL);
 
-	error = kern_getpeername(td, args->s, &sa, &len);
+	error = kern_getpeername(td, args->s, (struct sockaddr *)&ss);
 	if (error != 0)
 		return (error);
 
-	if (len != 0)
-		error = linux_copyout_sockaddr(sa, PTRIN(args->addr), len);
-
-	free(sa, M_SONAME);
-	if (error == 0)
+	len = min(ss.ss_len, len);
+	error = linux_copyout_sockaddr((struct sockaddr *)&ss,
+	    PTRIN(args->addr), len);
+	if (error == 0) {
+		len = ss.ss_len;
 		error = copyout(&len, PTRIN(args->namelen), sizeof(len));
+	}
 	return (error);
 }
 
@@ -1207,7 +1272,7 @@ linux_send(struct thread *td, struct linux_send_args *args)
 		int tolen;
 	} */ bsd_args;
 	struct file *fp;
-	int error, fflag;
+	int error;
 
 	bsd_args.s = args->s;
 	bsd_args.buf = (caddr_t)PTRIN(args->msg);
@@ -1221,10 +1286,9 @@ linux_send(struct thread *td, struct linux_send_args *args)
 		 * Linux doesn't return ENOTCONN for non-blocking sockets.
 		 * Instead it returns the EAGAIN.
 		 */
-		error = getsock_cap(td, args->s, &cap_send_rights, &fp,
-		    &fflag, NULL);
+		error = getsock(td, args->s, &cap_send_rights, &fp);
 		if (error == 0) {
-			if (fflag & FNONBLOCK)
+			if (atomic_load_int(&fp->f_flag) & FNONBLOCK)
 				error = EAGAIN;
 			fdrop(fp, td);
 		}
@@ -1275,8 +1339,7 @@ linux_sendto(struct thread *td, struct linux_sendto_args *args)
 		return (linux_sendto_hdrincl(td, args));
 
 	bzero(&msg, sizeof(msg));
-	error = getsock_cap(td, args->s, &cap_send_connect_rights,
-	    &fp, NULL, NULL);
+	error = getsock(td, args->s, &cap_send_connect_rights, &fp);
 	if (error != 0)
 		return (error);
 	so = fp->f_data;
@@ -1351,6 +1414,7 @@ static int
 linux_sendmsg_common(struct thread *td, l_int s, struct l_msghdr *msghdr,
     l_uint flags)
 {
+	struct sockaddr_storage ss = { .ss_len = sizeof(ss) };
 	struct cmsghdr *cmsg;
 	struct mbuf *control;
 	struct msghdr msg;
@@ -1359,14 +1423,13 @@ linux_sendmsg_common(struct thread *td, l_int s, struct l_msghdr *msghdr,
 	struct l_msghdr linux_msghdr;
 	struct iovec *iov;
 	socklen_t datalen;
-	struct sockaddr *sa;
 	struct socket *so;
 	sa_family_t sa_family;
 	struct file *fp;
 	void *data;
 	l_size_t len;
 	l_size_t clen;
-	int error, fflag;
+	int error;
 
 	error = copyin(msghdr, &linux_msghdr, sizeof(linux_msghdr));
 	if (error != 0)
@@ -1388,7 +1451,7 @@ linux_sendmsg_common(struct thread *td, l_int s, struct l_msghdr *msghdr,
 		return (error);
 
 #ifdef COMPAT_LINUX32
-	error = linux32_copyiniov(PTRIN(msg.msg_iov), msg.msg_iovlen,
+	error = freebsd32_copyiniov(PTRIN(msg.msg_iov), msg.msg_iovlen,
 	    &iov, EMSGSIZE);
 #else
 	error = copyiniov(msg.msg_iov, msg.msg_iovlen, &iov, EMSGSIZE);
@@ -1398,19 +1461,17 @@ linux_sendmsg_common(struct thread *td, l_int s, struct l_msghdr *msghdr,
 
 	control = NULL;
 
-	error = kern_getsockname(td, s, &sa, &datalen);
+	error = kern_getsockname(td, s, (struct sockaddr *)&ss);
 	if (error != 0)
 		goto bad;
-	sa_family = sa->sa_family;
-	free(sa, M_SONAME);
+	sa_family = ss.ss_family;
 
 	if (flags & LINUX_MSG_OOB) {
 		error = EOPNOTSUPP;
 		if (sa_family == AF_UNIX)
 			goto bad;
 
-		error = getsock_cap(td, s, &cap_send_rights, &fp,
-		    &fflag, NULL);
+		error = getsock(td, s, &cap_send_rights, &fp);
 		if (error != 0)
 			goto bad;
 		so = fp->f_data;
@@ -1704,6 +1765,39 @@ _Static_assert(sizeof(struct bintime) >= sizeof(struct timespec),
 #endif /* __i386__ || (__amd64__ && COMPAT_LINUX32) */
 
 static int
+recvmsg_scm_sol_socket(struct thread *td, l_int msg_type, l_int lmsg_type,
+    l_uint flags, socklen_t *datalen, void **data, void **udata)
+{
+	int error;
+
+	error = 0;
+	switch (msg_type) {
+	case SCM_RIGHTS:
+		error = recvmsg_scm_rights(td, flags, datalen,
+		    data, udata);
+		break;
+	case SCM_CREDS:
+		error = recvmsg_scm_creds(datalen, data, udata);
+		break;
+	case SCM_CREDS2:
+		error = recvmsg_scm_creds2(datalen, data, udata);
+		break;
+	case SCM_TIMESTAMP:
+#if defined(__i386__) || (defined(__amd64__) && defined(COMPAT_LINUX32))
+		error = recvmsg_scm_timestamp(lmsg_type, datalen,
+		    data, udata);
+#endif
+		break;
+	case SCM_BINTIME:
+		error = recvmsg_scm_timestampns(lmsg_type, datalen,
+		    data, udata);
+		break;
+	}
+
+	return (error);
+}
+
+static int
 recvmsg_scm_ip_origdstaddr(socklen_t *datalen, void **data, void **udata)
 {
 	struct l_sockaddr *lsa;
@@ -1714,6 +1808,23 @@ recvmsg_scm_ip_origdstaddr(socklen_t *datalen, void **data, void **udata)
 		*data = *udata = lsa;
 		*datalen = sizeof(*lsa);
 	}
+	return (error);
+}
+
+static int
+recvmsg_scm_ipproto_ip(l_int msg_type, l_int lmsg_type, socklen_t *datalen,
+    void **data, void **udata)
+{
+	int error;
+
+	error = 0;
+	switch (msg_type) {
+	case IP_ORIGDSTADDR:
+		error = recvmsg_scm_ip_origdstaddr(datalen, data,
+		    udata);
+		break;
+	}
+
 	return (error);
 }
 
@@ -1732,7 +1843,7 @@ linux_recvmsg_common(struct thread *td, l_int s, struct l_msghdr *msghdr,
 	struct sockaddr *sa;
 	caddr_t outbuf;
 	void *data, *udata;
-	int error;
+	int error, skiped;
 
 	error = copyin(msghdr, &l_msghdr, sizeof(l_msghdr));
 	if (error != 0)
@@ -1749,7 +1860,7 @@ linux_recvmsg_common(struct thread *td, l_int s, struct l_msghdr *msghdr,
 		return (error);
 
 #ifdef COMPAT_LINUX32
-	error = linux32_copyiniov(PTRIN(msg->msg_iov), msg->msg_iovlen,
+	error = freebsd32_copyiniov(PTRIN(msg->msg_iov), msg->msg_iovlen,
 	    &iov, EMSGSIZE);
 #else
 	error = copyiniov(msg->msg_iov, msg->msg_iovlen, &iov, EMSGSIZE);
@@ -1789,8 +1900,8 @@ linux_recvmsg_common(struct thread *td, l_int s, struct l_msghdr *msghdr,
 	if (error != 0)
 		goto bad;
 
+	skiped = outlen = 0;
 	maxlen = l_msghdr.msg_controllen;
-	l_msghdr.msg_controllen = 0;
 	if (control == NULL)
 		goto out;
 
@@ -1798,61 +1909,38 @@ linux_recvmsg_common(struct thread *td, l_int s, struct l_msghdr *msghdr,
 	msg->msg_control = mtod(control, struct cmsghdr *);
 	msg->msg_controllen = control->m_len;
 	outbuf = PTRIN(l_msghdr.msg_control);
-	outlen = 0;
 	for (m = control; m != NULL; m = m->m_next) {
 		cm = mtod(m, struct cmsghdr *);
 		lcm->cmsg_type = bsd_to_linux_cmsg_type(p, cm->cmsg_type,
 		    cm->cmsg_level);
 		lcm->cmsg_level = bsd_to_linux_sockopt_level(cm->cmsg_level);
 
+		if (lcm->cmsg_type == -1 ||
+		    lcm->cmsg_level == -1) {
+			LINUX_RATELIMIT_MSG_OPT2(
+			    "unsupported recvmsg cmsg level %d type %d",
+			    cm->cmsg_level, cm->cmsg_type);
+			/* Skip unsupported messages */
+			skiped++;
+			continue;
+		}
 		data = CMSG_DATA(cm);
 		datalen = (caddr_t)cm + cm->cmsg_len - (caddr_t)data;
 		udata = NULL;
 		error = 0;
 
-		/* Process non SOL_SOCKET types. */
-		if (cm->cmsg_level == IPPROTO_IP &&
-		    lcm->cmsg_type == LINUX_IP_ORIGDSTADDR) {
-			error = recvmsg_scm_ip_origdstaddr(&datalen, &data, &udata);
-			goto cont;
-		}
+		switch (cm->cmsg_level) {
+		case IPPROTO_IP:
+			error = recvmsg_scm_ipproto_ip(cm->cmsg_type,
+			    lcm->cmsg_type, &datalen, &data, &udata);
+ 			break;
+		case SOL_SOCKET:
+			error = recvmsg_scm_sol_socket(td, cm->cmsg_type,
+			    lcm->cmsg_type, flags, &datalen, &data, &udata);
+ 			break;
+ 		}
 
-		if (lcm->cmsg_type == -1 ||
-		    cm->cmsg_level != SOL_SOCKET) {
-			LINUX_RATELIMIT_MSG_OPT2(
-			    "unsupported recvmsg cmsg level %d type %d",
-			    cm->cmsg_level, cm->cmsg_type);
-			error = EINVAL;
-			goto bad;
-		}
-
-
-		switch (cm->cmsg_type) {
-		case SCM_RIGHTS:
-			error = recvmsg_scm_rights(td, flags,
-			    &datalen, &data, &udata);
-			break;
-		case SCM_CREDS:
-			error = recvmsg_scm_creds(&datalen,
-			    &data, &udata);
-			break;
-		case SCM_CREDS2:
-			error = recvmsg_scm_creds2(&datalen,
-			    &data, &udata);
-			break;
-		case SCM_TIMESTAMP:
-#if defined(__i386__) || (defined(__amd64__) && defined(COMPAT_LINUX32))
-			error = recvmsg_scm_timestamp(lcm->cmsg_type,
-			    &datalen, &data, &udata);
-#endif
-			break;
-		case SCM_BINTIME:
-			error = recvmsg_scm_timestampns(lcm->cmsg_type,
-			    &datalen, &data, &udata);
-			break;
-		}
-
-cont:
+		/* The recvmsg_scm_ is responsible to free udata on error. */
 		if (error != 0)
 			goto bad;
 
@@ -1871,11 +1959,10 @@ cont:
 		lcm->cmsg_len = LINUX_CMSG_LEN(datalen);
 		error = copyout(lcm, outbuf, L_CMSG_HDRSZ);
 		if (error == 0) {
-			outbuf += L_CMSG_HDRSZ;
-			error = copyout(data, outbuf, datalen);
+			error = copyout(data, LINUX_CMSG_DATA(outbuf), datalen);
 			if (error == 0) {
-				outbuf += LINUX_CMSG_ALIGN(datalen);
-				outlen += LINUX_CMSG_LEN(datalen);
+				outbuf += LINUX_CMSG_SPACE(datalen);
+				outlen += LINUX_CMSG_SPACE(datalen);
 			}
 		}
 err:
@@ -1883,9 +1970,13 @@ err:
 		if (error != 0)
 			goto bad;
 	}
-	l_msghdr.msg_controllen = outlen;
+	if (outlen == 0 && skiped > 0) {
+		error = EINVAL;
+		goto bad;
+	}
 
 out:
+	l_msghdr.msg_controllen = outlen;
 	error = copyout(&l_msghdr, msghdr, sizeof(l_msghdr));
 
 bad:
@@ -1908,8 +1999,7 @@ linux_recvmsg(struct thread *td, struct linux_recvmsg_args *args)
 	struct file *fp;
 	int error;
 
-	error = getsock_cap(td, args->s, &cap_recv_rights,
-	    &fp, NULL, NULL);
+	error = getsock(td, args->s, &cap_recv_rights, &fp);
 	if (error != 0)
 		return (error);
 	fdrop(fp, td);
@@ -1927,8 +2017,7 @@ linux_recvmmsg_common(struct thread *td, l_int s, struct l_mmsghdr *msg,
 	l_uint retval;
 	int error, datagrams;
 
-	error = getsock_cap(td, s, &cap_recv_rights,
-	    &fp, NULL, NULL);
+	error = getsock(td, s, &cap_recv_rights, &fp);
 	if (error != 0)
 		return (error);
 	datagrams = 0;
@@ -2025,8 +2114,10 @@ linux_setsockopt(struct thread *td, struct linux_setsockopt_args *args)
 	struct proc *p = td->td_proc;
 	struct linux_pemuldata *pem;
 	l_timeval linux_tv;
+	l_uint linux_timeout;
 	struct sockaddr *sa;
 	struct timeval tv;
+	u_int bsd_timeout;
 	socklen_t len;
 	int error, level, name, val;
 
@@ -2086,10 +2177,82 @@ linux_setsockopt(struct thread *td, struct linux_setsockopt_args *args)
 		name = linux_to_bsd_ip_sockopt(args->optname);
 		break;
 	case IPPROTO_IPV6:
+		if (args->optname == LINUX_IPV6_RECVERR &&
+		    linux_ignore_ip_recverr) {
+			/*
+			 * XXX: This is a hack to unbreak DNS resolution
+			 *	with glibc 2.30 and above.
+			 */
+			return (0);
+		}
 		name = linux_to_bsd_ip6_sockopt(args->optname);
 		break;
 	case IPPROTO_TCP:
 		name = linux_to_bsd_tcp_sockopt(args->optname);
+		switch (name) {
+		case TCP_MAXUNACKTIME:
+			if (args->optlen < sizeof(linux_timeout))
+				return (EINVAL);
+
+			error = copyin(PTRIN(args->optval), &linux_timeout,
+			    sizeof(linux_timeout));
+			if (error != 0)
+				return (error);
+
+			bsd_timeout = linux_to_bsd_tcp_user_timeout(
+			    linux_timeout);
+			return (kern_setsockopt(td, args->s, level, name,
+			    &bsd_timeout, UIO_SYSSPACE,
+			    sizeof(bsd_timeout)));
+		default:
+			break;
+		}
+		break;
+#ifdef INET6
+	case IPPROTO_RAW: {
+		struct file *fp;
+		struct socket *so;
+		int family;
+
+		error = getsock(td, args->s, &cap_setsockopt_rights, &fp);
+		if (error != 0)
+			return (error);
+		so = fp->f_data;
+		family = so->so_proto->pr_domain->dom_family;
+		fdrop(fp, td);
+
+		name = -1;
+		if (family == AF_INET6) {
+			name = linux_to_bsd_ip6_sockopt(args->optname);
+			if (name >= 0)
+				level = IPPROTO_IPV6;
+		}
+		break;
+	}
+	case IPPROTO_ICMPV6: {
+		struct icmp6_filter f;
+		int i;
+
+		name = linux_to_bsd_icmp6_sockopt(args->optname);
+		if (name != ICMP6_FILTER)
+			break;
+
+		if (args->optlen != sizeof(f))
+			return (EINVAL);
+
+		error = copyin(PTRIN(args->optval), &f, sizeof(f));
+		if (error)
+			return (error);
+
+		/* Linux uses opposite values for pass/block in ICMPv6 */
+		for (i = 0; i < nitems(f.icmp6_filt); i++)
+			f.icmp6_filt[i] = ~f.icmp6_filt[i];
+		return (kern_setsockopt(td, args->s, IPPROTO_ICMPV6,
+		    ICMP6_FILTER, &f, UIO_SYSSPACE, sizeof(f)));
+	}
+#endif
+	case SOL_NETLINK:
+		name = args->optname;
 		break;
 	default:
 		name = -1;
@@ -2103,7 +2266,8 @@ linux_setsockopt(struct thread *td, struct linux_setsockopt_args *args)
 		return (ENOPROTOOPT);
 	}
 
-	if (name == IPV6_NEXTHOP) {
+	switch (name) {
+	case IPV6_NEXTHOP: {
 		len = args->optlen;
 		error = linux_to_bsd_sockaddr(PTRIN(args->optval), &sa, &len);
 		if (error != 0)
@@ -2112,7 +2276,34 @@ linux_setsockopt(struct thread *td, struct linux_setsockopt_args *args)
 		error = kern_setsockopt(td, args->s, level,
 		    name, sa, UIO_SYSSPACE, len);
 		free(sa, M_SONAME);
-	} else {
+		break;
+	}
+	case MCAST_JOIN_GROUP:
+	case MCAST_LEAVE_GROUP:
+	case MCAST_JOIN_SOURCE_GROUP:
+	case MCAST_LEAVE_SOURCE_GROUP: {
+		struct group_source_req req;
+		size_t size;
+
+		size = (name == MCAST_JOIN_SOURCE_GROUP ||
+		    name == MCAST_LEAVE_SOURCE_GROUP) ?
+		    sizeof(struct group_source_req) : sizeof(struct group_req);
+
+		if ((error = copyin(PTRIN(args->optval), &req, size)))
+			return (error);
+		len = sizeof(struct sockaddr_storage);
+		if ((error = linux_to_bsd_sockaddr(
+		    (struct l_sockaddr *)&req.gsr_group, NULL, &len)))
+			return (error);
+		if (size == sizeof(struct group_source_req) &&
+		    (error = linux_to_bsd_sockaddr(
+		    (struct l_sockaddr *)&req.gsr_source, NULL, &len)))
+			return (error);
+		error = kern_setsockopt(td, args->s, level, name, &req,
+		    UIO_SYSSPACE, size);
+		break;
+	}
+	default:
 		error = kern_setsockopt(td, args->s, level,
 		    name, PTRIN(args->optval), UIO_USERSPACE, args->optlen);
 	}
@@ -2136,6 +2327,7 @@ static int
 linux_getsockopt_so_peergroups(struct thread *td,
     struct linux_getsockopt_args *args)
 {
+	l_gid_t *out = PTRIN(args->optval);
 	struct xucred xu;
 	socklen_t xulen, len;
 	int error, i;
@@ -2154,13 +2346,12 @@ linux_getsockopt_so_peergroups(struct thread *td,
 		return (error);
 	}
 
-	/*
-	 * "- 1" to skip the primary group.
-	 */
+	/* "- 1" to skip the primary group. */
 	for (i = 0; i < xu.cr_ngroups - 1; i++) {
-		error = copyout(xu.cr_groups + i + 1,
-		    (void *)(args->optval + i * sizeof(l_gid_t)),
-		    sizeof(l_gid_t));
+		/* Copy to cope with a possible type discrepancy. */
+		const l_gid_t g = xu.cr_groups[i + 1];
+
+		error = copyout(&g, out + i, sizeof(l_gid_t));
 		if (error != 0)
 			return (error);
 	}
@@ -2208,10 +2399,12 @@ linux_getsockopt_so_linger(struct thread *td,
 int
 linux_getsockopt(struct thread *td, struct linux_getsockopt_args *args)
 {
+	l_uint linux_timeout;
 	l_timeval linux_tv;
 	struct timeval tv;
 	socklen_t tv_len, xulen, len;
 	struct sockaddr *sa;
+	u_int bsd_timeout;
 	struct xucred xu;
 	struct l_ucred lxu;
 	int error, level, name, newval;
@@ -2281,8 +2474,8 @@ linux_getsockopt(struct thread *td, struct linux_getsockopt_args *args)
 			    name, &newval, UIO_SYSSPACE, &len);
 			if (error != 0)
 				return (error);
-			newval = bsd_to_linux_domain(newval);
-			if (newval == -1)
+			newval = bsd_to_linux_domain((sa_family_t)newval);
+			if (newval == AF_UNKNOWN)
 				return (ENOPROTOOPT);
 			return (linux_sockopt_copyout(td, &newval,
 			    len, args));
@@ -2302,7 +2495,72 @@ linux_getsockopt(struct thread *td, struct linux_getsockopt_args *args)
 		break;
 	case IPPROTO_TCP:
 		name = linux_to_bsd_tcp_sockopt(args->optname);
+		switch (name) {
+		case TCP_MAXUNACKTIME:
+			len = sizeof(bsd_timeout);
+			error = kern_getsockopt(td, args->s, level, name,
+			    &bsd_timeout, UIO_SYSSPACE, &len);
+			if (error != 0)
+				return (error);
+
+			linux_timeout = bsd_to_linux_tcp_user_timeout(
+			    bsd_timeout);
+			return (linux_sockopt_copyout(td, &linux_timeout,
+			    sizeof(linux_timeout), args));
+		default:
+			break;
+		}
 		break;
+#ifdef INET6
+	case IPPROTO_RAW: {
+		struct file *fp;
+		struct socket *so;
+		int family;
+
+		error = getsock(td, args->s, &cap_getsockopt_rights, &fp);
+		if (error != 0)
+			return (error);
+		so = fp->f_data;
+		family = so->so_proto->pr_domain->dom_family;
+		fdrop(fp, td);
+
+		name = -1;
+		if (family == AF_INET6) {
+			name = linux_to_bsd_ip6_sockopt(args->optname);
+			if (name >= 0)
+				level = IPPROTO_IPV6;
+		}
+		break;
+	}
+	case IPPROTO_ICMPV6: {
+		struct icmp6_filter f;
+		int i;
+
+		name = linux_to_bsd_icmp6_sockopt(args->optname);
+		if (name != ICMP6_FILTER)
+			break;
+
+		error = copyin(PTRIN(args->optlen), &len, sizeof(len));
+		if (error)
+			return (error);
+		if (len != sizeof(f))
+			return (EINVAL);
+
+		error = kern_getsockopt(td, args->s, IPPROTO_ICMPV6,
+		    ICMP6_FILTER, &f, UIO_SYSSPACE, &len);
+		if (error)
+			return (error);
+
+		/* Linux uses opposite values for pass/block in ICMPv6 */
+		for (i = 0; i < nitems(f.icmp6_filt); i++)
+			f.icmp6_filt[i] = ~f.icmp6_filt[i];
+		error = copyout(&f, PTRIN(args->optval), len);
+		if (error)
+			return (error);
+
+		return (copyout(&len, PTRIN(args->optlen), sizeof(socklen_t)));
+	}
+#endif
 	default:
 		name = -1;
 		break;
@@ -2348,57 +2606,217 @@ out:
 	return (error);
 }
 
+/*
+ * Based on sendfile_getsock from kern_sendfile.c
+ * Determines whether an fd is a stream socket that can be used
+ * with FreeBSD sendfile.
+ */
+static bool
+is_sendfile(struct file *fp, struct file *ofp)
+{
+	struct socket *so;
+
+	/*
+	 * FreeBSD sendfile() system call sends a regular file or
+	 * shared memory object out a stream socket.
+	 */
+	if ((fp->f_type != DTYPE_SHM && fp->f_type != DTYPE_VNODE) ||
+	    (fp->f_type == DTYPE_VNODE &&
+	    (fp->f_vnode == NULL || fp->f_vnode->v_type != VREG)))
+		return (false);
+	/*
+	 * The socket must be a stream socket and connected.
+	 */
+	if (ofp->f_type != DTYPE_SOCKET)
+		return (false);
+	so = ofp->f_data;
+	if (so->so_type != SOCK_STREAM)
+		return (false);
+	/*
+	 * SCTP one-to-one style sockets currently don't work with
+	 * sendfile().
+	 */
+	if (so->so_proto->pr_protocol == IPPROTO_SCTP)
+		return (false);
+	return (!SOLISTENING(so));
+}
+
+static bool
+is_regular_file(struct file *fp)
+{
+
+	return (fp->f_type == DTYPE_VNODE && fp->f_vnode != NULL &&
+	    fp->f_vnode->v_type == VREG);
+}
+
+static int
+sendfile_fallback(struct thread *td, struct file *fp, l_int out,
+    off_t *offset, l_size_t count, off_t *sbytes)
+{
+	off_t current_offset, out_offset, to_send;
+	l_size_t bytes_sent, n_read;
+	struct file *ofp;
+	struct iovec aiov;
+	struct uio auio;
+	bool seekable;
+	size_t bufsz;
+	void *buf;
+	int flags, error;
+
+	if (offset == NULL) {
+		if ((error = fo_seek(fp, 0, SEEK_CUR, td)) != 0)
+			return (error);
+		current_offset = td->td_uretoff.tdu_off;
+	} else {
+		if ((fp->f_ops->fo_flags & DFLAG_SEEKABLE) == 0)
+			return (ESPIPE);
+		current_offset = *offset;
+	}
+	error = fget_write(td, out, &cap_pwrite_rights, &ofp);
+	if (error != 0)
+		return (error);
+	seekable = (ofp->f_ops->fo_flags & DFLAG_SEEKABLE) != 0;
+	if (seekable) {
+		if ((error = fo_seek(ofp, 0, SEEK_CUR, td)) != 0)
+			goto drop;
+		out_offset = td->td_uretoff.tdu_off;
+	} else
+		out_offset = 0;
+
+	flags = FOF_OFFSET | FOF_NOUPDATE;
+	bufsz = min(count, maxphys);
+	buf = malloc(bufsz, M_LINUX, M_WAITOK);
+	bytes_sent = 0;
+	while (bytes_sent < count) {
+		to_send = min(count - bytes_sent, bufsz);
+		aiov.iov_base = buf;
+		aiov.iov_len = bufsz;
+		auio.uio_iov = &aiov;
+		auio.uio_iovcnt = 1;
+		auio.uio_segflg = UIO_SYSSPACE;
+		auio.uio_td = td;
+		auio.uio_rw = UIO_READ;
+		auio.uio_offset = current_offset;
+		auio.uio_resid = to_send;
+		error = fo_read(fp, &auio, fp->f_cred, flags, td);
+		if (error != 0)
+			break;
+		n_read = to_send - auio.uio_resid;
+		if (n_read == 0)
+			break;
+		aiov.iov_base = buf;
+		aiov.iov_len = bufsz;
+		auio.uio_iov = &aiov;
+		auio.uio_iovcnt = 1;
+		auio.uio_segflg = UIO_SYSSPACE;
+		auio.uio_td = td;
+		auio.uio_rw = UIO_WRITE;
+		auio.uio_offset = (seekable) ? out_offset : 0;
+		auio.uio_resid = n_read;
+		error = fo_write(ofp, &auio, ofp->f_cred, flags, td);
+		if (error != 0)
+			break;
+		bytes_sent += n_read;
+		current_offset += n_read;
+		out_offset += n_read;
+	}
+	free(buf, M_LINUX);
+
+	if (error == 0) {
+		*sbytes = bytes_sent;
+		if (offset != NULL)
+			*offset = current_offset;
+		else
+			error = fo_seek(fp, current_offset, SEEK_SET, td);
+	}
+	if (error == 0 && seekable)
+		error = fo_seek(ofp, out_offset, SEEK_SET, td);
+
+drop:
+	fdrop(ofp, td);
+	return (error);
+}
+
+static int
+sendfile_sendfile(struct thread *td, struct file *fp, l_int out,
+    off_t *offset, l_size_t count, off_t *sbytes)
+{
+	off_t current_offset;
+	int error;
+
+	if (offset == NULL) {
+		if ((fp->f_ops->fo_flags & DFLAG_SEEKABLE) == 0)
+			return (ESPIPE);
+		if ((error = fo_seek(fp, 0, SEEK_CUR, td)) != 0)
+			return (error);
+		current_offset = td->td_uretoff.tdu_off;
+	} else
+		current_offset = *offset;
+	error = fo_sendfile(fp, out, NULL, NULL, current_offset, count,
+	    sbytes, 0, td);
+	if (error == EAGAIN && *sbytes > 0) {
+		/*
+		 * The socket is non-blocking and we didn't finish sending.
+		 * Squash the error, since that's what Linux does.
+		 */
+		error = 0;
+	}
+	if (error == 0) {
+		current_offset += *sbytes;
+		if (offset != NULL)
+			*offset = current_offset;
+		else
+			error = fo_seek(fp, current_offset, SEEK_SET, td);
+	}
+	return (error);
+}
+
 static int
 linux_sendfile_common(struct thread *td, l_int out, l_int in,
-    l_loff_t *offset, l_size_t count)
+    off_t *offset, l_size_t count)
 {
-	off_t bytes_read;
+	struct file *fp, *ofp;
+	off_t sbytes;
 	int error;
-	l_loff_t current_offset;
-	struct file *fp;
+
+	/* Linux cannot have 0 count. */
+	if (count <= 0 || (offset != NULL && *offset < 0))
+		return (EINVAL);
 
 	AUDIT_ARG_FD(in);
 	error = fget_read(td, in, &cap_pread_rights, &fp);
 	if (error != 0)
 		return (error);
-
-	if (offset != NULL) {
-		current_offset = *offset;
-	} else {
-		error = (fp->f_ops->fo_flags & DFLAG_SEEKABLE) != 0 ?
-		    fo_seek(fp, 0, SEEK_CUR, td) : ESPIPE;
-		if (error != 0)
-			goto drop;
-		current_offset = td->td_uretoff.tdu_off;
-	}
-
-	bytes_read = 0;
-
-	/* Linux cannot have 0 count. */
-	if (count <= 0 || current_offset < 0) {
+	if ((fp->f_type != DTYPE_SHM && fp->f_type != DTYPE_VNODE) ||
+	    (fp->f_type == DTYPE_VNODE &&
+	    (fp->f_vnode == NULL || fp->f_vnode->v_type != VREG))) {
 		error = EINVAL;
 		goto drop;
 	}
-
-	error = fo_sendfile(fp, out, NULL, NULL, current_offset, count,
-	    &bytes_read, 0, td);
+	error = fget_unlocked(td, out, &cap_no_rights, &ofp);
 	if (error != 0)
 		goto drop;
-	current_offset += bytes_read;
 
-	if (offset != NULL) {
-		*offset = current_offset;
+	if (is_regular_file(fp) && is_regular_file(ofp)) {
+		error = kern_copy_file_range(td, in, offset, out, NULL, count,
+		    0);
 	} else {
-		error = fo_seek(fp, current_offset, SEEK_SET, td);
-		if (error != 0)
-			goto drop;
+		sbytes = 0;
+		if (is_sendfile(fp, ofp))
+			error = sendfile_sendfile(td, fp, out, offset, count,
+			    &sbytes);
+		else
+			error = sendfile_fallback(td, fp, out, offset, count,
+			    &sbytes);
+		if (error == ENOBUFS && (ofp->f_flag & FNONBLOCK) != 0)
+			error = EAGAIN;
+		if (error == 0)
+			td->td_retval[0] = sbytes;
 	}
+	fdrop(ofp, td);
 
-	td->td_retval[0] = (ssize_t)bytes_read;
 drop:
 	fdrop(fp, td);
-	if (error == ENOTSOCK)
-		error = EINVAL;
 	return (error);
 }
 
@@ -2408,10 +2826,10 @@ linux_sendfile(struct thread *td, struct linux_sendfile_args *arg)
 	/*
 	 * Differences between FreeBSD and Linux sendfile:
 	 * - Linux doesn't send anything when count is 0 (FreeBSD uses 0 to
-	 *   mean send the whole file.)  In linux_sendfile given fds are still
-	 *   checked for validity when the count is 0.
+	 *   mean send the whole file).
 	 * - Linux can send to any fd whereas FreeBSD only supports sockets.
-	 *   The same restriction follows for linux_sendfile.
+	 *   We therefore use FreeBSD sendfile where possible for performance,
+	 *   but fall back on a manual copy (sendfile_fallback).
 	 * - Linux doesn't have an equivalent for FreeBSD's flags and sf_hdtr.
 	 * - Linux takes an offset pointer and updates it to the read location.
 	 *   FreeBSD takes in an offset and a 'bytes read' parameter which is
@@ -2421,44 +2839,37 @@ linux_sendfile(struct thread *td, struct linux_sendfile_args *arg)
 	 *   returns 0.  We use the 'bytes read' parameter to get this value.
 	 */
 
-	l_loff_t offset64;
-	l_long offset;
-	int ret;
+	off_t offset64;
+	l_off_t offset;
 	int error;
 
 	if (arg->offset != NULL) {
 		error = copyin(arg->offset, &offset, sizeof(offset));
 		if (error != 0)
 			return (error);
-		offset64 = (l_loff_t)offset;
+		offset64 = offset;
 	}
 
-	ret = linux_sendfile_common(td, arg->out, arg->in,
+	error = linux_sendfile_common(td, arg->out, arg->in,
 	    arg->offset != NULL ? &offset64 : NULL, arg->count);
 
-	if (arg->offset != NULL) {
-#if defined(__i386__) || defined(__arm__) || \
-    (defined(__amd64__) && defined(COMPAT_LINUX32))
+	if (error == 0 && arg->offset != NULL) {
+#if defined(__i386__) || (defined(__amd64__) && defined(COMPAT_LINUX32))
 		if (offset64 > INT32_MAX)
 			return (EOVERFLOW);
 #endif
-		offset = (l_long)offset64;
+		offset = (l_off_t)offset64;
 		error = copyout(&offset, arg->offset, sizeof(offset));
-		if (error != 0)
-			return (error);
 	}
 
-	return (ret);
+	return (error);
 }
 
-#if defined(__i386__) || defined(__arm__) || \
-    (defined(__amd64__) && defined(COMPAT_LINUX32))
-
+#if defined(__i386__) || (defined(__amd64__) && defined(COMPAT_LINUX32))
 int
 linux_sendfile64(struct thread *td, struct linux_sendfile64_args *arg)
 {
-	l_loff_t offset;
-	int ret;
+	off_t offset;
 	int error;
 
 	if (arg->offset != NULL) {
@@ -2467,16 +2878,13 @@ linux_sendfile64(struct thread *td, struct linux_sendfile64_args *arg)
 			return (error);
 	}
 
-	ret = linux_sendfile_common(td, arg->out, arg->in,
+	error = linux_sendfile_common(td, arg->out, arg->in,
 		arg->offset != NULL ? &offset : NULL, arg->count);
 
-	if (arg->offset != NULL) {
+	if (error == 0 && arg->offset != NULL)
 		error = copyout(&offset, arg->offset, sizeof(offset));
-		if (error != 0)
-			return (error);
-	}
 
-	return (ret);
+	return (error);
 }
 
 /* Argument list sizes for linux_socketcall */
@@ -2567,4 +2975,4 @@ linux_socketcall(struct thread *td, struct linux_socketcall_args *args)
 	linux_msg(td, "socket type %d not implemented", args->what);
 	return (ENOSYS);
 }
-#endif /* __i386__ || __arm__ || (__amd64__ && COMPAT_LINUX32) */
+#endif /* __i386__ || (__amd64__ && COMPAT_LINUX32) */

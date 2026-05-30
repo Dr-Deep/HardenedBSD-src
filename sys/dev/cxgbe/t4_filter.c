@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2018 Chelsio Communications, Inc.
  * All rights reserved.
@@ -26,8 +26,6 @@
  * SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_inet.h"
 #include "opt_inet6.h"
 
@@ -324,46 +322,83 @@ remove_hftid(struct adapter *sc, struct filter_entry *f)
 	LIST_REMOVE(f, link_tid);
 }
 
-/*
- * Input: driver's 32b filter mode.
- * Returns: hardware filter mode (bits to set in vlan_pri_map) for the input.
- */
 static uint16_t
-mode_to_fconf(uint32_t mode)
+mode_to_fconf_t4(uint32_t mode)
 {
 	uint32_t fconf = 0;
 
 	if (mode & T4_FILTER_IP_FRAGMENT)
 		fconf |= F_FRAGMENTATION;
-
 	if (mode & T4_FILTER_MPS_HIT_TYPE)
 		fconf |= F_MPSHITTYPE;
-
 	if (mode & T4_FILTER_MAC_IDX)
 		fconf |= F_MACMATCH;
-
 	if (mode & T4_FILTER_ETH_TYPE)
 		fconf |= F_ETHERTYPE;
-
 	if (mode & T4_FILTER_IP_PROTO)
 		fconf |= F_PROTOCOL;
-
 	if (mode & T4_FILTER_IP_TOS)
 		fconf |= F_TOS;
-
 	if (mode & T4_FILTER_VLAN)
 		fconf |= F_VLAN;
-
 	if (mode & T4_FILTER_VNIC)
 		fconf |= F_VNIC_ID;
-
 	if (mode & T4_FILTER_PORT)
 		fconf |= F_PORT;
-
 	if (mode & T4_FILTER_FCoE)
 		fconf |= F_FCOE;
 
 	return (fconf);
+}
+
+static uint16_t
+mode_to_fconf_t7(uint32_t mode)
+{
+	uint32_t fconf = 0;
+
+	if (mode & T4_FILTER_TCPFLAGS)
+		fconf |= F_TCPFLAGS;
+	if (mode & T4_FILTER_SYNONLY)
+		fconf |= F_SYNONLY;
+	if (mode & T4_FILTER_ROCE)
+		fconf |= F_ROCE;
+	if (mode & T4_FILTER_IP_FRAGMENT)
+		fconf |= F_T7_FRAGMENTATION;
+	if (mode & T4_FILTER_MPS_HIT_TYPE)
+		fconf |= F_T7_MPSHITTYPE;
+	if (mode & T4_FILTER_MAC_IDX)
+		fconf |= F_T7_MACMATCH;
+	if (mode & T4_FILTER_ETH_TYPE)
+		fconf |= F_T7_ETHERTYPE;
+	if (mode & T4_FILTER_IP_PROTO)
+		fconf |= F_T7_PROTOCOL;
+	if (mode & T4_FILTER_IP_TOS)
+		fconf |= F_T7_TOS;
+	if (mode & T4_FILTER_VLAN)
+		fconf |= F_T7_VLAN;
+	if (mode & T4_FILTER_VNIC)
+		fconf |= F_T7_VNIC_ID;
+	if (mode & T4_FILTER_PORT)
+		fconf |= F_T7_PORT;
+	if (mode & T4_FILTER_FCoE)
+		fconf |= F_T7_FCOE;
+	if (mode & T4_FILTER_IPSECIDX)
+		fconf |= F_IPSECIDX;
+
+	return (fconf);
+}
+
+/*
+ * Input: driver's 32b filter mode.
+ * Returns: hardware filter mode (bits to set in vlan_pri_map) for the input.
+ */
+static uint16_t
+mode_to_fconf(struct adapter *sc, uint32_t mode)
+{
+	if (chip_id(sc) >= CHELSIO_T7)
+		return (mode_to_fconf_t7(mode));
+	else
+		return (mode_to_fconf_t4(mode));
 }
 
 /*
@@ -391,65 +426,100 @@ check_fspec_against_fconf_iconf(struct adapter *sc,
 	struct tp_params *tpp = &sc->params.tp;
 	uint32_t fconf = 0;
 
-	if (fs->val.frag || fs->mask.frag)
-		fconf |= F_FRAGMENTATION;
-
-	if (fs->val.matchtype || fs->mask.matchtype)
-		fconf |= F_MPSHITTYPE;
-
-	if (fs->val.macidx || fs->mask.macidx)
-		fconf |= F_MACMATCH;
-
-	if (fs->val.ethtype || fs->mask.ethtype)
-		fconf |= F_ETHERTYPE;
-
-	if (fs->val.proto || fs->mask.proto)
-		fconf |= F_PROTOCOL;
-
-	if (fs->val.tos || fs->mask.tos)
-		fconf |= F_TOS;
-
-	if (fs->val.vlan_vld || fs->mask.vlan_vld)
-		fconf |= F_VLAN;
-
-	if (fs->val.ovlan_vld || fs->mask.ovlan_vld) {
-		if (tpp->vnic_mode != FW_VNIC_MODE_OUTER_VLAN)
-			return (EINVAL);
-		fconf |= F_VNIC_ID;
-	}
-
-	if (fs->val.pfvf_vld || fs->mask.pfvf_vld) {
-		if (tpp->vnic_mode != FW_VNIC_MODE_PF_VF)
-			return (EINVAL);
-		fconf |= F_VNIC_ID;
-	}
-
+	if (chip_id(sc) >= CHELSIO_T7) {
+		if (fs->val.tcpflags || fs->mask.tcpflags)
+			fconf |= F_TCPFLAGS;
+		if (fs->val.synonly || fs->mask.synonly)
+			fconf |= F_SYNONLY;
+		if (fs->val.roce || fs->mask.roce)
+			fconf |= F_ROCE;
+		if (fs->val.frag || fs->mask.frag)
+			fconf |= F_T7_FRAGMENTATION;
+		if (fs->val.matchtype || fs->mask.matchtype)
+			fconf |= F_T7_MPSHITTYPE;
+		if (fs->val.macidx || fs->mask.macidx)
+			fconf |= F_T7_MACMATCH;
+		if (fs->val.ethtype || fs->mask.ethtype)
+			fconf |= F_T7_ETHERTYPE;
+		if (fs->val.proto || fs->mask.proto)
+			fconf |= F_T7_PROTOCOL;
+		if (fs->val.tos || fs->mask.tos)
+			fconf |= F_T7_TOS;
+		if (fs->val.vlan_vld || fs->mask.vlan_vld)
+			fconf |= F_T7_VLAN;
+		if (fs->val.ovlan_vld || fs->mask.ovlan_vld) {
+			if (tpp->vnic_mode != FW_VNIC_MODE_OUTER_VLAN)
+				return (EINVAL);
+			fconf |= F_T7_VNIC_ID;
+		}
+		if (fs->val.pfvf_vld || fs->mask.pfvf_vld) {
+			if (tpp->vnic_mode != FW_VNIC_MODE_PF_VF)
+				return (EINVAL);
+			fconf |= F_T7_VNIC_ID;
+		}
 #ifdef notyet
-	if (fs->val.encap_vld || fs->mask.encap_vld) {
-		if (tpp->vnic_mode != FW_VNIC_MODE_ENCAP_EN);
-			return (EINVAL);
-		fconf |= F_VNIC_ID;
-	}
+		if (fs->val.encap_vld || fs->mask.encap_vld) {
+			if (tpp->vnic_mode != FW_VNIC_MODE_ENCAP_EN);
+				return (EINVAL);
+			fconf |= F_T7_VNIC_ID;
+		}
 #endif
-
-	if (fs->val.iport || fs->mask.iport)
-		fconf |= F_PORT;
-
-	if (fs->val.fcoe || fs->mask.fcoe)
-		fconf |= F_FCOE;
-
+		if (fs->val.iport || fs->mask.iport)
+			fconf |= F_T7_PORT;
+		if (fs->val.fcoe || fs->mask.fcoe)
+			fconf |= F_T7_FCOE;
+		if (fs->val.ipsecidx || fs->mask.ipsecidx)
+			fconf |= F_IPSECIDX;
+	} else {
+		if (fs->val.tcpflags || fs->mask.tcpflags ||
+		    fs->val.synonly || fs->mask.synonly ||
+		    fs->val.roce || fs->mask.roce ||
+		    fs->val.ipsecidx || fs->mask.ipsecidx)
+			return (EINVAL);
+		if (fs->val.frag || fs->mask.frag)
+			fconf |= F_FRAGMENTATION;
+		if (fs->val.matchtype || fs->mask.matchtype)
+			fconf |= F_MPSHITTYPE;
+		if (fs->val.macidx || fs->mask.macidx)
+			fconf |= F_MACMATCH;
+		if (fs->val.ethtype || fs->mask.ethtype)
+			fconf |= F_ETHERTYPE;
+		if (fs->val.proto || fs->mask.proto)
+			fconf |= F_PROTOCOL;
+		if (fs->val.tos || fs->mask.tos)
+			fconf |= F_TOS;
+		if (fs->val.vlan_vld || fs->mask.vlan_vld)
+			fconf |= F_VLAN;
+		if (fs->val.ovlan_vld || fs->mask.ovlan_vld) {
+			if (tpp->vnic_mode != FW_VNIC_MODE_OUTER_VLAN)
+				return (EINVAL);
+			fconf |= F_VNIC_ID;
+		}
+		if (fs->val.pfvf_vld || fs->mask.pfvf_vld) {
+			if (tpp->vnic_mode != FW_VNIC_MODE_PF_VF)
+				return (EINVAL);
+			fconf |= F_VNIC_ID;
+		}
+#ifdef notyet
+		if (fs->val.encap_vld || fs->mask.encap_vld) {
+			if (tpp->vnic_mode != FW_VNIC_MODE_ENCAP_EN);
+				return (EINVAL);
+			fconf |= F_VNIC_ID;
+		}
+#endif
+		if (fs->val.iport || fs->mask.iport)
+			fconf |= F_PORT;
+		if (fs->val.fcoe || fs->mask.fcoe)
+			fconf |= F_FCOE;
+	}
 	if ((tpp->filter_mode | fconf) != tpp->filter_mode)
 		return (E2BIG);
 
 	return (0);
 }
 
-/*
- * Input: hardware filter configuration (filter mode/mask, ingress config).
- * Input: driver's 32b filter mode matching the input.
- */
 static uint32_t
-fconf_to_mode(uint16_t hwmode, int vnic_mode)
+fconf_to_mode_t4(uint16_t hwmode, int vnic_mode)
 {
 	uint32_t mode = T4_FILTER_IPv4 | T4_FILTER_IPv6 | T4_FILTER_IP_SADDR |
 	    T4_FILTER_IP_DADDR | T4_FILTER_IP_SPORT | T4_FILTER_IP_DPORT;
@@ -490,6 +560,69 @@ fconf_to_mode(uint16_t hwmode, int vnic_mode)
 	return (mode);
 }
 
+static uint32_t
+fconf_to_mode_t7(uint16_t hwmode, int vnic_mode)
+{
+	uint32_t mode = T4_FILTER_IPv4 | T4_FILTER_IPv6 | T4_FILTER_IP_SADDR |
+	    T4_FILTER_IP_DADDR | T4_FILTER_IP_SPORT | T4_FILTER_IP_DPORT;
+
+	if (hwmode & F_TCPFLAGS)
+		mode |= T4_FILTER_TCPFLAGS;
+	if (hwmode & F_SYNONLY)
+		mode |= T4_FILTER_SYNONLY;
+	if (hwmode & F_ROCE)
+		mode |= T4_FILTER_ROCE;
+	if (hwmode & F_T7_FRAGMENTATION)
+		mode |= T4_FILTER_IP_FRAGMENT;
+	if (hwmode & F_T7_MPSHITTYPE)
+		mode |= T4_FILTER_MPS_HIT_TYPE;
+	if (hwmode & F_T7_MACMATCH)
+		mode |= T4_FILTER_MAC_IDX;
+	if (hwmode & F_T7_ETHERTYPE)
+		mode |= T4_FILTER_ETH_TYPE;
+	if (hwmode & F_T7_PROTOCOL)
+		mode |= T4_FILTER_IP_PROTO;
+	if (hwmode & F_T7_TOS)
+		mode |= T4_FILTER_IP_TOS;
+	if (hwmode & F_T7_VLAN)
+		mode |= T4_FILTER_VLAN;
+	if (hwmode & F_T7_VNIC_ID)
+		mode |= T4_FILTER_VNIC; /* real meaning depends on vnic_mode. */
+	if (hwmode & F_T7_PORT)
+		mode |= T4_FILTER_PORT;
+	if (hwmode & F_T7_FCOE)
+		mode |= T4_FILTER_FCoE;
+	if (hwmode & F_IPSECIDX)
+		mode |= T4_FILTER_IPSECIDX;
+
+	switch (vnic_mode) {
+	case FW_VNIC_MODE_PF_VF:
+		mode |= T4_FILTER_IC_VNIC;
+		break;
+	case FW_VNIC_MODE_ENCAP_EN:
+		mode |= T4_FILTER_IC_ENCAP;
+		break;
+	case FW_VNIC_MODE_OUTER_VLAN:
+	default:
+		break;
+	}
+
+	return (mode);
+}
+
+/*
+ * Input: hardware filter configuration (filter mode/mask, ingress config).
+ * Output: driver's 32b filter mode matching the input.
+ */
+static inline uint32_t
+fconf_to_mode(struct adapter *sc, uint16_t hwmode, int vnic_mode)
+{
+	if (chip_id(sc) >= CHELSIO_T7)
+		return (fconf_to_mode_t7(hwmode, vnic_mode));
+	else
+		return (fconf_to_mode_t4(hwmode, vnic_mode));
+}
+
 int
 get_filter_mode(struct adapter *sc, uint32_t *mode)
 {
@@ -501,7 +634,7 @@ get_filter_mode(struct adapter *sc, uint32_t *mode)
 
 	/* Non-zero incoming value in mode means "hashfilter mode". */
 	filter_mode = *mode ? tp->filter_mask : tp->filter_mode;
-	*mode = fconf_to_mode(filter_mode, tp->vnic_mode);
+	*mode = fconf_to_mode(sc, filter_mode, tp->vnic_mode);
 
 	return (0);
 }
@@ -514,7 +647,7 @@ set_filter_mode(struct adapter *sc, uint32_t mode)
 	uint16_t fconf;
 
 	iconf = mode_to_iconf(mode);
-	fconf = mode_to_fconf(mode);
+	fconf = mode_to_fconf(sc, mode);
 	if ((iconf == -1 || iconf == tp->vnic_mode) && fconf == tp->filter_mode)
 		return (0);	/* Nothing to do */
 
@@ -522,7 +655,7 @@ set_filter_mode(struct adapter *sc, uint32_t mode)
 	if (rc)
 		return (rc);
 
-	if (hw_off_limits(sc)) {
+	if (!hw_all_ok(sc)) {
 		rc = ENXIO;
 		goto done;
 	}
@@ -556,7 +689,7 @@ set_filter_mask(struct adapter *sc, uint32_t mode)
 	uint16_t fmask;
 
 	iconf = mode_to_iconf(mode);
-	fmask = mode_to_fconf(mode);
+	fmask = mode_to_fconf(sc, mode);
 	if ((iconf == -1 || iconf == tp->vnic_mode) && fmask == tp->filter_mask)
 		return (0);	/* Nothing to do */
 
@@ -573,7 +706,7 @@ set_filter_mask(struct adapter *sc, uint32_t mode)
 	if (rc)
 		return (rc);
 
-	if (hw_off_limits(sc)) {
+	if (!hw_all_ok(sc)) {
 		rc = ENXIO;
 		goto done;
 	}
@@ -604,7 +737,7 @@ get_filter_hits(struct adapter *sc, uint32_t tid)
 	tcb_addr = t4_read_reg(sc, A_TP_CMM_TCB_BASE) + tid * TCB_SIZE;
 
 	mtx_lock(&sc->reg_lock);
-	if (hw_off_limits(sc))
+	if (!hw_all_ok(sc))
 		hits = 0;
 	else if (is_t4(sc)) {
 		uint64_t t;
@@ -813,71 +946,138 @@ hashfilter_ntuple(struct adapter *sc, const struct t4_filter_specification *fs,
 	struct tp_params *tp = &sc->params.tp;
 	uint16_t fmask;
 
-	*ftuple = fmask = 0;
-
 	/*
 	 * Initialize each of the fields which we care about which are present
 	 * in the Compressed Filter Tuple.
 	 */
-	if (tp->vlan_shift >= 0 && fs->mask.vlan) {
-		*ftuple |= (uint64_t)(F_FT_VLAN_VLD | fs->val.vlan) <<
-		    tp->vlan_shift;
-		fmask |= F_VLAN;
-	}
-
-	if (tp->port_shift >= 0 && fs->mask.iport) {
-		*ftuple |= (uint64_t)fs->val.iport << tp->port_shift;
-		fmask |= F_PORT;
-	}
-
-	if (tp->protocol_shift >= 0 && fs->mask.proto) {
-		*ftuple |= (uint64_t)fs->val.proto << tp->protocol_shift;
-		fmask |= F_PROTOCOL;
-	}
-
-	if (tp->tos_shift >= 0 && fs->mask.tos) {
-		*ftuple |= (uint64_t)(fs->val.tos) << tp->tos_shift;
-		fmask |= F_TOS;
-	}
-
-	if (tp->vnic_shift >= 0 && fs->mask.vnic) {
-		/* vnic_mode was already validated. */
-		if (tp->vnic_mode == FW_VNIC_MODE_PF_VF)
-			MPASS(fs->mask.pfvf_vld);
-		else if (tp->vnic_mode == FW_VNIC_MODE_OUTER_VLAN)
-			MPASS(fs->mask.ovlan_vld);
+#define SFF(V, S) ((uint64_t)(V) << S) /* Shifted Filter Field. */
+	*ftuple = fmask = 0;
+	if (chip_id(sc) >= CHELSIO_T7) {
+		if (tp->ipsecidx_shift >= 0 && fs->mask.ipsecidx) {
+			*ftuple |= SFF(fs->val.ipsecidx, tp->ipsecidx_shift);
+			fmask |= F_IPSECIDX;
+		}
+		if (tp->fcoe_shift >= 0 && fs->mask.fcoe) {
+			*ftuple |= SFF(fs->val.fcoe, tp->fcoe_shift);
+			fmask |= F_T7_FCOE;
+		}
+		if (tp->port_shift >= 0 && fs->mask.iport) {
+			*ftuple |= (uint64_t)fs->val.iport << tp->port_shift;
+			fmask |= F_T7_PORT;
+		}
+		if (tp->vnic_shift >= 0 && fs->mask.vnic) {
+			/* vnic_mode was already validated. */
+			if (tp->vnic_mode == FW_VNIC_MODE_PF_VF)
+				MPASS(fs->mask.pfvf_vld);
+			else if (tp->vnic_mode == FW_VNIC_MODE_OUTER_VLAN)
+				MPASS(fs->mask.ovlan_vld);
 #ifdef notyet
-		else if (tp->vnic_mode == FW_VNIC_MODE_ENCAP_EN)
-			MPASS(fs->mask.encap_vld);
+			else if (tp->vnic_mode == FW_VNIC_MODE_ENCAP_EN)
+				MPASS(fs->mask.encap_vld);
 #endif
-		*ftuple |= ((1ULL << 16) | fs->val.vnic) << tp->vnic_shift;
-		fmask |= F_VNIC_ID;
+			*ftuple |= SFF(F_FT_VNID_ID_VLD | fs->val.vnic, tp->vnic_shift);
+			fmask |= F_T7_VNIC_ID;
+		}
+		if (tp->vlan_shift >= 0 && fs->mask.vlan) {
+			*ftuple |= SFF(F_FT_VLAN_VLD | fs->val.vlan, tp->vlan_shift);
+			fmask |= F_T7_VLAN;
+		}
+		if (tp->tos_shift >= 0 && fs->mask.tos) {
+			*ftuple |= SFF(fs->val.tos, tp->tos_shift);
+			fmask |= F_T7_TOS;
+		}
+		if (tp->protocol_shift >= 0 && fs->mask.proto) {
+			*ftuple |= SFF(fs->val.proto, tp->protocol_shift);
+			fmask |= F_T7_PROTOCOL;
+		}
+		if (tp->ethertype_shift >= 0 && fs->mask.ethtype) {
+			*ftuple |= SFF(fs->val.ethtype, tp->ethertype_shift);
+			fmask |= F_T7_ETHERTYPE;
+		}
+		if (tp->macmatch_shift >= 0 && fs->mask.macidx) {
+			*ftuple |= SFF(fs->val.macidx, tp->macmatch_shift);
+			fmask |= F_T7_MACMATCH;
+		}
+		if (tp->matchtype_shift >= 0 && fs->mask.matchtype) {
+			*ftuple |= SFF(fs->val.matchtype, tp->matchtype_shift);
+			fmask |= F_T7_MPSHITTYPE;
+		}
+		if (tp->frag_shift >= 0 && fs->mask.frag) {
+			*ftuple |= SFF(fs->val.frag, tp->frag_shift);
+			fmask |= F_T7_FRAGMENTATION;
+		}
+		if (tp->roce_shift >= 0 && fs->mask.roce) {
+			*ftuple |= SFF(fs->val.roce, tp->roce_shift);
+			fmask |= F_ROCE;
+		}
+		if (tp->synonly_shift >= 0 && fs->mask.synonly) {
+			*ftuple |= SFF(fs->val.synonly, tp->synonly_shift);
+			fmask |= F_SYNONLY;
+		}
+		if (tp->tcpflags_shift >= 0 && fs->mask.tcpflags) {
+			*ftuple |= SFF(fs->val.tcpflags, tp->synonly_shift);
+			fmask |= F_TCPFLAGS;
+		}
+	} else {
+		if (fs->mask.ipsecidx || fs->mask.roce || fs->mask.synonly ||
+		    fs->mask.tcpflags) {
+			MPASS(tp->ipsecidx_shift == -1);
+			MPASS(tp->roce_shift == -1);
+			MPASS(tp->synonly_shift == -1);
+			MPASS(tp->tcpflags_shift == -1);
+			return (EINVAL);
+		}
+		if (tp->fcoe_shift >= 0 && fs->mask.fcoe) {
+			*ftuple |= SFF(fs->val.fcoe, tp->fcoe_shift);
+			fmask |= F_FCOE;
+		}
+		if (tp->port_shift >= 0 && fs->mask.iport) {
+			*ftuple |= (uint64_t)fs->val.iport << tp->port_shift;
+			fmask |= F_PORT;
+		}
+		if (tp->vnic_shift >= 0 && fs->mask.vnic) {
+			/* vnic_mode was already validated. */
+			if (tp->vnic_mode == FW_VNIC_MODE_PF_VF)
+				MPASS(fs->mask.pfvf_vld);
+			else if (tp->vnic_mode == FW_VNIC_MODE_OUTER_VLAN)
+				MPASS(fs->mask.ovlan_vld);
+#ifdef notyet
+			else if (tp->vnic_mode == FW_VNIC_MODE_ENCAP_EN)
+				MPASS(fs->mask.encap_vld);
+#endif
+			*ftuple |= SFF(F_FT_VNID_ID_VLD | fs->val.vnic, tp->vnic_shift);
+			fmask |= F_VNIC_ID;
+		}
+		if (tp->vlan_shift >= 0 && fs->mask.vlan) {
+			*ftuple |= SFF(F_FT_VLAN_VLD | fs->val.vlan, tp->vlan_shift);
+			fmask |= F_VLAN;
+		}
+		if (tp->tos_shift >= 0 && fs->mask.tos) {
+			*ftuple |= SFF(fs->val.tos, tp->tos_shift);
+			fmask |= F_TOS;
+		}
+		if (tp->protocol_shift >= 0 && fs->mask.proto) {
+			*ftuple |= SFF(fs->val.proto, tp->protocol_shift);
+			fmask |= F_PROTOCOL;
+		}
+		if (tp->ethertype_shift >= 0 && fs->mask.ethtype) {
+			*ftuple |= SFF(fs->val.ethtype, tp->ethertype_shift);
+			fmask |= F_ETHERTYPE;
+		}
+		if (tp->macmatch_shift >= 0 && fs->mask.macidx) {
+			*ftuple |= SFF(fs->val.macidx, tp->macmatch_shift);
+			fmask |= F_MACMATCH;
+		}
+		if (tp->matchtype_shift >= 0 && fs->mask.matchtype) {
+			*ftuple |= SFF(fs->val.matchtype, tp->matchtype_shift);
+			fmask |= F_MPSHITTYPE;
+		}
+		if (tp->frag_shift >= 0 && fs->mask.frag) {
+			*ftuple |= SFF(fs->val.frag, tp->frag_shift);
+			fmask |= F_FRAGMENTATION;
+		}
 	}
-
-	if (tp->macmatch_shift >= 0 && fs->mask.macidx) {
-		*ftuple |= (uint64_t)(fs->val.macidx) << tp->macmatch_shift;
-		fmask |= F_MACMATCH;
-	}
-
-	if (tp->ethertype_shift >= 0 && fs->mask.ethtype) {
-		*ftuple |= (uint64_t)(fs->val.ethtype) << tp->ethertype_shift;
-		fmask |= F_ETHERTYPE;
-	}
-
-	if (tp->matchtype_shift >= 0 && fs->mask.matchtype) {
-		*ftuple |= (uint64_t)(fs->val.matchtype) << tp->matchtype_shift;
-		fmask |= F_MPSHITTYPE;
-	}
-
-	if (tp->frag_shift >= 0 && fs->mask.frag) {
-		*ftuple |= (uint64_t)(fs->val.frag) << tp->frag_shift;
-		fmask |= F_FRAGMENTATION;
-	}
-
-	if (tp->fcoe_shift >= 0 && fs->mask.fcoe) {
-		*ftuple |= (uint64_t)(fs->val.fcoe) << tp->fcoe_shift;
-		fmask |= F_FCOE;
-	}
+#undef SFF
 
 	/* A hashfilter must conform to the hardware filter mask. */
 	if (fmask != tp->filter_mask)
@@ -978,7 +1178,7 @@ set_filter(struct adapter *sc, struct t4_filter *t)
 	if (rc)
 		return (rc);
 
-	if (hw_off_limits(sc)) {
+	if (!hw_all_ok(sc)) {
 		rc = ENXIO;
 		goto done;
 	}
@@ -1197,11 +1397,19 @@ set_tcb_field(struct adapter *sc, u_int tid, uint16_t word, uint64_t mask,
 		return (ENOMEM);
 	bzero(req, sizeof(*req));
 	INIT_TP_WR_MIT_CPL(req, CPL_SET_TCB_FIELD, tid);
-	if (no_reply == 0) {
-		req->reply_ctrl = htobe16(V_QUEUENO(sc->sge.fwq.abs_id) |
-		    V_NO_REPLY(0));
-	} else
-		req->reply_ctrl = htobe16(V_NO_REPLY(1));
+	if (no_reply) {
+		req->reply_ctrl = htobe16(F_NO_REPLY);
+	} else {
+		const int qid = sc->sge.fwq.abs_id;
+
+		if (chip_id(sc) >= CHELSIO_T7) {
+			req->reply_ctrl = htobe16(V_T7_QUEUENO(qid) |
+			    V_T7_REPLY_CHAN(0) | V_NO_REPLY(0));
+		} else {
+			req->reply_ctrl = htobe16(V_QUEUENO(qid) |
+			    V_REPLY_CHAN(0) | V_NO_REPLY(0));
+		}
+	}
 	req->word_cookie = htobe16(V_WORD(word) | V_COOKIE(CPL_COOKIE_HASHFILTER));
 	req->mask = htobe64(mask);
 	req->val = htobe64(val);
@@ -1596,7 +1804,7 @@ static int
 act_open_cpl_len16(struct adapter *sc, int isipv6)
 {
 	int idx;
-	static const int sz_table[3][2] = {
+	static const int sz_table[4][2] = {
 		{
 			howmany(sizeof (struct cpl_act_open_req), 16),
 			howmany(sizeof (struct cpl_act_open_req6), 16)
@@ -1609,10 +1817,14 @@ act_open_cpl_len16(struct adapter *sc, int isipv6)
 			howmany(sizeof (struct cpl_t6_act_open_req), 16),
 			howmany(sizeof (struct cpl_t6_act_open_req6), 16)
 		},
+		{
+			howmany(sizeof (struct cpl_t7_act_open_req), 16),
+			howmany(sizeof (struct cpl_t7_act_open_req6), 16)
+		},
 	};
 
 	MPASS(chip_id(sc) >= CHELSIO_T4);
-	idx = min(chip_id(sc) - CHELSIO_T4, 2);
+	idx = min(chip_id(sc) - CHELSIO_T4, 3);
 
 	return (sz_table[idx][!!isipv6]);
 }
@@ -1700,40 +1912,6 @@ done:
 	return (rc);
 }
 
-/* SET_TCB_FIELD sent as a ULP command looks like this */
-#define LEN__SET_TCB_FIELD_ULP (sizeof(struct ulp_txpkt) + \
-    sizeof(struct ulptx_idata) + sizeof(struct cpl_set_tcb_field_core))
-
-static void *
-mk_set_tcb_field_ulp(struct ulp_txpkt *ulpmc, uint64_t word, uint64_t mask,
-		uint64_t val, uint32_t tid, uint32_t qid)
-{
-	struct ulptx_idata *ulpsc;
-	struct cpl_set_tcb_field_core *req;
-
-	ulpmc->cmd_dest = htonl(V_ULPTX_CMD(ULP_TX_PKT) | V_ULP_TXPKT_DEST(0));
-	ulpmc->len = htobe32(howmany(LEN__SET_TCB_FIELD_ULP, 16));
-
-	ulpsc = (struct ulptx_idata *)(ulpmc + 1);
-	ulpsc->cmd_more = htobe32(V_ULPTX_CMD(ULP_TX_SC_IMM));
-	ulpsc->len = htobe32(sizeof(*req));
-
-	req = (struct cpl_set_tcb_field_core *)(ulpsc + 1);
-	OPCODE_TID(req) = htobe32(MK_OPCODE_TID(CPL_SET_TCB_FIELD, tid));
-	req->reply_ctrl = htobe16(V_NO_REPLY(1) | V_QUEUENO(qid));
-	req->word_cookie = htobe16(V_WORD(word) | V_COOKIE(0));
-	req->mask = htobe64(mask);
-	req->val = htobe64(val);
-
-	ulpsc = (struct ulptx_idata *)(req + 1);
-	if (LEN__SET_TCB_FIELD_ULP % 16) {
-		ulpsc->cmd_more = htobe32(V_ULPTX_CMD(ULP_TX_SC_NOOP));
-		ulpsc->len = htobe32(0);
-		return (ulpsc + 1);
-	}
-	return (ulpsc);
-}
-
 /* ABORT_REQ sent as a ULP command looks like this */
 #define LEN__ABORT_REQ_ULP (sizeof(struct ulp_txpkt) + \
 	sizeof(struct ulptx_idata) + sizeof(struct cpl_abort_req_core))
@@ -1809,14 +1987,15 @@ del_hashfilter_wrlen(void)
 }
 
 static void
-mk_del_hashfilter_wr(int tid, struct work_request_hdr *wrh, int wrlen, int qid)
+mk_del_hashfilter_wr(struct adapter *sc, int tid, struct work_request_hdr *wrh,
+    int wrlen, int qid)
 {
 	struct ulp_txpkt *ulpmc;
 
 	INIT_ULPTX_WRH(wrh, wrlen, 0, 0);
 	ulpmc = (struct ulp_txpkt *)(wrh + 1);
-	ulpmc = mk_set_tcb_field_ulp(ulpmc, W_TCB_RSS_INFO,
-	    V_TCB_RSS_INFO(M_TCB_RSS_INFO), V_TCB_RSS_INFO(qid), tid, 0);
+	ulpmc = mk_set_tcb_field_ulp(sc, ulpmc, tid, W_TCB_RSS_INFO,
+	    V_TCB_RSS_INFO(M_TCB_RSS_INFO), V_TCB_RSS_INFO(qid));
 	ulpmc = mk_abort_req_ulp(ulpmc, tid);
 	ulpmc = mk_abort_rpl_ulp(ulpmc, tid);
 }
@@ -1859,7 +2038,7 @@ del_hashfilter(struct adapter *sc, struct t4_filter *t)
 		goto done;
 	}
 
-	mk_del_hashfilter_wr(t->idx, wr, wrlen, sc->sge.fwq.abs_id);
+	mk_del_hashfilter_wr(sc, t->idx, wr, wrlen, sc->sge.fwq.abs_id);
 	f->locked = 1;
 	f->pending = 1;
 	commit_wrq_wr(&sc->sge.ctrlq[0], wr, &cookie);

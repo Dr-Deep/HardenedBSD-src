@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1999-2003 Robert N. M. Watson
  * All rights reserved.
@@ -33,8 +33,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_ufs.h"
 #include "opt_quota.h"
 
@@ -354,14 +352,7 @@ ufs_getacl_posix1e(struct vop_getacl_args *ap)
 }
 
 int
-ufs_getacl(ap)
-	struct vop_getacl_args /* {
-		struct vnode *vp;
-		acl_type_t type;
-		struct acl *aclp;
-		struct ucred *cred;
-		struct thread *td;
-	} */ *ap;
+ufs_getacl(struct vop_getacl_args *ap)
 {
 
 	if ((ap->a_vp->v_mount->mnt_flag & (MNT_ACLS | MNT_NFS4ACLS)) == 0)
@@ -606,14 +597,7 @@ ufs_setacl_posix1e(struct vop_setacl_args *ap)
 }
 
 int
-ufs_setacl(ap)
-	struct vop_setacl_args /* {
-		struct vnode *vp;
-		acl_type_t type;
-		struct acl *aclp;
-		struct ucred *cred;
-		struct thread *td;
-	} */ *ap;
+ufs_setacl(struct vop_setacl_args *ap)
 {
 	if ((ap->a_vp->v_mount->mnt_flag & (MNT_ACLS | MNT_NFS4ACLS)) == 0)
 		return (EOPNOTSUPP);
@@ -625,11 +609,11 @@ ufs_setacl(ap)
 }
 
 static int
-ufs_aclcheck_nfs4(struct vop_aclcheck_args *ap)
+ufs_aclcheck_nfs4(struct vop_aclcheck_args *ap, struct mount *mp)
 {
 	int is_directory = 0;
 
-	if ((ap->a_vp->v_mount->mnt_flag & MNT_NFS4ACLS) == 0)
+	if ((mp->mnt_flag & MNT_NFS4ACLS) == 0)
 		return (EINVAL);
 
 	/*
@@ -647,10 +631,9 @@ ufs_aclcheck_nfs4(struct vop_aclcheck_args *ap)
 }
 
 static int
-ufs_aclcheck_posix1e(struct vop_aclcheck_args *ap)
+ufs_aclcheck_posix1e(struct vop_aclcheck_args *ap, struct mount *mp)
 {
-
-	if ((ap->a_vp->v_mount->mnt_flag & MNT_ACLS) == 0)
+	if ((mp->mnt_flag & MNT_ACLS) == 0)
 		return (EINVAL);
 
 	/*
@@ -658,7 +641,7 @@ ufs_aclcheck_posix1e(struct vop_aclcheck_args *ap)
 	 * to this kind of object.
 	 * Rely on the acl_posix1e_check() routine to verify the contents.
 	 */
-	switch(ap->a_type) {
+	switch (ap->a_type) {
 	case ACL_TYPE_ACCESS:
 		break;
 
@@ -681,23 +664,20 @@ ufs_aclcheck_posix1e(struct vop_aclcheck_args *ap)
  * Check the validity of an ACL for a file.
  */
 int
-ufs_aclcheck(ap)
-	struct vop_aclcheck_args /* {
-		struct vnode *vp;
-		acl_type_t type;
-		struct acl *aclp;
-		struct ucred *cred;
-		struct thread *td;
-	} */ *ap;
+ufs_aclcheck(struct vop_aclcheck_args *ap)
 {
+	struct mount *mp;
 
-	if ((ap->a_vp->v_mount->mnt_flag & (MNT_ACLS | MNT_NFS4ACLS)) == 0)
+	mp = atomic_load_ptr(&ap->a_vp->v_mount);
+	if (mp == NULL)
+		return (EBADF);
+	if ((mp->mnt_flag & (MNT_ACLS | MNT_NFS4ACLS)) == 0)
 		return (EOPNOTSUPP);
 
 	if (ap->a_type == ACL_TYPE_NFS4)
-		return (ufs_aclcheck_nfs4(ap));
+		return (ufs_aclcheck_nfs4(ap, mp));
 
-	return (ufs_aclcheck_posix1e(ap));
+	return (ufs_aclcheck_posix1e(ap, mp));
 }
 
 #endif /* !UFS_ACL */

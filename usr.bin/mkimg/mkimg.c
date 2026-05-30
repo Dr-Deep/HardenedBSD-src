@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2013,2014 Juniper Networks, Inc.
  * All rights reserved.
  *
@@ -23,9 +25,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/stat.h>
@@ -63,6 +62,9 @@ static struct option longopts[] = {
 
 static uint64_t min_capacity = 0;
 static uint64_t max_capacity = 0;
+
+/* Fixed timestamp for reproducible builds. */
+time_t timestamp = (time_t)-1;
 
 struct partlisthead partlist = TAILQ_HEAD_INITIALIZER(partlist);
 u_int nparts = 0;
@@ -142,23 +144,28 @@ static void
 usage(const char *why)
 {
 
-	warnx("error: %s", why);
-	fputc('\n', stderr);
+	if (why != NULL) {
+		warnx("error: %s", why);
+		fputc('\n', stderr);
+	}
 	fprintf(stderr, "usage: %s <options>\n", getprogname());
 
 	fprintf(stderr, "    options:\n");
 	fprintf(stderr, "\t--formats\t-  list image formats\n");
 	fprintf(stderr, "\t--schemes\t-  list partition schemes\n");
 	fprintf(stderr, "\t--version\t-  show version information\n");
+	fprintf(stderr, "\t--capacity\t-  minimum and maximum capacity (in bytes)\n");
 	fputc('\n', stderr);
 	fprintf(stderr, "\t-a <num>\t-  mark num'th partition as active\n");
 	fprintf(stderr, "\t-b <file>\t-  file containing boot code\n");
 	fprintf(stderr, "\t-c <num>\t-  minimum capacity (in bytes) of the disk\n");
 	fprintf(stderr, "\t-C <num>\t-  maximum capacity (in bytes) of the disk\n");
 	fprintf(stderr, "\t-f <format>\n");
+	fprintf(stderr, "\t-h\t\t-  show this usage information\n");
 	fprintf(stderr, "\t-o <file>\t-  file to write image into\n");
 	fprintf(stderr, "\t-p <partition>\n");
 	fprintf(stderr, "\t-s <scheme>\n");
+	fprintf(stderr, "\t-t <num>\t-  set timestamp (seconds since epoch)\n");
 	fprintf(stderr, "\t-v\t\t-  increase verbosity\n");
 	fprintf(stderr, "\t-y\t\t-  [developers] enable unit test\n");
 	fprintf(stderr, "\t-H <num>\t-  number of heads to simulate\n");
@@ -171,19 +178,19 @@ usage(const char *why)
 	print_schemes(1);
 	fputc('\n', stderr);
 	fprintf(stderr, "    partition specification:\n");
-	fprintf(stderr, "\t<t>[/<l>]::<size>[:[+]<offset>]\t-  "
+	fprintf(stderr, "\t<type>[/<label>]::<size>[:[+]<offset>]\t-  "
 	    "empty partition of given size and\n\t\t\t\t\t"
 	    "   optional relative or absolute offset\n");
-	fprintf(stderr, "\t<t>[/<l>]:=<file>[:[+]offset]\t-  partition "
+	fprintf(stderr, "\t<type>[/<label>]:=<file>[:[+]offset]\t-  partition "
 	    "content and size are\n\t\t\t\t\t"
 	    "   determined by the named file and\n"
 	    "\t\t\t\t\t   optional relative or absolute offset\n");
-	fprintf(stderr, "\t<t>[/<l>]:-<cmd>\t\t-  partition content and size "
+	fprintf(stderr, "\t<type>[/<label>]:-<cmd>\t\t-  partition content and size "
 	    "are taken\n\t\t\t\t\t   from the output of the command to run\n");
 	fprintf(stderr, "\t-\t\t\t\t-  unused partition entry\n");
 	fprintf(stderr, "\t    where:\n");
-	fprintf(stderr, "\t\t<t>\t-  scheme neutral partition type\n");
-	fprintf(stderr, "\t\t<l>\t-  optional scheme-dependent partition "
+	fprintf(stderr, "\t\t<type>\t-  scheme neutral partition type\n");
+	fprintf(stderr, "\t\t<label>\t-  optional scheme-dependent partition "
 	    "label\n");
 
 	exit(EX_USAGE);
@@ -439,6 +446,8 @@ mkimg(void)
 {
 	FILE *fp;
 	struct part *part;
+	struct stat sb;
+	char *p;
 	lba_t block, blkoffset;
 	uint64_t bytesize, byteoffset;
 	char *size, *offset;
@@ -461,12 +470,28 @@ mkimg(void)
 		/* Look for an offset. Set size too if we can. */
 		switch (part->kind) {
 		case PART_KIND_SIZE:
-		case PART_KIND_FILE:
 			offset = part->contents;
 			size = strsep(&offset, ":");
-			if (part->kind == PART_KIND_SIZE &&
-			    expand_number(size, &bytesize) == -1)
+			if (expand_number(size, &bytesize) == -1)
 				error = errno;
+			break;
+		case PART_KIND_FILE:
+			size = part->contents;
+			if (stat(part->contents, &sb) == 0) {
+				if (S_ISDIR(sb.st_mode)) {
+					errc(EX_IOERR, EISDIR, "partition %d",
+					    part->index + 1);
+				}
+				offset = NULL;
+			} else {
+				p = strrchr(part->contents, ':');
+				if (p != NULL) {
+					*p = '\0';
+					offset = p + 1;
+				} else {
+					offset = NULL;
+				}
+			}
 			if (offset != NULL) {
 				if (*offset != '+')
 					abs_offset = true;
@@ -558,12 +583,13 @@ mkimg(void)
 int
 main(int argc, char *argv[])
 {
+	const char *format_name;
 	int bcfd, outfd;
 	int c, error;
 
 	bcfd = -1;
 	outfd = 1;	/* Write to stdout by default */
-	while ((c = getopt_long(argc, argv, "a:b:c:C:f:o:p:s:vyH:P:S:T:",
+	while ((c = getopt_long(argc, argv, "a:b:c:C:f:ho:p:s:t:vyH:P:S:T:",
 	    longopts, NULL)) != -1) {
 		switch (c) {
 		case 'a':	/* ACTIVE PARTITION, if supported */
@@ -595,6 +621,9 @@ main(int argc, char *argv[])
 			if (error)
 				errc(EX_DATAERR, error, "format");
 			break;
+		case 'h':	/* HELP */
+			usage(NULL);
+			break;
 		case 'o':	/* OUTPUT FILE */
 			if (outfd != 1)
 				usage("multiple output files given");
@@ -615,6 +644,19 @@ main(int argc, char *argv[])
 			if (error)
 				errc(EX_DATAERR, error, "scheme");
 			break;
+		case 't': {
+			char *ep;
+			long long val;
+
+			errno = 0;
+			val = strtoll(optarg, &ep, 0);
+			if (ep == optarg || *ep != '\0')
+				errno = EINVAL;
+			if (errno != 0)
+				errc(EX_DATAERR, errno, "timestamp");
+			timestamp = (time_t)val;
+			break;
+		}
 		case 'y':
 			unit_testing++;
 			break;
@@ -702,6 +744,7 @@ main(int argc, char *argv[])
 			errc(EX_DATAERR, error, "boot code");
 	}
 
+	format_name = format_selected()->name;
 	if (verbose) {
 		fprintf(stderr, "Logical sector size: %u\n", secsz);
 		fprintf(stderr, "Physical block size: %u\n", blksz);
@@ -712,9 +755,19 @@ main(int argc, char *argv[])
 			fprintf(stderr, "Partitioning scheme: %s\n",
 			    scheme_selected()->name);
 		fprintf(stderr, "Output file format:  %s\n",
-		    format_selected()->name);
+		    format_name);
 		fputc('\n', stderr);
 	}
+
+#if defined(SPARSE_WRITE)
+	/*
+	 * sparse_write() fails if output is not seekable so fail early
+	 * not wasting some load unless output format is raw
+	 */
+	if (strcmp("raw", format_name) &&
+	    lseek(outfd, (off_t)0, SEEK_CUR) == -1 && errno == ESPIPE)
+		errx(EX_USAGE, "%s: output must be seekable", format_name);
+#endif
 
 	error = image_init();
 	if (error)

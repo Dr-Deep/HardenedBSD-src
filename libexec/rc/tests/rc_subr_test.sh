@@ -1,7 +1,8 @@
+#-
+# SPDX-License-Identifier: BSD-2-Clause
 #
 # Copyright 2022 Mateusz Piotrowski <0mp@FreeBSD.org>
-#
-# SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+# Copyright (c) 2025 Klara, Inc.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -25,6 +26,17 @@
 # SUCH DAMAGE.
 #
 
+atf_test_case no_cycles
+no_cycles_head()
+{
+	atf_set "descr" "Verify that /etc/rc.d/* contains no cycles"
+}
+
+no_cycles_body()
+{
+	atf_check -e empty -o ignore rcorder /etc/rc.d/*
+}
+
 atf_test_case oomprotect_all
 oomprotect_all_head()
 {
@@ -35,6 +47,10 @@ oomprotect_all_head()
 
 oomprotect_all_body()
 {
+	if [ "$(sysctl -n security.jail.jailed)" != 0 ]; then
+		atf_skip "protect(1) cannot be used in a jail"
+	fi
+
 	__name="$(atf_get ident)"
 	__pidfile="$(mktemp -t "${__name}.pid")"
 	__childpidfile="$(mktemp -t "${__name}.childpid")"
@@ -48,16 +64,16 @@ oomprotect_all_body()
 	_rc_arg="$4"
 	setvar "${name}_oomprotect" all
 	command="/usr/sbin/daemon"
-	command_args="-P $pidfile -p $_childpidfile -- /bin/sleep 5"
+	command_args="-P $pidfile -p $_childpidfile -- /bin/sleep 60"
 	run_rc_command "$_rc_arg"
 	LITERAL
 
 	atf_check -s exit:0 -o inline:"Starting ${__name}.\n" -e empty \
 		/bin/sh "$__script" "$__name" "$__pidfile" "$__childpidfile" onestart
 	atf_check -s exit:0 -o match:'^..1..... .......1$' -e empty \
-		ps -p "$(cat "$__pidfile")" -ax -o flags,flags2
+		ps -p "$(cat "$__pidfile")" -o flags,flags2
 	atf_check -s exit:0 -o match:'^..1..... .......1$' -e empty \
-		ps -p "$(cat "$__childpidfile")" -ax -o flags,flags2
+		ps -p "$(cat "$__childpidfile")" -o flags,flags2
 	atf_check -s exit:0 -o ignore -e empty \
 		/bin/sh "$__script" "$__name" "$__pidfile" "$__childpidfile" onestop
 }
@@ -72,6 +88,10 @@ oomprotect_yes_head()
 
 oomprotect_yes_body()
 {
+	if [ "$(sysctl -n security.jail.jailed)" != 0 ]; then
+		atf_skip "protect(1) cannot be used in a jail"
+	fi
+
 	__name="$(atf_get ident)"
 	__pidfile="$(mktemp -t "${__name}.pid")"
 	__script=$(mktemp -t "${__name}.script")
@@ -84,7 +104,7 @@ oomprotect_yes_body()
 	setvar "${name}_oomprotect" yes
 	procname="/bin/sleep"
 	command="/usr/sbin/daemon"
-	command_args="-p $pidfile -- $procname 5"
+	command_args="-p $pidfile -- $procname 60"
 	run_rc_command "$_rc_arg"
 	LITERAL
 
@@ -96,8 +116,33 @@ oomprotect_yes_body()
 		/bin/sh "$__script" "$__name" "$__pidfile" onestop
 }
 
+atf_test_case wait_for_pids_progress
+wait_for_pids_progress_head()
+{
+	atf_set "descr" "Verify that wait_for_pids prints progress updates"
+}
+wait_for_pids_progress_body()
+{
+	cat >>script <<'EOF'
+. /etc/rc.subr
+sleep 15 &
+a=$!
+sleep 10 &
+b=$!
+sleep 5 &
+c=$!
+wait_for_pids $a $b $c
+EOF
+	re="^Waiting for PIDS: [0-9]+ [0-9]+ [0-9]+"
+	re="${re}, [0-9]+ [0-9]+"
+	re="${re}, [0-9]+\.$"
+	atf_check -s exit:0 -o match:"${re}" /bin/sh script
+}
+
 atf_init_test_cases()
 {
+	atf_add_test_case no_cycles
 	atf_add_test_case oomprotect_all
 	atf_add_test_case oomprotect_yes
+	atf_add_test_case wait_for_pids_progress
 }

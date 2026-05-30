@@ -34,8 +34,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -59,8 +57,6 @@
 #include <net/bpfdesc.h>
 
 #include <security/mac/mac_policy.h>
-
-SYSCTL_DECL(_security_mac);
 
 static SYSCTL_NODE(_security_mac, OID_AUTO, ifoff,
     CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
@@ -90,10 +86,10 @@ ifnet_check_outgoing(struct ifnet *ifp)
 	if (!ifoff_enabled)
 		return (0);
 
-	if (ifoff_lo_enabled && ifp->if_type == IFT_LOOP)
+	if (ifoff_lo_enabled && if_gettype(ifp) == IFT_LOOP)
 		return (0);
 
-	if (ifoff_other_enabled && ifp->if_type != IFT_LOOP)
+	if (ifoff_other_enabled && if_gettype(ifp) != IFT_LOOP)
 		return (0);
 
 	return (EPERM);
@@ -105,10 +101,10 @@ ifnet_check_incoming(struct ifnet *ifp, int viabpf)
 	if (!ifoff_enabled)
 		return (0);
 
-	if (ifoff_lo_enabled && ifp->if_type == IFT_LOOP)
+	if (ifoff_lo_enabled && if_gettype(ifp) == IFT_LOOP)
 		return (0);
 
-	if (ifoff_other_enabled && ifp->if_type != IFT_LOOP)
+	if (ifoff_other_enabled && if_gettype(ifp) != IFT_LOOP)
 		return (0);
 
 	if (viabpf && ifoff_bpfrecv_enabled)

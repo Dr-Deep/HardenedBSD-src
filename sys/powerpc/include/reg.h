@@ -1,5 +1,4 @@
 /* $NetBSD: reg.h,v 1.4 2000/06/04 09:30:44 tsubai Exp $	*/
-/* $FreeBSD$	*/
 
 #ifndef _POWERPC_REG_H_
 #define	_POWERPC_REG_H_
@@ -69,11 +68,6 @@ int	fill_fpregs(struct thread *, struct fpreg *);
 int	set_fpregs(struct thread *, struct fpreg *);
 int	fill_dbregs(struct thread *, struct dbreg *);
 int	set_dbregs(struct thread *, struct dbreg *);
-
-/*
- * MD interfaces.
- */
-void	cpu_save_thread_regs(struct thread *);
 
 #ifdef COMPAT_FREEBSD32
 struct image_params;

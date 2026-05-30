@@ -1,6 +1,6 @@
-# $FreeBSD$
-
 .include <bsd.init.mk>
+
+PACKAGE=	tests
 
 TESTSDIR=	${TESTSBASE}/lib/atf/libatf-c++/detail
 

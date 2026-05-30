@@ -75,7 +75,7 @@ Error SimpleExecutorMemoryManager::finalize(tpctypes::FinalizeRequest &FR) {
   auto BailOut = [&](Error Err) {
     std::pair<void *, Allocation> AllocToDestroy;
 
-    // Get allocation to destory.
+    // Get allocation to destroy.
     {
       std::lock_guard<std::mutex> Lock(M);
       auto I = Allocations.find(Base.toPtr<void *>());
@@ -126,14 +126,15 @@ Error SimpleExecutorMemoryManager::finalize(tpctypes::FinalizeRequest &FR) {
           inconvertibleErrorCode()));
 
     char *Mem = Seg.Addr.toPtr<char *>();
-    memcpy(Mem, Seg.Content.data(), Seg.Content.size());
+    if (!Seg.Content.empty())
+      memcpy(Mem, Seg.Content.data(), Seg.Content.size());
     memset(Mem + Seg.Content.size(), 0, Seg.Size - Seg.Content.size());
     assert(Seg.Size <= std::numeric_limits<size_t>::max());
     if (auto EC = sys::Memory::protectMappedMemory(
             {Mem, static_cast<size_t>(Seg.Size)},
-            tpctypes::fromWireProtectionFlags(Seg.Prot)))
+            toSysMemoryProtectionFlags(Seg.RAG.Prot)))
       return BailOut(errorCodeToError(EC));
-    if (Seg.Prot & tpctypes::WPF_Exec)
+    if ((Seg.RAG.Prot & MemProt::Exec) == MemProt::Exec)
       sys::Memory::InvalidateInstructionCache(Mem, Seg.Size);
   }
 
@@ -152,7 +153,7 @@ Error SimpleExecutorMemoryManager::deallocate(
   std::vector<std::pair<void *, Allocation>> AllocPairs;
   AllocPairs.reserve(Bases.size());
 
-  // Get allocation to destory.
+  // Get allocation to destroy.
   Error Err = Error::success();
   {
     std::lock_guard<std::mutex> Lock(M);

@@ -31,12 +31,7 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * @(#) Header: rpc.c,v 1.12 93/09/28 08:31:56 leres Exp  (LBL)
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 /*
  * RPC functions used by NFS and bootparams.
@@ -420,6 +415,11 @@ rpc_getport(struct iodesc *d, n_long prog, n_long vers)
 		return (-1);
 	}
 	port = (int)ntohl(res->port);
+	if (port == 0) {
+		printf("Portmapper returned 0. TCP-only NFS server?\n");
+		free(pkt);
+		return (-1);
+	}
 	free(pkt);
 
 	rpc_pmap_putcache(d->destip, prog, vers, port);

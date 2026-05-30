@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2010-2013 Alexander Motin <mav@FreeBSD.org>
  * All rights reserved.
@@ -27,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Common routines to manage event timers hardware.
  */
@@ -38,6 +36,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
+#include <sys/epoch.h>
 #include <sys/limits.h>
 #include <sys/lock.h>
 #include <sys/kdb.h>
@@ -237,7 +236,7 @@ getnextcpuevent(struct pcpu_state *state, int idle)
 
 	/* Handle hardclock() events, skipping some if CPU is idle. */
 	event = state->nexthard;
-	if (idle) {
+	if (idle && DPCPU_GET(epoch_cb_count) == 0) {
 		if (tc_min_ticktock_freq > 1
 #ifdef SMP
 		    && curcpu == CPU_FIRST()

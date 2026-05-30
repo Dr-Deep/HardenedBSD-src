@@ -41,8 +41,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	from:	@(#)pmap.c	7.7 (Berkeley)	5/12/91
  */
 /*-
  * Copyright (c) 2003 Networks Associates Technology, Inc.
@@ -83,8 +81,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_apic.h"
 #include "opt_cpu.h"
 #include "opt_pmap.h"
@@ -113,6 +109,7 @@ static SYSCTL_NODE(_vm, OID_AUTO, pmap, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
 #include <machine/vmparam.h>
 #include <vm/vm.h>
 #include <vm/vm_page.h>
+#include <vm/vm_param.h>
 #include <vm/pmap.h>
 #include <machine/pmap_base.h>
 
@@ -255,6 +252,11 @@ SYSCTL_INT(_vm_pmap, OID_AUTO, pv_entry_spare, CTLFLAG_RD,
     &pv_entry_spare, 0,
     "Current number of spare pv entries");
 #endif
+
+static int pmap_growkernel_panic = 0;
+SYSCTL_INT(_vm_pmap, OID_AUTO, growkernel_panic, CTLFLAG_RDTUN,
+    &pmap_growkernel_panic, 0,
+    "panic on failure to allocate kernel page table page");
 
 struct pmap kernel_pmap_store;
 static struct pmap_methods *pmap_methods_ptr;
@@ -430,7 +432,7 @@ pmap_align_superpage(vm_object_t object, vm_ooffset_t offset,
 	    addr, size));
 }
 
-vm_offset_t
+void *
 pmap_quick_enter_page(vm_page_t m)
 {
 
@@ -438,7 +440,7 @@ pmap_quick_enter_page(vm_page_t m)
 }
 
 void
-pmap_quick_remove_page(vm_offset_t addr)
+pmap_quick_remove_page(void *addr)
 {
 
 	return (pmap_methods_ptr->pm_quick_remove_page(addr));
@@ -561,7 +563,7 @@ pmap_bootstrap(vm_paddr_t firstaddr)
 	pmap_methods_ptr->pm_bootstrap(firstaddr);
 }
 
-boolean_t
+bool
 pmap_is_valid_memattr(pmap_t pmap, vm_memattr_t mode)
 {
 
@@ -569,7 +571,7 @@ pmap_is_valid_memattr(pmap_t pmap, vm_memattr_t mode)
 }
 
 int
-pmap_cache_bits(pmap_t pmap, int mode, boolean_t is_pde)
+pmap_cache_bits(pmap_t pmap, int mode, bool is_pde)
 {
 
 	return (pmap_methods_ptr->pm_cache_bits(pmap, mode, is_pde));
@@ -625,7 +627,7 @@ pmap_clear_modify(vm_page_t m)
 }
 
 int
-pmap_change_attr(vm_offset_t va, vm_size_t size, int mode)
+pmap_change_attr(void *va, vm_size_t size, int mode)
 {
 
 	return (pmap_methods_ptr->pm_change_attr(va, size, mode));
@@ -720,7 +722,7 @@ pmap_unwire(pmap_t pmap, vm_offset_t sva, vm_offset_t eva)
 	pmap_methods_ptr->pm_unwire(pmap, sva, eva);
 }
 
-boolean_t
+bool
 pmap_page_exists_quick(pmap_t pmap, vm_page_t m)
 {
 
@@ -734,7 +736,7 @@ pmap_page_wired_mappings(vm_page_t m)
 	return (pmap_methods_ptr->pm_page_wired_mappings(m));
 }
 
-boolean_t
+bool
 pmap_page_is_mapped(vm_page_t m)
 {
 
@@ -748,21 +750,21 @@ pmap_remove_pages(pmap_t pmap)
 	pmap_methods_ptr->pm_remove_pages(pmap);
 }
 
-boolean_t
+bool
 pmap_is_modified(vm_page_t m)
 {
 
 	return (pmap_methods_ptr->pm_is_modified(m));
 }
 
-boolean_t
+bool
 pmap_is_prefaultable(pmap_t pmap, vm_offset_t addr)
 {
 
 	return (pmap_methods_ptr->pm_is_prefaultable(pmap, addr));
 }
 
-boolean_t
+bool
 pmap_is_referenced(vm_page_t m)
 {
 
@@ -807,10 +809,10 @@ pmap_mapbios(vm_paddr_t pa, vm_size_t size)
 }
 
 void
-pmap_unmapdev(vm_offset_t va, vm_size_t size)
+pmap_unmapdev(void *p, vm_size_t size)
 {
 
-	pmap_methods_ptr->pm_unmapdev(va, size);
+	pmap_methods_ptr->pm_unmapdev(p, size);
 }
 
 void
@@ -834,7 +836,7 @@ pmap_extract_and_hold(pmap_t pmap, vm_offset_t va, vm_prot_t prot)
 	return (pmap_methods_ptr->pm_extract_and_hold(pmap, va, prot));
 }
 
-vm_offset_t
+void *
 pmap_map(vm_offset_t *virt, vm_paddr_t start, vm_paddr_t end, int prot)
 {
 
@@ -842,14 +844,14 @@ pmap_map(vm_offset_t *virt, vm_paddr_t start, vm_paddr_t end, int prot)
 }
 
 void
-pmap_qenter(vm_offset_t sva, vm_page_t *ma, int count)
+pmap_qenter(void *sva, vm_page_t *ma, int count)
 {
 
 	pmap_methods_ptr->pm_qenter(sva, ma, count);
 }
 
 void
-pmap_qremove(vm_offset_t sva, int count)
+pmap_qremove(void *sva, int count)
 {
 
 	pmap_methods_ptr->pm_qremove(sva, count);
@@ -897,11 +899,15 @@ pmap_init_pat(void)
 	pmap_methods_ptr->pm_init_pat();
 }
 
-void
+int
 pmap_growkernel(vm_offset_t addr)
 {
+	int rv;
 
-	pmap_methods_ptr->pm_growkernel(addr);
+	rv = pmap_methods_ptr->pm_growkernel(addr);
+	if (rv != KERN_SUCCESS && pmap_growkernel_panic)
+		panic("pmap_growkernel: no memory to grow kernel");
+	return (rv);
 }
 
 void
@@ -944,6 +950,12 @@ pmap_kremove(vm_offset_t va)
 {
 
 	pmap_methods_ptr->pm_kremove(va);
+}
+
+void
+pmap_active_cpus(pmap_t pmap, cpuset_t *res)
+{
+	*res = pmap->pm_active;
 }
 
 extern struct pmap_methods pmap_pae_methods, pmap_nopae_methods;

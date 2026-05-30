@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1999-2001, 2008 Robert N. M. Watson
  * All rights reserved.
@@ -29,9 +29,6 @@
  * Support functionality for the POSIX.1e ACL interface
  * These calls are intended only to be called within the library.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
 #include "namespace.h"
@@ -70,7 +67,7 @@ _posix1e_acl_id_to_name(acl_tag_t tag, uid_t id, ssize_t buf_len, char *buf,
 		else
 			p = getpwuid(id);
 		if (!p)
-			i = snprintf(buf, buf_len, "%d", id);
+			i = snprintf(buf, buf_len, "%ju", (uintmax_t)id);
 		else
 			i = snprintf(buf, buf_len, "%s", p->pw_name);
 
@@ -86,7 +83,7 @@ _posix1e_acl_id_to_name(acl_tag_t tag, uid_t id, ssize_t buf_len, char *buf,
 		else
 			g = getgrgid(id);
 		if (g == NULL)
-			i = snprintf(buf, buf_len, "%d", id);
+			i = snprintf(buf, buf_len, "%ju", (uintmax_t)id);
 		else
 			i = snprintf(buf, buf_len, "%s", g->gr_name);
 

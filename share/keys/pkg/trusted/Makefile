@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 PACKAGE=	pkg-bootstrap
 
 FILES=	pkg.freebsd.org.2013102301 pkg.hardenedbsd.org.2014-09-04

@@ -1,4 +1,6 @@
 .\"
+.\" SPDX-License-Identifier: BSD-2-Clause
+.\"
 .\" Copyright (c) 1997 David E. O'Brien
 .\"
 .\" All rights reserved.
@@ -23,9 +25,7 @@
 .\" (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 .\" THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
-.Dd July 22, 2021
+.Dd February 24, 2026
 .Dt PORTS 7
 .Os
 .Sh NAME
@@ -165,7 +165,7 @@ target.
 Configure
 .Va OPTIONS
 for this port using
-.Xr dialog4ports 1 .
+.Xr portconfig 1 Pq Pa ports/ports-mgmt/portconfig .
 .It Cm fetch
 Fetch all of the files needed to build this port from the sites
 listed in
@@ -247,22 +247,22 @@ configured.
 Configure
 .Va OPTIONS
 for this port and all its dependencies using
-.Xr dialog4ports 1 .
+.Xr portconfig 1 Pq Pa ports/ports-mgmt/portconfig .
 .It Cm fetch-list
-Show list of files to be fetched in order to build the port.
+Show the list of files to fetch in order to build the port (but not its
+dependencies).
 .It Cm fetch-recursive
 Fetch the distfiles of the port and all its dependencies.
 .It Cm fetch-recursive-list
 Show list of files that would be retrieved by
 .Cm fetch-recursive .
-.It Cm run-depends-list , build-depends-list
-Print a list of all the compile and run dependencies, and dependencies
-of those dependencies, by port directory.
+.It Cm build-depends-list , run-depends-list
+Print a list of all the direct compile or run dependencies for this port.
 .It Cm all-depends-list
-Print a list of all dependencies for the port.
-.It Cm pretty-print-run-depends-list , pretty-print-build-depends-list
-Print a list of all the compile and run dependencies, and dependencies
-of those dependencies, by port name and version.
+Print a list of all recursive dependencies for this port.
+.It Cm pretty-print-build-depends-list , pretty-print-run-depends-list
+Print a list of all the recursive compile or run dependencies for this port by
+port name and version.
 .It Cm missing
 Print a list of missing dependencies to be installed for the port.
 .It Cm clean
@@ -506,7 +506,7 @@ cluster (for
 .Cm fetchindex
 target).
 Defaults to
-.Pa https://www.FreeBSD.org/ports/ .
+.Pa https://download.FreeBSD.org/ports/index/ .
 .It Va FETCHINDEX
 Command to get
 .Pa INDEX
@@ -581,6 +581,10 @@ Additional
 to set when
 .Va WITH_DEBUG
 is set.
+.It Va DEFAULT_VERSIONS
+Override the default variant used for ports
+with multiple concurrent versions in the tree,
+such as database or compiler versions.
 .It Va WITH_CCACHE_BUILD
 .Pq Vt bool
 If set, enables the use of
@@ -592,11 +596,41 @@ Which directory to use for the
 data.
 .El
 .Sh FILES
-.Bl -tag -width ".Pa /usr/ports/Mk/bsd.port.mk" -compact
-.It Pa /usr/ports
-The default ports directory.
-.It Pa /usr/ports/Mk/bsd.port.mk
-The big Kahuna.
+.Bl -tag -width "ports/CONTRIBUTING.md" -compact
+.It Pa ports/CHANGES
+BREAKING NEWS to read before creating ports!
+.It Pa ports/CONTRIBUTING.md
+Instructions for contributing to the ports tree.
+.It Pa ports/Mk/bsd.port.mk
+The inner workings of the ports framework.
+.It Pa ports/Tools/scripts/
+Grab bag of tools for maintaining ports.
+.It Pa ports/UPDATING
+BREAKING NEWS to read before upgrading ports!
+.It Pa ports/distfiles/
+Directory where fetched files are stored.
+.Pp
+.It Pa ${PORT}/Makefile
+Specification for building the port.
+.It Pa ${PORT}/distinfo
+Checksums generated with
+.Ql make makesum .
+.It Pa ${PORT}/files/
+Directory for patches or any additional files.
+.It Pa ${PORT}/pkg-descr
+Long description of the port.
+.It Pa ${PORT}/pkg-plist
+List of all files installed by the port.
+.It Pa ${PORT}/work/
+The port's building and staging directory.
+.Pp
+.It Pa /etc/make.conf
+Settings for the port-building framework.
+.It Pa /usr/ports/
+Canonical ports tree location.
+.It Pa /var/db/ports/
+Directory for storing configured
+.Va OPTIONS .
 .El
 .Sh EXAMPLES
 .Bl -tag -width 0n
@@ -683,7 +717,7 @@ WITH_DEBUG_PORTS=	mail/dovecot security/krb5
 .Pp
 It is also possible to use the debug variables on the command line:
 .Bd -literal -offset 2n
-.Li # Ic make -DWITH_DEBUG DEBUG_FLAGS="-g -O0" build
+.Li # Ic make WITH_DEBUG DEBUG_FLAGS="-g -O0" build
 .Ed
 .Pp
 See the
@@ -739,16 +773,16 @@ Additional user documentation:
 .It
 .Xr pkg 8
 .It
-.Lk "https://www.FreeBSD.org/ports" "Searchable index of all ports"
+.Lk "https://ports.FreeBSD.org" "Searchable index of all ports"
 .El
 .Sh HISTORY
 The Ports Collection
 appeared in
 .Fx 1.0 .
 It has since spread to
-.Nx
-and
-.Ox .
+.Nx ,
+.Ox ,
+and macOS.
 .Sh AUTHORS
 .An -nosplit
 This manual page was originated by

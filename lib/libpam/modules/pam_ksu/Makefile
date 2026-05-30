@@ -22,14 +22,26 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 
 PACKAGE=	kerberos
 
-LIB=	pam_ksu
-SRCS=	pam_ksu.c
-MAN=	pam_ksu.8
+.include <src.opts.mk>
+
+LIB=		pam_ksu
+SRCS=		pam_ksu.c
+MANNODEV=	pam_ksu.8
+
+WARNS?=	3
 
 LIBADD+=	krb5
+
+.if ${MK_MITKRB5} != "no"
+WARNS=	2
+CFLAGS+=	-I${SRCTOP}/crypto/krb5/src/include
+CFLAGS+=	-I${SRCTOP}/krb5/include
+CFLAGS+=	-I${OBJTOP}/krb5/util/profile
+CFLAGS+=	-include ${SRCTOP}/crypto/krb5/src/include/k5-int.h
+CFLAGS+=	-DMK_MITKRB5=yes
+.endif
 
 .include <bsd.lib.mk>

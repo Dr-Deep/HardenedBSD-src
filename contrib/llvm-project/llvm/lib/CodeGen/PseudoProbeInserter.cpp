@@ -18,11 +18,9 @@
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/Module.h"
 #include "llvm/IR/PseudoProbe.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/MC/MCPseudoProbe.h"
-#include "llvm/Target/TargetMachine.h"
-#include <unordered_set>
 
 #define DEBUG_TYPE "pseudo-probe-inserter"
 
@@ -130,11 +128,8 @@ public:
 
 private:
   uint64_t getFuncGUID(Module *M, DILocation *DL) {
-    auto *SP = DL->getScope()->getSubprogram();
-    auto Name = SP->getLinkageName();
-    if (Name.empty())
-      Name = SP->getName();
-    return Function::getGUID(Name);
+    auto Name = DL->getSubprogramLinkageName();
+    return Function::getGUIDAssumingExternalLinkage(Name);
   }
 
   bool ShouldRun = false;

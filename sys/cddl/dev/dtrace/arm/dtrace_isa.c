@@ -18,8 +18,6 @@
  * information: Portions Copyright [yyyy] [name of copyright owner]
  *
  * CDDL HEADER END
- *
- * $FreeBSD$
  */
 /*
  * Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
@@ -29,6 +27,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/dtrace_impl.h>
 #include <sys/kernel.h>
 #include <sys/stack.h>
 #include <sys/pcpu.h>
@@ -49,14 +48,6 @@
 #include <sys/kdb.h>
 
 #include "regset.h"
-
-/*
- * Wee need some reasonable default to prevent backtrace code
- * from wandering too far
- */
-#define	MAX_FUNCTION_SIZE 0x10000
-#define	MAX_PROLOGUE_SIZE 0x100
-
 
 uint8_t dtrace_fuword8_nocheck(void *);
 uint16_t dtrace_fuword16_nocheck(void *);
@@ -165,7 +156,7 @@ dtrace_getstackdepth(int aframes)
 }
 
 ulong_t
-dtrace_getreg(struct trapframe *rp, uint_t reg)
+dtrace_getreg(struct trapframe *frame, uint_t reg)
 {
 	printf("IMPLEMENT ME: %s\n", __func__);
 

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2006 Roman Divacky
  * All rights reserved.
@@ -24,14 +24,10 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _LINUX_MISC_H_
 #define	_LINUX_MISC_H_
-
-#include <sys/sysctl.h>
 
 #define	LINUX_MAX_PID_NS_LEVEL	32
 
@@ -61,7 +57,10 @@
 #define	LINUX_PR_GET_SECCOMP	21
 #define	LINUX_PR_SET_SECCOMP	22
 #define	LINUX_PR_CAPBSET_READ	23
-#define	LINUX_PR_SET_NO_NEW_PRIVS	38
+#define	LINUX_PR_SET_CHILD_SUBREAPER	36 /* Set child subreaper status */
+#define	LINUX_PR_GET_CHILD_SUBREAPER	37 /* Get child subreaper status */
+#define	LINUX_PR_SET_NO_NEW_PRIVS	38 /* Set no_new_privs attribute */
+#define	LINUX_PR_GET_NO_NEW_PRIVS	39 /* Get no_new_privs attribute */
 #define	LINUX_PR_SET_PTRACER	1499557217
 
 #define	LINUX_MAX_COMM_LEN	16	/* Maximum length of the process name. */
@@ -88,7 +87,9 @@
 					 * differ from AT_PLATFORM.
 					 */
 #define	LINUX_AT_RANDOM		25	/* address of random bytes */
-#define	LINUX_AT_HWCAP2		26	/* CPU capabilities, second part */
+#define	LINUX_AT_HWCAP2		26	/* CPU capabilities */
+#define	LINUX_AT_HWCAP3		29	/* CPU capabilities */
+#define	LINUX_AT_HWCAP4		30	/* CPU capabilities */
 #define	LINUX_AT_EXECFN		31	/* filename of program */
 #define	LINUX_AT_SYSINFO	32	/* vsyscall */
 #define	LINUX_AT_SYSINFO_EHDR	33	/* vdso header */
@@ -192,5 +193,56 @@ struct syscall_info {
 		} seccomp;
 	};
 };
+
+/* Linux ioprio set/get syscalls */
+#define	LINUX_IOPRIO_CLASS_SHIFT	13
+#define	LINUX_IOPRIO_CLASS_MASK		0x07
+#define	LINUX_IOPRIO_PRIO_MASK		((1UL << LINUX_IOPRIO_CLASS_SHIFT) - 1)
+
+#define	LINUX_IOPRIO_PRIO_CLASS(ioprio)						\
+    (((ioprio) >> LINUX_IOPRIO_CLASS_SHIFT) & LINUX_IOPRIO_CLASS_MASK)
+#define	LINUX_IOPRIO_PRIO_DATA(ioprio)	((ioprio) & LINUX_IOPRIO_PRIO_MASK)
+#define	LINUX_IOPRIO_PRIO(class, data)						\
+    ((((class) & LINUX_IOPRIO_CLASS_MASK) << LINUX_IOPRIO_CLASS_SHIFT) |	\
+    ((data) & LINUX_IOPRIO_PRIO_MASK))
+
+#define	LINUX_IOPRIO_CLASS_NONE		0
+#define	LINUX_IOPRIO_CLASS_RT		1
+#define	LINUX_IOPRIO_CLASS_BE		2
+#define	LINUX_IOPRIO_CLASS_IDLE		3
+
+#define	LINUX_IOPRIO_MIN		0
+#define	LINUX_IOPRIO_MAX		7
+
+#define	LINUX_IOPRIO_WHO_PROCESS	1
+#define	LINUX_IOPRIO_WHO_PGRP		2
+#define	LINUX_IOPRIO_WHO_USER		3
+
+/* Linux kcmp types from <linux/kcmp.h>	*/
+#define	LINUX_KCMP_FILE			0
+#define	LINUX_KCMP_VM			1
+#define	LINUX_KCMP_FILES		2
+#define	LINUX_KCMP_FS			3
+#define	LINUX_KCMP_SIGHAND		4
+#define	LINUX_KCMP_IO			5
+#define	LINUX_KCMP_SYSVSEM		6
+#define	LINUX_KCMP_EPOLL_TFD		7
+#define	LINUX_KCMP_TYPES		8
+
+/* Linux membarrier commands from <linux/membarrier.h> */
+#define	LINUX_MEMBARRIER_CMD_QUERY				0
+#define	LINUX_MEMBARRIER_CMD_GLOBAL				(1 << 0)
+#define	LINUX_MEMBARRIER_CMD_GLOBAL_EXPEDITED			(1 << 1)
+#define	LINUX_MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED		(1 << 2)
+#define	LINUX_MEMBARRIER_CMD_PRIVATE_EXPEDITED			(1 << 3)
+#define	LINUX_MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED		(1 << 4)
+#define	LINUX_MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE	(1 << 5)
+#define	LINUX_MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE (1 << 6)
+#define	LINUX_MEMBARRIER_CMD_PRIVATE_EXPEDITED_RSEQ		(1 << 7)
+#define	LINUX_MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_RSEQ	(1 << 8)
+#define	LINUX_MEMBARRIER_CMD_GET_REGISTRATIONS			(1 << 9)
+
+/* Linux membarrier flags from <linux/membarrier.h> */
+#define	LINUX_MEMBARRIER_CMD_FLAG_CPU				(1 << 0)
 
 #endif	/* _LINUX_MISC_H_ */

@@ -1,4 +1,4 @@
-//===- AMDGPUMCInstLower.h - Lower AMDGPU MachineInstr to an MCInst -------===//
+//===- AMDGPUMCInstLower.h - Lower MachineInstr to MCInst ------*- C++ -*--===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -39,6 +39,8 @@ public:
 
   /// Lower a MachineInstr to an MCInst
   void lower(const MachineInstr *MI, MCInst &OutMI) const;
+
+  void lowerT16D16Helper(const MachineInstr *MI, MCInst &OutMI) const;
 };
 
 namespace {
@@ -55,7 +57,7 @@ static inline const MCExpr *lowerAddrSpaceCast(const TargetMachine &TM,
   // Clang generates addrspacecast for null pointers in private and local
   // address space, which needs to be lowered.
   if (CE && CE->getOpcode() == Instruction::AddrSpaceCast) {
-    auto Op = CE->getOperand(0);
+    auto *Op = CE->getOperand(0);
     auto SrcAddr = Op->getType()->getPointerAddressSpace();
     if (Op->isNullValue() && AT.getNullPointerValue(SrcAddr) == 0) {
       auto DstAddr = CE->getType()->getPointerAddressSpace();

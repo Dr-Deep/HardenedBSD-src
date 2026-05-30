@@ -27,9 +27,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
-.Dd June 4, 2011
+.Dd January 14, 2026
 .Dt RTADVD.CONF 5
 .Os
 .Sh NAME
@@ -430,6 +428,39 @@ DNS search list entries.
 The default value is 3/2 of the interval time.
 .El
 .Pp
+The following items are for PREF64 discovery
+.Pq RFC 8781 ,
+which will advertise the network's NAT64 prefix to clients.
+These items are optional.
+.Bl -tag -width indent
+.It Cm \&pref64
+(str) The prefix to advertise in the PREF64 option.
+Multiple PREF64 prefixes can be specified by seperating entries using
+.Cm pref64 ,
+.Cm pref640 ,
+.Cm pref641 ,
+.Cm pref642 ...
+options with corresponding
+.Cm pref64len ,
+.Cm pref64len0 ,
+.Cm pref64len1 ,
+.Cm pref64len2 ...
+entries.
+This is also true for the
+.Cm pref64lifetime
+option.
+Note that the maximum number of prefixes depends on the receiver side.
+.It Cm \&pref64len
+(num) The length of the PREF64 prefix.
+This must be 96, 64, 56, 48, 40, or 32.
+If not specified, the default is 96.
+.It Cm \&pref64lifetime
+(num) The prefix lifetime to advertise in the PREF64 option.
+This should be at least as long as the RA lifetime, but cannot be greater
+than 65528.
+If not specified, the default is the RA lifetime, or 65528, whichever is lower.
+.El
+.Pp
 You can also refer one line from another by using
 .Cm tc
 capability.
@@ -468,13 +499,15 @@ ef0:\\
 .Pp
 The following example configures the
 .Li wlan0
-interface and adds two DNS servers and a DNS domain search options
+interface and adds two DNS servers, a DNS domain search,
+and a PREF64 prefix,
 using the default option lifetime values.
 .Bd -literal -offset indent
 wlan0:\\
 	:addr="2001:db8:ffff:1000::":prefixlen#64:\\
 	:rdnss="2001:db8:ffff::10,2001:db8:ffff::2:43":\\
-	:dnssl="example.com":
+	:dnssl="example.com":\\
+	:pref64="64:ff9b::":
 .Ed
 .Pp
 The following example presents the default values in an explicit manner.

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2020 Alexander V. Chernikov
  *
@@ -23,8 +23,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -199,6 +197,14 @@ void nhop_set_type(struct nhop_object *nh, enum nhop_type nh_type);
 void nhop_set_src(struct nhop_object *nh, struct ifaddr *ifa);
 void nhop_set_transmit_ifp(struct nhop_object *nh, struct ifnet *ifp);
 
+#define	NH_ORIGIN_UNSPEC	0 /* not set */
+#define	NH_ORIGIN_REDIRECT	1 /* kernel-originated redirect */
+#define	NH_ORIGIN_KERNEL	2 /* kernel (interface) routes */
+#define	NH_ORIGIN_BOOT		3 /* kernel-originated routes at boot */
+#define	NH_ORIGIN_STATIC	4 /* route(8) routes */
+void nhop_set_origin(struct nhop_object *nh, uint8_t origin);
+uint8_t nhop_get_origin(const struct nhop_object *nh);
+
 uint32_t nhop_get_idx(const struct nhop_object *nh);
 uint32_t nhop_get_uidx(const struct nhop_object *nh);
 void nhop_set_uidx(struct nhop_object *nh, uint32_t uidx);
@@ -213,10 +219,18 @@ uint32_t nhop_get_fibnum(const struct nhop_object *nh);
 void nhop_set_fibnum(struct nhop_object *nh, uint32_t fibnum);
 uint32_t nhop_get_expire(const struct nhop_object *nh);
 void nhop_set_expire(struct nhop_object *nh, uint32_t expire);
+uint32_t nhop_get_metric(const struct nhop_object *nh);
+void nhop_set_metric(struct nhop_object *nh, uint32_t metric);
 struct rib_head *nhop_get_rh(const struct nhop_object *nh);
 
 struct nhgrp_object;
+struct nhgrp_object *nhgrp_alloc(uint32_t fibnum, int family,
+    struct weightened_nhop *wn, int num_nhops, int *perror);
+struct nhgrp_object *nhgrp_get_nhgrp(struct nhgrp_object *nhg, int *perror);
+void nhgrp_set_uidx(struct nhgrp_object *nhg, uint32_t uidx);
 uint32_t nhgrp_get_uidx(const struct nhgrp_object *nhg);
+uint8_t nhgrp_get_origin(const struct nhgrp_object *nhg);
+void nhgrp_set_origin(struct nhgrp_object *nhg, uint8_t origin);
 #endif /* _KERNEL */
 
 /* Kernel <> userland structures */

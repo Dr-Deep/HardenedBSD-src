@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 .include <src.opts.mk>
 
 PACKAGE=	nfs
@@ -14,5 +12,7 @@ CFLAGS+= -DINET
 .if ${MK_INET6_SUPPORT} != "no"
 CFLAGS+= -DINET6
 .endif
+
+CFI_OVERRIDE=	-fno-sanitize=cfi-icall
 
 .include <bsd.prog.mk>

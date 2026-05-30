@@ -1,11 +1,9 @@
 #!/bin/sh
 #
-# $FreeBSD$
 #
 
 # PROVIDE: zpool
-# REQUIRE: hostid disks
-# BEFORE: mountcritlocal
+# REQUIRE: hostid disks mountcritlocal
 # KEYWORD: nojail
 
 . /etc/rc.subr
@@ -35,4 +33,8 @@ zpool_start()
 }
 
 load_rc_config $name
+
+# doesn't make sense to run in a svcj
+zpool_svcj="NO"
+
 run_rc_command "$1"

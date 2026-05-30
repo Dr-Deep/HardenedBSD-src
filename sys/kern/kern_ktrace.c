@@ -29,21 +29,18 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)kern_ktrace.c	8.2 (Berkeley) 9/23/93
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include "opt_ktrace.h"
 
-#include <sys/param.h>
-#include <sys/capsicum.h>
+#define	EXTERR_CATEGORY	EXTERR_KTRACE
 #include <sys/systm.h>
+#include <sys/capsicum.h>
+#include <sys/exterrvar.h>
 #include <sys/fcntl.h>
 #include <sys/kernel.h>
 #include <sys/kthread.h>
+#include <sys/ktrace.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
 #include <sys/malloc.h>
@@ -52,16 +49,15 @@ __FBSDID("$FreeBSD$");
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/resourcevar.h>
-#include <sys/unistd.h>
-#include <sys/vnode.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
-#include <sys/ktrace.h>
 #include <sys/sx.h>
 #include <sys/sysctl.h>
 #include <sys/sysent.h>
 #include <sys/syslog.h>
 #include <sys/sysproto.h>
+#include <sys/unistd.h>
+#include <sys/vnode.h>
 
 #include <security/mac/mac_framework.h>
 
@@ -108,11 +104,12 @@ struct ktr_request {
 		struct	ktr_fault ktr_fault;
 		struct	ktr_faultend ktr_faultend;
 		struct  ktr_struct_array ktr_struct_array;
+		struct	ktr_exterr ktr_exterr;
 	} ktr_data;
 	STAILQ_ENTRY(ktr_request) ktr_list;
 };
 
-static int data_lengths[] = {
+static const int data_lengths[] = {
 	[KTR_SYSCALL] = offsetof(struct ktr_syscall, ktr_args),
 	[KTR_SYSRET] = sizeof(struct ktr_sysret),
 	[KTR_NAMEI] = 0,
@@ -128,6 +125,9 @@ static int data_lengths[] = {
 	[KTR_FAULT] = sizeof(struct ktr_fault),
 	[KTR_FAULTEND] = sizeof(struct ktr_faultend),
 	[KTR_STRUCT_ARRAY] = sizeof(struct ktr_struct_array),
+	[KTR_ARGS] = 0,
+	[KTR_ENVS] = 0,
+	[KTR_EXTERR] = sizeof(struct ktr_exterr),
 };
 
 static STAILQ_HEAD(, ktr_request) ktr_free;
@@ -373,11 +373,17 @@ ktr_getrequest(int type)
 static void
 ktr_enqueuerequest(struct thread *td, struct ktr_request *req)
 {
+	bool sched_ast;
 
 	mtx_lock(&ktrace_mtx);
-	STAILQ_INSERT_TAIL(&td->td_proc->p_ktr, req, ktr_list);
+	sched_ast = td->td_proc->p_ktrioparms != NULL;
+	if (sched_ast)
+		STAILQ_INSERT_TAIL(&td->td_proc->p_ktr, req, ktr_list);
+	else
+		ktr_freerequest_locked(req);
 	mtx_unlock(&ktrace_mtx);
-	ast_sched(td, TDA_KTRACE);
+	if (sched_ast)
+		ast_sched(td, TDA_KTRACE);
 }
 
 /*
@@ -398,7 +404,7 @@ ktr_drain(struct thread *td)
 
 	STAILQ_INIT(&local_queue);
 
-	if (!STAILQ_EMPTY(&td->td_proc->p_ktr)) {
+	if (!STAILQ_EMPTY_ATOMIC(&td->td_proc->p_ktr)) {
 		mtx_lock(&ktrace_mtx);
 		STAILQ_CONCAT(&local_queue, &td->td_proc->p_ktr);
 		mtx_unlock(&ktrace_mtx);
@@ -564,6 +570,21 @@ ktrsyscall(int code, int narg, syscallarg_t args[])
 }
 
 void
+ktrdata(int type, const void *data, size_t len)
+{
+        struct ktr_request *req;
+        void *buf;
+
+        if ((req = ktr_getrequest(type)) == NULL)
+                return;
+        buf = malloc(len, M_KTRACE, M_WAITOK);
+        bcopy(data, buf, len);
+        req->ktr_header.ktr_len = len;
+        req->ktr_buffer = buf;
+        ktr_submitrequest(curthread, req);
+}
+
+void
 ktrsysret(int code, int error, register_t retval)
 {
 	struct ktr_request *req;
@@ -595,7 +616,7 @@ ktrprocexec(struct proc *p)
 	PROC_LOCK_ASSERT(p, MA_OWNED);
 
 	kiop = p->p_ktrioparms;
-	if (kiop == NULL || priv_check_cred(kiop->cr, PRIV_DEBUG_DIFFCRED))
+	if (kiop == NULL || priv_check_cred(kiop->cr, PRIV_DEBUG_DIFFCRED) == 0)
 		return (NULL);
 
 	mtx_lock(&ktrace_mtx);
@@ -771,8 +792,8 @@ ktrgenio(int fd, enum uio_rw rw, struct uio *uio, int error)
 	int datalen;
 	char *buf;
 
-	if (error) {
-		free(uio, M_IOV);
+	if (error != 0 && (rw == UIO_READ || error == EFAULT)) {
+		freeuio(uio);
 		return;
 	}
 	uio->uio_offset = 0;
@@ -780,7 +801,7 @@ ktrgenio(int fd, enum uio_rw rw, struct uio *uio, int error)
 	datalen = MIN(uio->uio_resid, ktr_geniosize);
 	buf = malloc(datalen, M_KTRACE, M_WAITOK);
 	error = uiomove(buf, datalen, uio);
-	free(uio, M_IOV);
+	freeuio(uio);
 	if (error) {
 		free(buf, M_KTRACE);
 		return;
@@ -817,8 +838,8 @@ ktrpsig(int sig, sig_t action, sigset_t *mask, int code)
 	ktrace_exit(td);
 }
 
-void
-ktrcsw(int out, int user, const char *wmesg)
+static void
+ktrcsw_impl(int out, int user, const char *wmesg, const struct timespec *tv)
 {
 	struct thread *td = curthread;
 	struct ktr_request *req;
@@ -833,12 +854,26 @@ ktrcsw(int out, int user, const char *wmesg)
 	kc = &req->ktr_data.ktr_csw;
 	kc->out = out;
 	kc->user = user;
+	if (tv != NULL)
+		req->ktr_header.ktr_time = *tv;
 	if (wmesg != NULL)
 		strlcpy(kc->wmesg, wmesg, sizeof(kc->wmesg));
 	else
 		bzero(kc->wmesg, sizeof(kc->wmesg));
 	ktr_enqueuerequest(td, req);
 	ktrace_exit(td);
+}
+
+void
+ktrcsw(int out, int user, const char *wmesg)
+{
+	ktrcsw_impl(out, user, wmesg, NULL);
+}
+
+void
+ktrcsw_out(const struct timespec *tv, const char *wmesg)
+{
+	ktrcsw_impl(1, 0, wmesg, tv);
 }
 
 void
@@ -927,14 +962,17 @@ ktrstructarray(const char *name, enum uio_seg seg, const void *data,
 }
 
 void
-ktrcapfail(enum ktr_cap_fail_type type, const cap_rights_t *needed,
-    const cap_rights_t *held)
+ktrcapfail(enum ktr_cap_violation type, const void *data)
 {
 	struct thread *td = curthread;
 	struct ktr_request *req;
 	struct ktr_cap_fail *kcf;
+	union ktr_cap_data *kcd;
 
-	if (__predict_false(curthread->td_pflags & TDP_INKTRACE))
+	if (__predict_false(td->td_pflags & TDP_INKTRACE))
+		return;
+	if (type != CAPFAIL_SYSCALL &&
+	    (td->td_sa.callp->sy_flags & SYF_CAPENABLED) == 0)
 		return;
 
 	req = ktr_getrequest(KTR_CAPFAIL);
@@ -942,14 +980,39 @@ ktrcapfail(enum ktr_cap_fail_type type, const cap_rights_t *needed,
 		return;
 	kcf = &req->ktr_data.ktr_cap_fail;
 	kcf->cap_type = type;
-	if (needed != NULL)
-		kcf->cap_needed = *needed;
-	else
-		cap_rights_init(&kcf->cap_needed);
-	if (held != NULL)
-		kcf->cap_held = *held;
-	else
-		cap_rights_init(&kcf->cap_held);
+	kcf->cap_code = td->td_sa.code;
+	kcf->cap_svflags = td->td_proc->p_sysent->sv_flags;
+	if (data != NULL) {
+		kcd = &kcf->cap_data;
+		switch (type) {
+		case CAPFAIL_NOTCAPABLE:
+		case CAPFAIL_INCREASE:
+			kcd->cap_needed = *(const cap_rights_t *)data;
+			kcd->cap_held = *((const cap_rights_t *)data + 1);
+			break;
+		case CAPFAIL_SYSCALL:
+		case CAPFAIL_SIGNAL:
+		case CAPFAIL_PROTO:
+			kcd->cap_int = *(const int *)data;
+			break;
+		case CAPFAIL_SOCKADDR: {
+			size_t len;
+
+			len = MIN(((const struct sockaddr *)data)->sa_len,
+			    sizeof(kcd->cap_sockaddr));
+			memset(&kcd->cap_sockaddr, 0,
+			    sizeof(kcd->cap_sockaddr));
+			memcpy(&kcd->cap_sockaddr, data, len);
+			break;
+		}
+		case CAPFAIL_NAMEI:
+			strlcpy(kcd->cap_path, data, MAXPATHLEN);
+			break;
+		case CAPFAIL_CPUSET:
+		default:
+			break;
+		}
+	}
 	ktr_enqueuerequest(td, req);
 	ktrace_exit(td);
 }
@@ -992,7 +1055,34 @@ ktrfaultend(int result)
 	ktr_enqueuerequest(td, req);
 	ktrace_exit(td);
 }
+
+void
+ktrexterr(struct thread *td)
+{
+	struct ktr_request *req;
+	struct ktr_exterr *ktre;
+
+	if (!KTRPOINT(td, KTR_EXTERR))
+		return;
+
+	req = ktr_getrequest(KTR_EXTERR);
+	if (req == NULL)
+		return;
+	ktre = &req->ktr_data.ktr_exterr;
+	if (exterr_to_ue(td, &ktre->ue) == 0)
+		ktr_enqueuerequest(td, req);
+	else
+		ktr_freerequest(req);
+	ktrace_exit(td);
+}
 #endif /* KTRACE */
+
+#ifndef KTRACE
+void
+ktrexterr(struct thread *td __unused)
+{
+}
+#endif
 
 /* Interface and common routines */
 

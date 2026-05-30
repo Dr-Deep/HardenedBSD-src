@@ -1,7 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * Copyright (c) 2015-2020 Amazon.com, Inc. or its affiliates.
+ * Copyright (c) 2015-2024 Amazon.com, Inc. or its affiliates.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -28,17 +28,13 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_rss.h"
 #include "ena.h"
 #include "ena_datapath.h"
 #ifdef DEV_NETMAP
 #include "ena_netmap.h"
 #endif /* DEV_NETMAP */
-#ifdef RSS
 #include <net/rss_config.h>
-#endif /* RSS */
 
 #include <netinet6/ip6_var.h>
 
@@ -46,8 +42,8 @@ __FBSDID("$FreeBSD$");
  *  Static functions prototypes
  *********************************************************************/
 
-static int ena_tx_cleanup(struct ena_ring *);
-static int ena_rx_cleanup(struct ena_ring *);
+static bool ena_tx_cleanup(struct ena_ring *);
+static bool ena_rx_cleanup(struct ena_ring *);
 static inline int ena_get_tx_req_id(struct ena_ring *tx_ring,
     struct ena_com_io_cq *io_cq, uint16_t *req_id);
 static void ena_rx_hash_mbuf(struct ena_ring *, struct ena_com_rx_ctx *,
@@ -77,12 +73,8 @@ ena_cleanup(void *arg, int pending)
 	struct ena_com_io_cq *io_cq;
 	struct ena_eth_io_intr_reg intr_reg;
 	int qid, ena_qid;
-	int txc, rxc, i;
-
-	if (unlikely((if_getdrvflags(ifp) & IFF_DRV_RUNNING) == 0))
-		return;
-
-	ena_log_io(adapter->pdev, DBG, "MSI-X TX/RX routine\n");
+	int i;
+	bool rx_again, tx_again;
 
 	tx_ring = que->tx_ring;
 	rx_ring = que->rx_ring;
@@ -90,32 +82,46 @@ ena_cleanup(void *arg, int pending)
 	ena_qid = ENA_IO_TXQ_IDX(qid);
 	io_cq = &adapter->ena_dev->io_cq_queues[ena_qid];
 
+	atomic_store_8(&tx_ring->cleanup_running, 1);
+	/* Need to make sure that ENA_FLAG_TRIGGER_RESET is visible to ena_cleanup() and
+	 * that cleanup_running is visible to check_missing_comp_in_tx_queue() to
+	 * prevent the case of accessing CQ concurrently with check_cdesc_in_tx_cq()
+	 */
+	mb();
+	if (unlikely(((if_getdrvflags(ifp) & IFF_DRV_RUNNING) == 0) ||
+	    (ENA_FLAG_ISSET(ENA_FLAG_TRIGGER_RESET, adapter))))
+		return;
+
+	ena_log_io(adapter->pdev, DBG, "MSI-X TX/RX routine\n");
+
 	atomic_store_8(&tx_ring->first_interrupt, 1);
 	atomic_store_8(&rx_ring->first_interrupt, 1);
 
 	for (i = 0; i < ENA_CLEAN_BUDGET; ++i) {
-		rxc = ena_rx_cleanup(rx_ring);
-		txc = ena_tx_cleanup(tx_ring);
+		rx_again = ena_rx_cleanup(rx_ring);
+		tx_again = ena_tx_cleanup(tx_ring);
 
-		if (unlikely((if_getdrvflags(ifp) & IFF_DRV_RUNNING) == 0))
+		if (unlikely(((if_getdrvflags(ifp) & IFF_DRV_RUNNING) == 0) ||
+		    (ENA_FLAG_ISSET(ENA_FLAG_TRIGGER_RESET, adapter))))
 			return;
 
-		if ((txc != ENA_TX_BUDGET) && (rxc != ENA_RX_BUDGET))
+		if (!rx_again && !tx_again)
 			break;
 	}
 
 	/* Signal that work is done and unmask interrupt */
 	ena_com_update_intr_reg(&intr_reg, ENA_RX_IRQ_INTERVAL,
-	    ENA_TX_IRQ_INTERVAL, true);
+	    ENA_TX_IRQ_INTERVAL, true, false);
 	counter_u64_add(tx_ring->tx_stats.unmask_interrupt_num, 1);
 	ena_com_unmask_intr(io_cq, &intr_reg);
+	atomic_store_8(&tx_ring->cleanup_running, 0);
 }
 
 void
 ena_deferred_mq_start(void *arg, int pending)
 {
 	struct ena_ring *tx_ring = (struct ena_ring *)arg;
-	struct ifnet *ifp = tx_ring->adapter->ifp;
+	if_t ifp = tx_ring->adapter->ifp;
 
 	while (!drbr_empty(ifp, tx_ring->br) && tx_ring->running &&
 	    (if_getdrvflags(ifp) & IFF_DRV_RUNNING) != 0) {
@@ -128,7 +134,7 @@ ena_deferred_mq_start(void *arg, int pending)
 int
 ena_mq_start(if_t ifp, struct mbuf *m)
 {
-	struct ena_adapter *adapter = ifp->if_softc;
+	struct ena_adapter *adapter = if_getsoftc(ifp);
 	struct ena_ring *tx_ring;
 	int ret, is_drbr_empty;
 	uint32_t i;
@@ -179,7 +185,7 @@ ena_mq_start(if_t ifp, struct mbuf *m)
 void
 ena_qflush(if_t ifp)
 {
-	struct ena_adapter *adapter = ifp->if_softc;
+	struct ena_adapter *adapter = if_getsoftc(ifp);
 	struct ena_ring *tx_ring = adapter->tx_ring;
 	int i;
 
@@ -202,29 +208,22 @@ ena_get_tx_req_id(struct ena_ring *tx_ring, struct ena_com_io_cq *io_cq,
     uint16_t *req_id)
 {
 	struct ena_adapter *adapter = tx_ring->adapter;
-	int rc;
+	int rc = ena_com_tx_comp_req_id_get(io_cq, req_id);
 
-	rc = ena_com_tx_comp_req_id_get(io_cq, req_id);
-	if (rc == ENA_COM_TRY_AGAIN)
+	if (unlikely(rc == ENA_COM_TRY_AGAIN))
 		return (EAGAIN);
 
-	if (unlikely(rc != 0)) {
-		ena_log(adapter->pdev, ERR, "Invalid req_id %hu in qid %hu\n",
+	rc = validate_tx_req_id(tx_ring, *req_id, rc);
+
+	if (unlikely(tx_ring->tx_buffer_info[*req_id].mbuf == NULL)) {
+		ena_log(adapter->pdev, ERR,
+		    "tx_info doesn't have valid mbuf. req_id %hu qid %hu\n",
 		    *req_id, tx_ring->qid);
-		counter_u64_add(tx_ring->tx_stats.bad_req_id, 1);
-		goto err;
+		ena_trigger_reset(adapter, ENA_REGS_RESET_INV_TX_REQ_ID);
+		rc = EFAULT;
 	}
 
-	if (tx_ring->tx_buffer_info[*req_id].mbuf != NULL)
-		return (0);
-
-	ena_log(adapter->pdev, ERR,
-	    "tx_info doesn't have valid mbuf. req_id %hu qid %hu\n",
-	    *req_id, tx_ring->qid);
-err:
-	ena_trigger_reset(adapter, ENA_REGS_RESET_INV_TX_REQ_ID);
-
-	return (EFAULT);
+	return (rc);
 }
 
 /**
@@ -238,7 +237,7 @@ err:
  * TX_COMMIT. The first check of free descriptor is performed before the actual
  * loop, then repeated at the loop end.
  **/
-static int
+static bool
 ena_tx_cleanup(struct ena_ring *tx_ring)
 {
 	struct ena_adapter *adapter;
@@ -250,7 +249,6 @@ ena_tx_cleanup(struct ena_ring *tx_ring)
 	int rc;
 	int commit = ENA_TX_COMMIT;
 	int budget = ENA_TX_BUDGET;
-	int work_done;
 	bool above_thresh;
 
 	adapter = tx_ring->que->adapter;
@@ -300,22 +298,18 @@ ena_tx_cleanup(struct ena_ring *tx_ring)
 			ena_com_comp_ack(
 			    &adapter->ena_dev->io_sq_queues[ena_qid],
 			    total_done);
-			ena_com_update_dev_comp_head(io_cq);
 			total_done = 0;
 		}
 	} while (likely(--budget));
 
-	work_done = ENA_TX_BUDGET - budget;
-
 	ena_log_io(adapter->pdev, DBG, "tx: q %d done. total pkts: %d\n",
-	    tx_ring->qid, work_done);
+	    tx_ring->qid, ENA_TX_BUDGET - budget);
 
 	/* If there is still something to commit update ring state */
 	if (likely(commit != ENA_TX_COMMIT)) {
 		tx_ring->next_to_clean = next_to_clean;
 		ena_com_comp_ack(&adapter->ena_dev->io_sq_queues[ena_qid],
 		    total_done);
-		ena_com_update_dev_comp_head(io_cq);
 	}
 
 	/*
@@ -341,7 +335,7 @@ ena_tx_cleanup(struct ena_ring *tx_ring)
 
 	tx_ring->tx_last_cleanup_ticks = ticks;
 
-	return (work_done);
+	return (budget == 0);
 }
 
 static void
@@ -353,7 +347,6 @@ ena_rx_hash_mbuf(struct ena_ring *rx_ring, struct ena_com_rx_ctx *ena_rx_ctx,
 	if (likely(ENA_FLAG_ISSET(ENA_FLAG_RSS_ACTIVE, adapter))) {
 		mbuf->m_pkthdr.flowid = ena_rx_ctx->hash;
 
-#ifdef RSS
 		/*
 		 * Hardware and software RSS are in agreement only when both are
 		 * configured to Toeplitz algorithm.  This driver configures
@@ -364,7 +357,6 @@ ena_rx_hash_mbuf(struct ena_ring *rx_ring, struct ena_com_rx_ctx *ena_rx_ctx,
 			M_HASHTYPE_SET(mbuf, M_HASHTYPE_OPAQUE_HASH);
 			return;
 		}
-#endif
 
 		if (ena_rx_ctx->frag &&
 		    (ena_rx_ctx->l3_proto != ENA_ETH_IO_L3_PROTO_UNKNOWN)) {
@@ -436,7 +428,9 @@ ena_rx_mbuf(struct ena_ring *rx_ring, struct ena_com_rx_buf_info *ena_bufs,
 	req_id = ena_bufs[buf].req_id;
 	rx_info = &rx_ring->rx_buffer_info[req_id];
 	if (unlikely(rx_info->mbuf == NULL)) {
-		ena_log(pdev, ERR, "NULL mbuf in rx_info");
+		ena_log(pdev, ERR, "NULL mbuf in rx_info. qid %u req_id %u\n",
+		    rx_ring->qid, req_id);
+		ena_trigger_reset(adapter, ENA_REGS_RESET_INV_RX_REQ_ID);
 		return (NULL);
 	}
 
@@ -478,7 +472,8 @@ ena_rx_mbuf(struct ena_ring *rx_ring, struct ena_com_rx_buf_info *ena_bufs,
 		rx_info = &rx_ring->rx_buffer_info[req_id];
 
 		if (unlikely(rx_info->mbuf == NULL)) {
-			ena_log(pdev, ERR, "NULL mbuf in rx_info");
+			ena_log(pdev, ERR, "NULL mbuf in rx_info. qid %u req_id %u\n",
+			    rx_ring->qid, req_id);
 			/*
 			 * If one of the required mbufs was not allocated yet,
 			 * we can break there.
@@ -490,6 +485,7 @@ ena_rx_mbuf(struct ena_ring *rx_ring, struct ena_com_rx_buf_info *ena_bufs,
 			 * with hw ring.
 			 */
 			m_freem(mbuf);
+			ena_trigger_reset(adapter, ENA_REGS_RESET_INV_RX_REQ_ID);
 			return (NULL);
 		}
 
@@ -557,7 +553,7 @@ ena_rx_checksum(struct ena_ring *rx_ring, struct ena_com_rx_ctx *ena_rx_ctx,
  * ena_rx_cleanup - handle rx irq
  * @arg: ring for which irq is being handled
  **/
-static int
+static bool
 ena_rx_cleanup(struct ena_ring *rx_ring)
 {
 	struct ena_adapter *adapter;
@@ -575,7 +571,7 @@ ena_rx_cleanup(struct ena_ring *rx_ring)
 	uint32_t do_if_input = 0;
 	unsigned int qid;
 	int rc, i;
-	int budget = ENA_RX_BUDGET;
+	int budget = (ENA_RX_DESC_BUDGET == -1) ? INT_MAX : ENA_RX_DESC_BUDGET;
 #ifdef DEV_NETMAP
 	int done;
 #endif /* DEV_NETMAP */
@@ -610,6 +606,8 @@ ena_rx_cleanup(struct ena_ring *rx_ring)
 				counter_u64_add(rx_ring->rx_stats.bad_desc_num,
 				    1);
 				reset_reason = ENA_REGS_RESET_TOO_MANY_RX_DESCS;
+			} else if (rc == ENA_COM_FAULT) {
+				reset_reason = ENA_REGS_RESET_RX_DESCRIPTOR_MALFORMED;
 			} else {
 				counter_u64_add(rx_ring->rx_stats.bad_req_id,
 				    1);
@@ -643,8 +641,8 @@ ena_rx_cleanup(struct ena_ring *rx_ring)
 			break;
 		}
 
-		if (((ifp->if_capenable & IFCAP_RXCSUM) != 0) ||
-		    ((ifp->if_capenable & IFCAP_RXCSUM_IPV6) != 0)) {
+		if (((if_getcapenable(ifp) & IFCAP_RXCSUM) != 0) ||
+		    ((if_getcapenable(ifp) & IFCAP_RXCSUM_IPV6) != 0)) {
 			ena_rx_checksum(rx_ring, &ena_rx_ctx, mbuf);
 		}
 
@@ -659,7 +657,7 @@ ena_rx_cleanup(struct ena_ring *rx_ring)
 		 * should be computed by hardware.
 		 */
 		do_if_input = 1;
-		if (((ifp->if_capenable & IFCAP_LRO) != 0) &&
+		if (((if_getcapenable(ifp) & IFCAP_LRO) != 0)  &&
 		    ((mbuf->m_pkthdr.csum_flags & CSUM_IP_VALID) != 0) &&
 		    (ena_rx_ctx.l4_proto == ENA_ETH_IO_L4_PROTO_TCP)) {
 			/*
@@ -675,14 +673,21 @@ ena_rx_cleanup(struct ena_ring *rx_ring)
 		if (do_if_input != 0) {
 			ena_log_io(pdev, DBG,
 			    "calling if_input() with mbuf %p\n", mbuf);
-			(*ifp->if_input)(ifp, mbuf);
+			if_input(ifp, mbuf);
 		}
 
 		counter_enter();
 		counter_u64_add_protected(rx_ring->rx_stats.cnt, 1);
 		counter_u64_add_protected(adapter->hw_stats.rx_packets, 1);
 		counter_exit();
-	} while (--budget);
+
+		/*
+		 * Adjust our budget; note that we count descriptors, not
+		 * packets, since we need to ensure we don't run out of rx
+		 * buffers when receiving jumbos.
+		 */
+		budget -= ena_rx_ctx.descs;
+	} while (budget > 0);
 
 	rx_ring->next_to_clean = next_to_clean;
 
@@ -692,13 +697,12 @@ ena_rx_cleanup(struct ena_ring *rx_ring)
 	    ENA_RX_REFILL_THRESH_PACKET);
 
 	if (refill_required > refill_threshold) {
-		ena_com_update_dev_comp_head(rx_ring->ena_com_io_cq);
 		ena_refill_rx_bufs(rx_ring, refill_required);
 	}
 
 	tcp_lro_flush_all(&rx_ring->lro);
 
-	return (ENA_RX_BUDGET - budget);
+	return (budget <= 0);
 }
 
 static void

@@ -23,7 +23,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 #include "test.h"
-__FBSDID("$FreeBSD$");
 
 #define __LIBARCHIVE_TEST
 #include "archive_pathmatch.h"
@@ -286,4 +285,22 @@ DEFINE_TEST(test_archive_pathmatch)
 	    archive_pathmatch("a/b/c$", "a/b/c/d", PATHMATCH_NO_ANCHOR_START | PATHMATCH_NO_ANCHOR_END));
 	assertEqualInt(1,
 	    archive_pathmatch("b/c/d$", "a/b/c/d", PATHMATCH_NO_ANCHOR_START | PATHMATCH_NO_ANCHOR_END));
+
+	/* Anchor characters within pattern not special. */
+	assertEqualInt(0,
+	    archive_pathmatch("*^*", "a/b/c", PATHMATCH_NO_ANCHOR_START | PATHMATCH_NO_ANCHOR_END));
+	assertEqualInt(1,
+	    archive_pathmatch("*^*", "a^b", PATHMATCH_NO_ANCHOR_START | PATHMATCH_NO_ANCHOR_END));
+	assertEqualInt(0,
+	    archive_pathmatch("*$*", "a/b/c", PATHMATCH_NO_ANCHOR_START | PATHMATCH_NO_ANCHOR_END));
+	assertEqualInt(1,
+	    archive_pathmatch("*$*", "a$b", PATHMATCH_NO_ANCHOR_START | PATHMATCH_NO_ANCHOR_END));
+	assertEqualInt(0,
+	    archive_pathmatch("a*/^b/c", "a/b/c", PATHMATCH_NO_ANCHOR_START | PATHMATCH_NO_ANCHOR_END));
+	assertEqualInt(1,
+	    archive_pathmatch("a*/^b/c", "a/^b/c", PATHMATCH_NO_ANCHOR_START | PATHMATCH_NO_ANCHOR_END));
+	assertEqualInt(0,
+	    archive_pathmatch("a*/b$/c", "a/b/c", PATHMATCH_NO_ANCHOR_START | PATHMATCH_NO_ANCHOR_END));
+	assertEqualInt(1,
+	    archive_pathmatch("a*/b$/c", "a/b$/c", PATHMATCH_NO_ANCHOR_START | PATHMATCH_NO_ANCHOR_END));
 }

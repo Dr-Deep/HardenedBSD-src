@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 .include <src.opts.mk>
 
 .if ${MK_CLANG} != "no"
@@ -7,11 +5,16 @@ SUBDIR+=	clang
 .endif
 
 .if !defined(TOOLS_PREFIX)
+.if ${MK_CLANG} != "no"
+SUBDIR+=	clang-scan-deps
+.endif
+
 # LLVM binutils are needed to support features such as LTO, so we build them
 # by default if clang is enabled. If MK_LLVM_BINUTILS is set, we also use them
 # as the default binutils (ar,nm,addr2line, etc.).
 .if ${MK_CLANG} != "no" || ${MK_LLVM_BINUTILS} != "no"
 SUBDIR+=	llvm-ar
+SUBDIR+=	llvm-cxxfilt
 SUBDIR+=	llvm-nm
 SUBDIR+=	llvm-objcopy
 SUBDIR+=	llvm-objdump
@@ -19,10 +22,8 @@ SUBDIR+=	llvm-readobj
 SUBDIR+=	llvm-size
 SUBDIR+=	llvm-strings
 SUBDIR+=	llvm-symbolizer
-.endif
-
-.if ${MK_LLVM_BINUTILS} != "no" || ${MK_LLVM_CXXFILT} != "no"
-SUBDIR+=	llvm-cxxfilt
+SUBDIR+=	.WAIT
+SUBDIR+=	toolchain
 .endif
 
 .if ${MK_CLANG_EXTRAS} != "no"
@@ -35,6 +36,7 @@ SUBDIR+=	llvm-cxxdump
 SUBDIR+=	llvm-diff
 SUBDIR+=	llvm-dis
 SUBDIR+=	llvm-dwarfdump
+SUBDIR+=	llvm-dwarfutil
 SUBDIR+=	llvm-dwp
 SUBDIR+=	llvm-extract
 SUBDIR+=	llvm-link
@@ -63,6 +65,7 @@ SUBDIR+=	lldb-server
 .if ${MK_LLVM_COV} != "no"
 SUBDIR+=	llvm-cov
 SUBDIR+=	llvm-profdata
+SUBDIR_DEPEND_toolchain=	llvm-cov
 .endif
 .endif # TOOLS_PREFIX
 

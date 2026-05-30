@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -188,13 +189,13 @@ static const unsigned long zfs_log_sm_blksz = 1ULL << 17;
  * (thus the _ppm suffix; reads as "parts per million"). As an example,
  * the default of 1000 allows 0.1% of memory to be used.
  */
-static unsigned long zfs_unflushed_max_mem_ppm = 1000;
+static uint64_t zfs_unflushed_max_mem_ppm = 1000;
 
 /*
  * Specific hard-limit in memory that ZFS allows to be used for
  * unflushed changes.
  */
-static unsigned long zfs_unflushed_max_mem_amt = 1ULL << 30;
+static uint64_t zfs_unflushed_max_mem_amt = 1ULL << 30;
 
 /*
  * The following tunable determines the number of blocks that can be used for
@@ -243,33 +244,33 @@ static unsigned long zfs_unflushed_max_mem_amt = 1ULL << 30;
  * provide upper and lower bounds for the log block limit.
  * [see zfs_unflushed_log_block_{min,max}]
  */
-static unsigned long zfs_unflushed_log_block_pct = 400;
+static uint_t zfs_unflushed_log_block_pct = 400;
 
 /*
  * If the number of metaslabs is small and our incoming rate is high, we could
  * get into a situation that we are flushing all our metaslabs every TXG. Thus
  * we always allow at least this many log blocks.
  */
-static unsigned long zfs_unflushed_log_block_min = 1000;
+static uint64_t zfs_unflushed_log_block_min = 1000;
 
 /*
  * If the log becomes too big, the import time of the pool can take a hit in
  * terms of performance. Thus we have a hard limit in the size of the log in
  * terms of blocks.
  */
-static unsigned long zfs_unflushed_log_block_max = (1ULL << 17);
+static uint64_t zfs_unflushed_log_block_max = (1ULL << 17);
 
 /*
  * Also we have a hard limit in the size of the log in terms of dirty TXGs.
  */
-static unsigned long zfs_unflushed_log_txg_max = 1000;
+static uint64_t zfs_unflushed_log_txg_max = 1000;
 
 /*
  * Max # of rows allowed for the log_summary. The tradeoff here is accuracy and
  * stability of the flushing algorithm (longer summary) vs its runtime overhead
  * (smaller summary is faster to traverse).
  */
-static unsigned long zfs_max_logsm_summary_length = 10;
+static uint64_t zfs_max_logsm_summary_length = 10;
 
 /*
  * Tunable that sets the lower bound on the metaslabs to flush every TXG.
@@ -282,7 +283,7 @@ static unsigned long zfs_max_logsm_summary_length = 10;
  * The point of this tunable is to be used in extreme cases where we really
  * want to flush more metaslabs than our adaptable heuristic plans to flush.
  */
-static unsigned long zfs_min_metaslabs_to_flush = 1;
+static uint64_t zfs_min_metaslabs_to_flush = 1;
 
 /*
  * Tunable that specifies how far in the past do we want to look when trying to
@@ -293,7 +294,7 @@ static unsigned long zfs_min_metaslabs_to_flush = 1;
  * average over all the blocks that we walk
  * [see spa_estimate_incoming_log_blocks].
  */
-static unsigned long zfs_max_log_walking = 5;
+static uint64_t zfs_max_log_walking = 5;
 
 /*
  * This tunable exists solely for testing purposes. It ensures that the log
@@ -507,6 +508,7 @@ void
 spa_log_summary_decrement_blkcount(spa_t *spa, uint64_t blocks_gone)
 {
 	log_summary_entry_t *e = list_head(&spa->spa_log_summary);
+	ASSERT3P(e, !=, NULL);
 	if (e->lse_txgcount > 0)
 		e->lse_txgcount--;
 	for (; e != NULL; e = list_head(&spa->spa_log_summary)) {
@@ -690,7 +692,8 @@ spa_estimate_metaslabs_to_flush(spa_t *spa)
 		 * based on the incoming rate until we exceed it.
 		 */
 		if (available_blocks >= 0 && available_txgs >= 0) {
-			uint64_t skip_txgs = MIN(available_txgs + 1,
+			uint64_t skip_txgs = (incoming == 0) ?
+			    available_txgs + 1 : MIN(available_txgs + 1,
 			    (available_blocks / incoming) + 1);
 			available_blocks -= (skip_txgs * incoming);
 			available_txgs -= skip_txgs;
@@ -781,7 +784,7 @@ spa_flush_metaslabs(spa_t *spa, dmu_tx_t *tx)
 	 * request of flushing everything before we attempt to return
 	 * immediately.
 	 */
-	if (spa->spa_uberblock.ub_rootbp.blk_birth < txg &&
+	if (BP_GET_LOGICAL_BIRTH(&spa->spa_uberblock.ub_rootbp) < txg &&
 	    !dmu_objset_is_dirty(spa_meta_objset(spa), txg) &&
 	    !spa_flush_all_logs_requested(spa))
 		return;
@@ -1018,16 +1021,17 @@ spa_ld_log_sm_metadata(spa_t *spa)
 	}
 
 	zap_cursor_t zc;
-	zap_attribute_t za;
+	zap_attribute_t *za = zap_attribute_alloc();
 	for (zap_cursor_init(&zc, spa_meta_objset(spa), spacemap_zap);
-	    (error = zap_cursor_retrieve(&zc, &za)) == 0;
+	    (error = zap_cursor_retrieve(&zc, za)) == 0;
 	    zap_cursor_advance(&zc)) {
-		uint64_t log_txg = zfs_strtonum(za.za_name, NULL);
+		uint64_t log_txg = zfs_strtonum(za->za_name, NULL);
 		spa_log_sm_t *sls =
-		    spa_log_sm_alloc(za.za_first_integer, log_txg);
+		    spa_log_sm_alloc(za->za_first_integer, log_txg);
 		avl_add(&spa->spa_sm_logs_by_txg, sls);
 	}
 	zap_cursor_fini(&zc);
+	zap_attribute_free(za);
 	if (error != ENOENT) {
 		spa_load_failed(spa, "spa_ld_log_sm_metadata(): failed at "
 		    "zap_cursor_retrieve(spacemap_zap) [error %d]",
@@ -1105,11 +1109,11 @@ spa_ld_log_sm_cb(space_map_entry_t *sme, void *arg)
 
 	switch (sme->sme_type) {
 	case SM_ALLOC:
-		range_tree_remove_xor_add_segment(offset, offset + size,
+		zfs_range_tree_remove_xor_add_segment(offset, offset + size,
 		    ms->ms_unflushed_frees, ms->ms_unflushed_allocs);
 		break;
 	case SM_FREE:
-		range_tree_remove_xor_add_segment(offset, offset + size,
+		zfs_range_tree_remove_xor_add_segment(offset, offset + size,
 		    ms->ms_unflushed_allocs, ms->ms_unflushed_frees);
 		break;
 	default:
@@ -1145,17 +1149,18 @@ spa_ld_log_sm_data(spa_t *spa)
 	/* Prefetch log spacemaps dnodes. */
 	for (sls = avl_first(&spa->spa_sm_logs_by_txg); sls;
 	    sls = AVL_NEXT(&spa->spa_sm_logs_by_txg, sls)) {
-		dmu_prefetch(spa_meta_objset(spa), sls->sls_sm_obj,
-		    0, 0, 0, ZIO_PRIORITY_SYNC_READ);
+		dmu_prefetch_dnode(spa_meta_objset(spa), sls->sls_sm_obj,
+		    ZIO_PRIORITY_SYNC_READ);
 	}
 
 	uint_t pn = 0;
 	uint64_t ps = 0;
+	uint64_t nsm = 0;
 	psls = sls = avl_first(&spa->spa_sm_logs_by_txg);
 	while (sls != NULL) {
 		/* Prefetch log spacemaps up to 16 TXGs or MBs ahead. */
 		if (psls != NULL && pn < 16 &&
-		    (pn < 2 || ps < 2 * dmu_prefetch_max)) {
+		    (pn < 2 || ps < dmu_prefetch_max)) {
 			error = space_map_open(&psls->sls_sm,
 			    spa_meta_objset(spa), psls->sls_sm_obj, 0,
 			    UINT64_MAX, SPA_MINBLOCKSHIFT);
@@ -1166,9 +1171,9 @@ spa_ld_log_sm_data(spa_t *spa)
 				    (u_longlong_t)sls->sls_sm_obj, error);
 				goto out;
 			}
-			dmu_prefetch(spa_meta_objset(spa), psls->sls_sm_obj,
-			    0, 0, space_map_length(psls->sls_sm),
-			    ZIO_PRIORITY_ASYNC_READ);
+			dmu_prefetch_stream(spa_meta_objset(spa),
+			    psls->sls_sm_obj, 0,
+			    space_map_length(psls->sls_sm), B_TRUE);
 			pn++;
 			ps += space_map_length(psls->sls_sm);
 			psls = AVL_NEXT(&spa->spa_sm_logs_by_txg, psls);
@@ -1176,12 +1181,16 @@ spa_ld_log_sm_data(spa_t *spa)
 		}
 
 		/* Load TXG log spacemap into ms_unflushed_allocs/frees. */
-		cond_resched();
+		kpreempt(KPREEMPT_SYNC);
 		ASSERT0(sls->sls_nblocks);
 		sls->sls_nblocks = space_map_nblocks(sls->sls_sm);
 		spa->spa_unflushed_stats.sus_nblocks += sls->sls_nblocks;
 		summary_add_data(spa, sls->sls_txg,
 		    sls->sls_mscount, 0, sls->sls_nblocks);
+
+		spa_import_progress_set_notes_nolog(spa,
+		    "Read %llu of %lu log space maps", (u_longlong_t)nsm,
+		    avl_numnodes(&spa->spa_sm_logs_by_txg));
 
 		struct spa_ld_log_sm_arg vla = {
 			.slls_spa = spa,
@@ -1198,6 +1207,7 @@ spa_ld_log_sm_data(spa_t *spa)
 
 		pn--;
 		ps -= space_map_length(sls->sls_sm);
+		nsm++;
 		space_map_close(sls->sls_sm);
 		sls->sls_sm = NULL;
 		sls = AVL_NEXT(&spa->spa_sm_logs_by_txg, sls);
@@ -1208,11 +1218,11 @@ spa_ld_log_sm_data(spa_t *spa)
 
 	hrtime_t read_logs_endtime = gethrtime();
 	spa_load_note(spa,
-	    "read %llu log space maps (%llu total blocks - blksz = %llu bytes) "
-	    "in %lld ms", (u_longlong_t)avl_numnodes(&spa->spa_sm_logs_by_txg),
+	    "Read %lu log space maps (%llu total blocks - blksz = %llu bytes) "
+	    "in %lld ms", avl_numnodes(&spa->spa_sm_logs_by_txg),
 	    (u_longlong_t)spa_log_sm_nblocks(spa),
 	    (u_longlong_t)zfs_log_sm_blksz,
-	    (longlong_t)((read_logs_endtime - read_logs_starttime) / 1000000));
+	    (longlong_t)NSEC2MSEC(read_logs_endtime - read_logs_starttime));
 
 out:
 	if (error != 0) {
@@ -1242,14 +1252,13 @@ out:
 	    m != NULL; m = AVL_NEXT(&spa->spa_metaslabs_by_flushed, m)) {
 		mutex_enter(&m->ms_lock);
 		m->ms_allocated_space = space_map_allocated(m->ms_sm) +
-		    range_tree_space(m->ms_unflushed_allocs) -
-		    range_tree_space(m->ms_unflushed_frees);
+		    zfs_range_tree_space(m->ms_unflushed_allocs) -
+		    zfs_range_tree_space(m->ms_unflushed_frees);
 
-		vdev_t *vd = m->ms_group->mg_vd;
-		metaslab_space_update(vd, m->ms_group->mg_class,
-		    range_tree_space(m->ms_unflushed_allocs), 0, 0);
-		metaslab_space_update(vd, m->ms_group->mg_class,
-		    -range_tree_space(m->ms_unflushed_frees), 0, 0);
+		metaslab_space_update(m->ms_group,
+		    zfs_range_tree_space(m->ms_unflushed_allocs), 0, 0);
+		metaslab_space_update(m->ms_group,
+		    -zfs_range_tree_space(m->ms_unflushed_frees), 0, 0);
 
 		ASSERT0(m->ms_weight & METASLAB_ACTIVE_MASK);
 		metaslab_recalculate_weight_and_sort(m);
@@ -1308,8 +1317,8 @@ spa_ld_unflushed_txgs(vdev_t *vd)
 
 		ms->ms_unflushed_txg = entry.msp_unflushed_txg;
 		ms->ms_unflushed_dirty = B_FALSE;
-		ASSERT(range_tree_is_empty(ms->ms_unflushed_allocs));
-		ASSERT(range_tree_is_empty(ms->ms_unflushed_frees));
+		ASSERT(zfs_range_tree_is_empty(ms->ms_unflushed_allocs));
+		ASSERT(zfs_range_tree_is_empty(ms->ms_unflushed_frees));
 		if (ms->ms_unflushed_txg != 0) {
 			mutex_enter(&spa->spa_flushed_ms_lock);
 			avl_add(&spa->spa_metaslabs_by_flushed, ms);
@@ -1355,45 +1364,43 @@ spa_ld_log_spacemaps(spa_t *spa)
 	return (error);
 }
 
-/* BEGIN CSTYLED */
-ZFS_MODULE_PARAM(zfs, zfs_, unflushed_max_mem_amt, ULONG, ZMOD_RW,
+ZFS_MODULE_PARAM(zfs, zfs_, unflushed_max_mem_amt, U64, ZMOD_RW,
 	"Specific hard-limit in memory that ZFS allows to be used for "
 	"unflushed changes");
 
-ZFS_MODULE_PARAM(zfs, zfs_, unflushed_max_mem_ppm, ULONG, ZMOD_RW,
+ZFS_MODULE_PARAM(zfs, zfs_, unflushed_max_mem_ppm, U64, ZMOD_RW,
 	"Percentage of the overall system memory that ZFS allows to be "
 	"used for unflushed changes (value is calculated over 1000000 for "
 	"finer granularity)");
 
-ZFS_MODULE_PARAM(zfs, zfs_, unflushed_log_block_max, ULONG, ZMOD_RW,
+ZFS_MODULE_PARAM(zfs, zfs_, unflushed_log_block_max, U64, ZMOD_RW,
 	"Hard limit (upper-bound) in the size of the space map log "
 	"in terms of blocks.");
 
-ZFS_MODULE_PARAM(zfs, zfs_, unflushed_log_block_min, ULONG, ZMOD_RW,
+ZFS_MODULE_PARAM(zfs, zfs_, unflushed_log_block_min, U64, ZMOD_RW,
 	"Lower-bound limit for the maximum amount of blocks allowed in "
 	"log spacemap (see zfs_unflushed_log_block_max)");
 
-ZFS_MODULE_PARAM(zfs, zfs_, unflushed_log_txg_max, ULONG, ZMOD_RW,
-    "Hard limit (upper-bound) in the size of the space map log "
-    "in terms of dirty TXGs.");
+ZFS_MODULE_PARAM(zfs, zfs_, unflushed_log_txg_max, U64, ZMOD_RW,
+	"Hard limit (upper-bound) in the size of the space map log "
+	"in terms of dirty TXGs.");
 
-ZFS_MODULE_PARAM(zfs, zfs_, unflushed_log_block_pct, ULONG, ZMOD_RW,
+ZFS_MODULE_PARAM(zfs, zfs_, unflushed_log_block_pct, UINT, ZMOD_RW,
 	"Tunable used to determine the number of blocks that can be used for "
 	"the spacemap log, expressed as a percentage of the total number of "
 	"metaslabs in the pool (e.g. 400 means the number of log blocks is "
 	"capped at 4 times the number of metaslabs)");
 
-ZFS_MODULE_PARAM(zfs, zfs_, max_log_walking, ULONG, ZMOD_RW,
+ZFS_MODULE_PARAM(zfs, zfs_, max_log_walking, U64, ZMOD_RW,
 	"The number of past TXGs that the flushing algorithm of the log "
 	"spacemap feature uses to estimate incoming log blocks");
 
 ZFS_MODULE_PARAM(zfs, zfs_, keep_log_spacemaps_at_export, INT, ZMOD_RW,
 	"Prevent the log spacemaps from being flushed and destroyed "
 	"during pool export/destroy");
-/* END CSTYLED */
 
-ZFS_MODULE_PARAM(zfs, zfs_, max_logsm_summary_length, ULONG, ZMOD_RW,
+ZFS_MODULE_PARAM(zfs, zfs_, max_logsm_summary_length, U64, ZMOD_RW,
 	"Maximum number of rows allowed in the summary of the spacemap log");
 
-ZFS_MODULE_PARAM(zfs, zfs_, min_metaslabs_to_flush, ULONG, ZMOD_RW,
+ZFS_MODULE_PARAM(zfs, zfs_, min_metaslabs_to_flush, U64, ZMOD_RW,
 	"Minimum number of metaslabs to flush per dirty TXG");

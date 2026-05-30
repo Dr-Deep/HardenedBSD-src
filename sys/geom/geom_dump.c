@@ -36,14 +36,11 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/sbuf.h>
 #include <sys/systm.h>
 #include <sys/malloc.h>
-#include <machine/stdarg.h>
+#include <sys/stdarg.h>
 
 #include <geom/geom.h>
 #include <geom/geom_int.h>

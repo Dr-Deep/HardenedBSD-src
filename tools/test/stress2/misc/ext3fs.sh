@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #
-# SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+# SPDX-License-Identifier: BSD-2-Clause
 #
 # Copyright (c) 2018 Dell EMC Isilon
 #
@@ -33,7 +33,7 @@
 
 . ../default.cfg
 
-# Uses mke2fs from sysutils/e2fsprogs
+# Uses mke2fs from filesystems/e2fsprogs
 [ -z "`type mke2fs 2>/dev/null`" ] &&
     echo "Skipping test as mke2fs not installed" && exit 0
 

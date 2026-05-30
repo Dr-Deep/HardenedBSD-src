@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2014 The FreeBSD Foundation
  *
@@ -27,9 +27,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -61,6 +58,7 @@ static struct vt_driver vt_efifb_driver = {
 	.vd_bitblt_text = vt_fb_bitblt_text,
 	.vd_invalidate_text = vt_fb_invalidate_text,
 	.vd_bitblt_bmp = vt_fb_bitblt_bitmap,
+	.vd_bitblt_argb = vt_fb_bitblt_argb,
 	.vd_drawrect = vt_fb_drawrect,
 	.vd_setpixel = vt_fb_setpixel,
 	.vd_fb_ioctl = vt_fb_ioctl,
@@ -79,17 +77,13 @@ vt_efifb_probe(struct vt_device *vd)
 {
 	int		disabled;
 	struct efi_fb	*efifb;
-	caddr_t		kmdp;
 
 	disabled = 0;
 	TUNABLE_INT_FETCH("hw.syscons.disable", &disabled);
 	if (disabled != 0)
 		return (CN_DEAD);
 
-	kmdp = preload_search_by_type("elf kernel");
-	if (kmdp == NULL)
-		kmdp = preload_search_by_type("elf64 kernel");
-	efifb = (struct efi_fb *)preload_search_info(kmdp,
+	efifb = (struct efi_fb *)preload_search_info(preload_kmdp,
 	    MODINFO_METADATA | MODINFOMD_EFI_FB);
 	if (efifb == NULL)
 		return (CN_DEAD);
@@ -102,17 +96,43 @@ vt_efifb_init(struct vt_device *vd)
 {
 	struct fb_info	*info;
 	struct efi_fb	*efifb;
-	caddr_t		kmdp;
+	vm_memattr_t	memattr;
 	int		roff, goff, boff;
+
+#ifdef VM_MEMATTR_WRITE_COMBINING
+	char attr[16];
+
+	/*
+	 * XXX TODO: I think there's more nuance here than we're acknowledging,
+	 * and we should look into it.  It may be that the framebuffer lives in
+	 * a segment of memory that doesn't support one or both of these.  We
+	 * should likely be consulting the memory map for any applicable
+	 * cacheability attributes before making a final decision.
+	 */
+	memattr = VM_MEMATTR_WRITE_COMBINING;
+	if (TUNABLE_STR_FETCH("hw.efifb.cache_attr", attr, sizeof(attr))) {
+		/*
+		 * We'll allow WC but it's currently the default, UC is the only
+		 * other tested one at this time.
+		 */
+		if (strcasecmp(attr, "wc") != 0 &&
+		    strcasecmp(attr, "uc") != 0) {
+			printf("efifb: unsupported cache attr specified: %s\n",
+			    attr);
+			printf("efifb: expected \"wc\" or \"uc\"\n");
+		} else if (strcasecmp(attr, "uc") == 0) {
+			memattr = VM_MEMATTR_UNCACHEABLE;
+		}
+	}
+#else
+	memattr = VM_MEMATTR_UNCACHEABLE;
+#endif
 
 	info = vd->vd_softc;
 	if (info == NULL)
 		info = vd->vd_softc = (void *)&local_info;
 
-	kmdp = preload_search_by_type("elf kernel");
-	if (kmdp == NULL)
-		kmdp = preload_search_by_type("elf64 kernel");
-	efifb = (struct efi_fb *)preload_search_info(kmdp,
+	efifb = (struct efi_fb *)preload_search_info(preload_kmdp,
 	    MODINFO_METADATA | MODINFOMD_EFI_FB);
 	if (efifb == NULL)
 		return (CN_DEAD);
@@ -141,7 +161,7 @@ vt_efifb_init(struct vt_device *vd)
 	info->fb_size = info->fb_height * info->fb_stride;
 	info->fb_pbase = efifb->fb_addr;
 	info->fb_vbase = (intptr_t)pmap_mapdev_attr(info->fb_pbase,
-	    info->fb_size, VM_MEMATTR_WRITE_COMBINING);
+	    info->fb_size, memattr);
 
 	vt_fb_init(vd);
 
@@ -154,5 +174,5 @@ vt_efifb_fini(struct vt_device *vd, void *softc)
 	struct fb_info	*info = softc;
 
 	vt_fb_fini(vd, softc);
-	pmap_unmapdev(info->fb_vbase, info->fb_size);
+	pmap_unmapdev((void *)info->fb_vbase, info->fb_size);
 }

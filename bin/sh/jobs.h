@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -28,9 +30,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)jobs.h	8.2 (Berkeley) 5/4/95
- * $FreeBSD$
  */
 
 /* Mode argument to forkshell.  Don't change FORK_FG or FORK_BG. */
@@ -55,7 +54,7 @@ void setjobctl(int);
 void showjobs(int, int);
 struct job *makejob(union node *, int);
 pid_t forkshell(struct job *, union node *, int);
-pid_t vforkexecshell(struct job *, char **, char **, const char *, int, int []);
+pid_t vforkexecshell(struct job *, char **, char **, const char *, int, int [2]);
 int waitforjob(struct job *, int *);
 int stoppedjobs(void);
 int backgndpidset(void);

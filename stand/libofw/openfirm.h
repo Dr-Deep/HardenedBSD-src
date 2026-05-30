@@ -53,8 +53,6 @@
  * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
  * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #ifndef _OPENFIRM_H_
 #define	_OPENFIRM_H_
@@ -62,7 +60,6 @@
  * Prototypes for Open Firmware Interface Routines
  */
 
-#include <sys/cdefs.h>
 #include <sys/types.h>
 
 typedef uint32_t		ihandle_t;
@@ -92,6 +89,7 @@ phandle_t	OF_instance_to_package(ihandle_t);
 int		OF_getproplen(phandle_t, const char *);
 int		OF_getprop(phandle_t, const char *, void *, int);
 int		OF_getencprop(phandle_t, const char *, cell_t *, int);
+bool		OF_hasprop(phandle_t, const char *);
 int		OF_nextprop(phandle_t, const char *, char *);
 int		OF_setprop(phandle_t, const char *, void *, int);
 int		OF_canon(const char *, char *, int);

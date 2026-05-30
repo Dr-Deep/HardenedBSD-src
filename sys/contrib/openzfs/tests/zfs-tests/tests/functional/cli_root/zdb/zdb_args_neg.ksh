@@ -1,4 +1,5 @@
 #!/bin/ksh -p
+# SPDX-License-Identifier: CDDL-1.0
 #
 # CDDL HEADER START
 #
@@ -56,9 +57,9 @@ set -A args "create" "add" "destroy" "import fakepool" \
     "add mirror fakepool" "add raidz fakepool" \
     "add raidz1 fakepool" "add raidz2 fakepool" \
     "setvprop" "blah blah" "-%" "--?" "-*" "-=" \
-    "-a" "-f" "-g" "-j" "-n" "-o" "-p" "-p /tmp" \
-    "-t" "-w" "-z" "-E" "-H" "-I" "-J" "-K" \
-    "-Q" "-R" "-T" "-W"
+    "-a"  "-g" "-j" "-n" "-o" "-p" "-p /tmp" \
+    "-t" "-w" "-z" "-E" "-H" "-I" "-J" \
+    "-Q" "-R" "-W"
 
 log_assert "Execute zdb using invalid parameters."
 

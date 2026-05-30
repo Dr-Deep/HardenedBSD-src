@@ -1,8 +1,7 @@
-# $FreeBSD$
-
 PLAIN_TESTS_SH=
 .for test in	always_test \
 		conflicts_test \
+		empty_file_test \
 		fbsdid_test \
 		ignore_test \
 		preworld_test \

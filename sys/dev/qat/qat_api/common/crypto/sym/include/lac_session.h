@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/* Copyright(c) 2007-2022 Intel Corporation */
-/* $FreeBSD$ */
+/* Copyright(c) 2007-2025 Intel Corporation */
 
 /**
  *****************************************************************************
@@ -57,7 +56,7 @@
  * while there are requests in flight.
  *
  * <b>Reference Count</b>\n
- * - The perform funcion increments the reference count for the session.
+ * - The perform function increments the reference count for the session.
  * - The callback function decrements the reference count for the session.
  * - The Remove function checks the reference count to ensure that it is 0.
  *
@@ -107,6 +106,21 @@
 * Include private header files
 *******************************************************************************
 */
+/**
+*****************************************************************************
+* @ingroup LacSym
+*      Spc state
+*
+* @description
+*      This enum is used to indicate the Spc state.
+*
+*****************************************************************************/
+typedef enum lac_single_pass_state_e {
+	NON_SPC,    /* Algorithms other than CHACHA-POLY and AES-GCM */
+	LIKELY_SPC, /* AES-GCM - Likely to handle it as single pass  */
+	SPC	    /* CHACHA-POLY and AES-GCM */
+} lac_single_pass_state_t;
+
 /**
 *******************************************************************************
 * @ingroup LacSym_Session
@@ -214,15 +228,17 @@ typedef struct lac_session_desc_s {
 	/**< Flag indicating whether the SymConstantsTable can be used or not */
 	CpaBoolean useOptimisedContentDesc : 1;
 	/**< Flag indicating whether to use the optimised CD or not */
+	CpaBoolean isPartialSupported : 1;
+	/**< Flag indicating whether symOperation support partial packet */
+	CpaBoolean useStatefulSha3ContentDesc : 1;
+	/**< Flag indicating whether to use the stateful SHA3 CD or not */
 	icp_qat_la_bulk_req_hdr_t shramReqCacheHdr;
 	icp_qat_fw_la_key_gen_common_t shramReqCacheMid;
 	icp_qat_la_bulk_req_ftr_t shramReqCacheFtr;
 	/**< Alternative pre-built request (header, mid & footer)
 	 * for use with symConstantsTable. */
-	CpaBoolean isPartialSupported : 1;
-	/**< Flag indicating whether symOperation support partial packet */
-	CpaBoolean isSinglePass : 1;
-	/**< Flag indicating whether symOperation is single pass operation */
+	lac_single_pass_state_t singlePassState;
+	/**< Flag indicating whether symOperation support single pass */
 	icp_qat_fw_serv_specif_flags laCmdFlags;
 	/**< Common request - Service specific flags type  */
 	icp_qat_fw_comn_flags cmnRequestFlags;
@@ -235,6 +251,23 @@ typedef struct lac_session_desc_s {
 	icp_qat_hw_auth_mode_t qatHashMode;
 	/**< Hash Mode for the qat slices. Not to be confused with QA-API
 	 * hashMode
+	 */
+	Cpa32U cipherSliceType;
+	/**< Cipher slice type to be used, set at init session time */
+	Cpa8U cipherAesXtsKey1Forward[LAC_CIPHER_AES_XTS_KEY_MAX_LENGTH];
+	/**< Cached AES XTS Forward key
+	 * For CPM2.0 AES XTS key conversions need to be done in SW.
+	 * Because use can update session direction at any time,
+	 * also forward key needs to be cached
+	 */
+	Cpa8U cipherAesXtsKey1Reverse[LAC_CIPHER_AES_XTS_KEY_MAX_LENGTH];
+	/**< AES XTS Reverse key
+	 * For CPM2.0 AES XTS key conversions need to be done in SW.
+	 * Reverse key always will be calculated at session setup time and
+	 * cached to be used when needed */
+	Cpa8U cipherAesXtsKey2[LAC_CIPHER_AES_XTS_KEY_MAX_LENGTH];
+	/**< For AES XTS session need to store Key2 value in order to generate
+	 * tweak
 	 */
 	void *writeRingMsgFunc;
 	/**< function which will be called to write ring message */
@@ -325,8 +358,7 @@ typedef struct lac_session_desc_d1_s {
 	 * a decrypt operation. */
 	CpaCySymPacketType partialState;
 	/**< state of the partial packet. This can be written to by the perform
-	 * because the SpinLock pPartialInFlightSpinlock guarantees that that
-	 * the
+	 * because the SpinLock pPartialInFlightSpinlock guarantees that the
 	 * state is accessible in only one place at a time. */
 	icp_qat_la_bulk_req_hdr_t reqCacheHdr;
 	icp_qat_fw_la_key_gen_common_t reqCacheMid;
@@ -382,15 +414,17 @@ typedef struct lac_session_desc_d1_s {
 	/**< Flag indicating whether the SymConstantsTable can be used or not */
 	CpaBoolean useOptimisedContentDesc : 1;
 	/**< Flag indicating whether to use the optimised CD or not */
+	CpaBoolean isPartialSupported : 1;
+	/**< Flag indicating whether symOperation support partial packet */
+	CpaBoolean useStatefulSha3ContentDesc : 1;
+	/**< Flag indicating whether to use the stateful SHA3 CD or not */
 	icp_qat_la_bulk_req_hdr_t shramReqCacheHdr;
 	icp_qat_fw_la_key_gen_common_t shramReqCacheMid;
 	icp_qat_la_bulk_req_ftr_t shramReqCacheFtr;
 	/**< Alternative pre-built request (header, mid & footer)
 	 * for use with symConstantsTable. */
-	CpaBoolean isPartialSupported : 1;
-	/**< Flag indicating whether symOperation support partial packet */
-	CpaBoolean isSinglePass : 1;
-	/**< Flag indicating whether symOperation is single pass operation */
+	lac_single_pass_state_t singlePassState;
+	/**< Flag indicating whether symOperation support single pass */
 	icp_qat_fw_serv_specif_flags laCmdFlags;
 	/**< Common request - Service specific flags type  */
 	icp_qat_fw_comn_flags cmnRequestFlags;
@@ -403,6 +437,23 @@ typedef struct lac_session_desc_d1_s {
 	icp_qat_hw_auth_mode_t qatHashMode;
 	/**< Hash Mode for the qat slices. Not to be confused with QA-API
 	 * hashMode
+	 */
+	Cpa32U cipherSliceType;
+	/**< Cipher slice type to be used, set at init session time */
+	Cpa8U cipherAesXtsKey1Forward[LAC_CIPHER_AES_XTS_KEY_MAX_LENGTH];
+	/**< Cached AES XTS Forward key
+	 * For CPM2.0 AES XTS key conversions need to be done in SW.
+	 * Because use can update session direction at any time,
+	 * also forward key needs to be cached
+	 */
+	Cpa8U cipherAesXtsKey1Reverse[LAC_CIPHER_AES_XTS_KEY_MAX_LENGTH];
+	/**< AES XTS Reverse key
+	 * For CPM2.0 AES XTS key conversions need to be done in SW.
+	 * Reverse key always will be calculated at session setup time and
+	 * cached to be used when needed */
+	Cpa8U cipherAesXtsKey2[LAC_CIPHER_AES_XTS_KEY_MAX_LENGTH];
+	/**< For AES XTS session need to store Key2 value in order to generate
+	 * tweak
 	 */
 	void *writeRingMsgFunc;
 	/**< function which will be called to write ring message */
@@ -444,8 +495,8 @@ typedef struct lac_session_desc_d2_s {
 	/**< info on the hash state prefix buffer */
 	CpaCySymHashAlgorithm hashAlgorithm;
 	/**< hash algorithm */
-        Cpa32U authKeyLenInBytes;
-        /**< Authentication key length in bytes */
+	Cpa32U authKeyLenInBytes;
+	/**< Authentication key length in bytes */
 	CpaCySymHashMode hashMode;
 	/**< Mode of the hash operation. plain, auth or nested */
 	Cpa32U hashResultSize;
@@ -459,8 +510,7 @@ typedef struct lac_session_desc_d2_s {
 	 * a decrypt operation. */
 	CpaCySymPacketType partialState;
 	/**< state of the partial packet. This can be written to by the perform
-	 * because the SpinLock pPartialInFlightSpinlock guarantees that that
-	 * the
+	 * because the SpinLock pPartialInFlightSpinlock guarantees that the
 	 * state is accessible in only one place at a time. */
 	icp_qat_la_bulk_req_hdr_t reqCacheHdr;
 	icp_qat_fw_la_key_gen_common_t reqCacheMid;
@@ -516,15 +566,17 @@ typedef struct lac_session_desc_d2_s {
 	/**< Flag indicating whether the SymConstantsTable can be used or not */
 	CpaBoolean useOptimisedContentDesc : 1;
 	/**< Flag indicating whether to use the optimised CD or not */
+	CpaBoolean isPartialSupported : 1;
+	/**< Flag indicating whether symOperation support partial packet */
+	CpaBoolean useStatefulSha3ContentDesc : 1;
+	/**< Flag indicating whether to use the stateful SHA3 CD or not */
 	icp_qat_la_bulk_req_hdr_t shramReqCacheHdr;
 	icp_qat_fw_la_key_gen_common_t shramReqCacheMid;
 	icp_qat_la_bulk_req_ftr_t shramReqCacheFtr;
 	/**< Alternative pre-built request (header. mid & footer)
 	 * for use with symConstantsTable. */
-	CpaBoolean isPartialSupported : 1;
-	/**< Flag indicating whether symOperation support partial packet */
-	CpaBoolean isSinglePass : 1;
-	/**< Flag indicating whether symOperation is single pass operation */
+	lac_single_pass_state_t singlePassState;
+	/**< Flag indicating whether symOperation support single pass */
 	icp_qat_fw_serv_specif_flags laCmdFlags;
 	/**< Common request - Service specific flags type  */
 	icp_qat_fw_comn_flags cmnRequestFlags;
@@ -537,6 +589,23 @@ typedef struct lac_session_desc_d2_s {
 	icp_qat_hw_auth_mode_t qatHashMode;
 	/**< Hash Mode for the qat slices. Not to be confused with QA-API
 	 * hashMode
+	 */
+	Cpa32U cipherSliceType;
+	/**< Cipher slice type to be used, set at init session time */
+	Cpa8U cipherAesXtsKey1Forward[LAC_CIPHER_AES_XTS_KEY_MAX_LENGTH];
+	/**< Cached AES XTS Forward key
+	 * For CPM2.0 AES XTS key conversions need to be done in SW.
+	 * Because use can update session direction at any time,
+	 * also forward key needs to be cached
+	 */
+	Cpa8U cipherAesXtsKey1Reverse[LAC_CIPHER_AES_XTS_KEY_MAX_LENGTH];
+	/**< AES XTS Reverse key
+	 * For CPM2.0 AES XTS key conversions need to be done in SW.
+	 * Reverse key always will be calculated at session setup time and
+	 * cached to be used when needed */
+	Cpa8U cipherAesXtsKey2[LAC_CIPHER_AES_XTS_KEY_MAX_LENGTH];
+	/**< For AES XTS session need to store Key2 value in order to generate
+	 * tweak
 	 */
 	void *writeRingMsgFunc;
 	/**< function which will be called to write ring message */
@@ -556,7 +625,7 @@ typedef struct lac_session_desc_d2_s {
 	 sizeof(LAC_ARCH_UINT))
 /**< @ingroup LacSym_Session
  * Size of the memory that the client has to allocate for a session. Extra
- * memory is needed to internally re-align the data. The pointer to the algined
+ * memory is needed to internally re-align the data. The pointer to the aligned
  * data is stored at the start of the user allocated memory hence the extra
  * space for an LAC_ARCH_UINT */
 
@@ -600,7 +669,7 @@ typedef struct lac_session_desc_d2_s {
 *
 * @param[in] instanceHandle_in    Instance Handle
 * @param[in] pSymCb               callback function
-* @param[in] pSessionSetupData    pointer to the strucutre containing the setup
+* @param[in] pSessionSetupData    pointer to the structure containing the setup
 *data
 * @param[in] isDpSession          CPA_TRUE for a data plane session
 * @param[out] pSessionCtx         Pointer to session context

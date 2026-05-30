@@ -1,8 +1,8 @@
 /*
  * __mtag_tag_zero_region - tag memory and fill it with zero bytes
  *
- * Copyright (c) 2021, Arm Limited.
- * SPDX-License-Identifier: MIT
+ * Copyright (c) 2021-2022, Arm Limited.
+ * SPDX-License-Identifier: MIT OR Apache-2.0 WITH LLVM-exception
  */
 
 /* Assumptions:
@@ -15,7 +15,7 @@
  * The memory region may remain untagged if tagging is not enabled.
  */
 
-#include "../asmdefs.h"
+#include "asmdefs.h"
 
 #if __ARM_FEATURE_MEMORY_TAGGING
 
@@ -27,9 +27,6 @@
 #define zva_val	x4
 
 ENTRY (__mtag_tag_zero_region)
-	PTR_ARG (0)
-	SIZE_ARG (1)
-
 	add	dstend, dstin, count
 
 	cmp	count, 96

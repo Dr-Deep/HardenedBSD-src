@@ -13,28 +13,26 @@
 //===----------------------------------------------------------------------===//
 
 #include "RegAllocScore.h"
-#include "llvm/ADT/SetVector.h"
-#include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/CodeGen/MachineFrameInfo.h"
-#include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/MachineBasicBlock.h"
+#include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
+#include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/Format.h"
-#include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetMachine.h"
-#include <cassert>
-#include <cstdint>
-#include <numeric>
-#include <vector>
+#include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/MC/MCInstrDesc.h"
+#include "llvm/Support/CommandLine.h"
 
 using namespace llvm;
-cl::opt<double> CopyWeight("regalloc-copy-weight", cl::init(0.2), cl::Hidden);
-cl::opt<double> LoadWeight("regalloc-load-weight", cl::init(4.0), cl::Hidden);
-cl::opt<double> StoreWeight("regalloc-store-weight", cl::init(1.0), cl::Hidden);
-cl::opt<double> CheapRematWeight("regalloc-cheap-remat-weight", cl::init(0.2),
-                                 cl::Hidden);
-cl::opt<double> ExpensiveRematWeight("regalloc-expensive-remat-weight",
-                                     cl::init(1.0), cl::Hidden);
+LLVM_ABI cl::opt<double> CopyWeight("regalloc-copy-weight", cl::init(0.2),
+                                    cl::Hidden);
+LLVM_ABI cl::opt<double> LoadWeight("regalloc-load-weight", cl::init(4.0),
+                                    cl::Hidden);
+LLVM_ABI cl::opt<double> StoreWeight("regalloc-store-weight", cl::init(1.0),
+                                     cl::Hidden);
+LLVM_ABI cl::opt<double> CheapRematWeight("regalloc-cheap-remat-weight",
+                                          cl::init(0.2), cl::Hidden);
+LLVM_ABI cl::opt<double> ExpensiveRematWeight("regalloc-expensive-remat-weight",
+                                              cl::init(1.0), cl::Hidden);
 #define DEBUG_TYPE "regalloc-score"
 
 RegAllocScore &RegAllocScore::operator+=(const RegAllocScore &Other) {
@@ -74,8 +72,7 @@ double RegAllocScore::getScore() const {
 
 RegAllocScore
 llvm::calculateRegAllocScore(const MachineFunction &MF,
-                             const MachineBlockFrequencyInfo &MBFI,
-                             AAResults &AAResults) {
+                             const MachineBlockFrequencyInfo &MBFI) {
   return calculateRegAllocScore(
       MF,
       [&](const MachineBasicBlock &MBB) {
@@ -83,7 +80,7 @@ llvm::calculateRegAllocScore(const MachineFunction &MF,
       },
       [&](const MachineInstr &MI) {
         return MF.getSubtarget().getInstrInfo()->isTriviallyReMaterializable(
-            MI, &AAResults);
+            MI);
       });
 }
 

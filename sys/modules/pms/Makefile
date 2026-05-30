@@ -1,4 +1,3 @@
-# $FreeBSD$
 # 5/31/2012
 #PATH shall include all directories
 
@@ -18,11 +17,9 @@
 	${SRCTOP}/sys/dev/pms/freebsd/driver/common
 
 CFLAGS+=-fno-builtin
-CFLAGS+=-fms-extensions
 
 CFLAGS+=-Wredundant-decls
 CFLAGS+=-Wunused-variable
-CFLAGS+=-Wnested-externs
 CFLAGS+=-Woverflow
 CFLAGS+=-Wmissing-prototypes
 CFLAGS+=-Wparentheses

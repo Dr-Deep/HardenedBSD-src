@@ -1,4 +1,5 @@
 #!/bin/ksh -p
+# SPDX-License-Identifier: CDDL-1.0
 #
 # CDDL HEADER START
 #
@@ -40,6 +41,7 @@
 # 5. TRIM the first 1MB and last 2MB of the 5MB block of data.
 # 6. Observe 2MB of used space on the zvol
 # 7. Verify the trimmed regions are zero'd on the zvol
+# 8. Verify Secure Erase does not work on zvols (Linux only)
 
 verify_runnable "global"
 
@@ -55,6 +57,7 @@ if is_linux ; then
 	else
 		trimcmd='blkdiscard'
 	fi
+	secure_trimcmd="$trimcmd --secure"
 else
 	# By default, FreeBSD 'trim' always does a dry-run.  '-f' makes
 	# it perform the actual operation.
@@ -65,8 +68,8 @@ if ! is_physical_device $DISKS; then
 	log_unsupported "This directory cannot be run on raw files."
 fi
 
-typeset datafile1="$(mktemp zvol_misc_flags1.XXXXXX)"
-typeset datafile2="$(mktemp zvol_misc_flags2.XXXXXX)"
+typeset datafile1="$(mktemp -t zvol_misc_flags1.XXXXXX)"
+typeset datafile2="$(mktemp -t zvol_misc_flags2.XXXXXX)"
 typeset zvolpath=${ZVOL_DEVDIR}/$TESTPOOL/$TESTVOL
 
 function cleanup
@@ -83,6 +86,7 @@ function do_test {
 	
 	# Write to zvol
 	log_must dd if=$datafile1 of=$zvolpath conv=fsync
+	sync_pool
 
 	# Record how much space we've used (should be 5MB, with 128k
 	# of tolerance).
@@ -112,6 +116,11 @@ function do_test {
 	log_must diff $datafile1 $datafile2
 
 	log_must rm $datafile1 $datafile2
+
+	# Secure erase should not work (Linux check only).
+	if [ -n "$secure_trimcmd" ] ; then
+		log_mustnot $secure_trimcmd $zvolpath
+	fi
 }
 
 log_assert "Verify that a ZFS volume can be TRIMed"
@@ -122,14 +131,13 @@ log_must zfs set compression=off $TESTPOOL/$TESTVOL
 # Remove old data from previous tests
 log_must $trimcmd $zvolpath
 
-
 set_blk_mq 1
-log_must zpool export $TESTPOOL
+log_must_busy zpool export $TESTPOOL
 log_must zpool import $TESTPOOL
 do_test
 
 set_blk_mq 0
-log_must zpool export $TESTPOOL
+log_must_busy zpool export $TESTPOOL
 log_must zpool import $TESTPOOL
 do_test
 

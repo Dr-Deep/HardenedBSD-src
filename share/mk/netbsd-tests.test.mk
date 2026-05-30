@@ -1,7 +1,6 @@
-# $FreeBSD$
 
 .if !target(__netbsd_tests.test.mk__)
-__netbsd_tests.test.mk__:
+__netbsd_tests.test.mk__:	.NOTMAIN
 
 TESTSRC?=	${SRCTOP}/contrib/netbsd-tests/${RELDIR:H}
 

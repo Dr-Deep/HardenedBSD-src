@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2006-2008 Stanislav Sedov <stas@FreeBSD.org>
  * All rights reserved.
@@ -26,9 +26,6 @@
  * SUCH DAMAGE.
  *
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -347,7 +344,7 @@ ucode_intel_load_rv(void *arg)
 
 	d = arg;
 	if (PCPU_GET(cpuid) == d->cpu)
-		d->ret = ucode_intel_load(d->ptr, true, NULL, NULL);
+		d->ret = ucode_intel_load(d->ptr, SAFE, NULL, NULL);
 }
 
 static int
@@ -405,19 +402,20 @@ out:
  * its workings.
  */
 static void
-amd_ucode_wrmsr(void *ucode_ptr)
+amd_ucode_wrmsr(void *arg)
 {
+	struct ucode_update_data *d = arg;
 	uint32_t tmp[4];
 
-	wrmsr_safe(MSR_K8_UCODE_UPDATE, (uintptr_t)ucode_ptr);
+	if (PCPU_GET(cpuid) == d->cpu)
+		d->ret = wrmsr_safe(MSR_K8_UCODE_UPDATE, (uintptr_t)d->ptr);
 	do_cpuid(0, tmp);
 }
 
 static int
 update_amd(int cpu, cpuctl_update_args_t *args, struct thread *td)
 {
-	void *ptr;
-	int ret;
+	struct ucode_update_data d = { .cpu = cpu };
 
 	if (args->size == 0 || args->data == NULL) {
 		DPRINTF("[cpuctl,%d]: zero-sized firmware image", __LINE__);
@@ -433,18 +431,17 @@ update_amd(int cpu, cpuctl_update_args_t *args, struct thread *td)
 	 * malloc(9) always returns the pointer aligned at least on
 	 * the size of the allocation.
 	 */
-	ptr = malloc(args->size + 16, M_CPUCTL, M_ZERO | M_WAITOK);
-	if (copyin(args->data, ptr, args->size) != 0) {
+	d.ptr = malloc(args->size + 16, M_CPUCTL, M_ZERO | M_WAITOK);
+	if (copyin(args->data, d.ptr, args->size) != 0) {
 		DPRINTF("[cpuctl,%d]: copyin %p->%p of %zd bytes failed",
 		    __LINE__, args->data, ptr, args->size);
-		ret = EFAULT;
+		d.ret = EFAULT;
 		goto fail;
 	}
-	smp_rendezvous(NULL, amd_ucode_wrmsr, NULL, ptr);
-	ret = 0;
+	smp_rendezvous(NULL, amd_ucode_wrmsr, NULL, &d);
 fail:
-	free(ptr, M_CPUCTL);
-	return (ret);
+	free(d.ptr, M_CPUCTL);
+	return (d.ret);
 }
 
 static int
@@ -548,6 +545,7 @@ cpuctl_do_eval_cpu_features(int cpu, struct thread *td)
 	hw_mds_recalculate();
 	x86_taa_recalculate();
 	x86_rngds_mitg_recalculate(true);
+	zenbleed_check_and_apply(true);
 	printcpuinfo();
 	return (0);
 }

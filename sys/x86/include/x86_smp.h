@@ -8,8 +8,6 @@
  * this stuff is worth it, you can buy me a beer in return.   Poul-Henning Kamp
  * ----------------------------------------------------------------------------
  *
- * $FreeBSD$
- *
  */
 
 #ifndef _X86_X86_SMP_H_
@@ -30,7 +28,6 @@ extern unsigned int boot_address;
 /* global data in mp_x86.c */
 extern int mp_naps;
 extern int boot_cpu_id;
-extern struct pcb stoppcbs[];
 extern int cpu_apic_ids[];
 extern int bootAP;
 extern void *dpcpu;
@@ -38,7 +35,6 @@ extern char *bootSTK;
 extern void *bootstacks[];
 extern unsigned int bootMP_size;
 extern volatile int aps_ready;
-extern struct mtx ap_boot_mtx;
 extern int cpu_logical;
 extern int cpu_cores;
 extern volatile uint32_t smp_tlb_generation;
@@ -56,10 +52,10 @@ extern int nmi_kdb_lock;
 extern int nmi_is_broadcast;
 
 struct cpu_info {
-	int	cpu_present:1;
-	int	cpu_bsp:1;
-	int	cpu_disabled:1;
-	int	cpu_hyperthread:1;
+	bool	cpu_present:1;
+	bool	cpu_bsp:1;
+	bool	cpu_disabled:1;
+	bool	cpu_hyperthread:1;
 };
 extern struct cpu_info *cpu_info;
 
@@ -80,6 +76,7 @@ extern u_long *ipi_rendezvous_counts[MAXCPU];
 inthand_t
 	IDTVEC(ipi_intr_bitmap_handler), /* Bitmap based IPIs */ 
 	IDTVEC(ipi_swi),	/* Runs delayed SWI */
+	IDTVEC(cpuoff),		/* CPU goes offline until hard reset */
 	IDTVEC(cpustop),	/* CPU stops & waits to be restarted */
 	IDTVEC(cpususpend),	/* CPU suspends & waits to be resumed */
 	IDTVEC(rendezvous);	/* handle CPU rendezvous */
@@ -96,14 +93,15 @@ void	assign_cpu_ids(void);
 void	cpu_add(u_int apic_id, char boot_cpu);
 void	cpustop_handler(void);
 void	cpususpend_handler(void);
+void	cpuoff_handler(void);
 void	init_secondary_tail(void);
 void	init_secondary(void);
 void	ipi_startup(int apic_id, int vector);
 void	ipi_all_but_self(u_int ipi);
-void 	ipi_bitmap_handler(struct trapframe frame);
+void 	ipi_bitmap_handler(struct trapframe *frame);
 void	ipi_cpu(int cpu, u_int ipi);
 int	ipi_nmi_handler(void);
-void	ipi_swi_handler(struct trapframe frame);
+void	ipi_swi_handler(struct trapframe *frame);
 void	ipi_selected(cpuset_t cpus, u_int ipi);
 void	ipi_self_from_nmi(u_int vector);
 void	set_interrupt_apic_ids(void);

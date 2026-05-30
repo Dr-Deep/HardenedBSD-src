@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2015-2016 Landon Fuller <landon@landonf.org>
  * Copyright (c) 2017 The FreeBSD Foundation
@@ -32,9 +32,6 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGES.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -217,7 +214,7 @@ bcma_dinfo_init_agent(device_t bus, device_t child, struct bcma_devinfo *dinfo)
 	bhnd_addr_t	addr;
 	bhnd_size_t	size;
 	rman_res_t	r_start, r_count, r_end;
-	int		error;
+	int		error, rid_agent;
 
 	KASSERT(dinfo->res_agent == NULL, ("double allocation of agent"));
 
@@ -240,9 +237,9 @@ bcma_dinfo_init_agent(device_t bus, device_t child, struct bcma_devinfo *dinfo)
 	r_count = size;
 	r_end = r_start + r_count - 1;
 
-	dinfo->rid_agent = BCMA_AGENT_RID(dinfo);
+	rid_agent = BCMA_AGENT_RID(dinfo);
 	dinfo->res_agent = BHND_BUS_ALLOC_RESOURCE(bus, bus, SYS_RES_MEMORY,
-	    &dinfo->rid_agent, r_start, r_end, r_count, RF_ACTIVE|RF_SHAREABLE);
+	    rid_agent, r_start, r_end, r_count, RF_ACTIVE|RF_SHAREABLE);
 	if (dinfo->res_agent == NULL) {
 		device_printf(bus, "failed allocating agent register block for "
 		    "core %u\n", BCMA_DINFO_COREIDX(dinfo));
@@ -335,7 +332,6 @@ bcma_alloc_dinfo(device_t bus)
 
 	dinfo->corecfg = NULL;
 	dinfo->res_agent = NULL;
-	dinfo->rid_agent = -1;
 
 	STAILQ_INIT(&dinfo->intrs);
 	dinfo->num_intrs = 0;
@@ -437,8 +433,7 @@ bcma_free_dinfo(device_t bus, device_t child, struct bcma_devinfo *dinfo)
 
 	/* Release agent resource, if any */
 	if (dinfo->res_agent != NULL) {
-		bhnd_release_resource(bus, SYS_RES_MEMORY, dinfo->rid_agent,
-		    dinfo->res_agent);
+		bhnd_release_resource(bus, dinfo->res_agent);
 	}
 
 	/* Clean up interrupt descriptors */

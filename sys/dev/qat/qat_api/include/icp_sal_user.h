@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/* Copyright(c) 2007-2022 Intel Corporation */
-/* $FreeBSD$ */
+/* Copyright(c) 2007-2025 Intel Corporation */
 /**
  ***************************************************************************
  * @file icp_sal_user.h
@@ -76,7 +75,7 @@ CpaStatus icp_sal_userStart(const char *pProcessName);
   *
   * @param[in] limitDevAccess         Specifies if the address space is limited
   *                                   to one device (true) or if it spans
-  *                                   accross multiple devices.
+  *                                   across multiple devices.
   *
   * @retval CPA_STATUS_SUCCESS        No error
   * @retval CPA_STATUS_FAIL           Operation failed. In this case user
@@ -479,7 +478,7 @@ CpaStatus icp_sal_find_new_devices(void);
  * @assumptions
  *      None
  * @sideEffects
- *      In case a device has beed stoped or restarted the application
+ *      In case a device has been stopped or restarted the application
  *      will get restarting/stop/shutdown events
  * @reentrant
  *      No
@@ -868,4 +867,41 @@ CpaStatus icp_sal_dp_SymGetInflightRequests(CpaInstanceHandle instanceHandle,
  *
  *****************************************************************************/
 CpaStatus icp_sal_AsymPerformOpNow(CpaInstanceHandle instanceHandle);
+
+/**
+ *****************************************************************************
+ * @ingroup icp_sal_setForceAEADMACVerify
+ *      Sets forceAEADMacVerify for particular instance to force HW MAC
+ *      validation.
+ *
+ * @description
+ * 	By default HW MAC verification is set to CPA_TRUE - this utility
+ * 	function allows to change default behavior.
+ *
+ * @assumptions
+ *      None
+ * @sideEffects
+ *      None
+ * @blocking
+ *      None
+ * @reentrant
+ *      No
+ * @threadSafe
+ *      No
+ *
+ * @param[in] instanceHandle         Crypto API instance handle.
+ * @param[in] forceAEADMacVerify     new value
+ *
+ * @retval CPA_STATUS_SUCCESS        Function executed successfully.
+ * @retval CPA_STATUS_FAIL           Function failed.
+ * @pre
+ *      None
+ * @post
+ *      None
+ * @see
+ *      None
+ *
+ *****************************************************************************/
+CpaStatus icp_sal_setForceAEADMACVerify(CpaInstanceHandle instanceHandle,
+					CpaBoolean forceAEADMacVerify);
 #endif

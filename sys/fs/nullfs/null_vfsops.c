@@ -30,11 +30,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)null_vfsops.c	8.2 (Berkeley) 1/21/94
- *
- * @(#)lofs_vfsops.c	1.2 (Berkeley) 6/18/92
- * $FreeBSD$
  */
 
 /*
@@ -51,6 +46,7 @@
 #include <sys/mount.h>
 #include <sys/namei.h>
 #include <sys/proc.h>
+#include <sys/sysctl.h>
 #include <sys/vnode.h>
 #include <sys/jail.h>
 
@@ -68,6 +64,13 @@ static vfs_unmount_t	nullfs_unmount;
 static vfs_vget_t	nullfs_vget;
 static vfs_extattrctl_t	nullfs_extattrctl;
 
+SYSCTL_NODE(_vfs, OID_AUTO, nullfs, CTLFLAG_RW, 0, "nullfs");
+
+static bool null_cache_vnodes = true;
+SYSCTL_BOOL(_vfs_nullfs, OID_AUTO, cache_vnodes, CTLFLAG_RWTUN,
+    &null_cache_vnodes, 0,
+    "cache free nullfs vnodes");
+
 /*
  * Mount null layer
  */
@@ -82,6 +85,10 @@ nullfs_mount(struct mount *mp)
 	char *target;
 	int error, len;
 	bool isvnunlocked;
+	static const char cache_opt_name[] = "cache";
+	static const char nocache_opt_name[] = "nocache";
+	static const char unixbypass_opt_name[] = "unixbypass";
+	static const char nounixbypass_opt_name[] = "nounixbypass";
 
 	NULLFSDEBUG("nullfs_mount(mp = %p)\n", (void *)mp);
 
@@ -113,7 +120,7 @@ nullfs_mount(struct mount *mp)
 	/*
 	 * Unlock lower node to avoid possible deadlock.
 	 */
-	if (mp->mnt_vnodecovered->v_op == &null_vnodeops &&
+	if (null_is_nullfs_vnode(mp->mnt_vnodecovered) &&
 	    VOP_ISLOCKED(mp->mnt_vnodecovered) == LK_EXCLUSIVE) {
 		VOP_UNLOCK(mp->mnt_vnodecovered);
 		isvnunlocked = true;
@@ -145,9 +152,17 @@ nullfs_mount(struct mount *mp)
 	lowerrootvp = ndp->ni_vp;
 
 	/*
+	 * Do not allow to mount a vnode over itself.
+	 */
+	if (mp->mnt_vnodecovered == lowerrootvp) {
+		vput(lowerrootvp);
+		return (EDEADLK);
+	}
+
+	/*
 	 * Check multi null mount to avoid `lock against myself' panic.
 	 */
-	if (mp->mnt_vnodecovered->v_op == &null_vnodeops) {
+	if (null_is_nullfs_vnode(mp->mnt_vnodecovered)) {
 		nn = VTONULL(mp->mnt_vnodecovered);
 		if (nn == NULL || lowerrootvp == nn->null_lowervp) {
 			NULLFSDEBUG("nullfs_mount: multi null mount?\n");
@@ -156,8 +171,19 @@ nullfs_mount(struct mount *mp)
 		}
 	}
 
-	xmp = (struct null_mount *) malloc(sizeof(struct null_mount),
-	    M_NULLFSMNT, M_WAITOK | M_ZERO);
+	/*
+	 * Lower vnode must be the same type as the covered vnode - we
+	 * don't allow mounting directories to files or vice versa.
+	 */
+	if ((lowerrootvp->v_type != VDIR && lowerrootvp->v_type != VREG) ||
+	    lowerrootvp->v_type != mp->mnt_vnodecovered->v_type) {
+		NULLFSDEBUG("nullfs_mount: target must be same type as fspath");
+		vput(lowerrootvp);
+		return (EINVAL);
+	}
+
+	xmp = malloc(sizeof(struct null_mount), M_NULLFSMNT,
+	    M_WAITOK | M_ZERO);
 
 	/*
 	 * Save pointer to underlying FS and the reference to the
@@ -191,14 +217,32 @@ nullfs_mount(struct mount *mp)
 		MNT_IUNLOCK(mp);
 	}
 
-	xmp->nullm_flags |= NULLM_CACHE;
-	if (vfs_getopt(mp->mnt_optnew, "nocache", NULL, NULL) == 0 ||
-	    (xmp->nullm_vfs->mnt_kern_flag & MNTK_NULL_NOCACHE) != 0)
-		xmp->nullm_flags &= ~NULLM_CACHE;
+	if (vfs_getopt(mp->mnt_optnew, cache_opt_name, NULL, NULL) == 0) {
+		xmp->nullm_flags |= NULLM_CACHE;
+	} else if (vfs_getopt(mp->mnt_optnew, nocache_opt_name, NULL,
+	    NULL) == 0) {
+		;
+	} else if (null_cache_vnodes &&
+	    (xmp->nullm_vfs->mnt_kern_flag & MNTK_NULL_NOCACHE) == 0) {
+		xmp->nullm_flags |= NULLM_CACHE;
+	}
 
 	if ((xmp->nullm_flags & NULLM_CACHE) != 0) {
 		vfs_register_for_notification(xmp->nullm_vfs, mp,
 		    &xmp->notify_node);
+	}
+
+	if (vfs_getopt(mp->mnt_optnew, unixbypass_opt_name, NULL, NULL) == 0) {
+		;
+	} else if (vfs_getopt(mp->mnt_optnew, nounixbypass_opt_name, NULL,
+	    NULL) == 0) {
+		xmp->nullm_flags |= NULLM_NOUNPBYPASS;
+	}
+
+	if (lowerrootvp == mp->mnt_vnodecovered) {
+		vn_lock(lowerrootvp, LK_EXCLUSIVE | LK_RETRY | LK_CANRECURSE);
+		lowerrootvp->v_vflag |= VV_CROSSLOCK;
+		VOP_UNLOCK(lowerrootvp);
 	}
 
 	MNT_ILOCK(mp);
@@ -224,9 +268,7 @@ nullfs_mount(struct mount *mp)
  * Free reference to null layer
  */
 static int
-nullfs_unmount(mp, mntflags)
-	struct mount *mp;
-	int mntflags;
+nullfs_unmount(struct mount *mp, int mntflags)
 {
 	struct null_mount *mntdata;
 	int error, flags;
@@ -261,6 +303,11 @@ nullfs_unmount(mp, mntflags)
 		vfs_unregister_for_notification(mntdata->nullm_vfs,
 		    &mntdata->notify_node);
 	}
+	if (mntdata->nullm_lowerrootvp == mp->mnt_vnodecovered) {
+		vn_lock(mp->mnt_vnodecovered, LK_EXCLUSIVE | LK_RETRY | LK_CANRECURSE);
+		mp->mnt_vnodecovered->v_vflag &= ~VV_CROSSLOCK;
+		VOP_UNLOCK(mp->mnt_vnodecovered);
+	}
 	vfs_unregister_upper(mntdata->nullm_vfs, &mntdata->upper_node);
 	vrele(mntdata->nullm_lowerrootvp);
 	mp->mnt_data = NULL;
@@ -269,10 +316,7 @@ nullfs_unmount(mp, mntflags)
 }
 
 static int
-nullfs_root(mp, flags, vpp)
-	struct mount *mp;
-	int flags;
-	struct vnode **vpp;
+nullfs_root(struct mount *mp, int flags, struct vnode **vpp)
 {
 	struct vnode *vp;
 	struct null_mount *mntdata;
@@ -293,12 +337,7 @@ nullfs_root(mp, flags, vpp)
 }
 
 static int
-nullfs_quotactl(mp, cmd, uid, arg, mp_busy)
-	struct mount *mp;
-	int cmd;
-	uid_t uid;
-	void *arg;
-	bool *mp_busy;
+nullfs_quotactl(struct mount *mp, int cmd, uid_t uid, void *arg, bool *mp_busy)
 {
 	struct mount *lowermp;
 	struct null_mount *mntdata;
@@ -329,9 +368,7 @@ nullfs_quotactl(mp, cmd, uid, arg, mp_busy)
 }
 
 static int
-nullfs_statfs(mp, sbp)
-	struct mount *mp;
-	struct statfs *sbp;
+nullfs_statfs(struct mount *mp, struct statfs *sbp)
 {
 	int error;
 	struct statfs *mstat;
@@ -348,11 +385,7 @@ nullfs_statfs(mp, sbp)
 		return (error);
 	}
 
-	/* now copy across the "interesting" information and fake the rest */
 	sbp->f_type = mstat->f_type;
-	sbp->f_flags = (sbp->f_flags & (MNT_RDONLY | MNT_NOEXEC | MNT_NOSUID |
-	    MNT_UNION | MNT_NOSYMFOLLOW | MNT_AUTOMOUNTED)) |
-	    (mstat->f_flags & ~(MNT_ROOTFS | MNT_AUTOMOUNTED));
 	sbp->f_bsize = mstat->f_bsize;
 	sbp->f_iosize = mstat->f_iosize;
 	sbp->f_blocks = mstat->f_blocks;
@@ -366,9 +399,7 @@ nullfs_statfs(mp, sbp)
 }
 
 static int
-nullfs_sync(mp, waitfor)
-	struct mount *mp;
-	int waitfor;
+nullfs_sync(struct mount *mp, int waitfor)
 {
 	/*
 	 * XXX - Assumes no data cached at null layer.
@@ -377,11 +408,7 @@ nullfs_sync(mp, waitfor)
 }
 
 static int
-nullfs_vget(mp, ino, flags, vpp)
-	struct mount *mp;
-	ino_t ino;
-	int flags;
-	struct vnode **vpp;
+nullfs_vget(struct mount *mp, ino_t ino, int flags, struct vnode **vpp)
 {
 	int error;
 
@@ -395,11 +422,7 @@ nullfs_vget(mp, ino, flags, vpp)
 }
 
 static int
-nullfs_fhtovp(mp, fidp, flags, vpp)
-	struct mount *mp;
-	struct fid *fidp;
-	int flags;
-	struct vnode **vpp;
+nullfs_fhtovp(struct mount *mp, struct fid *fidp, int flags, struct vnode **vpp)
 {
 	int error;
 
@@ -410,13 +433,9 @@ nullfs_fhtovp(mp, fidp, flags, vpp)
 	return (null_nodeget(mp, *vpp, vpp));
 }
 
-static int                        
-nullfs_extattrctl(mp, cmd, filename_vp, namespace, attrname)
-	struct mount *mp;
-	int cmd;
-	struct vnode *filename_vp;
-	int namespace;
-	const char *attrname;
+static int
+nullfs_extattrctl(struct mount *mp, int cmd, struct vnode *filename_vp,
+    int namespace, const char *attrname)
 {
 
 	return (VFS_EXTATTRCTL(MOUNTTONULLMOUNT(mp)->nullm_vfs, cmd,
@@ -450,16 +469,12 @@ nullfs_unlink_lowervp(struct mount *mp, struct vnode *lowervp)
 	vhold(vp);
 	vunref(vp);
 
-	if (vp->v_usecount == 0) {
+	if (VN_IS_DOOMED(vp)) {
 		/*
-		 * If vunref() dropped the last use reference on the
-		 * nullfs vnode, it must be reclaimed, and its lock
-		 * was split from the lower vnode lock.  Need to do
-		 * extra unlock before allowing the final vdrop() to
-		 * free the vnode.
+		 * If the vnode is doomed, its lock was split from the lower
+		 * vnode lock.  Therefore we need to do an extra unlock before
+		 * allowing the final vdrop() to free the vnode.
 		 */
-		KASSERT(VN_IS_DOOMED(vp),
-		    ("not reclaimed nullfs vnode %p", vp));
 		VOP_UNLOCK(vp);
 	} else {
 		/*
@@ -469,8 +484,6 @@ nullfs_unlink_lowervp(struct mount *mp, struct vnode *lowervp)
 		 * relevant for future reclamations.
 		 */
 		ASSERT_VOP_ELOCKED(vp, "unlink_lowervp");
-		KASSERT(!VN_IS_DOOMED(vp),
-		    ("reclaimed nullfs vnode %p", vp));
 		xp->null_flags &= ~NULLV_NOUNLOCK;
 	}
 	vdrop(vp);
@@ -492,4 +505,4 @@ static struct vfsops null_vfsops = {
 	.vfs_unlink_lowervp =	nullfs_unlink_lowervp,
 };
 
-VFS_SET(null_vfsops, nullfs, VFCF_LOOPBACK | VFCF_JAIL);
+VFS_SET(null_vfsops, nullfs, VFCF_LOOPBACK | VFCF_JAIL | VFCF_FILEMOUNT);

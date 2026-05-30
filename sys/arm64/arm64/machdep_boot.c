@@ -27,9 +27,7 @@
  */
 
 #include "opt_platform.h"
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
+#include "opt_ddb.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -51,11 +49,16 @@ __FBSDID("$FreeBSD$");
 #include <dev/fdt/fdt_common.h>
 #endif
 
-extern int *end;
+#ifdef DDB
+#include <ddb/ddb.h>
+#endif
+
+extern char end[];
 static char *loader_envp;
-static char static_kenv[4096];
 
 #ifdef FDT
+static char static_kenv[4096];
+
 #define	CMDLINE_GUARD "FreeBSD:"
 #define	LBABI_MAX_COMMAND_LINE 512
 static char linux_command_line[LBABI_MAX_COMMAND_LINE + 1];
@@ -95,7 +98,7 @@ fake_preload_metadata(void *dtb_ptr, size_t dtb_size)
 	PRELOAD_PUSH_STRING("kernel");
 
 	PRELOAD_PUSH_VALUE(uint32_t, MODINFO_TYPE);
-	PRELOAD_PUSH_STRING("elf kernel");
+	PRELOAD_PUSH_STRING(preload_kerntype);
 
 	PRELOAD_PUSH_VALUE(uint32_t, MODINFO_ADDR);
 	PRELOAD_PUSH_VALUE(uint32_t, sizeof(vm_offset_t));
@@ -103,7 +106,8 @@ fake_preload_metadata(void *dtb_ptr, size_t dtb_size)
 
 	PRELOAD_PUSH_VALUE(uint32_t, MODINFO_SIZE);
 	PRELOAD_PUSH_VALUE(uint32_t, sizeof(size_t));
-	PRELOAD_PUSH_VALUE(uint64_t, (size_t)(&end - VM_MIN_KERNEL_ADDRESS));
+	PRELOAD_PUSH_VALUE(uint64_t,
+		(size_t)((vm_offset_t)&end - VM_MIN_KERNEL_ADDRESS));
 
 	if (dtb_ptr != NULL) {
 		/* Copy DTB to KVA space and insert it into module chain. */
@@ -111,7 +115,7 @@ fake_preload_metadata(void *dtb_ptr, size_t dtb_size)
 		PRELOAD_PUSH_VALUE(uint32_t, MODINFO_METADATA | MODINFOMD_DTBP);
 		PRELOAD_PUSH_VALUE(uint32_t, sizeof(uint64_t));
 		PRELOAD_PUSH_VALUE(uint64_t, (uint64_t)lastaddr);
-		memmove((void *)lastaddr, dtb_ptr, dtb_size);
+		memmove_early((void *)lastaddr, dtb_ptr, dtb_size);
 		lastaddr += dtb_size;
 		lastaddr = roundup(lastaddr, sizeof(int));
 	}
@@ -120,6 +124,9 @@ fake_preload_metadata(void *dtb_ptr, size_t dtb_size)
 	PRELOAD_PUSH_VALUE(uint32_t, 0);
 
 	preload_metadata = (caddr_t)(uintptr_t)fake_preload;
+
+	/* Initialize preload_kmdp */
+	preload_initkmdp(true);
 
 	init_static_kenv(NULL, 0);
 
@@ -185,7 +192,6 @@ static vm_offset_t
 freebsd_parse_boot_param(struct arm64_bootparams *abp)
 {
 	vm_offset_t lastaddr = 0;
-	void *kmdp;
 #ifdef DDB
 	vm_offset_t ksym_start;
 	vm_offset_t ksym_end;
@@ -195,17 +201,19 @@ freebsd_parse_boot_param(struct arm64_bootparams *abp)
 		return (0);
 
 	preload_metadata = (caddr_t)(uintptr_t)(abp->modulep);
-	kmdp = preload_search_by_type("elf kernel");
-	if (kmdp == NULL)
+
+	/* Initialize preload_kmdp */
+	preload_initkmdp(false);
+	if (preload_kmdp == NULL)
 		return (0);
 
-	boothowto = MD_FETCH(kmdp, MODINFOMD_HOWTO, int);
-	loader_envp = MD_FETCH(kmdp, MODINFOMD_ENVP, char *);
+	boothowto = MD_FETCH(preload_kmdp, MODINFOMD_HOWTO, int);
+	loader_envp = MD_FETCH(preload_kmdp, MODINFOMD_ENVP, char *);
 	init_static_kenv(loader_envp, 0);
-	lastaddr = MD_FETCH(kmdp, MODINFOMD_KERNEND, vm_offset_t);
+	lastaddr = MD_FETCH(preload_kmdp, MODINFOMD_KERNEND, vm_offset_t);
 #ifdef DDB
-	ksym_start = MD_FETCH(kmdp, MODINFOMD_SSYM, uintptr_t);
-	ksym_end = MD_FETCH(kmdp, MODINFOMD_ESYM, uintptr_t);
+	ksym_start = MD_FETCH(preload_kmdp, MODINFOMD_SSYM, uintptr_t);
+	ksym_end = MD_FETCH(preload_kmdp, MODINFOMD_ESYM, uintptr_t);
 	db_fetch_ksymtab(ksym_start, ksym_end, 0);
 #endif
 	return (lastaddr);

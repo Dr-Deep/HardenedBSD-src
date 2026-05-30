@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2006 M. Warner Losh <imp@FreeBSD.org>
  * Copyright (c) 2017 Marius Strobl <marius@FreeBSD.org>
@@ -51,8 +51,6 @@
  * herein shall be construed as an obligation by the SD Group, the SD-3C LLC
  * or the SD Card Association to disclose or distribute any technical
  * information, know-how or other confidential information to any third party.
- *
- * $FreeBSD$
  */
 
 #ifndef DEV_MMC_MMCREG_H
@@ -82,6 +80,7 @@ struct mmc_command {
 #define	MMC_CMD_BC	(2ul << 5)	/* Broadcast command, no response */
 #define	MMC_CMD_BCR	(3ul << 5)	/* Broadcast command with response */
 #define	MMC_CMD_MASK	(3ul << 5)
+#define	MMC_CMD_IS_APP  (1ul << 7)	/* Next cmd after MMC_APP_CMD */
 
 /* Possible response types defined in the standard: */
 #define	MMC_RSP_NONE	(0)

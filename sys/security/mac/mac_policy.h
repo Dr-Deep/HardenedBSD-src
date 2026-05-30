@@ -38,8 +38,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 /*
  * Kernel interface for MAC policy modules.
@@ -90,6 +88,7 @@ struct mount;
 struct msg;
 struct msqid_kernel;
 struct pipepair;
+struct prison;
 struct proc;
 struct sbuf;
 struct semid_kernel;
@@ -102,8 +101,12 @@ struct sysctl_req;
 struct thread;
 struct ucred;
 struct vattr;
+struct vfsconf;
+struct vfsoptlist;
 struct vnode;
-struct prison;
+
+struct in_addr;
+struct in6_addr;
 
 /*
  * Policy module operations.
@@ -144,6 +147,10 @@ typedef int	(*mpo_cred_check_setaudit_t)(struct ucred *cred,
 typedef int	(*mpo_cred_check_setaudit_addr_t)(struct ucred *cred,
 		    struct auditinfo_addr *aia);
 typedef int	(*mpo_cred_check_setauid_t)(struct ucred *cred, uid_t auid);
+typedef void	(*mpo_cred_setcred_enter_t)(void);
+typedef int	(*mpo_cred_check_setcred_t)(u_int flags,
+		    const struct ucred *old_cred, struct ucred *new_cred);
+typedef void	(*mpo_cred_setcred_exit_t)(void);
 typedef int	(*mpo_cred_check_setegid_t)(struct ucred *cred, gid_t egid);
 typedef int	(*mpo_cred_check_seteuid_t)(struct ucred *cred, uid_t euid);
 typedef int	(*mpo_cred_check_setgid_t)(struct ucred *cred, gid_t gid);
@@ -163,7 +170,7 @@ typedef int	(*mpo_cred_check_visible_t)(struct ucred *cr1,
 typedef void	(*mpo_cred_copy_label_t)(struct label *src,
 		    struct label *dest);
 typedef void	(*mpo_cred_create_init_t)(struct ucred *cred);
-typedef void	(*mpo_cred_create_swapper_t)(struct ucred *cred);
+typedef void	(*mpo_cred_create_kproc0_t)(struct ucred *cred);
 typedef void	(*mpo_cred_destroy_label_t)(struct label *label);
 typedef int	(*mpo_cred_externalize_label_t)(struct label *label,
 		    char *element_name, struct sbuf *sb, int *claimed);
@@ -249,6 +256,12 @@ typedef void	(*mpo_ip6q_reassemble)(struct ip6q *q6, struct label *q6label,
 typedef void	(*mpo_ip6q_update_t)(struct mbuf *m, struct label *mlabel,
 		    struct ip6q *q6, struct label *q6label);
 
+/* Policy ops checking IPv4 and IPv6 address for ipacl. */
+typedef int	(*mpo_ip4_check_jail_t)(struct ucred *cred,
+		    const struct in_addr *ia, struct ifnet *ifp);
+typedef int	(*mpo_ip6_check_jail_t)(struct ucred *cred,
+		    const struct in6_addr *ia6, struct ifnet *ifp);
+
 typedef void	(*mpo_ipq_create_t)(struct mbuf *m, struct label *mlabel,
 		    struct ipq *q, struct label *qlabel);
 typedef void	(*mpo_ipq_destroy_label_t)(struct label *label);
@@ -283,6 +296,14 @@ typedef void	(*mpo_mount_create_t)(struct ucred *cred, struct mount *mp,
 		    struct label *mplabel);
 typedef void	(*mpo_mount_destroy_label_t)(struct label *label);
 typedef void	(*mpo_mount_init_label_t)(struct label *label);
+typedef int	(*mpo_mount_check_mount_t)(struct ucred *cred, struct vnode *vp,
+		    struct label *vplabel, struct vfsconf *vfsp,
+		    struct vfsoptlist **optlist, uint64_t fsflags);
+typedef int	(*mpo_mount_check_update_t)(struct ucred *cred,
+		    struct mount *mp, struct label *mplabel,
+		    struct vfsoptlist **optlist, uint64_t fsflags);
+typedef int	(*mpo_mount_check_unmount_t)(struct ucred *cred,
+		    struct mount *mp, struct label *mplabel, uint64_t flags);
 
 typedef void	(*mpo_netinet_arp_send_t)(struct ifnet *ifp,
 		    struct label *ifplabel, struct mbuf *m,
@@ -396,6 +417,39 @@ typedef void	(*mpo_posixshm_create_t)(struct ucred *cred,
 		    struct shmfd *shmfd, struct label *shmlabel);
 typedef void	(*mpo_posixshm_destroy_label_t)(struct label *label);
 typedef void	(*mpo_posixshm_init_label_t)(struct label *label);
+
+typedef int	(*mpo_prison_init_label_t)(struct label *label, int flag);
+typedef int	(*mpo_prison_check_relabel_t)(struct ucred *cred,
+		    struct prison *pr, struct label *prlabel,
+		    struct label *newlabel);
+typedef void	(*mpo_prison_destroy_label_t)(struct label *label);
+typedef void	(*mpo_prison_copy_label_t)(struct label *src,
+		    struct label *dest);
+typedef int	(*mpo_prison_externalize_label_t)(struct label *label,
+		    char *element_name, struct sbuf *sb, int *claimed);
+typedef int	(*mpo_prison_internalize_label_t)(struct label *label,
+		    char *element_name, char *element_data, int *claimed);
+typedef void	(*mpo_prison_relabel_t)(struct ucred *cred, struct prison *pr,
+		    struct label *prlabel, struct label *newlabel);
+typedef int	(*mpo_prison_check_attach_t)(struct ucred *cred,
+		    struct prison *pr, struct label *prlabel);
+typedef int	(*mpo_prison_check_create_t)(struct ucred *cred,
+		    struct vfsoptlist *opts, int flags);
+typedef int	(*mpo_prison_check_get_t)(struct ucred *cred,
+		    struct prison *pr, struct label *prlabel,
+		    struct vfsoptlist *opts, int flags);
+typedef int	(*mpo_prison_check_set_t)(struct ucred *cred,
+		    struct prison *pr, struct label *prlabel,
+		    struct vfsoptlist *opts, int flags);
+typedef int	(*mpo_prison_check_remove_t)(struct ucred *cred,
+		    struct prison *pr, struct label *prlabel);
+typedef void	(*mpo_prison_created_t)(struct ucred *cred,
+		    struct prison *pr, struct label *prlabel);
+typedef void	(*mpo_prison_cleanup_t)(struct ucred *cred,
+		    struct prison *pr);
+typedef void	(*mpo_prison_attached_t)(struct ucred *cred,
+		    struct prison *pr, struct label *prlabel, struct proc *p,
+		    struct label *proclabel);
 
 typedef int	(*mpo_priv_check_t)(struct ucred *cred, int priv);
 typedef int	(*mpo_priv_grant_t)(struct ucred *cred, int priv);
@@ -683,8 +737,6 @@ typedef int	(*mpo_vnode_setlabel_extattr_t)(struct ucred *cred,
 		    struct vnode *vp, struct label *vplabel,
 		    struct label *intlabel);
 
-typedef void	(*mpo_prison_destroy_t)(struct prison *prison);
-
 struct mac_policy_ops {
 	/*
 	 * Policy module operations.
@@ -716,6 +768,9 @@ struct mac_policy_ops {
 	mpo_cred_check_setaudit_t		mpo_cred_check_setaudit;
 	mpo_cred_check_setaudit_addr_t		mpo_cred_check_setaudit_addr;
 	mpo_cred_check_setauid_t		mpo_cred_check_setauid;
+	mpo_cred_setcred_enter_t		mpo_cred_setcred_enter;
+	mpo_cred_check_setcred_t		mpo_cred_check_setcred;
+	mpo_cred_setcred_exit_t			mpo_cred_setcred_exit;
 	mpo_cred_check_setuid_t			mpo_cred_check_setuid;
 	mpo_cred_check_seteuid_t		mpo_cred_check_seteuid;
 	mpo_cred_check_setgid_t			mpo_cred_check_setgid;
@@ -727,7 +782,7 @@ struct mac_policy_ops {
 	mpo_cred_check_setresgid_t		mpo_cred_check_setresgid;
 	mpo_cred_check_visible_t		mpo_cred_check_visible;
 	mpo_cred_copy_label_t			mpo_cred_copy_label;
-	mpo_cred_create_swapper_t		mpo_cred_create_swapper;
+	mpo_cred_create_kproc0_t		mpo_cred_create_kproc0;
 	mpo_cred_create_init_t			mpo_cred_create_init;
 	mpo_cred_destroy_label_t		mpo_cred_destroy_label;
 	mpo_cred_externalize_label_t		mpo_cred_externalize_label;
@@ -765,6 +820,9 @@ struct mac_policy_ops {
 	mpo_inpcb_init_label_t			mpo_inpcb_init_label;
 	mpo_inpcb_sosetlabel_t			mpo_inpcb_sosetlabel;
 
+	mpo_ip4_check_jail_t			mpo_ip4_check_jail;
+	mpo_ip6_check_jail_t			mpo_ip6_check_jail;
+
 	mpo_ip6q_create_t			mpo_ip6q_create;
 	mpo_ip6q_destroy_label_t		mpo_ip6q_destroy_label;
 	mpo_ip6q_init_label_t			mpo_ip6q_init_label;
@@ -797,6 +855,9 @@ struct mac_policy_ops {
 	mpo_mount_create_t			mpo_mount_create;
 	mpo_mount_destroy_label_t		mpo_mount_destroy_label;
 	mpo_mount_init_label_t			mpo_mount_init_label;
+	mpo_mount_check_mount_t			mpo_mount_check_mount;
+	mpo_mount_check_update_t		mpo_mount_check_update;
+	mpo_mount_check_unmount_t		mpo_mount_check_unmount;
 
 	mpo_netinet_arp_send_t			mpo_netinet_arp_send;
 	mpo_netinet_firewall_reply_t		mpo_netinet_firewall_reply;
@@ -848,6 +909,22 @@ struct mac_policy_ops {
 	mpo_posixshm_create_t			mpo_posixshm_create;
 	mpo_posixshm_destroy_label_t		mpo_posixshm_destroy_label;
 	mpo_posixshm_init_label_t		mpo_posixshm_init_label;
+
+	mpo_prison_init_label_t			mpo_prison_init_label;
+	mpo_prison_check_relabel_t		mpo_prison_check_relabel;
+	mpo_prison_destroy_label_t		mpo_prison_destroy_label;
+	mpo_prison_copy_label_t			mpo_prison_copy_label;
+	mpo_prison_externalize_label_t		mpo_prison_externalize_label;
+	mpo_prison_internalize_label_t		mpo_prison_internalize_label;
+	mpo_prison_relabel_t			mpo_prison_relabel;
+	mpo_prison_check_attach_t		mpo_prison_check_attach;
+	mpo_prison_check_create_t		mpo_prison_check_create;
+	mpo_prison_check_get_t			mpo_prison_check_get;
+	mpo_prison_check_set_t			mpo_prison_check_set;
+	mpo_prison_check_remove_t		mpo_prison_check_remove;
+	mpo_prison_created_t			mpo_prison_created;
+	mpo_prison_cleanup_t			mpo_prison_cleanup;
+	mpo_prison_attached_t			mpo_prison_attached;
 
 	mpo_priv_check_t			mpo_priv_check;
 	mpo_priv_grant_t			mpo_priv_grant;
@@ -982,8 +1059,6 @@ struct mac_policy_ops {
 	mpo_vnode_internalize_label_t		mpo_vnode_internalize_label;
 	mpo_vnode_relabel_t			mpo_vnode_relabel;
 	mpo_vnode_setlabel_extattr_t		mpo_vnode_setlabel_extattr;
-
-	mpo_prison_destroy_t			mpo_prison_destroy;
 };
 
 /*
@@ -995,9 +1070,9 @@ struct mac_policy_ops {
  * structure, as its layout is statically compiled into all policies.
  */
 struct mac_policy_conf {
-	char				*mpc_name;	/* policy name */
-	char				*mpc_fullname;	/* policy full name */
-	struct mac_policy_ops		*mpc_ops;	/* policy operations */
+	const char			*mpc_name;	/* policy name */
+	const char			*mpc_fullname;	/* policy full name */
+	const struct mac_policy_ops	*mpc_ops;	/* policy operations */
 	int				 mpc_loadtime_flags;	/* flags */
 	int				*mpc_field_off; /* security field */
 	int				 mpc_runtime_flags; /* flags */
@@ -1027,8 +1102,11 @@ struct mac_policy_conf {
  *   2                       6.x
  *   3                       7.x
  *   4                       8.x
+ *   5                       14.x
+ *   6                       15.x
+ *   7                       16.x
  */
-#define	MAC_VERSION	4
+#define	MAC_VERSION	7
 
 #define	MAC_POLICY_SET(mpops, mpname, mpfullname, mpflags, privdata_wanted) \
 	static struct mac_policy_conf mpname##_mac_policy_conf = {	\
@@ -1057,5 +1135,20 @@ int	mac_policy_modevent(module_t mod, int type, void *data);
  */
 intptr_t	mac_label_get(struct label *l, int slot);
 void		mac_label_set(struct label *l, int slot, intptr_t v);
+
+/*
+ * Common MAC Framework's sysctl and jail parameters' sysctl nodes' declarations.
+ *
+ * Headers <sys/jail.h> and <sys/sysctl.h> normally have to be included before
+ * this header as style(9) hints to.  If they weren't, just forego the
+ * corresponding declarations, assuming they are not needed.
+ */
+#ifdef SYSCTL_DECL
+SYSCTL_DECL(_security_mac);
+#endif
+
+#ifdef SYSCTL_JAIL_PARAM_DECL
+SYSCTL_JAIL_PARAM_DECL(mac);
+#endif
 
 #endif /* !_SECURITY_MAC_MAC_POLICY_H_ */

@@ -29,10 +29,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\"     @(#)ls.1	8.7 (Berkeley) 7/29/94
-.\" $FreeBSD$
-.\"
-.Dd August 31, 2020
+.Dd January 16, 2025
 .Dt LS 1
 .Os
 .Sh NAME
@@ -40,8 +37,10 @@
 .Nd list directory contents
 .Sh SYNOPSIS
 .Nm
-.Op Fl ABCFGHILPRSTUWZabcdfghiklmnopqrstuwxy1\&,
+.Op Fl ABCFGHILPRSTUWZabcdfghiklmnopqrstuvwxy1\&,
 .Op Fl -color Ns = Ns Ar when
+.Op Fl -group-directories Ns = Ns Ar order
+.Op Fl -group-directories-first
 .Op Fl D Ar format
 .Op Ar
 .Sh DESCRIPTION
@@ -247,9 +246,11 @@ but only if
 .Dv stdout
 is a tty and either the
 .Fl G
-flag is specified or the
+flag is specified or one of the environment variables
 .Ev COLORTERM
-environment variable is set and not empty.
+or
+.Ev CLICOLOR
+is set and not empty.
 .Pp
 .Cm never
 will disable color regardless of environment variables.
@@ -301,14 +302,19 @@ and
 .Fl s
 options.
 .It Fl g
-This option has no effect.
-It is only available for compatibility with
-.Bx 4.3 ,
-where it was used to display the group name in the long
+Display the long
 .Pq Fl l
-format output.
-This option is incompatible with
-.St -p1003.1-2008 .
+format output without the file owner's name or number.
+.It Fl -group-directories Ns = Ns Ar order
+Within results for each operand,
+group directories together and print them either
+.Cm first
+or
+.Cm last.
+.It Fl -group-directories-first
+Equivalent to
+.Fl -group-directories Ns = Ns Ar first .
+Implemented for compatibility with GNU coreutils.
 .It Fl h
 When used with the
 .Fl l
@@ -399,6 +405,15 @@ of the file for sorting
 .Pq Fl t
 or printing
 .Pq Fl l .
+.It Fl v
+Sort following a natural ordering, using
+.Xr strverscmp 3
+instead of
+.Xr strcoll 3
+as the comparison function.
+E.g., files lexicographically ordered
+"bloem1", "bloem10", and "bloem9" would instead be ordered
+"bloem1", "bloem9", and "bloem10", as one would perhaps expect.
 .It Fl w
 Force raw printing of non-printable characters.
 This is the default
@@ -431,6 +446,8 @@ output is not to a terminal.
 .It Fl ,
 (Comma) When the
 .Fl l
+or
+.Fl s
 option is set, print file sizes grouped and separated by thousands using the
 non-monetary separator returned by
 .Xr localeconv 3 ,
@@ -456,9 +473,9 @@ options all override each other; the last one specified determines
 the file time used.
 .Pp
 The
-.Fl S
+.Fl S , t
 and
-.Fl t
+.Fl v
 options override each other; the last one specified determines
 the sort order used.
 .Pp
@@ -534,6 +551,10 @@ which are listed as the directory's contents
 and
 .Pa ..
 and other files which start with a dot, depending on other options).
+If the
+.Fl h
+option is given,
+the total size is displayed as the number of bytes.
 .Pp
 The default block size is 512 bytes.
 The block size may be set with option
@@ -740,7 +761,7 @@ where
 is the foreground color and
 .Ar b
 is the background color.
-When the background color is capitalized, the text will underlined.
+When the background color is capitalized, the text is underlined.
 .Pp
 The color designators are as follows:
 .Pp
@@ -883,8 +904,10 @@ specification.
 .Xr sort 1 ,
 .Xr xterm 1 Pq Pa ports/x11/xterm ,
 .Xr localeconv 3 ,
+.Xr strcoll 3 ,
 .Xr strftime 3 ,
 .Xr strmode 3 ,
+.Xr strverscmp 3 ,
 .Xr termcap 5 ,
 .Xr maclabel 7 ,
 .Xr sticky 7 ,
@@ -902,9 +925,14 @@ utility conforms to
 and
 .St -p1003.1-2008 .
 The options
-.Fl B , D , G , I , T , U , W , Z , b , h , w , y
-and
+.Fl B , D , G , I , T , U , W , Z , b , h , v , w , y
+,
 .Fl ,
+.Fl -color
+and
+.Fl -group-directories Ns =
+(including
+.Fl -group-directories-first )
 are non-standard extensions.
 .Pp
 The ACL support is compatible with
@@ -918,6 +946,11 @@ An
 .Nm
 command appeared in
 .At v1 .
+.Pp
+The
+.Fl v
+option was added in
+.Fx 13.2 .
 .Sh BUGS
 To maintain backward compatibility, the relationships between the many
 options are quite complex.

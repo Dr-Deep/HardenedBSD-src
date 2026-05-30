@@ -27,8 +27,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _DEV_XDMA_XDMA_H_
@@ -95,7 +93,7 @@ struct xchan_buf {
 	bus_dmamap_t			map;
 	uint32_t			nsegs;
 	uint32_t			nsegs_left;
-	vm_offset_t			vaddr;
+	void				*vaddr;
 	vm_offset_t			paddr;
 	vm_size_t			size;
 };

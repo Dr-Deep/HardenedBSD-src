@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: CDDL-1.0
 libzutil_la_CFLAGS  = $(AM_CFLAGS) $(LIBRARY_CFLAGS)
 libzutil_la_CFLAGS += $(LIBBLKID_CFLAGS) $(LIBUDEV_CFLAGS)
 libzutil_la_CFLAGS += -fvisibility=hidden
@@ -17,6 +18,7 @@ libzutil_la_SOURCES = \
 
 if BUILD_LINUX
 libzutil_la_SOURCES += \
+	%D%/os/linux/zutil_setproctitle.c \
 	%D%/os/linux/zutil_device_path_os.c \
 	%D%/os/linux/zutil_import_os.c
 endif
@@ -29,7 +31,6 @@ endif
 
 libzutil_la_LIBADD = \
 	libavl.la \
-	libtpool.la \
 	libnvpair.la \
 	libspl.la
 

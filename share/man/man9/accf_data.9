@@ -22,8 +22,6 @@
 .\" THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 .\" (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 .\" THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-.\"
-.\" $FreeBSD$
 .\" "
 .Dd November 15, 2000
 .Dt ACCF_DATA 9
@@ -32,9 +30,12 @@
 .Nm accf_data
 .Nd buffer incoming connections until data arrives
 .Sh SYNOPSIS
-.Nm options INET
-.Nm options ACCEPT_FILTER_DATA
-.Nm kldload accf_data
+.Cd options INET
+.Cd options ACCEPT_FILTER_DATA
+.Pp
+In
+.Xr rc.conf 5 :
+.Cd kld_list="accf_data"
 .Sh DESCRIPTION
 This is a filter to be placed on a socket that will be using
 .Fn accept

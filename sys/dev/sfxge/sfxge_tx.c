@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2010-2016 Solarflare Communications Inc.
  * All rights reserved.
@@ -60,8 +60,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_rss.h"
 
 #include <sys/param.h>
@@ -780,12 +778,12 @@ sfxge_tx_qdpl_flush(struct sfxge_txq *txq)
 }
 
 void
-sfxge_if_qflush(struct ifnet *ifp)
+sfxge_if_qflush(if_t ifp)
 {
 	struct sfxge_softc *sc;
 	unsigned int i;
 
-	sc = ifp->if_softc;
+	sc = if_getsoftc(ifp);
 
 	for (i = 0; i < sc->txq_count; i++)
 		sfxge_tx_qdpl_flush(sc->txq[i]);
@@ -861,10 +859,10 @@ static void sfxge_parse_tx_packet(struct mbuf *mbuf)
 	 * generates TSO packets with RST flag. So, do not assert
 	 * its absence.
 	 */
-	KASSERT(!(th->th_flags & (TH_URG | TH_SYN)),
+	KASSERT(!(tcp_get_flags(th) & (TH_URG | TH_SYN)),
 		("incompatible TCP flag 0x%x on TSO packet",
-		 th->th_flags & (TH_URG | TH_SYN)));
-	TSO_MBUF_FLAGS(mbuf) = th->th_flags;
+		 tcp_get_flags(th) & (TH_URG | TH_SYN)));
+	TSO_MBUF_FLAGS(mbuf) = tcp_get_flags(th);
 }
 #endif
 
@@ -872,13 +870,13 @@ static void sfxge_parse_tx_packet(struct mbuf *mbuf)
  * TX start -- called by the stack.
  */
 int
-sfxge_if_transmit(struct ifnet *ifp, struct mbuf *m)
+sfxge_if_transmit(if_t ifp, struct mbuf *m)
 {
 	struct sfxge_softc *sc;
 	struct sfxge_txq *txq;
 	int rc;
 
-	sc = (struct sfxge_softc *)ifp->if_softc;
+	sc = (struct sfxge_softc *)if_getsoftc(ifp);
 
 	/*
 	 * Transmit may be called when interface is up from the kernel
@@ -888,7 +886,7 @@ sfxge_if_transmit(struct ifnet *ifp, struct mbuf *m)
 	 * point of view, but already down from the kernel point of
 	 * view. I.e. Rx when interface shutdown is in progress.
 	 */
-	KASSERT((ifp->if_flags & IFF_UP) || (sc->if_flags & IFF_UP),
+	KASSERT((if_getflags(ifp) & IFF_UP) || (sc->if_flags & IFF_UP),
 		("interface not up"));
 
 	/* Pick the desired transmit queue. */
@@ -1119,10 +1117,10 @@ static void tso_start(struct sfxge_txq *txq, struct sfxge_tso_state *tso,
 	 * generates TSO packets with RST flag. So, do not assert
 	 * its absence.
 	 */
-	KASSERT(!(th->th_flags & (TH_URG | TH_SYN)),
+	KASSERT(!(tcp_get_flags(th) & (TH_URG | TH_SYN)),
 		("incompatible TCP flag 0x%x on TSO packet",
-		 th->th_flags & (TH_URG | TH_SYN)));
-	tso->tcp_flags = th->th_flags;
+		 tcp_get_flags(th) & (TH_URG | TH_SYN)));
+	tso->tcp_flags = tcp_get_flags(th);
 #else
 	tso->seqnum = TSO_MBUF_SEQNUM(mbuf);
 	tso->tcp_flags = TSO_MBUF_FLAGS(mbuf);
@@ -1321,7 +1319,7 @@ static int tso_start_new_packet(struct sfxge_txq *txq,
 		if (tso->out_len > tso->seg_size) {
 			/* This packet will not finish the TSO burst. */
 			ip_length = tso->header_len - tso->nh_off + tso->seg_size;
-			tsoh_th->th_flags &= ~(TH_FIN | TH_PUSH);
+			tcp_set_flags(tsoh_th, tcp_get_flags(tsoh_th) & ~(TH_FIN | TH_PUSH));
 		} else {
 			/* This packet will be the last in the TSO burst. */
 			ip_length = tso->header_len - tso->nh_off + tso->out_len;

@@ -1,4 +1,5 @@
 #!/bin/ksh -p
+# SPDX-License-Identifier: CDDL-1.0
 #
 # This file and its contents are supplied under the terms of the
 # Common Development and Distribution License ("CDDL"), version 1.0.
@@ -57,10 +58,6 @@ function do_test
 	log_must eval "$stop_cmd"
 	bkgrnd_proc_succeeded $pid
 }
-
-if is_freebsd; then
-	log_unsupported "FreeBSD has no hole punching mechanism for the time being."
-fi
 
 typeset pid
 typeset -r FILE_VDEV="$TESTDIR/file_vdev1"

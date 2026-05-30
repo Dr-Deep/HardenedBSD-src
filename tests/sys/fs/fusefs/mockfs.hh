@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2019 The FreeBSD Foundation
  *
@@ -26,8 +26,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 extern "C" {
@@ -37,6 +35,8 @@ extern "C" {
 
 #include "fuse_kernel.h"
 }
+
+#include <unordered_set>
 
 #include <gmock/gmock.h>
 
@@ -166,6 +166,7 @@ union fuse_payloads_in {
 	fuse_forget_in	forget;
 	fuse_getattr_in	getattr;
 	fuse_interrupt_in interrupt;
+	fuse_ioctl_in	ioctl;
 	fuse_lk_in	getlk;
 	fuse_getxattr_in getxattr;
 	fuse_init_in	init;
@@ -206,7 +207,7 @@ union fuse_payloads_out {
 	 * The protocol places no limits on the size of bytes.  Choose
 	 * a size big enough for anything we'll test.
 	 */
-	uint8_t			bytes[0x20000];
+	uint8_t			bytes[0x40000];
 	fuse_entry_out		entry;
 	fuse_entry_out_7_8	entry_7_8;
 	fuse_lk_out		getlk;
@@ -222,6 +223,7 @@ union fuse_payloads_out {
 	fuse_listxattr_out	listxattr;
 	fuse_open_out		open;
 	fuse_statfs_out		statfs;
+	fuse_ioctl_out		ioctl;
 	/*
 	 * The protocol places no limits on the length of the string.  This is
 	 * merely convenient for testing.
@@ -233,6 +235,8 @@ union fuse_payloads_out {
 struct mockfs_buf_out {
 	fuse_out_header		header;
 	union fuse_payloads_out	body;
+	/* the expected errno of the write to /dev/fuse */
+	int			expected_errno;
 
 	/* Default constructor: zero everything */
 	mockfs_buf_out() {
@@ -292,14 +296,20 @@ class MockFS {
 
 	int m_kq;
 
+	/*
+	 * If nonzero, the maximum size in bytes of a read that the kernel will
+	 * send to the server.
+	 */
+	int m_maxread;
+
 	/* The max_readahead file system option */
 	uint32_t m_maxreadahead;
 
 	/* pid of the test process */
 	pid_t m_pid;
 
-	/* The unique value of the header of the last received operation */
-	uint64_t m_last_unique;
+	/* Every "unique" value of a fuse ticket seen so far */
+	std::unique_ptr<std::unordered_set<uint64_t>> m_uniques;
 
 	/* Method the daemon should use for I/O to and from /dev/fuse */
 	enum poll_method m_pm;
@@ -333,15 +343,12 @@ class MockFS {
 	 */
 	void read_request(mockfs_buf_in& in, ssize_t& res);
 
+	public:
 	/* Write a single response back to the kernel */
 	void write_response(const mockfs_buf_out &out);
 
-	public:
 	/* pid of child process, for two-process test cases */
 	pid_t m_child_pid;
-
-	/* the expected errno of the next write to /dev/fuse */
-	int m_expected_write_errno;
 
 	/* Maximum size of a FUSE_WRITE write */
 	uint32_t m_maxwrite;
@@ -355,18 +362,28 @@ class MockFS {
 	/* Tell the daemon to shut down ASAP */
 	bool m_quit;
 
+	/* Tell the daemon that the server might forcibly unmount us */
+	bool m_expect_unmount;
+
 	/* Create a new mockfs and mount it to a tempdir */
-	MockFS(int max_readahead, bool allow_other,
+	MockFS(int max_read, int max_readahead, bool allow_other,
 		bool default_permissions, bool push_symlinks_in, bool ro,
 		enum poll_method pm, uint32_t flags,
 		uint32_t kernel_minor_version, uint32_t max_write, bool async,
 		bool no_clusterr, unsigned time_gran, bool nointr,
-		bool noatime, const char *fsname, const char *subtype);
+		bool noatime, const char *fsname, const char *subtype,
+		bool no_auto_init, bool auto_unmount);
 
 	virtual ~MockFS();
 
+	/* Duplicate the /dev/fuse file descriptor, and return the duplicate */
+	int dup_dev_fuse();
+
 	/* Kill the filesystem daemon without unmounting the filesystem */
 	void kill_daemon();
+
+	/* Wait until the daemon thread terminates */
+	void join_daemon();
 
 	/* Process FUSE requests endlessly */
 	void loop();
@@ -381,8 +398,10 @@ class MockFS {
 	 * @param	parent	Parent directory's inode number
 	 * @param	name	name of dirent to invalidate
 	 * @param	namelen	size of name, including the NUL
+	 * @param	expected_errno The error that write() should return
 	 */
-	int notify_inval_entry(ino_t parent, const char *name, size_t namelen);
+	int notify_inval_entry(ino_t parent, const char *name, size_t namelen,
+			int expected_errno = 0);
 
 	/*
 	 * Send an asynchronous notification to invalidate an inode's cached

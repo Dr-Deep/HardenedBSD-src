@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -52,6 +53,7 @@ struct zthr;
 #define	DD_FIELD_SNAPSHOT_COUNT		"com.joyent:snapshot_count"
 #define	DD_FIELD_CRYPTO_KEY_OBJ		"com.datto:crypto_key_obj"
 #define	DD_FIELD_LIVELIST		"com.delphix:livelist"
+#define	DD_FIELD_SNAPSHOTS_CHANGED	"com.ixsystems:snapshots_changed"
 
 typedef enum dd_used {
 	DD_USED_HEAD,
@@ -115,7 +117,7 @@ struct dsl_dir {
 	/* gross estimate of space used by in-flight tx's */
 	uint64_t dd_tempreserved[TXG_SIZE];
 	/* amount of space we expect to write; == amount of dirty data */
-	int64_t dd_space_towrite[TXG_SIZE];
+	uint64_t dd_space_towrite[TXG_SIZE];
 
 	dsl_deadlist_t dd_livelist;
 	bplist_t dd_pending_frees;
@@ -183,11 +185,11 @@ int dsl_dir_set_reservation(const char *ddname, zprop_source_t source,
     uint64_t reservation);
 int dsl_dir_activate_fs_ss_limit(const char *);
 int dsl_fs_ss_limit_check(dsl_dir_t *, uint64_t, zfs_prop_t, dsl_dir_t *,
-    cred_t *, proc_t *);
+    cred_t *);
 void dsl_fs_ss_count_adjust(dsl_dir_t *, int64_t, const char *, dmu_tx_t *);
 int dsl_dir_rename(const char *oldname, const char *newname);
 int dsl_dir_transfer_possible(dsl_dir_t *sdd, dsl_dir_t *tdd,
-    uint64_t fs_cnt, uint64_t ss_cnt, uint64_t space, cred_t *, proc_t *);
+    uint64_t fs_cnt, uint64_t ss_cnt, uint64_t space, cred_t *);
 boolean_t dsl_dir_is_clone(dsl_dir_t *dd);
 void dsl_dir_new_refreservation(dsl_dir_t *dd, struct dsl_dataset *ds,
     uint64_t reservation, cred_t *cr, dmu_tx_t *tx);
@@ -197,7 +199,7 @@ void dsl_dir_set_reservation_sync_impl(dsl_dir_t *dd, uint64_t value,
     dmu_tx_t *tx);
 void dsl_dir_zapify(dsl_dir_t *dd, dmu_tx_t *tx);
 boolean_t dsl_dir_is_zapified(dsl_dir_t *dd);
-void dsl_dir_livelist_open(dsl_dir_t *dd, uint64_t obj);
+int dsl_dir_livelist_open(dsl_dir_t *dd, uint64_t obj);
 void dsl_dir_livelist_close(dsl_dir_t *dd);
 void dsl_dir_remove_livelist(dsl_dir_t *dd, dmu_tx_t *tx, boolean_t total);
 int dsl_dir_wait(dsl_dir_t *dd, dsl_dataset_t *ds, zfs_wait_activity_t activity,

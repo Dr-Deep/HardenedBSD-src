@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2016 Konrad Witaszczyk <def@FreeBSD.org>
  * All rights reserved.
  *
@@ -24,9 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/types.h>
 #include <sys/capsicum.h>
 #include <sys/endian.h>
@@ -41,6 +40,7 @@ __FBSDID("$FreeBSD$");
 #include <string.h>
 #include <unistd.h>
 
+#include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
@@ -179,8 +179,10 @@ decrypt(int ofd, const char *privkeyfile, const char *keyfile,
 		unsigned char c[1];
 		RAND_bytes(c, 1);
 	}
-#endif
 	ERR_load_crypto_strings();
+#else
+	OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CONFIG, NULL);
+#endif
 
 	caph_cache_catpages();
 	if (caph_enter() < 0) {

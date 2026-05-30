@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2014 Steven Lawrance <stl@koffein.net>
  * All rights reserved.
@@ -27,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Access to the Freescale i.MX6 On-Chip One-Time-Programmable Memory
  */
@@ -61,7 +59,6 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm.h>
 #include <vm/pmap.h>
 #include <dev/fdt/fdt_common.h>
-#include <sys/devmap.h>
 
 static uint32_t   *ocotp_regs;
 static vm_size_t   ocotp_size;
@@ -135,7 +132,7 @@ ocotp_attach(device_t dev)
 
 	/* We're done with the temporary mapping now. */
 	if (ocotp_regs != NULL)
-		pmap_unmapdev((vm_offset_t)ocotp_regs, ocotp_size);
+		pmap_unmapdev(ocotp_regs, ocotp_size);
 
 	err = 0;
 

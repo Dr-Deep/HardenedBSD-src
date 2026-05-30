@@ -35,9 +35,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/mount.h>
 #include <sys/namei.h>
@@ -56,6 +53,29 @@ __FBSDID("$FreeBSD$");
 #include <security/mac/mac_framework.h>
 
 #ifdef AUDIT
+
+static int
+audit_priv_check_cred(struct ucred *cred, int priv)
+{
+	int error;
+
+	error = priv_check_cred(cred, priv);
+	if (error == EPERM && jailed(cred)) {
+		/*
+		 * The audit system calls historically returned ENOSYS when
+		 * invoked from within a jail, and some userspace applications
+		 * handle that case specially.  Thus, convert the error here.
+		 */
+		error = ENOSYS;
+	}
+	return (error);
+}
+
+static int
+audit_priv_check(struct thread *td, int priv)
+{
+	return (audit_priv_check_cred(td->td_ucred, priv));
+}
 
 /*
  * System call to allow a user space application to submit a BSM audit record
@@ -595,9 +615,7 @@ sys_getauid(struct thread *td, struct getauid_args *uap)
 {
 	int error;
 
-	if (jailed(td->td_ucred))
-		return (ENOSYS);
-	error = priv_check(td, PRIV_AUDIT_GETAUDIT);
+	error = audit_priv_check(td, PRIV_AUDIT_GETAUDIT);
 	if (error)
 		return (error);
 	return (copyout(&td->td_ucred->cr_audit.ai_auid, uap->auid,
@@ -612,8 +630,6 @@ sys_setauid(struct thread *td, struct setauid_args *uap)
 	au_id_t id;
 	int error;
 
-	if (jailed(td->td_ucred))
-		return (ENOSYS);
 	error = copyin(uap->auid, &id, sizeof(id));
 	if (error)
 		return (error);
@@ -627,7 +643,7 @@ sys_setauid(struct thread *td, struct setauid_args *uap)
 	if (error)
 		goto fail;
 #endif
-	error = priv_check_cred(oldcred, PRIV_AUDIT_SETAUDIT);
+	error = audit_priv_check_cred(oldcred, PRIV_AUDIT_SETAUDIT);
 	if (error)
 		goto fail;
 	newcred->cr_audit.ai_auid = id;
@@ -653,9 +669,7 @@ sys_getaudit(struct thread *td, struct getaudit_args *uap)
 	int error;
 
 	cred = td->td_ucred;
-	if (jailed(cred))
-		return (ENOSYS);
-	error = priv_check(td, PRIV_AUDIT_GETAUDIT);
+	error = audit_priv_check(td, PRIV_AUDIT_GETAUDIT);
 	if (error)
 		return (error);
 	if (cred->cr_audit.ai_termid.at_type == AU_IPv6)
@@ -677,8 +691,6 @@ sys_setaudit(struct thread *td, struct setaudit_args *uap)
 	struct auditinfo ai;
 	int error;
 
-	if (jailed(td->td_ucred))
-		return (ENOSYS);
 	error = copyin(uap->auditinfo, &ai, sizeof(ai));
 	if (error)
 		return (error);
@@ -692,7 +704,7 @@ sys_setaudit(struct thread *td, struct setaudit_args *uap)
 	if (error)
 		goto fail;
 #endif
-	error = priv_check_cred(oldcred, PRIV_AUDIT_SETAUDIT);
+	error = audit_priv_check_cred(oldcred, PRIV_AUDIT_SETAUDIT);
 	if (error)
 		goto fail;
 	bzero(&newcred->cr_audit, sizeof(newcred->cr_audit));
@@ -718,11 +730,9 @@ sys_getaudit_addr(struct thread *td, struct getaudit_addr_args *uap)
 {
 	int error;
 
-	if (jailed(td->td_ucred))
-		return (ENOSYS);
 	if (uap->length < sizeof(*uap->auditinfo_addr))
 		return (EOVERFLOW);
-	error = priv_check(td, PRIV_AUDIT_GETAUDIT);
+	error = audit_priv_check(td, PRIV_AUDIT_GETAUDIT);
 	if (error)
 		return (error);
 	return (copyout(&td->td_ucred->cr_audit, uap->auditinfo_addr,
@@ -737,8 +747,6 @@ sys_setaudit_addr(struct thread *td, struct setaudit_addr_args *uap)
 	struct auditinfo_addr aia;
 	int error;
 
-	if (jailed(td->td_ucred))
-		return (ENOSYS);
 	error = copyin(uap->auditinfo_addr, &aia, sizeof(aia));
 	if (error)
 		return (error);
@@ -755,7 +763,7 @@ sys_setaudit_addr(struct thread *td, struct setaudit_addr_args *uap)
 	if (error)
 		goto fail;
 #endif
-	error = priv_check_cred(oldcred, PRIV_AUDIT_SETAUDIT);
+	error = audit_priv_check_cred(oldcred, PRIV_AUDIT_SETAUDIT);
 	if (error)
 		goto fail;
 	newcred->cr_audit = aia;

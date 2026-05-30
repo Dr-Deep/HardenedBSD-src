@@ -26,14 +26,13 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <stand.h>
 #include <efi.h>
 #include <efilib.h>
 #include <fdt_platform.h>
+#include <Uefi.h>
+#include <Guid/Fdt.h>
 
 #include "bootstrap.h"
 

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2005 Philip Paeps <philip@FreeBSD.org>
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #define PFIOC_USE_LATEST
@@ -52,11 +50,11 @@
 
 struct lmodule *module;
 
-static int dev = -1;
+static struct pfctl_handle *pfh;
 static int started;
 static uint64_t pf_tick;
 
-static struct pf_status pfs;
+static struct pfctl_status *pfs;
 
 enum { IN, OUT };
 enum { IPV4, IPV6 };
@@ -168,18 +166,18 @@ pf_status(struct snmp_context __unused *ctx, struct snmp_value *val,
 
 		switch (which) {
 			case LEAF_pfStatusRunning:
-			    val->v.uint32 = pfs.running;
+			    val->v.uint32 = pfs->running;
 			    break;
 			case LEAF_pfStatusRuntime:
-			    runtime = (pfs.since > 0) ?
-				time(NULL) - pfs.since : 0;
-			    val->v.uint32 = runtime * 100;
+			    runtime = (pfs->since > 0) ?
+				time(NULL) - pfs->since : 0;
+			    val->v.uint32 = (uint32_t)(runtime * 100);
 			    break;
 			case LEAF_pfStatusDebug:
-			    val->v.uint32 = pfs.debug;
+			    val->v.uint32 = pfs->debug;
 			    break;
 			case LEAF_pfStatusHostId:
-			    sprintf(str, "0x%08x", ntohl(pfs.hostid));
+			    sprintf(str, "0x%08x", ntohl(pfs->hostid));
 			    return (string_get(val, str, strlen(str)));
 
 			default:
@@ -207,22 +205,22 @@ pf_counter(struct snmp_context __unused *ctx, struct snmp_value *val,
 
 		switch (which) {
 			case LEAF_pfCounterMatch:
-				val->v.counter64 = pfs.counters[PFRES_MATCH];
+				val->v.counter64 = pfctl_status_counter(pfs, PFRES_MATCH);
 				break;
 			case LEAF_pfCounterBadOffset:
-				val->v.counter64 = pfs.counters[PFRES_BADOFF];
+				val->v.counter64 = pfctl_status_counter(pfs, PFRES_BADOFF);
 				break;
 			case LEAF_pfCounterFragment:
-				val->v.counter64 = pfs.counters[PFRES_FRAG];
+				val->v.counter64 = pfctl_status_counter(pfs, PFRES_FRAG);
 				break;
 			case LEAF_pfCounterShort:
-				val->v.counter64 = pfs.counters[PFRES_SHORT];
+				val->v.counter64 = pfctl_status_counter(pfs, PFRES_SHORT);
 				break;
 			case LEAF_pfCounterNormalize:
-				val->v.counter64 = pfs.counters[PFRES_NORM];
+				val->v.counter64 = pfctl_status_counter(pfs, PFRES_NORM);
 				break;
 			case LEAF_pfCounterMemDrop:
-				val->v.counter64 = pfs.counters[PFRES_MEMORY];
+				val->v.counter64 = pfctl_status_counter(pfs, PFRES_MEMORY);
 				break;
 
 			default:
@@ -250,19 +248,19 @@ pf_statetable(struct snmp_context __unused *ctx, struct snmp_value *val,
 
 		switch (which) {
 			case LEAF_pfStateTableCount:
-				val->v.uint32 = pfs.states;
+				val->v.uint32 = pfs->states;
 				break;
 			case LEAF_pfStateTableSearches:
 				val->v.counter64 =
-				    pfs.fcounters[FCNT_STATE_SEARCH];
+				    pfctl_status_fcounter(pfs, FCNT_STATE_SEARCH);
 				break;
 			case LEAF_pfStateTableInserts:
 				val->v.counter64 =
-				    pfs.fcounters[FCNT_STATE_INSERT];
+				    pfctl_status_fcounter(pfs, FCNT_STATE_INSERT);
 				break;
 			case LEAF_pfStateTableRemovals:
 				val->v.counter64 =
-				    pfs.fcounters[FCNT_STATE_REMOVALS];
+				    pfctl_status_fcounter(pfs, FCNT_STATE_REMOVALS);
 				break;
 
 			default:
@@ -290,19 +288,19 @@ pf_srcnodes(struct snmp_context __unused *ctx, struct snmp_value *val,
 
 		switch (which) {
 			case LEAF_pfSrcNodesCount:
-				val->v.uint32 = pfs.src_nodes;
+				val->v.uint32 = pfs->src_nodes;
 				break;
 			case LEAF_pfSrcNodesSearches:
 				val->v.counter64 =
-				    pfs.scounters[SCNT_SRC_NODE_SEARCH];
+				    pfctl_status_scounter(pfs, SCNT_SRC_NODE_SEARCH);
 				break;
 			case LEAF_pfSrcNodesInserts:
 				val->v.counter64 =
-				    pfs.scounters[SCNT_SRC_NODE_INSERT];
+				    pfctl_status_scounter(pfs, SCNT_SRC_NODE_INSERT);
 				break;
 			case LEAF_pfSrcNodesRemovals:
 				val->v.counter64 =
-				    pfs.scounters[SCNT_SRC_NODE_REMOVALS];
+				    pfctl_status_scounter(pfs, SCNT_SRC_NODE_REMOVALS);
 				break;
 
 			default:
@@ -320,36 +318,34 @@ pf_limits(struct snmp_context __unused *ctx, struct snmp_value *val,
 	u_int sub, u_int __unused vindex, enum snmp_op op)
 {
 	asn_subid_t		which = val->var.subs[sub - 1];
-	struct pfioc_limit	pl;
+	unsigned int		index, limit;
 
 	if (op == SNMP_OP_SET)
 		return (SNMP_ERR_NOT_WRITEABLE);
 
 	if (op == SNMP_OP_GET) {
-		bzero(&pl, sizeof(struct pfioc_limit));
-
 		switch (which) {
 			case LEAF_pfLimitsStates:
-				pl.index = PF_LIMIT_STATES;
+				index = PF_LIMIT_STATES;
 				break;
 			case LEAF_pfLimitsSrcNodes:
-				pl.index = PF_LIMIT_SRC_NODES;
+				index = PF_LIMIT_SRC_NODES;
 				break;
 			case LEAF_pfLimitsFrags:
-				pl.index = PF_LIMIT_FRAGS;
+				index = PF_LIMIT_FRAGS;
 				break;
 
 			default:
 				return (SNMP_ERR_NOSUCHNAME);
 		}
 
-		if (ioctl(dev, DIOCGETLIMIT, &pl)) {
+		if (pfctl_get_limit(pfh, index, &limit)) {
 			syslog(LOG_ERR, "pf_limits(): ioctl(): %s",
 			    strerror(errno));
 			return (SNMP_ERR_GENERR);
 		}
 
-		val->v.uint32 = pl.limit;
+		val->v.uint32 = limit;
 
 		return (SNMP_ERR_NOERROR);
 	}
@@ -433,7 +429,7 @@ pf_timeouts(struct snmp_context __unused *ctx, struct snmp_value *val,
 				return (SNMP_ERR_NOSUCHNAME);
 		}
 
-		if (ioctl(dev, DIOCGETTIMEOUT, &pt)) {
+		if (ioctl(pfctl_fd(pfh), DIOCGETTIMEOUT, &pt)) {
 			syslog(LOG_ERR, "pf_timeouts(): ioctl(): %s",
 			    strerror(errno));
 			return (SNMP_ERR_GENERR);
@@ -463,51 +459,51 @@ pf_logif(struct snmp_context __unused *ctx, struct snmp_value *val,
 
 		switch (which) {
 	 		case LEAF_pfLogInterfaceName:
-				strlcpy(str, pfs.ifname, sizeof str);
+				strlcpy(str, pfs->ifname, sizeof str);
 				return (string_get(val, str, strlen(str)));
 			case LEAF_pfLogInterfaceIp4BytesIn:
-				val->v.counter64 = pfs.bcounters[IPV4][IN];
+				val->v.counter64 = pfs->bcounters[IPV4][IN];
 				break;
 			case LEAF_pfLogInterfaceIp4BytesOut:
-				val->v.counter64 = pfs.bcounters[IPV4][OUT];
+				val->v.counter64 = pfs->bcounters[IPV4][OUT];
 				break;
 			case LEAF_pfLogInterfaceIp4PktsInPass:
 				val->v.counter64 =
-				    pfs.pcounters[IPV4][IN][PF_PASS];
+				    pfs->pcounters[IPV4][IN][PF_PASS];
 				break;
 			case LEAF_pfLogInterfaceIp4PktsInDrop:
 				val->v.counter64 =
-				    pfs.pcounters[IPV4][IN][PF_DROP];
+				    pfs->pcounters[IPV4][IN][PF_DROP];
 				break;
 			case LEAF_pfLogInterfaceIp4PktsOutPass:
 				val->v.counter64 =
-				    pfs.pcounters[IPV4][OUT][PF_PASS];
+				    pfs->pcounters[IPV4][OUT][PF_PASS];
 				break;
 			case LEAF_pfLogInterfaceIp4PktsOutDrop:
 				val->v.counter64 =
-				    pfs.pcounters[IPV4][OUT][PF_DROP];
+				    pfs->pcounters[IPV4][OUT][PF_DROP];
 				break;
 			case LEAF_pfLogInterfaceIp6BytesIn:
-				val->v.counter64 = pfs.bcounters[IPV6][IN];
+				val->v.counter64 = pfs->bcounters[IPV6][IN];
 				break;
 			case LEAF_pfLogInterfaceIp6BytesOut:
-				val->v.counter64 = pfs.bcounters[IPV6][OUT];
+				val->v.counter64 = pfs->bcounters[IPV6][OUT];
 				break;
 			case LEAF_pfLogInterfaceIp6PktsInPass:
 				val->v.counter64 =
-				    pfs.pcounters[IPV6][IN][PF_PASS];
+				    pfs->pcounters[IPV6][IN][PF_PASS];
 				break;
 			case LEAF_pfLogInterfaceIp6PktsInDrop:
 				val->v.counter64 =
-				    pfs.pcounters[IPV6][IN][PF_DROP];
+				    pfs->pcounters[IPV6][IN][PF_DROP];
 				break;
 			case LEAF_pfLogInterfaceIp6PktsOutPass:
 				val->v.counter64 =
-				    pfs.pcounters[IPV6][OUT][PF_PASS];
+				    pfs->pcounters[IPV6][OUT][PF_PASS];
 				break;
 			case LEAF_pfLogInterfaceIp6PktsOutDrop:
 				val->v.counter64 =
-				    pfs.pcounters[IPV6][OUT][PF_DROP];
+				    pfs->pcounters[IPV6][OUT][PF_DROP];
 				break;
 
 			default:
@@ -590,7 +586,7 @@ pf_iftable(struct snmp_context __unused *ctx, struct snmp_value *val,
 			break;
 		case LEAF_pfInterfacesIfTZero:
 			val->v.uint32 =
-			    (time(NULL) - e->pfi.pfik_tzero) * 100;
+			    (uint32_t)(time(NULL) - e->pfi.pfik_tzero) * 100;
 			break;
 		case LEAF_pfInterfacesIfRefsRule:
 			val->v.uint32 = e->pfi.pfik_rulerefs;
@@ -677,7 +673,7 @@ pf_tables(struct snmp_context __unused *ctx, struct snmp_value *val,
 		return (SNMP_ERR_NOT_WRITEABLE);
 
 	if (op == SNMP_OP_GET) {
-		if ((time(NULL) - pft_table_age) > PFT_TABLE_MAXAGE)
+		if (! started || (time(NULL) - pft_table_age) > PFT_TABLE_MAXAGE)
 			if (pft_refresh() == -1)
 			    return (SNMP_ERR_GENERR);
 
@@ -737,7 +733,7 @@ pf_tbltable(struct snmp_context __unused *ctx, struct snmp_value *val,
 			break;
 		case LEAF_pfTablesTblTZero:
 			val->v.uint32 =
-			    (time(NULL) - e->pft.pfrts_tzero) * 100;
+			    (uint32_t)(time(NULL) - e->pft.pfrts_tzero) * 100;
 			break;
 		case LEAF_pfTablesTblRefsAnchor:
 			val->v.integer =
@@ -816,7 +812,7 @@ pf_tbladdr(struct snmp_context __unused *ctx, struct snmp_value __unused *val,
 	asn_subid_t	which = val->var.subs[sub - 1];
 	struct pfa_entry *e = NULL;
 
-	if ((time(NULL) - pfa_table_age) > PFA_TABLE_MAXAGE)
+	if (! started || (time(NULL) - pfa_table_age) > PFA_TABLE_MAXAGE)
 		pfa_refresh();
 
 	switch (op) {
@@ -866,7 +862,7 @@ pf_tbladdr(struct snmp_context __unused *ctx, struct snmp_value __unused *val,
 			break;
 		case LEAF_pfTablesAddrTZero:
 			val->v.uint32 =
-			    (time(NULL) - e->pfas.pfras_tzero) * 100;
+			    (uint32_t)(time(NULL) - e->pfas.pfras_tzero) * 100;
 			break;
 		case LEAF_pfTablesAddrBytesInPass:
 			val->v.counter64 =
@@ -1039,7 +1035,7 @@ pf_lbltable(struct snmp_context __unused *ctx, struct snmp_value *val,
 	asn_subid_t	which = val->var.subs[sub - 1];
 	struct pfl_entry *e = NULL;
 
-	if ((time(NULL) - pfl_table_age) > PFL_TABLE_MAXAGE)
+	if (! started || (time(NULL) - pfl_table_age) > PFL_TABLE_MAXAGE)
 		pfl_refresh();
 
 	switch (op) {
@@ -1176,7 +1172,7 @@ pfi_refresh(void)
 		io.pfiio_size = numifs;
 		io.pfiio_buffer = p;
 
-		if (ioctl(dev, DIOCIGETIFACES, &io)) {
+		if (ioctl(pfctl_fd(pfh), DIOCIGETIFACES, &io)) {
 			syslog(LOG_ERR, "pfi_refresh(): ioctl(): %s",
 			    strerror(errno));
 			goto err2;
@@ -1233,7 +1229,7 @@ pfq_refresh(void)
 
 	bzero(&pa, sizeof(pa));
 	pa.version = PFIOC_ALTQ_VERSION;
-	if (ioctl(dev, DIOCGETALTQS, &pa)) {
+	if (ioctl(pfctl_fd(pfh), DIOCGETALTQS, &pa)) {
 		syslog(LOG_ERR, "pfq_refresh: ioctl(DIOCGETALTQS): %s",
 		    strerror(errno));
 		return (-1);
@@ -1253,7 +1249,7 @@ pfq_refresh(void)
 		pa.ticket = ticket;
 		pa.nr = i;
 
-		if (ioctl(dev, DIOCGETALTQ, &pa)) {
+		if (ioctl(pfctl_fd(pfh), DIOCGETALTQ, &pa)) {
 			syslog(LOG_ERR, "pfq_refresh(): "
 			    "ioctl(DIOCGETALTQ): %s",
 			    strerror(errno));
@@ -1288,11 +1284,11 @@ pfs_refresh(void)
 	if (started && this_tick <= pf_tick)
 		return (0);
 
-	bzero(&pfs, sizeof(struct pf_status));
+	pfctl_free_status(pfs);
+	pfs = pfctl_get_status_h(pfh);
 
-	if (ioctl(dev, DIOCGETSTATUS, &pfs)) {
-		syslog(LOG_ERR, "pfs_refresh(): ioctl(): %s",
-		    strerror(errno));
+	if (pfs == NULL) {
+		syslog(LOG_ERR, "pfs_refresh(): pfctl_get_status failure");
 		return (-1);
 	}
 
@@ -1301,15 +1297,29 @@ pfs_refresh(void)
 }
 
 static int
+pft_add_tstats(const struct pfr_tstats *t, void *arg)
+{
+	struct pft_entry *e;
+	int *index = arg;
+
+	e = malloc(sizeof(struct pft_entry));
+	if (e == NULL)
+		return (ENOMEM);
+
+	e->index = (*index) + 1;
+	(*index)++;
+	memcpy(&e->pft, t, sizeof(struct pfr_tstats));
+	TAILQ_INSERT_TAIL(&pft_table, e, link);
+
+	return (0);
+}
+
+static int
 pft_refresh(void)
 {
-	struct pfioc_table io;
-	struct pfr_tstats *t = NULL;
+	struct pfr_table filter;
 	struct pft_entry *e;
 	int i, numtbls = 1;
-
-	if (started && this_tick <= pf_tick)
-		return (0);
 
 	while (!TAILQ_EMPTY(&pft_table)) {
 		e = TAILQ_FIRST(&pft_table);
@@ -1317,45 +1327,18 @@ pft_refresh(void)
 		free(e);
 	}
 
-	bzero(&io, sizeof(io));
-	io.pfrio_esize = sizeof(struct pfr_tstats);
+	bzero(&filter, sizeof(filter));
 
-	for (;;) {
-		t = reallocf(t, numtbls * sizeof(struct pfr_tstats));
-		if (t == NULL) {
-			syslog(LOG_ERR, "pft_refresh(): reallocf() numtbls=%d: %s",
-			    numtbls, strerror(errno));
-			goto err2;
-		}
-		io.pfrio_size = numtbls;
-		io.pfrio_buffer = t;
-
-		if (ioctl(dev, DIOCRGETTSTATS, &io)) {
-			syslog(LOG_ERR, "pft_refresh(): ioctl(): %s",
-			    strerror(errno));
-			goto err2;
-		}
-
-		if (numtbls >= io.pfrio_size)
-			break;
-
-		numtbls = io.pfrio_size;
-	}
-
-	for (i = 0; i < numtbls; i++) {
-		e = malloc(sizeof(struct pft_entry));
-		if (e == NULL)
-			goto err1;
-		e->index = i + 1;
-		memcpy(&e->pft, t+i, sizeof(struct pfr_tstats));
-		TAILQ_INSERT_TAIL(&pft_table, e, link);
+	if (pfctl_get_tstats(pfh, &filter, pft_add_tstats, &i)) {
+		syslog(LOG_ERR, "pft_refresh(): pfctl_get_tstats(): %s",
+		    strerror(errno));
+		goto err1;
 	}
 
 	pft_table_age = time(NULL);
 	pft_table_count = numtbls;
 	pf_tick = this_tick;
 
-	free(t);
 	return (0);
 err1:
 	while (!TAILQ_EMPTY(&pft_table)) {
@@ -1363,25 +1346,22 @@ err1:
 		TAILQ_REMOVE(&pft_table, e, link);
 		free(e);
 	}
-err2:
-	free(t);
 	return(-1);
 }
 
 static int
 pfa_table_addrs(u_int sidx, struct pfr_table *pt)
 {
-	struct pfioc_table io;
+	struct pfr_table tbl = { 0 };
 	struct pfr_astats *t = NULL;
 	struct pfa_entry *e;
-	int i, numaddrs = 1;
+	int i, numaddrs = 1, outnum;
 
 	if (pt == NULL)
 		return (-1);
 
-	memset(&io, 0, sizeof(io));
-	strlcpy(io.pfrio_table.pfrt_name, pt->pfrt_name,
-	    sizeof(io.pfrio_table.pfrt_name));
+	strlcpy(tbl.pfrt_name, pt->pfrt_name,
+	    sizeof(tbl.pfrt_name));
 
 	for (;;) {
 		t = reallocf(t, numaddrs * sizeof(struct pfr_astats));
@@ -1392,22 +1372,18 @@ pfa_table_addrs(u_int sidx, struct pfr_table *pt)
 			goto error;
 		}
 
-		memset(t, 0, sizeof(*t));
-		io.pfrio_size = numaddrs;
-		io.pfrio_buffer = t;
-		io.pfrio_esize = sizeof(struct pfr_astats);
-
-		if (ioctl(dev, DIOCRGETASTATS, &io)) {
+		outnum = numaddrs;
+		if (pfctl_get_astats(pfh, &tbl, t, &outnum, 0) != 0) {
 			syslog(LOG_ERR, "pfa_table_addrs(): ioctl() on %s: %s",
 			    pt->pfrt_name, strerror(errno));
 			numaddrs = -1;
 			break;
 		}
 
-		if (numaddrs >= io.pfrio_size)
+		if (numaddrs >= outnum)
 			break;
 
-		numaddrs = io.pfrio_size;
+		numaddrs = outnum;
 	}
 
 	for (i = 0; i < numaddrs; i++) {
@@ -1442,9 +1418,6 @@ pfa_refresh(void)
 	struct pfa_entry *e;
 	int i, numtbls = 1, cidx, naddrs;
 
-	if (started && this_tick <= pf_tick)
-		return (0);
-
 	while (!TAILQ_EMPTY(&pfa_table)) {
 		e = TAILQ_FIRST(&pfa_table);
 		TAILQ_REMOVE(&pfa_table, e, link);
@@ -1465,7 +1438,7 @@ pfa_refresh(void)
 		io.pfrio_size = numtbls;
 		io.pfrio_buffer = pt;
 
-		if (ioctl(dev, DIOCRGETTABLES, &io)) {
+		if (ioctl(pfctl_fd(pfh), DIOCRGETTABLES, &io)) {
 			syslog(LOG_ERR, "pfa_refresh(): ioctl(): %s",
 			    strerror(errno));
 			goto err2;
@@ -1514,30 +1487,27 @@ err2:
 static int
 pfl_scan_ruleset(const char *path)
 {
-	struct pfioc_rule pr;
+	struct pfctl_rules_info rules;
 	struct pfctl_rule rule;
+	char anchor_call[MAXPATHLEN] = "";
 	struct pfl_entry *e;
 	u_int32_t nr, i;
 
-	bzero(&pr, sizeof(pr));
-	strlcpy(pr.anchor, path, sizeof(pr.anchor));
-	pr.rule.action = PF_PASS;
-	if (ioctl(dev, DIOCGETRULES, &pr)) {
+	if (pfctl_get_rules_info_h(pfh, &rules, PF_PASS, path)) {
 		syslog(LOG_ERR, "pfl_scan_ruleset: ioctl(DIOCGETRULES): %s",
 		    strerror(errno));
 		goto err;
 	}
 
-	for (nr = pr.nr, i = 0; i < nr; i++) {
-		pr.nr = i;
-		if (pfctl_get_rule(dev, pr.nr, pr.ticket, pr.anchor,
-		    PF_PASS, &rule, pr.anchor_call)) {
+	for (nr = rules.nr, i = 0; i < nr; i++) {
+		if (pfctl_get_rule_h(pfh, i, rules.ticket, path,
+		    PF_PASS, &rule, anchor_call)) {
 			syslog(LOG_ERR, "pfl_scan_ruleset: ioctl(DIOCGETRULE):"
 			    " %s", strerror(errno));
 			goto err;
 		}
 
-		if (rule.label[0]) {
+		if (rule.label[0][0]) {
 			e = (struct pfl_entry *)malloc(sizeof(*e));
 			if (e == NULL)
 				goto err;
@@ -1576,7 +1546,7 @@ pfl_walk_rulesets(const char *path)
 
 	bzero(&prs, sizeof(prs));
 	strlcpy(prs.path, path, sizeof(prs.path));
-	if (ioctl(dev, DIOCGETRULESETS, &prs)) {
+	if (ioctl(pfctl_fd(pfh), DIOCGETRULESETS, &prs)) {
 		syslog(LOG_ERR, "pfl_walk_rulesets: ioctl(DIOCGETRULESETS): %s",
 		    strerror(errno));
 		goto err;
@@ -1584,7 +1554,7 @@ pfl_walk_rulesets(const char *path)
 
 	for (nr = prs.nr, i = 0; i < nr; i++) {
 		prs.nr = i;
-		if (ioctl(dev, DIOCGETRULESET, &prs)) {
+		if (ioctl(pfctl_fd(pfh), DIOCGETRULESET, &prs)) {
 			syslog(LOG_ERR, "pfl_walk_rulesets: ioctl(DIOCGETRULESET):"
 			    " %s", strerror(errno));
 			goto err;
@@ -1612,9 +1582,6 @@ static int
 pfl_refresh(void)
 {
 	struct pfl_entry *e;
-
-	if (started && this_tick <= pf_tick)
-		return (0);
 
 	while (!TAILQ_EMPTY(&pfl_table)) {
 		e = TAILQ_FIRST(&pfl_table);
@@ -1675,13 +1642,13 @@ pf_init(struct lmodule *mod, int __unused argc, char __unused *argv[])
 {
 	module = mod;
 
-	if ((dev = open("/dev/pf", O_RDONLY)) == -1) {
+	if ((pfh = pfctl_open(PF_DEVICE)) == NULL) {
 		syslog(LOG_ERR, "pf_init(): open(): %s\n",
 		    strerror(errno));
 		return (-1);
 	}
 
-	if ((altq_enabled = altq_is_enabled(dev)) == -1) {
+	if ((altq_enabled = altq_is_enabled(pfctl_fd(pfh))) == -1) {
 		syslog(LOG_ERR, "pf_init(): altq test failed");
 		return (-1);
 	}
@@ -1757,7 +1724,11 @@ pf_fini(void)
 		l1 = l2;
 	}
 
-	close(dev);
+	pfctl_free_status(pfs);
+	pfs = NULL;
+
+	pfctl_close(pfh);
+
 	return (0);
 }
 

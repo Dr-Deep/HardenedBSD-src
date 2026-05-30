@@ -25,10 +25,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\"     @(#)shutdown.8	8.2 (Berkeley) 4/27/95
-.\" $FreeBSD$
-.\"
-.Dd January 11, 2020
+.Dd December 8, 2025
 .Dt SHUTDOWN 8
 .Os
 .Sh NAME
@@ -39,13 +36,14 @@
 .Nm
 .Op Fl
 .Oo
-.Fl c | Fl h | Fl p |
+.Fl c | Fl f | Fl h | Fl p |
 .Fl r | Fl k
 .Oc
 .Oo
 .Fl o
 .Op Fl n
 .Oc
+.Op Fl q
 .Ar time
 .Op Ar warning-message ...
 .Nm poweroff
@@ -56,6 +54,10 @@ utility provides an automated shutdown procedure for super-users
 to nicely notify users when the system is shutting down,
 saving them from system administrators, hackers, and gurus, who
 would otherwise not bother with such niceties.
+In order to use the
+.Nm
+command, the user must have root privileges or be a member of the
+operator group.
 .Pp
 The following options are available:
 .Bl -tag -width indent
@@ -69,6 +71,12 @@ At the present time, only systems with BMC supported by the
 driver that implement this functionality support this flag.
 The amount of time the system is off is dependent on the device
 that implements this feature.
+.It Fl f
+The
+.Nm
+command ignores the presence of the
+.Pa /var/run/noshutdown
+file.
 .It Fl h
 The system is halted at the specified
 .Ar time .
@@ -91,15 +99,15 @@ system multi-user with logins disabled (for all but super-user).
 If one of the
 .Fl c ,
 .Fl h ,
-.Fl p
+.Fl p ,
 or
 .Fl r
-options are specified,
+options is specified,
 .Nm
 will execute
-.Xr halt 8
+.Xr fasthalt 8
 or
-.Xr reboot 8
+.Xr fastboot 8
 instead of sending a signal to
 .Xr init 8 .
 .It Fl n
@@ -108,10 +116,16 @@ If the
 option is specified, prevent the file system cache from being flushed by passing
 .Fl n
 to
-.Xr halt 8
+.Xr fasthalt 8
 or
-.Xr reboot 8 .
+.Xr fastboot 8 .
 This option should probably not be used.
+.It Fl q
+Shut down quietly.
+Suppress the warning message to all logged in users about system shutdown.
+It is an error to supply a
+.Ar warning-message
+when warnings are suppressed.
 .It Ar time
 .Ar Time
 is the time at which
@@ -121,23 +135,42 @@ may be the case-insensitive word
 .Ar now
 (indicating an immediate shutdown) or
 a future time in one of two formats:
-.Ar +number ,
-or
-.Ar yymmddhhmm ,
-where the year, month, and day may be defaulted
-to the current system values.
+.Ar +number
+or an absolute time specification.
 The first form brings the system down in
 .Ar number
-minutes and the second at the absolute time specified.
+time units (defaulting to minutes), and the second at the absolute time specified.
+.Pp
+An absolute time may be specified in one of the following formats,
+where unspecified parts default to the current date:
+.Bl -tag -width "YYMMDDhhmm"
+.It Ar hhmm
+Hour and minute.
+.It Ar DDhhmm
+Day, hour, and minute.
+.It Ar MMDDhhmm
+Month, day, hour, and minute.
+.It Ar YYMMDDhhmm
+Year (within the century), month, day, hour, and minute.
+.El
+.Pp
+The year
+.Ar YY
+is interpreted relative to the current century, with a one-year tolerance
+for values slightly in the past (to accommodate entry at year boundaries).
 .Ar +number
 may be specified in units other than minutes by appending the corresponding
 suffix:
 .Dq Li s ,
 .Dq Li sec ,
+.Dq Li secs ,
 .Dq Li m ,
 .Dq Li min ,
+.Dq Li mins ,
 .Dq Li h ,
-.Dq Li hour .
+.Dq Li hour ,
+.Dq Li hours .
+The unit suffixes are case-insensitive.
 .Pp
 If an absolute time is specified, but not a date,
 and that time today has already passed,
@@ -160,7 +193,7 @@ At intervals, becoming more frequent as apocalypse approaches
 and starting at ten hours before shutdown, warning messages are displayed
 on the terminals of all users logged in.
 Five minutes before
-shutdown, or immediately if shutdown is in less than 5 minutes,
+shutdown, or immediately if shutdown is in less than five minutes,
 logins are disabled by creating
 .Pa /var/run/nologin
 and copying the
@@ -178,7 +211,7 @@ At shutdown time a message is written to the system log, containing the
 time of shutdown, the person who initiated the shutdown and the reason.
 The corresponding signal is then sent to
 .Xr init 8
-to respectively halt, reboot or bring the system down to single-user state
+to respectively halt, reboot, or bring the system down to single-user state
 (depending on the above options).
 The time of the shutdown and the warning message
 are placed in
@@ -198,9 +231,15 @@ file that
 .Nm
 created will be removed automatically.
 .Pp
+If the
+.Pa /var/run/noshutdown
+file is present,
+.Nm
+exits without executing any action on the system.
+.Pp
 When run without options, the
 .Nm
-utility will place the system into single user mode at the
+utility will place the system into single-user mode at the
 .Ar time
 specified.
 .Pp
@@ -211,20 +250,40 @@ is equivalent to running:
 shutdown -p now
 .Ed
 .Sh FILES
-.Bl -tag -width /var/run/nologin -compact
+.Bl -tag -width /var/run/noshutdown -compact
 .It Pa /var/run/nologin
 tells
 .Xr login 1
-not to let anyone log in
+not to let anyone log in.
+.It Pa /var/run/noshutdown
+prevents
+.Nm
+from initiating an action on the system.
+Can be overridden with the
+.Fl f
+option.
 .El
 .Sh EXAMPLES
 Reboot the system in 30 minutes and display a warning message on the terminals
 of all users currently logged in:
 .Pp
 .Dl # shutdown -r +30 \&"System will reboot\&"
+.Pp
+Halt the system at 23:30 (using either format):
+.Pp
+.Dl # shutdown -h 2330
+.Dl # shutdown -h 23:30
+.Pp
+Power off the system on June 15th at 10:00:
+.Pp
+.Dl # shutdown -p 06151000
 .Sh COMPATIBILITY
-The hours and minutes in the second time format may be separated by
+The hours and minutes in any absolute time format may be separated by
 a colon (``:'') for backward compatibility.
+For example,
+.Ar hh:mm
+is accepted as equivalent to
+.Ar hhmm .
 .Sh SEE ALSO
 .Xr kill 1 ,
 .Xr login 1 ,

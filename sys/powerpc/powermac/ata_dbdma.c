@@ -27,9 +27,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("* $FreeBSD$");
-
 /*
  * Common routines for the DMA engine on both the Apple Kauai and MacIO
  * ATA controllers.
@@ -42,9 +39,9 @@ __FBSDID("* $FreeBSD$");
 #include <sys/bus.h>
 #include <sys/malloc.h>
 #include <sys/sema.h>
+#include <sys/stdarg.h>
 #include <sys/taskqueue.h>
 #include <vm/uma.h>
-#include <machine/stdarg.h>
 #include <machine/resource.h>
 #include <machine/bus.h>
 #include <sys/rman.h>

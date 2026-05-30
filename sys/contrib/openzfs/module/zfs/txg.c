@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -22,6 +23,7 @@
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Portions Copyright 2011 Martin Matuska
  * Copyright (c) 2012, 2019 by Delphix. All rights reserved.
+ * Copyright (c) 2025, Klara, Inc.
  */
 
 #include <sys/zfs_context.h>
@@ -111,7 +113,7 @@
 static __attribute__((noreturn)) void txg_sync_thread(void *arg);
 static __attribute__((noreturn)) void txg_quiesce_thread(void *arg);
 
-int zfs_txg_timeout = 5;	/* max seconds worth of delta per txg */
+uint_t zfs_txg_timeout = 5;	/* max seconds worth of delta per txg */
 
 /*
  * Prepare the txg subsystem.
@@ -429,7 +431,7 @@ txg_quiesce(dsl_pool_t *dp, uint64_t txg)
 }
 
 static void
-txg_do_callbacks(list_t *cb_list)
+txg_do_callbacks(void *cb_list)
 {
 	dmu_tx_do_callbacks(cb_list, 0);
 
@@ -479,7 +481,7 @@ txg_dispatch_callbacks(dsl_pool_t *dp, uint64_t txg)
 
 		list_move_tail(cb_list, &tc->tc_callbacks[g]);
 
-		(void) taskq_dispatch(tx->tx_commit_cb_taskq, (task_func_t *)
+		(void) taskq_dispatch(tx->tx_commit_cb_taskq,
 		    txg_do_callbacks, cb_list, TQ_SLEEP);
 	}
 }
@@ -549,6 +551,15 @@ txg_sync_thread(void *arg)
 			delta = ddi_get_lbolt() - start;
 			timer = (delta > timeout ? 0 : timeout - delta);
 		}
+
+		/*
+		 * When we're suspended, nothing should be changing and for
+		 * MMP we don't want to bump anything that would make it
+		 * harder to detect if another host is changing it when
+		 * resuming after a MMP suspend.
+		 */
+		if (spa_suspended(spa))
+			continue;
 
 		/*
 		 * Wait until the quiesce thread hands off a txg to us,
@@ -689,11 +700,13 @@ txg_delay(dsl_pool_t *dp, uint64_t txg, hrtime_t delay, hrtime_t resolution)
 	mutex_exit(&tx->tx_sync_lock);
 }
 
-static boolean_t
-txg_wait_synced_impl(dsl_pool_t *dp, uint64_t txg, boolean_t wait_sig)
+int
+txg_wait_synced_flags(dsl_pool_t *dp, uint64_t txg, txg_wait_flag_t flags)
 {
+	int error = 0;
 	tx_state_t *tx = &dp->dp_tx;
 
+	ASSERT0(flags & ~(TXG_WAIT_SIGNAL | TXG_WAIT_SUSPEND));
 	ASSERT(!dsl_pool_config_held(dp));
 
 	mutex_enter(&tx->tx_sync_lock);
@@ -705,13 +718,28 @@ txg_wait_synced_impl(dsl_pool_t *dp, uint64_t txg, boolean_t wait_sig)
 	dprintf("txg=%llu quiesce_txg=%llu sync_txg=%llu\n",
 	    (u_longlong_t)txg, (u_longlong_t)tx->tx_quiesce_txg_waiting,
 	    (u_longlong_t)tx->tx_sync_txg_waiting);
+
+	/*
+	 * Keep pushing util the pool gets to the wanted txg. If something
+	 * else interesting happens, we'll set an error and break out.
+	 */
 	while (tx->tx_synced_txg < txg) {
+		if ((flags & TXG_WAIT_SUSPEND) && spa_suspended(dp->dp_spa)) {
+			/*
+			 * Pool suspended and the caller does not want to
+			 * block; inform them immediately.
+			 */
+			error = SET_ERROR(ESHUTDOWN);
+			break;
+		}
+
 		dprintf("broadcasting sync more "
 		    "tx_synced=%llu waiting=%llu dp=%px\n",
 		    (u_longlong_t)tx->tx_synced_txg,
 		    (u_longlong_t)tx->tx_sync_txg_waiting, dp);
 		cv_broadcast(&tx->tx_sync_more_cv);
-		if (wait_sig) {
+
+		if (flags & TXG_WAIT_SIGNAL) {
 			/*
 			 * Condition wait here but stop if the thread receives a
 			 * signal. The caller may call txg_wait_synced*() again
@@ -719,31 +747,32 @@ txg_wait_synced_impl(dsl_pool_t *dp, uint64_t txg, boolean_t wait_sig)
 			 */
 			if (cv_wait_io_sig(&tx->tx_sync_done_cv,
 			    &tx->tx_sync_lock) == 0) {
-				mutex_exit(&tx->tx_sync_lock);
-				return (B_TRUE);
+				error = SET_ERROR(EINTR);
+				break;
 			}
 		} else {
+			/* Uninterruptable wait, until the condvar fires */
 			cv_wait_io(&tx->tx_sync_done_cv, &tx->tx_sync_lock);
 		}
 	}
+
 	mutex_exit(&tx->tx_sync_lock);
-	return (B_FALSE);
+	return (error);
 }
 
 void
 txg_wait_synced(dsl_pool_t *dp, uint64_t txg)
 {
-	VERIFY0(txg_wait_synced_impl(dp, txg, B_FALSE));
+	VERIFY0(txg_wait_synced_flags(dp, txg, TXG_WAIT_NONE));
 }
 
-/*
- * Similar to a txg_wait_synced but it can be interrupted from a signal.
- * Returns B_TRUE if the thread was signaled while waiting.
- */
-boolean_t
-txg_wait_synced_sig(dsl_pool_t *dp, uint64_t txg)
+void
+txg_wait_kick(dsl_pool_t *dp)
 {
-	return (txg_wait_synced_impl(dp, txg, B_TRUE));
+	tx_state_t *tx = &dp->dp_tx;
+	mutex_enter(&tx->tx_sync_lock);
+	cv_broadcast(&tx->tx_sync_done_cv);
+	mutex_exit(&tx->tx_sync_lock);
 }
 
 /*
@@ -895,15 +924,10 @@ txg_list_destroy(txg_list_t *tl)
 boolean_t
 txg_all_lists_empty(txg_list_t *tl)
 {
-	mutex_enter(&tl->tl_lock);
-	for (int i = 0; i < TXG_SIZE; i++) {
-		if (!txg_list_empty_impl(tl, i)) {
-			mutex_exit(&tl->tl_lock);
-			return (B_FALSE);
-		}
-	}
-	mutex_exit(&tl->tl_lock);
-	return (B_TRUE);
+	boolean_t res = B_TRUE;
+	for (int i = 0; i < TXG_SIZE; i++)
+		res &= (tl->tl_head[i] == NULL);
+	return (res);
 }
 
 /*
@@ -1069,5 +1093,5 @@ EXPORT_SYMBOL(txg_wait_callbacks);
 EXPORT_SYMBOL(txg_stalled);
 EXPORT_SYMBOL(txg_sync_waiting);
 
-ZFS_MODULE_PARAM(zfs_txg, zfs_txg_, timeout, INT, ZMOD_RW,
+ZFS_MODULE_PARAM(zfs_txg, zfs_txg_, timeout, UINT, ZMOD_RW,
 	"Max seconds worth of delta per txg");

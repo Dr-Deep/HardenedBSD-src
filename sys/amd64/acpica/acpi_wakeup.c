@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2001 Takanori Watanabe <takawata@jp.freebsd.org>
  * Copyright (c) 2001-2012 Mitsuru IWASAKI <iwasaki@jp.freebsd.org>
@@ -29,9 +29,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/bus.h>
 #include <sys/eventhandler.h>
@@ -57,10 +54,8 @@ __FBSDID("$FreeBSD$");
 
 #include <x86/apicreg.h>
 #include <x86/apicvar.h>
-#ifdef SMP
 #include <machine/smp.h>
 #include <machine/vmparam.h>
-#endif
 
 #include <contrib/dev/acpica/include/acpi.h>
 
@@ -76,19 +71,11 @@ extern int		acpi_resume_beep;
 extern int		acpi_reset_video;
 extern int		acpi_susp_bounce;
 
-#ifdef SMP
 extern struct susppcb	**susppcbs;
 static cpuset_t		suspcpus;
-#else
-static struct susppcb	**susppcbs;
-#endif
 
-static void		acpi_stop_beep(void *);
-
-#ifdef SMP
+static void		acpi_stop_beep(void *, enum power_stype);
 static int		acpi_wakeup_ap(struct acpi_softc *, int);
-static void		acpi_wakeup_cpus(struct acpi_softc *);
-#endif
 
 #define	ACPI_WAKEPT_PAGES	7
 
@@ -99,14 +86,13 @@ static void		acpi_wakeup_cpus(struct acpi_softc *);
 } while (0)
 
 static void
-acpi_stop_beep(void *arg)
+acpi_stop_beep(void *arg, enum power_stype stype)
 {
 
 	if (acpi_resume_beep != 0)
 		timer_spkr_release();
 }
 
-#ifdef SMP
 static int
 acpi_wakeup_ap(struct acpi_softc *sc, int cpu)
 {
@@ -141,24 +127,22 @@ acpi_wakeup_ap(struct acpi_softc *sc, int cpu)
 #define	BIOS_WARM		(0x0a)
 
 static void
-acpi_wakeup_cpus(struct acpi_softc *sc)
+acpi_wakeup_cpus_bios(struct acpi_softc *sc)
 {
 	uint32_t	mpbioswarmvec;
 	int		cpu;
 	u_char		mpbiosreason;
 
-	if (!efi_boot) {
-		/* save the current value of the warm-start vector */
-		mpbioswarmvec = *((uint32_t *)WARMBOOT_OFF);
-		outb(CMOS_REG, BIOS_RESET);
-		mpbiosreason = inb(CMOS_DATA);
+	/* save the current value of the warm-start vector */
+	mpbioswarmvec = *((uint32_t *)WARMBOOT_OFF);
+	outb(CMOS_REG, BIOS_RESET);
+	mpbiosreason = inb(CMOS_DATA);
 
-		/* setup a vector to our boot code */
-		*((volatile u_short *)WARMBOOT_OFF) = WARMBOOT_TARGET;
-		*((volatile u_short *)WARMBOOT_SEG) = sc->acpi_wakephys >> 4;
-		outb(CMOS_REG, BIOS_RESET);
-		outb(CMOS_DATA, BIOS_WARM);	/* 'warm-start' */
-	}
+	/* setup a vector to our boot code */
+	*((volatile u_short *)WARMBOOT_OFF) = WARMBOOT_TARGET;
+	*((volatile u_short *)WARMBOOT_SEG) = sc->acpi_wakephys >> 4;
+	outb(CMOS_REG, BIOS_RESET);
+	outb(CMOS_DATA, BIOS_WARM);	/* 'warm-start' */
 
 	/* Wake up each AP. */
 	for (cpu = 1; cpu < mp_ncpus; cpu++) {
@@ -172,15 +156,28 @@ acpi_wakeup_cpus(struct acpi_softc *sc)
 		}
 	}
 
-	if (!efi_boot) {
-		/* restore the warmstart vector */
-		*(uint32_t *)WARMBOOT_OFF = mpbioswarmvec;
+	/* restore the warmstart vector */
+	*(uint32_t *)WARMBOOT_OFF = mpbioswarmvec;
 
-		outb(CMOS_REG, BIOS_RESET);
-		outb(CMOS_DATA, mpbiosreason);
+	outb(CMOS_REG, BIOS_RESET);
+	outb(CMOS_DATA, mpbiosreason);
+}
+
+static void
+acpi_wakeup_cpus_efi(struct acpi_softc *sc)
+{
+	int		cpu;
+
+	/* Wake up each AP. */
+	for (cpu = 1; cpu < mp_ncpus; cpu++) {
+		if (!CPU_ISSET(cpu, &suspcpus))
+			continue;
+		if (acpi_wakeup_ap(sc, cpu) == 0) {
+			panic("acpi_wakeup: failed to resume AP #%d (PHY #%d)",
+			    cpu, cpu_apic_ids[cpu]);
+		}
 	}
 }
-#endif
 
 int
 acpi_sleep_machdep(struct acpi_softc *sc, int state)
@@ -193,10 +190,8 @@ acpi_sleep_machdep(struct acpi_softc *sc, int state)
 	if (sc->acpi_wakeaddr == 0ul)
 		return (-1);	/* couldn't alloc wake memory */
 
-#ifdef SMP
 	suspcpus = all_cpus;
 	CPU_CLR(PCPU_GET(cpuid), &suspcpus);
-#endif
 
 	if (acpi_resume_beep != 0)
 		timer_spkr_acquire();
@@ -205,15 +200,16 @@ acpi_sleep_machdep(struct acpi_softc *sc, int state)
 
 	intr_suspend();
 
+	if (vmm_suspend_p != NULL)
+		vmm_suspend_p();
+
 	pcb = &susppcbs[0]->sp_pcb;
 	if (savectx(pcb)) {
 		fpususpend(susppcbs[0]->sp_fpususpend);
-#ifdef SMP
 		if (!CPU_EMPTY(&suspcpus) && suspend_cpus(suspcpus) == 0) {
 			device_printf(sc->acpi_dev, "Failed to suspend APs\n");
 			return (0);	/* couldn't sleep */
 		}
-#endif
 		hw_ibrs_ibpb_active = 0;
 		hw_ssb_active = 0;
 		cpu_stdext_feature3 = 0;
@@ -232,7 +228,7 @@ acpi_sleep_machdep(struct acpi_softc *sc, int state)
 		WAKECODE_FIXUP(wakeup_gdt + 2, uint64_t, pcb->pcb_gdt.rd_base);
 
 		/* Call ACPICA to enter the desired sleep state */
-		if (state == ACPI_STATE_S4 && sc->acpi_s4bios)
+		if (state == ACPI_STATE_S4 && acpi_should_do_s4bios(sc))
 			status = AcpiEnterSleepStateS4bios();
 		else
 			status = AcpiEnterSleepState(state);
@@ -250,7 +246,7 @@ acpi_sleep_machdep(struct acpi_softc *sc, int state)
 			ia32_pause();
 	} else {
 		/*
-		 * Re-initialize console hardware as soon as possibe.
+		 * Re-initialize console hardware as soon as possible.
 		 * No console output (e.g. printf) is allowed before
 		 * this point.
 		 */
@@ -278,20 +274,37 @@ acpi_wakeup_machdep(struct acpi_softc *sc, int state, int sleep_result,
 			PCPU_SET(switchtime, 0);
 			PCPU_SET(switchticks, ticks);
 			lapic_xapic_mode();
-#ifdef SMP
-			if (!CPU_EMPTY(&suspcpus))
-				acpi_wakeup_cpus(sc);
-#endif
+			if (!CPU_EMPTY(&suspcpus)) {
+				if (efi_boot)
+					acpi_wakeup_cpus_efi(sc);
+				else
+					acpi_wakeup_cpus_bios(sc);
+			}
 		}
 
-#ifdef SMP
 		if (!CPU_EMPTY(&suspcpus))
 			resume_cpus(suspcpus);
-#endif
+
+		/*
+		 * Re-read cpu_stdext_feature3, which was zeroed-out
+		 * in acpi_sleep_machdep(), after the microcode was
+		 * reloaded.  Then recalculate the active mitigation
+		 * knobs that depend on the microcode and
+		 * cpu_stdext_feature3.  Do it after LAPICs are woken,
+		 * so that IPIs work.
+		 */
+		identify_cpu_ext_features();
+
 		mca_resume();
 		if (vmm_resume_p != NULL)
 			vmm_resume_p();
 		intr_resume(/*suspend_cancelled*/false);
+
+		hw_ibrs_recalculate(true);
+		amd64_syscall_ret_flush_l1d_recalc();
+		hw_ssb_recalculate(true);
+		x86_rngds_mitg_recalculate(true);
+		zenbleed_check_and_apply(true);
 
 		AcpiSetFirmwareWakingVector(0, 0);
 	} else {
@@ -331,8 +344,7 @@ acpi_alloc_wakeup_handler(void **wakeaddr,
 
 	for (i = 0; i < ACPI_WAKEPT_PAGES - (la57 ? 0 : 1); i++) {
 		wakept_m[i] = pmap_page_alloc_below_4g(true);
-		wakept_pages[i] = (void *)PHYS_TO_DMAP(VM_PAGE_TO_PHYS(
-		    wakept_m[i]));
+		wakept_pages[i] = VM_PAGE_TO_DMAP(wakept_m[i]);
 	}
 	if (EVENTHANDLER_REGISTER(power_resume, acpi_stop_beep, NULL,
 	    EVENTHANDLER_PRI_LAST) == NULL) {
@@ -347,8 +359,7 @@ acpi_alloc_wakeup_handler(void **wakeaddr,
 	return;
 
 freepages:
-	if (*wakeaddr != NULL)
-		contigfree(*wakeaddr, PAGE_SIZE, M_DEVBUF);
+	free(*wakeaddr, M_DEVBUF);
 	for (i = 0; i < ACPI_WAKEPT_PAGES; i++) {
 		if (wakept_m[i] != NULL)
 			vm_page_free(wakept_m[i]);

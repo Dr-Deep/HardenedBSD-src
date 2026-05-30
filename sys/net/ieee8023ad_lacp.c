@@ -1,7 +1,7 @@
 /*	$NetBSD: ieee8023ad_lacp.c,v 1.3 2005/12/11 12:24:54 christos Exp $	*/
 
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c)2005 YAMAMOTO Takashi,
  * Copyright (c)2008 Andrew Thompson <thompsa@FreeBSD.org>
@@ -30,8 +30,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_kern_tls.h"
 #include "opt_ratelimit.h"
 
@@ -44,8 +42,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/kernel.h> /* hz */
 #include <sys/socket.h> /* for net/if.h */
 #include <sys/sockio.h>
+#include <sys/stdarg.h>
 #include <sys/sysctl.h>
-#include <machine/stdarg.h>
 #include <sys/lock.h>
 #include <sys/rwlock.h>
 #include <sys/taskqueue.h>
@@ -53,6 +51,7 @@ __FBSDID("$FreeBSD$");
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_private.h>
 #include <net/if_dl.h>
 #include <net/ethernet.h>
 #include <net/infiniband.h>
@@ -116,9 +115,9 @@ static void	lacp_fill_aggregator_id(struct lacp_aggregator *,
 		    const struct lacp_port *);
 static void	lacp_fill_aggregator_id_peer(struct lacp_peerinfo *,
 		    const struct lacp_peerinfo *);
-static int	lacp_aggregator_is_compatible(const struct lacp_aggregator *,
+static bool	lacp_aggregator_is_compatible(const struct lacp_aggregator *,
 		    const struct lacp_port *);
-static int	lacp_peerinfo_is_compatible(const struct lacp_peerinfo *,
+static bool	lacp_peerinfo_is_compatible(const struct lacp_peerinfo *,
 		    const struct lacp_peerinfo *);
 
 static struct lacp_aggregator *lacp_aggregator_get(struct lacp_softc *,
@@ -683,6 +682,7 @@ static void
 lacp_disable_distributing(struct lacp_port *lp)
 {
 	struct lacp_aggregator *la = lp->lp_aggregator;
+	struct lacp_aggregator *la_active;
 	struct lacp_softc *lsc = lp->lp_lsc;
 	struct lagg_softc *sc = lsc->lsc_softc;
 	char buf[LACP_LAGIDSTR_MAX+1];
@@ -704,7 +704,6 @@ lacp_disable_distributing(struct lacp_port *lp)
 
 	TAILQ_REMOVE(&la->la_ports, lp, lp_dist_q);
 	la->la_nports--;
-	sc->sc_active = la->la_nports;
 
 	if (lsc->lsc_active_aggregator == la) {
 		lacp_suppress_distributing(lsc, la);
@@ -714,6 +713,8 @@ lacp_disable_distributing(struct lacp_port *lp)
 	}
 
 	lp->lp_state &= ~LACP_STATE_DISTRIBUTING;
+	la_active = lsc->lsc_active_aggregator;
+	sc->sc_active = la_active != NULL ? la_active->la_nports : 0;
 	if_link_state_change(sc->sc_ifp,
 	    sc->sc_active ? LINK_STATE_UP : LINK_STATE_DOWN);
 }
@@ -722,6 +723,7 @@ static void
 lacp_enable_distributing(struct lacp_port *lp)
 {
 	struct lacp_aggregator *la = lp->lp_aggregator;
+	struct lacp_aggregator *la_active;
 	struct lacp_softc *lsc = lp->lp_lsc;
 	struct lagg_softc *sc = lsc->lsc_softc;
 	char buf[LACP_LAGIDSTR_MAX+1];
@@ -740,7 +742,6 @@ lacp_enable_distributing(struct lacp_port *lp)
 	KASSERT(la->la_refcnt > la->la_nports, ("aggregator refcnt invalid"));
 	TAILQ_INSERT_HEAD(&la->la_ports, lp, lp_dist_q);
 	la->la_nports++;
-	sc->sc_active = la->la_nports;
 
 	lp->lp_state |= LACP_STATE_DISTRIBUTING;
 
@@ -751,6 +752,8 @@ lacp_enable_distributing(struct lacp_port *lp)
 		/* try to become the active aggregator */
 		lacp_select_active_aggregator(lsc);
 
+	la_active = lsc->lsc_active_aggregator;
+	sc->sc_active = la_active != NULL ? la_active->la_nports : 0;
 	if_link_state_change(sc->sc_ifp,
 	    sc->sc_active ? LINK_STATE_UP : LINK_STATE_DOWN);
 }
@@ -1037,6 +1040,18 @@ lacp_select_active_aggregator(struct lacp_softc *lsc)
 	}
 }
 
+static int
+lacp_pm_compare(const void *p1, const void *p2)
+{
+	struct lacp_port *const *a = p1;
+	struct lacp_port *const *b = p2;
+	int left, right;
+
+	left = (*a)->lp_ifp->if_index;
+	right = (*b)->lp_ifp->if_index;
+	return ((left > right) - (left < right));
+}
+
 /*
  * Updated the inactive portmap array with the new list of ports and
  * make it live.
@@ -1080,11 +1095,23 @@ lacp_update_portmap(struct lacp_softc *lsc)
 
 #ifdef NUMA
 		for (i = 0; i < MAXMEMDOM; i++) {
-			if (p->pm_numa[i].count != 0)
+			if (p->pm_numa[i].count != 0) {
 				p->pm_num_dom++;
+				if (p->pm_numa[i].count > 1) {
+					qsort(&p->pm_numa[i].map[0],
+					    p->pm_numa[i].count,
+					    sizeof(p->pm_numa[i].map[0]),
+					    lacp_pm_compare);
+				}
+			}
 		}
 #endif
 		speed = lacp_aggregator_bandwidth(la);
+	}
+
+	if (p->pm_count > 1) {
+		qsort(&p->pm_map[0], p->pm_count,
+		    sizeof(p->pm_map[0]), lacp_pm_compare);
 	}
 	sc->sc_ifp->if_baudrate = speed;
 	EVENTHANDLER_INVOKE(ifnet_event, sc->sc_ifp,
@@ -1138,6 +1165,7 @@ lacp_compose_key(struct lacp_port *lp)
 		case IFM_100_T2:
 		case IFM_100_T:
 		case IFM_100_SGMII:
+		case IFM_100_BX:
 			key = IFM_100_TX;
 			break;
 		case IFM_1000_SX:
@@ -1147,6 +1175,7 @@ lacp_compose_key(struct lacp_port *lp)
 		case IFM_1000_KX:
 		case IFM_1000_SGMII:
 		case IFM_1000_CX_SGMII:
+		case IFM_1000_BX:
 			key = IFM_1000_SX;
 			break;
 		case IFM_10G_LR:
@@ -1263,6 +1292,8 @@ lacp_compose_key(struct lacp_port *lp)
 		case IFM_400G_DR4:
 		case IFM_400G_AUI8_AC:
 		case IFM_400G_AUI8:
+		case IFM_400G_SR8:
+		case IFM_400G_CR8:
 			key = IFM_400G_FR8;
 			break;
 		default:
@@ -1364,44 +1395,40 @@ lacp_fill_aggregator_id_peer(struct lacp_peerinfo *lpi_aggr,
  * lacp_aggregator_is_compatible: check if a port can join to an aggregator.
  */
 
-static int
+static bool
 lacp_aggregator_is_compatible(const struct lacp_aggregator *la,
     const struct lacp_port *lp)
 {
 	if (!(lp->lp_state & LACP_STATE_AGGREGATION) ||
 	    !(lp->lp_partner.lip_state & LACP_STATE_AGGREGATION)) {
-		return (0);
+		return (false);
 	}
 
-	if (!(la->la_actor.lip_state & LACP_STATE_AGGREGATION)) {
-		return (0);
-	}
+	if (!(la->la_actor.lip_state & LACP_STATE_AGGREGATION))
+		return (false);
 
-	if (!lacp_peerinfo_is_compatible(&la->la_partner, &lp->lp_partner)) {
-		return (0);
-	}
+	if (!lacp_peerinfo_is_compatible(&la->la_partner, &lp->lp_partner))
+		return (false);
 
-	if (!lacp_peerinfo_is_compatible(&la->la_actor, &lp->lp_actor)) {
-		return (0);
-	}
+	if (!lacp_peerinfo_is_compatible(&la->la_actor, &lp->lp_actor))
+		return (false);
 
-	return (1);
+	return (true);
 }
 
-static int
+static bool
 lacp_peerinfo_is_compatible(const struct lacp_peerinfo *a,
     const struct lacp_peerinfo *b)
 {
 	if (memcmp(&a->lip_systemid, &b->lip_systemid,
-	    sizeof(a->lip_systemid))) {
-		return (0);
+	    sizeof(a->lip_systemid)) != 0) {
+		return (false);
 	}
 
-	if (memcmp(&a->lip_key, &b->lip_key, sizeof(a->lip_key))) {
-		return (0);
-	}
+	if (memcmp(&a->lip_key, &b->lip_key, sizeof(a->lip_key)) != 0)
+		return (false);
 
-	return (1);
+	return (true);
 }
 
 static void

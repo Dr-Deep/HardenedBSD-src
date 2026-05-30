@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2010, 2012 Konstantin Belousov <kib@FreeBSD.org>
  * Copyright (c) 2015 The FreeBSD Foundation
@@ -31,8 +31,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_vm.h"
 
 #include <sys/param.h>
@@ -117,7 +115,7 @@ static void
 shared_page_init(void *dummy __unused)
 {
 	vm_page_t m;
-	vm_offset_t addr;
+	void *addr;
 
 	sx_init(&shared_page_alloc_sx, "shpsx");
 	shared_page_obj = vm_pager_allocate(OBJT_PHYS, 0, PAGE_SIZE,
@@ -129,11 +127,10 @@ shared_page_init(void *dummy __unused)
 	vm_page_xunbusy(m);
 	addr = kva_alloc(PAGE_SIZE);
 	pmap_qenter(addr, &m, 1);
-	shared_page_mapping = (char *)addr;
+	shared_page_mapping = addr;
 }
 
-SYSINIT(shp, SI_SUB_EXEC, SI_ORDER_FIRST, (sysinit_cfunc_t)shared_page_init,
-    NULL);
+SYSINIT(shp, SI_SUB_EXEC, SI_ORDER_FIRST, shared_page_init, NULL);
 
 /*
  * Push the timehands update to the shared page.

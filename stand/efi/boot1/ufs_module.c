@@ -28,13 +28,11 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include <stdarg.h>
 #include <stdbool.h>
-#include <sys/cdefs.h>
+
 #include <sys/param.h>
 #include <sys/disk/bsd.h>
 #include <efi.h>
@@ -64,7 +62,7 @@ dskread(void *buf, uint64_t lba, int nblk)
 		DPRINTF("dskread: failed dev: %p, id: %u, lba: %ju, size: %d, "
 		    "status: %lu\n", devinfo->dev,
 		    devinfo->dev->Media->MediaId, (uintmax_t)lba, size,
-		    EFI_ERROR_CODE(status));
+		    DECODE_ERROR(status));
 		return (-1);
 	}
 

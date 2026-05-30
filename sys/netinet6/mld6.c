@@ -61,12 +61,7 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)igmp.c	8.1 (Berkeley) 7/19/93
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include "opt_inet.h"
 #include "opt_inet6.h"
@@ -84,6 +79,7 @@ __FBSDID("$FreeBSD$");
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_private.h>
 #include <net/route.h>
 #include <net/vnet.h>
 
@@ -94,6 +90,7 @@ __FBSDID("$FreeBSD$");
 #include <netinet6/ip6_var.h>
 #include <netinet6/scope6_var.h>
 #include <netinet/icmp6.h>
+#include <netinet6/ip6_mroute.h>
 #include <netinet6/mld6.h>
 #include <netinet6/mld6_var.h>
 
@@ -103,7 +100,6 @@ __FBSDID("$FreeBSD$");
 #define KTR_MLD KTR_INET6
 #endif
 
-static void	mli_delete_locked(const struct ifnet *);
 static void	mld_dispatch_packet(struct mbuf *);
 static void	mld_dispatch_queue(struct mbufq *, int);
 static void	mld_final_leave(struct in6_multi *, struct mld_ifsoftc *);
@@ -169,8 +165,8 @@ static int	sysctl_mld_ifinfo(SYSCTL_HANDLER_ARGS);
  *  scope ID is only used by MLD to select the outgoing interface.
  *
  *  During interface attach and detach, MLD will take MLD_LOCK *after*
- *  the IF_AFDATA_LOCK.
- *  As in6_setscope() takes IF_AFDATA_LOCK then SCOPE_LOCK, we can't call
+ *  the LLTABLE_LOCK.
+ *  As in6_setscope() takes LLTABLE_LOCK then SCOPE_LOCK, we can't call
  *  it with MLD_LOCK held without triggering an LOR. A netisr with indirect
  *  dispatch could work around this, but we'd rather not do that, as it
  *  can introduce other races.
@@ -186,7 +182,7 @@ static int	sysctl_mld_ifinfo(SYSCTL_HANDLER_ARGS);
  *  calls in6_setscope() internally whilst MLD_LOCK is held. This will
  *  trigger a LOR warning in WITNESS when the ifnet is detached.
  *
- *  The right answer is probably to make IF_AFDATA_LOCK an rwlock, given
+ *  The right answer is probably to make LLTABLE_LOCK an rwlock, given
  *  how it's used across the network stack. Here we're simply exploiting
  *  the fact that MLD runs at a similar layer in the stack to scope6.c.
  *
@@ -237,17 +233,20 @@ static SYSCTL_NODE(_net_inet6_mld, OID_AUTO, ifinfo,
     CTLFLAG_RD | CTLFLAG_MPSAFE, sysctl_mld_ifinfo,
     "Per-interface MLDv2 state");
 
-static int	mld_v1enable = 1;
-SYSCTL_INT(_net_inet6_mld, OID_AUTO, v1enable, CTLFLAG_RWTUN,
-    &mld_v1enable, 0, "Enable fallback to MLDv1");
+VNET_DEFINE_STATIC(bool, mld_v1enable) = true;
+#define	V_mld_v1enable	VNET(mld_v1enable)
+SYSCTL_BOOL(_net_inet6_mld, OID_AUTO, v1enable, CTLFLAG_VNET | CTLFLAG_RWTUN,
+    &VNET_NAME(mld_v1enable), 0, "Enable fallback to MLDv1");
 
-static int	mld_v2enable = 1;
-SYSCTL_INT(_net_inet6_mld, OID_AUTO, v2enable, CTLFLAG_RWTUN,
-    &mld_v2enable, 0, "Enable MLDv2");
+VNET_DEFINE_STATIC(bool, mld_v2enable) = true;
+#define	V_mld_v2enable	VNET(mld_v2enable)
+SYSCTL_BOOL(_net_inet6_mld, OID_AUTO, v2enable, CTLFLAG_VNET | CTLFLAG_RWTUN,
+    &VNET_NAME(mld_v2enable), 0, "Enable MLDv2");
 
-static int	mld_use_allow = 1;
-SYSCTL_INT(_net_inet6_mld, OID_AUTO, use_allow, CTLFLAG_RWTUN,
-    &mld_use_allow, 0, "Use ALLOW/BLOCK for RFC 4604 SSM joins/leaves");
+VNET_DEFINE_STATIC(bool, mld_use_allow) = true;
+#define	V_mld_use_allow	VNET(mld_use_allow)
+SYSCTL_BOOL(_net_inet6_mld, OID_AUTO, use_allow, CTLFLAG_VNET | CTLFLAG_RWTUN,
+    &VNET_NAME(mld_use_allow), 0, "Use ALLOW/BLOCK for RFC 4604 SSM joins/leaves");
 
 /*
  * Packed Router Alert option structure declaration.
@@ -466,32 +465,30 @@ mld_is_addr_reported(const struct in6_addr *addr)
  * Attach MLD when PF_INET6 is attached to an interface.  Assumes that the
  * current VNET is set by the caller.
  */
-struct mld_ifsoftc *
+void
 mld_domifattach(struct ifnet *ifp)
 {
-	struct mld_ifsoftc *mli;
+	struct mld_ifsoftc *mli = MLD_IFINFO(ifp);
 
 	CTR3(KTR_MLD, "%s: called for ifp %p(%s)", __func__, ifp, if_name(ifp));
 
-	mli = malloc(sizeof(struct mld_ifsoftc), M_MLD, M_WAITOK | M_ZERO);
-	mli->mli_ifp = ifp;
-	mli->mli_version = MLD_VERSION_2;
-	mli->mli_flags = 0;
-	mli->mli_rv = MLD_RV_INIT;
-	mli->mli_qi = MLD_QI_INIT;
-	mli->mli_qri = MLD_QRI_INIT;
-	mli->mli_uri = MLD_URI_INIT;
+	*mli = (struct mld_ifsoftc){
+		.mli_ifp = ifp,
+		.mli_version = MLD_VERSION_2,
+		.mli_rv = MLD_RV_INIT,
+		.mli_qi = MLD_QI_INIT,
+		.mli_qri = MLD_QRI_INIT,
+		.mli_uri = MLD_URI_INIT,
+	};
 	mbufq_init(&mli->mli_gq, MLD_MAX_RESPONSE_PACKETS);
 	if ((ifp->if_flags & IFF_MULTICAST) == 0)
 		mli->mli_flags |= MLIF_SILENT;
-	if (mld_use_allow)
+	if (V_mld_use_allow)
 		mli->mli_flags |= MLIF_USEALLOW;
 
 	MLD_LOCK();
 	LIST_INSERT_HEAD(&V_mli_head, mli, mli_link);
 	MLD_UNLOCK();
-
-	return (mli);
 }
 
 /*
@@ -553,44 +550,19 @@ mld_ifdetach(struct ifnet *ifp, struct in6_multi_head *inmh)
 /*
  * Hook for domifdetach.
  * Runs after link-layer cleanup; free MLD state.
- *
- * SMPng: Normally called with IF_AFDATA_LOCK held.
  */
 void
 mld_domifdetach(struct ifnet *ifp)
 {
+	struct mld_ifsoftc *mli = MLD_IFINFO(ifp);
 
 	CTR3(KTR_MLD, "%s: called for ifp %p(%s)",
 	    __func__, ifp, if_name(ifp));
 
 	MLD_LOCK();
-	mli_delete_locked(ifp);
+	LIST_REMOVE(mli, mli_link);
 	MLD_UNLOCK();
-}
-
-static void
-mli_delete_locked(const struct ifnet *ifp)
-{
-	struct mld_ifsoftc *mli, *tmli;
-
-	CTR3(KTR_MLD, "%s: freeing mld_ifsoftc for ifp %p(%s)",
-	    __func__, ifp, if_name(ifp));
-
-	MLD_LOCK_ASSERT();
-
-	LIST_FOREACH_SAFE(mli, &V_mli_head, mli_link, tmli) {
-		if (mli->mli_ifp == ifp) {
-			/*
-			 * Free deferred General Query responses.
-			 */
-			mbufq_drain(&mli->mli_gq);
-
-			LIST_REMOVE(mli, mli_link);
-
-			free(mli, M_MLD);
-			return;
-		}
-	}
+	mbufq_drain(&mli->mli_gq);
 }
 
 /*
@@ -617,7 +589,7 @@ mld_v1_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 
 	is_general_query = 0;
 
-	if (!mld_v1enable) {
+	if (!V_mld_v1enable) {
 		CTR3(KTR_MLD, "ignore v1 query %s on ifp %p(%s)",
 		    ip6_sprintf(ip6tbuf, &mld->mld_addr),
 		    ifp, if_name(ifp));
@@ -793,7 +765,7 @@ mld_v2_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 
 	NET_EPOCH_ASSERT();
 
-	if (!mld_v2enable) {
+	if (!V_mld_v2enable) {
 		CTR3(KTR_MLD, "ignore v2 query src %s on ifp %p(%s)",
 		    ip6_sprintf(ip6tbuf, &ip6->ip6_src),
 		    ifp, if_name(ifp));
@@ -1079,7 +1051,7 @@ mld_v1_input_report(struct ifnet *ifp, const struct ip6_hdr *ip6,
 
 	NET_EPOCH_ASSERT();
 
-	if (!mld_v1enable) {
+	if (!V_mld_v1enable) {
 		CTR3(KTR_MLD, "ignore v1 report %s on ifp %p(%s)",
 		    ip6_sprintf(ip6tbuf, &mld->mld_addr),
 		    ifp, if_name(ifp));
@@ -2163,12 +2135,9 @@ static void
 mld_final_leave(struct in6_multi *inm, struct mld_ifsoftc *mli)
 {
 	struct epoch_tracker     et;
-	int syncstates;
 #ifdef KTR
 	char ip6tbuf[INET6_ADDRSTRLEN];
 #endif
-
-	syncstates = 1;
 
 	CTR4(KTR_MLD, "%s: final leave %s on ifp %p(%s)",
 	    __func__, ip6_sprintf(ip6tbuf, &inm->in6m_addr),
@@ -2233,7 +2202,6 @@ mld_final_leave(struct in6_multi *inm, struct mld_ifsoftc *mli)
 				inm->in6m_state = MLD_LEAVING_MEMBER;
 				inm->in6m_sctimer = 1;
 				V_state_change_timers_running6 = 1;
-				syncstates = 0;
 			}
 			break;
 		}
@@ -2245,15 +2213,13 @@ mld_final_leave(struct in6_multi *inm, struct mld_ifsoftc *mli)
 		break;
 	}
 
-	if (syncstates) {
-		in6m_commit(inm);
-		CTR3(KTR_MLD, "%s: T1 -> T0 for %s/%s", __func__,
-		    ip6_sprintf(ip6tbuf, &inm->in6m_addr),
-		    if_name(inm->in6m_ifp));
-		inm->in6m_st[1].iss_fmode = MCAST_UNDEFINED;
-		CTR3(KTR_MLD, "%s: T1 now MCAST_UNDEFINED for %p/%s",
-		    __func__, &inm->in6m_addr, if_name(inm->in6m_ifp));
-	}
+	in6m_commit(inm);
+	CTR3(KTR_MLD, "%s: T1 -> T0 for %s/%s", __func__,
+	    ip6_sprintf(ip6tbuf, &inm->in6m_addr),
+	    if_name(inm->in6m_ifp));
+	inm->in6m_st[1].iss_fmode = MCAST_UNDEFINED;
+	CTR3(KTR_MLD, "%s: T1 now MCAST_UNDEFINED for %p/%s",
+	    __func__, &inm->in6m_addr, if_name(inm->in6m_ifp));
 }
 
 /*
@@ -3002,7 +2968,7 @@ mld_v2_dispatch_general_query(struct mld_ifsoftc *mli)
 	 * many packets, we should finish sending them before starting of
 	 * queuing the new reply.
 	 */
-	if (mbufq_len(&mli->mli_gq) != 0)
+	if (!mbufq_empty(&mli->mli_gq))
 		goto send;
 
 	ifp = mli->mli_ifp;
@@ -3097,7 +3063,7 @@ mld_dispatch_packet(struct mbuf *m)
 	}
 
 	im6o.im6o_multicast_hlim  = 1;
-	im6o.im6o_multicast_loop = (V_ip6_mrouter != NULL);
+	im6o.im6o_multicast_loop = V_ip6_mrouting_enabled;
 	im6o.im6o_multicast_ifp = ifp;
 
 	if (m->m_flags & M_MLDV1) {
@@ -3142,7 +3108,7 @@ mld_dispatch_packet(struct mbuf *m)
 		CTR3(KTR_MLD, "%s: ip6_output(%p) = %d", __func__, m0, error);
 		goto out;
 	}
-	ICMP6STAT_INC(icp6s_outhist[type]);
+	ICMP6STAT_INC2(icp6s_outhist, type);
 	if (oifp != NULL) {
 		icmp6_ifstat_inc(oifp, ifs6_out_msg);
 		switch (type) {
@@ -3273,6 +3239,7 @@ mld_init(void *unused __unused)
 	mld_po.ip6po_hbh = &mld_ra.hbh;
 	mld_po.ip6po_prefer_tempaddr = IP6PO_TEMPADDR_NOTPREFER;
 	mld_po.ip6po_flags = IP6PO_DONTFRAG;
+	mld_po.ip6po_valid = IP6PO_VALID_HLIM | IP6PO_VALID_HBH;
 
 	callout_init(&mldslow_callout, 1);
 	callout_reset(&mldslow_callout, hz / MLD_SLOWHZ, mld_slowtimo, NULL);

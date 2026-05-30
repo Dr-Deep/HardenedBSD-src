@@ -22,8 +22,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include <ufs/ffs/fs.h>
@@ -34,19 +32,12 @@
 #include <sys/stat.h>
 #include <libufs.h>
 
-union dinode {
-	struct ufs1_dinode *dp1;
-	struct ufs2_dinode *dp2;
-};
-
 void prtblknos(struct fs *fs, union dinode *dp);
 
 struct uufsd disk;
 
 int
-main(argc, argv)
-	int argc;
-	char *argv[];
+main(int argc, char *argv[])
 {
 	union dinodep dp;
 	struct fs *fs;
@@ -85,7 +76,7 @@ main(argc, argv)
 	if (ufs_disk_fillout_blank(&disk, fsname) == -1 ||
 	    sbfind(&disk, 0) == -1)
 		err(1, "Cannot access file system superblock on %s", fsname);
-	fs = (struct fs *)&disk.d_sb;
+	fs = (struct fs *)&disk.d_sbunion.d_sb;
 
 	/* remaining arguments are inode numbers. */
 	while (*++argv) {

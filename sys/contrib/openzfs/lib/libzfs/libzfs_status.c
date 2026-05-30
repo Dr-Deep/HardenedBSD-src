@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -97,66 +98,70 @@ static const char *const zfs_msgid_table[] = {
 #define	NMSGID	(sizeof (zfs_msgid_table) / sizeof (zfs_msgid_table[0]))
 
 static int
-vdev_missing(vdev_stat_t *vs, uint_t vsc)
+vdev_missing(vdev_stat_t *vs, uint_t vsc, void *arg)
 {
-	(void) vsc;
+	(void) vsc, (void) arg;
 	return (vs->vs_state == VDEV_STATE_CANT_OPEN &&
 	    vs->vs_aux == VDEV_AUX_OPEN_FAILED);
 }
 
 static int
-vdev_faulted(vdev_stat_t *vs, uint_t vsc)
+vdev_faulted(vdev_stat_t *vs, uint_t vsc, void *arg)
 {
-	(void) vsc;
+	(void) vsc, (void) arg;
 	return (vs->vs_state == VDEV_STATE_FAULTED);
 }
 
 static int
-vdev_errors(vdev_stat_t *vs, uint_t vsc)
+vdev_errors(vdev_stat_t *vs, uint_t vsc, void *arg)
 {
-	(void) vsc;
+	(void) vsc, (void) arg;
 	return (vs->vs_state == VDEV_STATE_DEGRADED ||
 	    vs->vs_read_errors != 0 || vs->vs_write_errors != 0 ||
 	    vs->vs_checksum_errors != 0);
 }
 
 static int
-vdev_broken(vdev_stat_t *vs, uint_t vsc)
+vdev_broken(vdev_stat_t *vs, uint_t vsc, void *arg)
 {
-	(void) vsc;
+	(void) vsc, (void) arg;
 	return (vs->vs_state == VDEV_STATE_CANT_OPEN);
 }
 
 static int
-vdev_offlined(vdev_stat_t *vs, uint_t vsc)
+vdev_offlined(vdev_stat_t *vs, uint_t vsc, void *arg)
 {
-	(void) vsc;
+	(void) vsc, (void) arg;
 	return (vs->vs_state == VDEV_STATE_OFFLINE);
 }
 
 static int
-vdev_removed(vdev_stat_t *vs, uint_t vsc)
+vdev_removed(vdev_stat_t *vs, uint_t vsc, void *arg)
 {
-	(void) vsc;
+	(void) vsc, (void) arg;
 	return (vs->vs_state == VDEV_STATE_REMOVED);
 }
 
 static int
-vdev_non_native_ashift(vdev_stat_t *vs, uint_t vsc)
+vdev_non_native_ashift(vdev_stat_t *vs, uint_t vsc, void *arg)
 {
-	if (getenv("ZPOOL_STATUS_NON_NATIVE_ASHIFT_IGNORE") != NULL)
-		return (0);
+	uint64_t ashift = *(uint64_t *)arg;
 
 	return (VDEV_STAT_VALID(vs_physical_ashift, vsc) &&
+	    (ashift == 0 || vs->vs_configured_ashift < ashift) &&
 	    vs->vs_configured_ashift < vs->vs_physical_ashift);
 }
 
 /*
  * Detect if any leaf devices that have seen errors or could not be opened.
+ * Returns:
+ *   - EDOM if a failure domain in dRAID vdev is down
+ *   - ENXIO if any device is problematic
+ *   - 0 (zero) otherwise
  */
-static boolean_t
-find_vdev_problem(nvlist_t *vdev, int (*func)(vdev_stat_t *, uint_t),
-    boolean_t ignore_replacing)
+static int
+find_vdev_problem(nvlist_t *vdev, int (*func)(vdev_stat_t *, uint_t, void *),
+    void *arg, boolean_t ignore_replacing)
 {
 	nvlist_t **child;
 	uint_t c, children;
@@ -168,22 +173,44 @@ find_vdev_problem(nvlist_t *vdev, int (*func)(vdev_stat_t *, uint_t),
 	 * later.
 	 */
 	if (ignore_replacing == B_TRUE) {
-		char *type = fnvlist_lookup_string(vdev, ZPOOL_CONFIG_TYPE);
+		const char *type = fnvlist_lookup_string(vdev,
+		    ZPOOL_CONFIG_TYPE);
 		if (strcmp(type, VDEV_TYPE_REPLACING) == 0)
-			return (B_FALSE);
+			return (0);
 	}
 
 	if (nvlist_lookup_nvlist_array(vdev, ZPOOL_CONFIG_CHILDREN, &child,
 	    &children) == 0) {
-		for (c = 0; c < children; c++)
-			if (find_vdev_problem(child[c], func, ignore_replacing))
-				return (B_TRUE);
+
+		uint64_t fgrp_children = 0;
+		(void) nvlist_lookup_uint64(vdev, ZPOOL_CONFIG_DRAID_NCHILDREN,
+		    &fgrp_children);
+
+		for (c = 0; c < fgrp_children; c++) {
+			int nfgrps = children / fgrp_children;
+			int nfaults = 0;
+			for (int g = 0; g < nfgrps; g++) {
+				if (find_vdev_problem(child[c +
+				    (g * fgrp_children)], func, arg,
+				    ignore_replacing))
+					nfaults++;
+			}
+			if (nfaults == nfgrps)
+				return (EDOM);
+		}
+
+		for (c = 0; c < children; c++) {
+			int res;
+			if ((res = find_vdev_problem(child[c], func, arg,
+			    ignore_replacing)))
+				return (res);
+		}
 	} else {
 		uint_t vsc;
 		vdev_stat_t *vs = (vdev_stat_t *)fnvlist_lookup_uint64_array(
 		    vdev, ZPOOL_CONFIG_VDEV_STATS, &vsc);
-		if (func(vs, vsc) != 0)
-			return (B_TRUE);
+		if (func(vs, vsc, arg) != 0)
+			return (ENXIO);
 	}
 
 	/*
@@ -191,12 +218,14 @@ find_vdev_problem(nvlist_t *vdev, int (*func)(vdev_stat_t *, uint_t),
 	 */
 	if (nvlist_lookup_nvlist_array(vdev, ZPOOL_CONFIG_L2CACHE, &child,
 	    &children) == 0) {
-		for (c = 0; c < children; c++)
-			if (find_vdev_problem(child[c], func, ignore_replacing))
-				return (B_TRUE);
+		for (c = 0; c < children; c++) {
+			if (find_vdev_problem(child[c], func, arg,
+			    ignore_replacing))
+				return (ENXIO);
+		}
 	}
 
-	return (B_FALSE);
+	return (0);
 }
 
 /*
@@ -218,11 +247,10 @@ find_vdev_problem(nvlist_t *vdev, int (*func)(vdev_stat_t *, uint_t),
  */
 static zpool_status_t
 check_status(nvlist_t *config, boolean_t isimport,
-    zpool_errata_t *erratap, const char *compat)
+    zpool_errata_t *erratap, const char *compat, uint64_t ashift)
 {
 	pool_scan_stat_t *ps = NULL;
 	uint_t vsc, psc;
-	uint64_t nerr;
 	uint64_t suspended;
 	uint64_t hostid = 0;
 	uint64_t errata = 0;
@@ -370,15 +398,15 @@ check_status(nvlist_t *config, boolean_t isimport,
 	 * Bad devices in non-replicated config.
 	 */
 	if (vs->vs_state == VDEV_STATE_CANT_OPEN &&
-	    find_vdev_problem(nvroot, vdev_faulted, B_TRUE))
+	    find_vdev_problem(nvroot, vdev_faulted, NULL, B_TRUE))
 		return (ZPOOL_STATUS_FAULTED_DEV_NR);
 
 	if (vs->vs_state == VDEV_STATE_CANT_OPEN &&
-	    find_vdev_problem(nvroot, vdev_missing, B_TRUE))
+	    find_vdev_problem(nvroot, vdev_missing, NULL, B_TRUE))
 		return (ZPOOL_STATUS_MISSING_DEV_NR);
 
 	if (vs->vs_state == VDEV_STATE_CANT_OPEN &&
-	    find_vdev_problem(nvroot, vdev_broken, B_TRUE))
+	    find_vdev_problem(nvroot, vdev_broken, NULL, B_TRUE))
 		return (ZPOOL_STATUS_CORRUPT_LABEL_NR);
 
 	/*
@@ -392,6 +420,7 @@ check_status(nvlist_t *config, boolean_t isimport,
 	 * Persistent data errors.
 	 */
 	if (!isimport) {
+		uint64_t nerr;
 		if (nvlist_lookup_uint64(config, ZPOOL_CONFIG_ERRCOUNT,
 		    &nerr) == 0 && nerr != 0)
 			return (ZPOOL_STATUS_CORRUPT_DATA);
@@ -400,35 +429,41 @@ check_status(nvlist_t *config, boolean_t isimport,
 	/*
 	 * Missing devices in a replicated config.
 	 */
-	if (find_vdev_problem(nvroot, vdev_faulted, B_TRUE))
+	if (find_vdev_problem(nvroot, vdev_faulted, NULL, B_TRUE) == EDOM)
+		return (ZPOOL_STATUS_FAULTED_FDOM_R);
+	if (find_vdev_problem(nvroot, vdev_missing, NULL, B_TRUE) == EDOM)
+		return (ZPOOL_STATUS_FAULTED_FDOM_R);
+	if (find_vdev_problem(nvroot, vdev_faulted, NULL, B_TRUE))
 		return (ZPOOL_STATUS_FAULTED_DEV_R);
-	if (find_vdev_problem(nvroot, vdev_missing, B_TRUE))
+	if (find_vdev_problem(nvroot, vdev_missing, NULL, B_TRUE))
 		return (ZPOOL_STATUS_MISSING_DEV_R);
-	if (find_vdev_problem(nvroot, vdev_broken, B_TRUE))
+	if (find_vdev_problem(nvroot, vdev_broken, NULL, B_TRUE))
 		return (ZPOOL_STATUS_CORRUPT_LABEL_R);
 
 	/*
 	 * Devices with errors
 	 */
-	if (!isimport && find_vdev_problem(nvroot, vdev_errors, B_TRUE))
+	if (!isimport && find_vdev_problem(nvroot, vdev_errors, NULL, B_TRUE))
 		return (ZPOOL_STATUS_FAILING_DEV);
 
 	/*
 	 * Offlined devices
 	 */
-	if (find_vdev_problem(nvroot, vdev_offlined, B_TRUE))
+	if (find_vdev_problem(nvroot, vdev_offlined, NULL, B_TRUE))
 		return (ZPOOL_STATUS_OFFLINE_DEV);
 
 	/*
 	 * Removed device
 	 */
-	if (find_vdev_problem(nvroot, vdev_removed, B_TRUE))
+	if (find_vdev_problem(nvroot, vdev_removed, NULL, B_TRUE))
 		return (ZPOOL_STATUS_REMOVED_DEV);
 
 	/*
 	 * Suboptimal, but usable, ashift configuration.
 	 */
-	if (find_vdev_problem(nvroot, vdev_non_native_ashift, B_FALSE))
+	if (!isimport &&
+	    getenv("ZPOOL_STATUS_NON_NATIVE_ASHIFT_IGNORE") == NULL &&
+	    find_vdev_problem(nvroot, vdev_non_native_ashift, &ashift, B_FALSE))
 		return (ZPOOL_STATUS_NON_NATIVE_ASHIFT);
 
 	/*
@@ -482,7 +517,8 @@ check_status(nvlist_t *config, boolean_t isimport,
 		}
 		for (i = 0; i < SPA_FEATURES; i++) {
 			zfeature_info_t *fi = &spa_feature_table[i];
-			if (!fi->fi_zfs_mod_supported)
+			if (!fi->fi_zfs_mod_supported ||
+			    (fi->fi_flags & ZFEATURE_FLAG_NO_UPGRADE))
 				continue;
 			if (c_features[i] && !nvlist_exists(feat, fi->fi_guid))
 				return (ZPOOL_STATUS_FEAT_DISABLED);
@@ -507,8 +543,10 @@ zpool_get_status(zpool_handle_t *zhp, const char **msgid,
 	    ZFS_MAXPROPLEN, NULL, B_FALSE) != 0)
 		compatibility[0] = '\0';
 
+	uint64_t ashift = zpool_get_prop_int(zhp, ZPOOL_PROP_ASHIFT, NULL);
+
 	zpool_status_t ret = check_status(zhp->zpool_config, B_FALSE, errata,
-	    compatibility);
+	    compatibility, ashift);
 
 	if (msgid != NULL) {
 		if (ret >= NMSGID)
@@ -523,7 +561,7 @@ zpool_status_t
 zpool_import_status(nvlist_t *config, const char **msgid,
     zpool_errata_t *errata)
 {
-	zpool_status_t ret = check_status(config, B_TRUE, errata, NULL);
+	zpool_status_t ret = check_status(config, B_TRUE, errata, NULL, 0);
 
 	if (ret >= NMSGID)
 		*msgid = NULL;

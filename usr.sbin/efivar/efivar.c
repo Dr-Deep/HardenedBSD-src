@@ -24,8 +24,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <ctype.h>
 #include <efivar.h>
 #include <efivar-dp.h>
@@ -40,7 +38,6 @@ __FBSDID("$FreeBSD$");
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include "efiutil.h"
 #include "efichar.h"
 
 /* options descriptor */
@@ -256,15 +253,15 @@ print_var(efi_guid_t *guid, char *name)
 		if (load_opt_flag)
 			efi_print_load_option(data, datalen, Aflag, bflag, uflag);
 		else if (Aflag)
-			asciidump(data, datalen);
+			efi_asciidump(data, datalen, 0);
 		else if (uflag)
-			utf8dump(data, datalen);
+			efi_utf8dump(data, datalen, 0);
 		else if (bflag)
-			bindump(data, datalen);
+			efi_bindump(data, datalen);
 		else if (dflag)
 			devpath_dump(data, datalen);
 		else
-			hexdump(data, datalen);
+			efi_hexdump(data, datalen, 0);
 	} else {
 		printf("%s-%s", gname, name);
 	}
@@ -300,7 +297,7 @@ print_variables(void)
 static void
 print_known_guid(void)
 {
-	struct uuid_table *tbl;
+	struct guid_table *tbl;
 	int i, n;
 
 	n = efi_known_guid(&tbl);

@@ -32,7 +32,6 @@
  * SUCH DAMAGE.
  * 
  * $DragonFly: src/sys/net/altq/altq_fairq.c,v 1.1 2008/04/06 18:58:15 dillon Exp $
- * $FreeBSD$
  */
 /*
  * Matt: I gutted altq_priq.c and used it as a skeleton on which to build
@@ -104,6 +103,7 @@
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_private.h>
 #include <netinet/in.h>
 
 #include <netpfil/pf/pf.h>
@@ -856,6 +856,8 @@ static void
 get_class_stats(struct fairq_classstats *sp, struct fairq_class *cl)
 {
 	fairq_bucket_t *b;
+
+	memset(sp, 0, sizeof(*sp));
 
 	sp->class_handle = cl->cl_handle;
 	sp->qlimit = cl->cl_qlimit;

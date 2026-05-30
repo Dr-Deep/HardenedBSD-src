@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2010 Isilon Systems, Inc.
  * Copyright (c) 2016 Matthew Macy (mmacy@mattmacy.io)
@@ -43,23 +43,26 @@
 #include <vm/vm_page.h>
 #include <vm/pmap.h>
 
+#include <linux/mm.h>
 #include <linux/page.h>
+#include <linux/hardirq.h>
 
 #define	PageHighMem(p)		(0)
 
-static inline vm_page_t
+static inline struct page *
 kmap_to_page(void *addr)
 {
+
 	return (virt_to_page(addr));
 }
 
 static inline void *
-kmap(vm_page_t page)
+kmap(struct page *page)
 {
 	struct sf_buf *sf;
 
 	if (PMAP_HAS_DMAP) {
-		return ((void *)PHYS_TO_DMAP(VM_PAGE_TO_PHYS(page)));
+		return (PHYS_TO_DMAP(page_to_phys(page)));
 	} else {
 		sched_pin();
 		sf = sf_buf_alloc(page, SFB_NOWAIT | SFB_CPUPRIVATE);
@@ -67,32 +70,57 @@ kmap(vm_page_t page)
 			sched_unpin();
 			return (NULL);
 		}
-		return ((void *)sf_buf_kva(sf));
+		return (sf_buf_kva(sf));
 	}
 }
 
 static inline void *
-kmap_atomic_prot(vm_page_t page, pgprot_t prot)
+kmap_atomic_prot(struct page *page, pgprot_t prot)
 {
 	vm_memattr_t attr = pgprot2cachemode(prot);
 
 	if (attr != VM_MEMATTR_DEFAULT) {
-		vm_page_lock(page);
 		page->flags |= PG_FICTITIOUS;
-		vm_page_unlock(page);
 		pmap_page_set_memattr(page, attr);
 	}
 	return (kmap(page));
 }
 
 static inline void *
-kmap_atomic(vm_page_t page)
+kmap_atomic(struct page *page)
 {
+
 	return (kmap_atomic_prot(page, VM_PROT_ALL));
 }
 
+static inline void *
+kmap_local_page(struct page *page)
+{
+	return (kmap(page));
+}
+
+static inline void *
+kmap_local_folio(struct folio *folio, size_t offset)
+{
+	struct page *page;
+	char *vaddr;
+
+	page = &folio->page;
+	vaddr = kmap_local_page(page);
+	vaddr += offset;
+
+	return (vaddr);
+}
+
+static inline void *
+kmap_local_page_prot(struct page *page, pgprot_t prot)
+{
+
+	return (kmap_atomic_prot(page, prot));
+}
+
 static inline void
-kunmap(vm_page_t page)
+kunmap(struct page *page)
 {
 	struct sf_buf *sf;
 
@@ -111,8 +139,55 @@ kunmap(vm_page_t page)
 static inline void
 kunmap_atomic(void *vaddr)
 {
+
 	if (!PMAP_HAS_DMAP)
 		kunmap(virt_to_page(vaddr));
+}
+
+static inline void
+kunmap_local(void *addr)
+{
+
+	kunmap_atomic(addr);
+}
+
+static inline void
+memcpy_from_page(char *to, struct page *page, size_t offset, size_t len)
+{
+	char *from;
+
+	KASSERT(offset + len <= PAGE_SIZE,
+	    ("%s: memcpy from page %p to address %p: "
+	     "offset+len (%zu+%zu) would go beyond page end",
+	     __func__, page, to, offset, len));
+
+	from = kmap_local_page(page);
+	memcpy(to, from + offset, len);
+	kunmap_local(from);
+}
+
+static inline void
+memcpy_to_page(struct page *page, size_t offset, const char *from, size_t len)
+{
+	char *to;
+
+	KASSERT(offset + len <= PAGE_SIZE,
+	    ("%s: memcpy from address %p to page %p: "
+	     "offset+len (%zu+%zu) would go beyond page end",
+	     __func__, from, page, offset, len));
+
+	to = kmap_local_page(page);
+	memcpy(to + offset, from, len);
+	kunmap_local(to);
+}
+
+static inline void
+memcpy_to_folio(struct folio *folio, size_t offset, const char *from, size_t len)
+{
+	struct page *page;
+
+	page = &folio->page;
+	memcpy_to_page(page, offset, from, len);
 }
 
 #endif	/* _LINUXKPI_LINUX_HIGHMEM_H_ */

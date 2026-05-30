@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2010 Rui Paulo <rpaulo@FreeBSD.org>
  * All rights reserved.
@@ -23,8 +23,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _NET80211_IEEE80211_RATECTL_H_
@@ -65,7 +63,7 @@ struct ieee80211_ratectl_tx_status {
 	int		final_rate;	/* transmission rate */
 	uint_fast8_t	short_retries;	/* RTS/CTS retries */
 	uint_fast8_t	long_retries;	/* ACK retries */
-	int8_t		rssi;		/* ACK RSSI */
+	net80211_rssi_t	rssi;		/* ACK RSSI */
 
 	uint8_t		spare[15];	/* for future use */
 };
@@ -129,12 +127,12 @@ ieee80211_ratectl_node_deinit(struct ieee80211_node *ni)
 	vap->iv_rate->ir_node_deinit(ni);
 }
 
-static int __inline
+static void __inline
 ieee80211_ratectl_rate(struct ieee80211_node *ni, void *arg, uint32_t iarg)
 {
 	const struct ieee80211vap *vap = ni->ni_vap;
 
-	return vap->iv_rate->ir_rate(ni, arg, iarg);
+	vap->iv_rate->ir_rate(ni, arg, iarg);
 }
 
 static __inline void

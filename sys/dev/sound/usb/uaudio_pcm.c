@@ -1,7 +1,6 @@
-/* $FreeBSD$ */
 
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2000-2002 Hiroyuki Aizu <aizu@navi.org>
  * Copyright (c) 2006 Hans Petter Selasky
@@ -33,7 +32,6 @@
 #endif
 
 #include <dev/sound/pcm/sound.h>
-#include <dev/sound/chip.h>
 #include <dev/sound/usb/uaudio.h>
 
 #include "mixer_if.h"
@@ -136,39 +134,18 @@ ua_mixer_init(struct snd_mixer *m)
 static int
 ua_mixer_set(struct snd_mixer *m, unsigned type, unsigned left, unsigned right)
 {
-	struct mtx *mtx = mixer_get_lock(m);
-	uint8_t do_unlock;
-
-	if (mtx_owned(mtx)) {
-		do_unlock = 0;
-	} else {
-		do_unlock = 1;
-		mtx_lock(mtx);
-	}
 	uaudio_mixer_set(mix_getdevinfo(m), m, type, left, right);
-	if (do_unlock) {
-		mtx_unlock(mtx);
-	}
+
 	return (left | (right << 8));
 }
 
 static uint32_t
 ua_mixer_setrecsrc(struct snd_mixer *m, uint32_t src)
 {
-	struct mtx *mtx = mixer_get_lock(m);
 	int retval;
-	uint8_t do_unlock;
 
-	if (mtx_owned(mtx)) {
-		do_unlock = 0;
-	} else {
-		do_unlock = 1;
-		mtx_lock(mtx);
-	}
 	retval = uaudio_mixer_setrecsrc(mix_getdevinfo(m), m, src);
-	if (do_unlock) {
-		mtx_unlock(mtx);
-	}
+
 	return (retval);
 }
 
@@ -192,19 +169,7 @@ MIXER_DECLARE(ua_mixer);
 static int
 ua_probe(device_t dev)
 {
-	struct sndcard_func *func;
-
-	/* the parent device has already been probed */
-
-	func = device_get_ivars(dev);
-
-	if ((func == NULL) ||
-	    (func->func != SCF_PCM)) {
-		return (ENXIO);
-	}
-	device_set_desc(dev, "USB audio");
-
-	return (BUS_PROBE_DEFAULT);
+	return (0);
 }
 
 static int
@@ -237,6 +202,6 @@ static driver_t ua_pcm_driver = {
 };
 
 DRIVER_MODULE(ua_pcm, uaudio, ua_pcm_driver, 0, 0);
-MODULE_DEPEND(ua_pcm, uaudio, 1, 1, 1);
+MODULE_DEPEND(ua_pcm, snd_uaudio, 1, 1, 1);
 MODULE_DEPEND(ua_pcm, sound, SOUND_MINVER, SOUND_PREFVER, SOUND_MAXVER);
 MODULE_VERSION(ua_pcm, 1);

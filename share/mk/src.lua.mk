@@ -1,4 +1,3 @@
-# $FreeBSD$
 #
 # Lua helper file for FreeBSD /usr/src builds.
 #
@@ -6,7 +5,7 @@
 # system.
 
 .if !target(__<src.lua.mk>__)
-__<src.lua.mk>__:
+__<src.lua.mk>__:	.NOTMAIN
 
 .include <bsd.own.mk>
 

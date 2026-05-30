@@ -28,10 +28,6 @@
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
- *
- *	from: @(#)pmap_clnt.h 1.11 88/02/08 SMI 
- *	from: @(#)pmap_clnt.h	2.1 88/07/29 4.0 RPCSRC
- * $FreeBSD$
  */
 
 /*
@@ -68,6 +64,8 @@
 #include <sys/cdefs.h>
 
 __BEGIN_DECLS
+typedef bool_t (*clnt_broadcast_resultproc_t)(caddr_t, struct sockaddr_in *);
+
 extern bool_t		pmap_set(u_long, u_long, int, int);
 extern bool_t		pmap_unset(u_long, u_long);
 extern struct pmaplist	*pmap_getmaps(struct sockaddr_in *);
@@ -79,7 +77,7 @@ extern enum clnt_stat	pmap_rmtcall(struct sockaddr_in *,
 extern enum clnt_stat	clnt_broadcast(u_long, u_long, u_long,
 				       xdrproc_t, void *,
 				       xdrproc_t, void *,
-				       resultproc_t);
+				       clnt_broadcast_resultproc_t);
 extern u_short		pmap_getport(struct sockaddr_in *,
 				     u_long, u_long, u_int);
 __END_DECLS

@@ -9,30 +9,28 @@
 #ifndef LLVM_DEBUGINFO_PDB_NATIVE_PUBLICSSTREAM_H
 #define LLVM_DEBUGINFO_PDB_NATIVE_PUBLICSSTREAM_H
 
-#include "llvm/DebugInfo/CodeView/SymbolRecord.h"
-#include "llvm/DebugInfo/MSF/MappedBlockStream.h"
 #include "llvm/DebugInfo/PDB/Native/GlobalsStream.h"
-#include "llvm/DebugInfo/PDB/Native/RawConstants.h"
-#include "llvm/DebugInfo/PDB/Native/RawTypes.h"
-#include "llvm/DebugInfo/PDB/PDBTypes.h"
 #include "llvm/Support/BinaryStreamArray.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
 
 namespace llvm {
+namespace msf {
+class MappedBlockStream;
+}
 namespace pdb {
-class DbiStream;
-struct GSIHashHeader;
-class PDBFile;
+struct PublicsStreamHeader;
+struct SectionOffset;
 
 class PublicsStream {
 public:
-  PublicsStream(std::unique_ptr<msf::MappedBlockStream> Stream);
-  ~PublicsStream();
-  Error reload();
+  LLVM_ABI PublicsStream(std::unique_ptr<msf::MappedBlockStream> Stream);
+  LLVM_ABI ~PublicsStream();
+  LLVM_ABI Error reload();
 
-  uint32_t getSymHash() const;
-  uint16_t getThunkTableSection() const;
-  uint32_t getThunkTableOffset() const;
+  LLVM_ABI uint32_t getSymHash() const;
+  LLVM_ABI uint16_t getThunkTableSection() const;
+  LLVM_ABI uint32_t getThunkTableOffset() const;
   const GSIHashTable &getPublicsTable() const { return PublicsTable; }
   FixedStreamArray<support::ulittle32_t> getAddressMap() const {
     return AddressMap;

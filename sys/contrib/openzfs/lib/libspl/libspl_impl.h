@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -20,5 +21,12 @@
  * CDDL HEADER END
  */
 
+#ifndef _LIBSPL_IMPL_H
+#define	_LIBSPL_IMPL_H
 
 extern ssize_t getexecname_impl(char *execname);
+
+extern void random_init(void);
+extern void random_fini(void);
+
+#endif

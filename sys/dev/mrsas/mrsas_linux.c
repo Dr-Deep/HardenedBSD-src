@@ -37,17 +37,10 @@
  *
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 
-#if (__FreeBSD_version >= 1001511)
 #include <sys/capsicum.h>
-#elif (__FreeBSD_version > 900000)
-#include <sys/capability.h>
-#endif
 
 #include <sys/conf.h>
 #include <sys/kernel.h>
@@ -74,15 +67,7 @@ __FBSDID("$FreeBSD$");
 #define	MRSAS_LINUX_IOCTL_MIN  0x4d00
 #define	MRSAS_LINUX_IOCTL_MAX  0x4d01
 
-static linux_ioctl_function_t mrsas_linux_ioctl;
-static struct linux_ioctl_handler mrsas_linux_handler = {mrsas_linux_ioctl,
-	MRSAS_LINUX_IOCTL_MIN,
-MRSAS_LINUX_IOCTL_MAX};
-
-SYSINIT(mrsas_register, SI_SUB_KLD, SI_ORDER_MIDDLE,
-    linux_ioctl_register_handler, &mrsas_linux_handler);
-SYSUNINIT(mrsas_unregister, SI_SUB_KLD, SI_ORDER_MIDDLE,
-    linux_ioctl_unregister_handler, &mrsas_linux_handler);
+LINUX_IOCTL_SET(mrsas, MRSAS_LINUX_IOCTL_MIN, MRSAS_LINUX_IOCTL_MAX);
 
 static struct linux_device_handler mrsas_device_handler =
 {"mrsas", "megaraid_sas", "mrsas0", "megaraid_sas_ioctl_node", -1, 0, 1};
@@ -108,10 +93,7 @@ mrsas_linux_modevent(module_t mod __unused, int cmd __unused, void *data __unuse
 static int
 mrsas_linux_ioctl(struct thread *p, struct linux_ioctl_args *args)
 {
-#if (__FreeBSD_version >= 1000000)
 	cap_rights_t rights;
-
-#endif
 	struct file *fp;
 	int error;
 	u_long cmd = args->cmd;
@@ -120,14 +102,7 @@ mrsas_linux_ioctl(struct thread *p, struct linux_ioctl_args *args)
 		error = ENOTSUP;
 		goto END;
 	}
-#if (__FreeBSD_version >= 1000000)
 	error = fget(p, args->fd, cap_rights_init_one(&rights, CAP_IOCTL), &fp);
-#elif (__FreeBSD_version <= 900000)
-	error = fget(p, args->fd, &fp);
-#else					/* For FreeBSD version greater than
-					 * 9.0.0 but less than 10.0.0 */
-	error = fget(p, args->fd, CAP_IOCTL, &fp);
-#endif
 	if (error != 0)
 		goto END;
 

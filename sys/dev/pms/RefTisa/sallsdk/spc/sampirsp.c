@@ -26,7 +26,6 @@
  */
 /******************************************************************************/
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 #include <dev/pms/config.h>
 
 #include <dev/pms/RefTisa/sallsdk/spc/saglobal.h>
@@ -658,9 +657,6 @@ mpiParseOBIomb(
   return ret;
 
 }
-#endif
-
-#ifndef BIOS
 #endif
 
 /******************************************************************************/
@@ -7221,7 +7217,7 @@ GLOBAL bit32 mpiDekManagementRsp(
      agEvent.encryptOperation = OSSA_HW_ENCRYPT_DEK_INVALIDTE;
   }
   agEvent.status = status;
-  if (status == OSSA_MPI_ENC_ERR_ILLEGAL_DEK_PARAM || OSSA_MPI_ERR_DEK_MANAGEMENT_DEK_UNWRAP_FAIL)
+  if (status == OSSA_MPI_ENC_ERR_ILLEGAL_DEK_PARAM || status == OSSA_MPI_ERR_DEK_MANAGEMENT_DEK_UNWRAP_FAIL)
   {
     agEvent.eq = errorQualifier;
   }

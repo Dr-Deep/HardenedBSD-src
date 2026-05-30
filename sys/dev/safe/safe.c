@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2003 Sam Leffler, Errno Consulting
  * Copyright (c) 2003 Global Technology Associates, Inc.
@@ -28,8 +28,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * SafeNet SafeXcel-1141 hardware crypto accelerator
  */
@@ -426,6 +424,8 @@ safe_attach(device_t dev)
 #ifdef SAFE_DEBUG
 	safec = sc;			/* for use by hw.safe.dump */
 #endif
+	gone_in(16, "%s(4) is deprecated in 15.0 and removed in 16.0\n",
+	    safe_driver.name);
 	return (0);
 bad4:
 	crypto_unregister_all(sc->sc_cid);
@@ -466,7 +466,6 @@ safe_detach(device_t dev)
 	mtx_destroy(&sc->sc_ringmtx);
 	safe_dma_free(sc, &sc->sc_ringalloc);
 
-	bus_generic_detach(dev);
 	bus_teardown_intr(dev, sc->sc_irq, sc->sc_ih);
 	bus_release_resource(dev, SYS_RES_IRQ, 0, sc->sc_irq);
 
@@ -1779,7 +1778,7 @@ safe_dmamap_aligned(const struct safe_operand *op)
  * of an operation.  The hardware requires that each ``particle''
  * but the last in an operation result have the same size.  We
  * fix that size at SAFE_MAX_DSIZE bytes.  This routine returns
- * 0 if some segment is not a multiple of of this size, 1 if all
+ * 0 if some segment is not a multiple of this size, 1 if all
  * segments are exactly this size, or 2 if segments are at worst
  * a multiple of this size.
  */

@@ -59,7 +59,6 @@ ldns_wire2dname(ldns_rdf **dname, const uint8_t *wire, size_t max, size_t *pos)
 	uint16_t pointer_target;
 	uint8_t pointer_target_buf[2];
 	size_t dname_pos = 0;
-	size_t uncompressed_length = 0;
 	size_t compression_pos = 0;
 	uint8_t tmp_dname[LDNS_MAX_DOMAINLEN];
 	unsigned int pointer_count = 0;
@@ -120,7 +119,6 @@ ldns_wire2dname(ldns_rdf **dname, const uint8_t *wire, size_t max, size_t *pos)
 			return LDNS_STATUS_DOMAINNAME_OVERFLOW;
 		}
 		memcpy(&tmp_dname[dname_pos], &wire[*pos], label_size);
-		uncompressed_length += label_size + 1;
 		dname_pos += label_size;
 		*pos = *pos + label_size;
 
@@ -225,6 +223,8 @@ ldns_wire2rdf(ldns_rr *rr, const uint8_t *wire, size_t max, size_t *pos)
 			break;
 		case LDNS_RDF_TYPE_ILNP64:
 		case LDNS_RDF_TYPE_EUI64:
+		case LDNS_RDF_TYPE_IPN:
+		case LDNS_RDF_TYPE_INT64:
 			cur_rdf_length = LDNS_RDF_SIZE_8BYTES;
 			break;
 		case LDNS_RDF_TYPE_AAAA:
@@ -232,6 +232,7 @@ ldns_wire2rdf(ldns_rr *rr, const uint8_t *wire, size_t max, size_t *pos)
 			break;
 		case LDNS_RDF_TYPE_STR:
 		case LDNS_RDF_TYPE_NSEC3_SALT:
+		case LDNS_RDF_TYPE_UNQUOTED:
 		case LDNS_RDF_TYPE_TAG:
 			/* len is stored in first byte
 			 * it should be in the rdf too, so just
@@ -272,6 +273,8 @@ ldns_wire2rdf(ldns_rr *rr, const uint8_t *wire, size_t max, size_t *pos)
 		case LDNS_RDF_TYPE_ATMA:
 		case LDNS_RDF_TYPE_IPSECKEY:
 		case LDNS_RDF_TYPE_LONG_STR:
+		case LDNS_RDF_TYPE_AMTRELAY:
+		case LDNS_RDF_TYPE_SVCPARAMS:
 		case LDNS_RDF_TYPE_NONE:
 			/*
 			 * Read to end of rr rdata
@@ -308,7 +311,6 @@ ldns_wire2rdf(ldns_rr *rr, const uint8_t *wire, size_t max, size_t *pos)
 
 	return LDNS_STATUS_OK;
 }
-
 
 /* TODO:
          can *pos be incremented at READ_INT? or maybe use something like
@@ -412,6 +414,10 @@ ldns_wire2pkt(ldns_pkt **packet_p, const uint8_t *wire, size_t max)
 
 	uint8_t data[4];
 
+	if (!packet) {
+		return LDNS_STATUS_MEM_ERR;
+	}
+
 	status = ldns_wire2pkt_hdr(packet, wire, max, &pos);
 	LDNS_STATUS_CHECK_GOTO(status, status_error);
 
@@ -464,6 +470,7 @@ ldns_wire2pkt(ldns_pkt **packet_p, const uint8_t *wire, size_t max)
 			ldns_pkt_set_edns_z(packet, ldns_read_uint16(&data[2]));
 			/* edns might not have rdfs */
 			if (ldns_rr_rdf(rr, 0)) {
+				ldns_rdf_deep_free(ldns_pkt_edns_data(packet));
 				ldns_pkt_set_edns_data(packet, ldns_rdf_clone(ldns_rr_rdf(rr, 0)));
 			}
 			ldns_rr_free(rr);

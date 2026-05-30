@@ -29,21 +29,6 @@
  * SUCH DAMAGE.
  */
 
-#ifndef lint
-static const char copyright[] =
-"@(#) Copyright (c) 1987, 1993\n\
-	The Regents of the University of California.  All rights reserved.\n";
-#endif /* not lint */
-
-#if 0
-#ifndef lint
-static char sccsid[] = "@(#)printenv.c	8.2 (Berkeley) 5/4/95";
-#endif /* not lint */
-#endif
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/types.h>
 
 #include <capsicum_helpers.h>
@@ -53,8 +38,14 @@ __FBSDID("$FreeBSD$");
 #include <string.h>
 #include <unistd.h>
 
-void	usage(void);
 extern char **environ;
+
+static void
+usage(void)
+{
+	(void)fprintf(stderr, "usage: printenv [name]\n");
+	exit(EXIT_FAILURE);
+}
 
 /*
  * printenv
@@ -67,40 +58,42 @@ main(int argc, char *argv[])
 {
 	char *cp, **ep;
 	size_t len;
-	int ch;
+	int opt;
 
 	if (caph_limit_stdio() < 0 || caph_enter() < 0)
 		err(1, "capsicum");
 
-	while ((ch = getopt(argc, argv, "")) != -1)
-		switch(ch) {
-		case '?':
+	while ((opt = getopt(argc, argv, "")) != -1) {
+		switch (opt) {
 		default:
 			usage();
 		}
+	}
 	argc -= optind;
 	argv += optind;
 
+	if (argc > 1)
+		usage();
 	if (argc == 0) {
 		for (ep = environ; *ep; ep++)
 			(void)printf("%s\n", *ep);
-		exit(0);
-	}
-	len = strlen(*argv);
-	for (ep = environ; *ep; ep++)
-		if (!memcmp(*ep, *argv, len)) {
-			cp = *ep + len;
-			if (*cp == '=') {
-				(void)printf("%s\n", cp + 1);
-				exit(0);
+	} else {
+		len = strlen(*argv);
+		for (ep = environ; *ep != NULL; ep++) {
+			if (memcmp(*ep, *argv, len) == 0) {
+				cp = *ep + len;
+				if (*cp == '=') {
+					(void)printf("%s\n", cp + 1);
+					break;
+				}
 			}
 		}
-	exit(1);
-}
-
-void
-usage(void)
-{
-	(void)fprintf(stderr, "usage: printenv [name]\n");
-	exit(1);
+		if (*ep == NULL) {
+			/* *argv not found */
+			exit(EXIT_FAILURE);
+		}
+	}
+	if (fflush(stdout) != 0)
+		err(EXIT_FAILURE, "stdout");
+	exit(EXIT_SUCCESS);
 }

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2010 Nathan Whitehorn
  * All rights reserved.
@@ -25,9 +25,6 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -226,8 +223,7 @@ static int
 ps3_smp_start_cpu(platform_t plat, struct pcpu *pc)
 {
 	/* kernel is spinning on 0x40 == -1 right now */
-	volatile uint32_t *secondary_spin_sem =
-	    (uint32_t *)PHYS_TO_DMAP((uintptr_t)0x40);
+	volatile uint32_t *secondary_spin_sem = PHYS_TO_DMAP((uintptr_t)0x40);
 	int remote_pir = pc->pc_hwref;
 	int timeout;
 

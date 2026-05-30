@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2021 Adrian Chadd <adrian@FreeBSD.org>
  *
@@ -29,9 +29,6 @@
 /*
  * This is a pinmux/gpio controller for the IPQ4018/IPQ4019.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -317,6 +314,7 @@ qcom_tlmm_ipq4018_hw_pin_set_pupd_config(
 		reg |= QCOM_TLMM_IPQ4018_REG_PIN_CONTROL_PUPD_PULLDOWN
 		    << QCOM_TLMM_IPQ4018_REG_PIN_CONTROL_PUPD_SHIFT;
 		break;
+	case QCOM_TLMM_PIN_PUPD_CONFIG_STRONG_PULL_UP:
 	case QCOM_TLMM_PIN_PUPD_CONFIG_PULL_UP:
 		reg |= QCOM_TLMM_IPQ4018_REG_PIN_CONTROL_PUPD_PULLUP
 		    << QCOM_TLMM_IPQ4018_REG_PIN_CONTROL_PUPD_SHIFT;

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2020 Oleksandr Tymoshenko <gonzo@FreeBSD.org>
  * Copyright (c) 2018 Jared McNeill <jmcneill@invisible.ca>
@@ -24,12 +24,7 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -45,8 +40,8 @@ __FBSDID("$FreeBSD$");
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
-#include <dev/extres/clk/clk.h>
-#include <dev/extres/syscon/syscon.h>
+#include <dev/clk/clk.h>
+#include <dev/syscon/syscon.h>
 
 #include "syscon_if.h"
 
@@ -421,38 +416,22 @@ static int
 rkcodec_mixer_set(struct snd_mixer *m, unsigned dev, unsigned left, unsigned right)
 {
 	struct rkcodec_softc *sc;
-	struct mtx *mixer_lock;
-	uint8_t do_unlock;
 
 	sc = device_get_softc(mix_getdevinfo(m));
-	mixer_lock = mixer_get_lock(m);
-
-	if (mtx_owned(mixer_lock)) {
-		do_unlock = 0;
-	} else {
-		do_unlock = 1;
-		mtx_lock(mixer_lock);
-	}
 
 	right = left;
 
 	RKCODEC_LOCK(sc);
 	switch(dev) {
 	case SOUND_MIXER_VOLUME:
-		printf("[%s] %s:%d\n", __func__, __FILE__, __LINE__);
 		break;
 
 	case SOUND_MIXER_MIC:
-		printf("[%s] %s:%d\n", __func__, __FILE__, __LINE__);
 		break;
 	default:
 		break;
 	}
 	RKCODEC_UNLOCK(sc);
-
-	if (do_unlock) {
-		mtx_unlock(mixer_lock);
-	}
 
 	return (left | (right << 8));
 }
@@ -551,27 +530,15 @@ rkcodec_dai_trigger(device_t dev, int go, int pcm_dir)
 {
 	// struct rkcodec_softc 	*sc = device_get_softc(dev);
 
-	if ((pcm_dir != PCMDIR_PLAY) && (pcm_dir != PCMDIR_REC))
+	if (pcm_dir != PCMDIR_PLAY && pcm_dir != PCMDIR_REC)
 		return (EINVAL);
 
 	switch (go) {
 	case PCMTRIG_START:
-		if (pcm_dir == PCMDIR_PLAY) {
-			printf("[%s] %s:%d\n", __func__, __FILE__, __LINE__);
-		}
-		else if (pcm_dir == PCMDIR_REC) {
-			printf("[%s] %s:%d\n", __func__, __FILE__, __LINE__);
-		}
 		break;
 
 	case PCMTRIG_STOP:
 	case PCMTRIG_ABORT:
-		if (pcm_dir == PCMDIR_PLAY) {
-			printf("[%s] %s:%d\n", __func__, __FILE__, __LINE__);
-		}
-		else if (pcm_dir == PCMDIR_REC) {
-			printf("[%s] %s:%d\n", __func__, __FILE__, __LINE__);
-		}
 		break;
 	}
 
@@ -587,6 +554,12 @@ rkcodec_dai_setup_mixer(device_t dev, device_t pcmdev)
 	return (0);
 }
 
+static int
+rkcodec_dai_set_sysclk(device_t dev, unsigned int rate, int dai_dir)
+{
+	return (0);
+}
+
 static device_method_t rkcodec_methods[] = {
 	/* Device interface */
 	DEVMETHOD(device_probe,		rkcodec_probe),
@@ -596,6 +569,7 @@ static device_method_t rkcodec_methods[] = {
 	DEVMETHOD(audio_dai_init,	rkcodec_dai_init),
 	DEVMETHOD(audio_dai_setup_mixer,	rkcodec_dai_setup_mixer),
 	DEVMETHOD(audio_dai_trigger,	rkcodec_dai_trigger),
+	DEVMETHOD(audio_dai_set_sysclk,	rkcodec_dai_set_sysclk),
 
 	DEVMETHOD_END
 };

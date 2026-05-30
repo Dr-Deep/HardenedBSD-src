@@ -23,7 +23,6 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 
 .include <src.opts.mk>
 .include <bsd.init.mk>
@@ -31,7 +30,6 @@
 ATF=		${SRCTOP}/contrib/atf
 .PATH:		${ATF}/atf-sh
 
-PACKAGE=	tests
 PROG_CXX=	atf-sh
 SRCS=		atf-sh.cpp
 MAN=		atf-sh.1 atf-sh.3
@@ -55,6 +53,7 @@ MLINKS+=	\
 		atf-sh.3 atf_get_srcdir.3 \
 		atf-sh.3 atf_init_test_cases.3 \
 		atf-sh.3 atf_pass.3 \
+		atf-sh.3 atf_require_kmod.3 \
 		atf-sh.3 atf_require_prog.3 \
 		atf-sh.3 atf_set.3 \
 		atf-sh.3 atf_skip.3 \
@@ -66,16 +65,12 @@ CFLAGS+=	-DATF_PKGDATADIR='"${SHAREDIR}/atf"'
 CFLAGS+=	-DATF_SHELL='"/bin/sh"'
 CFLAGS+=	-I${ATF}
 
-# Silence warnings about usage of deprecated std::auto_ptr
-CXXWARNFLAGS+=	-Wno-deprecated-declarations
-
 LIBADD=		atf_cxx
 
 FILESGROUPS=	SUBR
 
 SUBRDIR=	${SHAREDIR}/atf
 SUBR=		libatf-sh.subr
-SUBRTAGS=	package=tests
 
 HAS_TESTS=
 SUBDIR.${MK_TESTS}+= tests

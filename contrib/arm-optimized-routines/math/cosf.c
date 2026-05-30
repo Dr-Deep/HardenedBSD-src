@@ -1,14 +1,16 @@
 /*
  * Single-precision cos function.
  *
- * Copyright (c) 2018-2019, Arm Limited.
- * SPDX-License-Identifier: MIT
+ * Copyright (c) 2018-2024, Arm Limited.
+ * SPDX-License-Identifier: MIT OR Apache-2.0 WITH LLVM-exception
  */
 
 #include <stdint.h>
 #include <math.h>
 #include "math_config.h"
 #include "sincosf.h"
+#include "test_defs.h"
+#include "test_sig.h"
 
 /* Fast cosf implementation.  Worst-case ULP is 0.5607, maximum relative
    error is 0.5303 * 2^-23.  A single-step range reduction is used for
@@ -22,7 +24,7 @@ cosf (float y)
   int n;
   const sincos_t *p = &__sincosf_table[0];
 
-  if (abstop12 (y) < abstop12 (pio4))
+  if (abstop12 (y) < abstop12 (pio4f))
     {
       double x2 = x * x;
 
@@ -61,3 +63,9 @@ cosf (float y)
   else
     return __math_invalidf (y);
 }
+
+TEST_SIG (S, F, 1, cos, -3.1, 3.1)
+TEST_ULP (cosf, 0.06)
+TEST_ULP_NONNEAREST (cosf, 0.5)
+TEST_INTERVAL (cosf, 0, 0xffff0000, 10000)
+TEST_SYM_INTERVAL (cosf, 0x1p-14, 0x1p54, 50000)

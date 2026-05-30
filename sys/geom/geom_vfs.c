@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2004 Poul-Henning Kamp
  * All rights reserved.
@@ -26,12 +26,11 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
+#define	EXTERR_CATEGORY	EXTERR_CAT_GEOMVFS
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bio.h>
+#include <sys/exterrvar.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
@@ -127,12 +126,12 @@ g_vfs_done(struct bio *bip)
 			mp = cdevp->si_mountpt;
 		if (mp != NULL) {
 			if (bp->b_iocmd == BIO_READ) {
-				if (LK_HOLDER(bp->b_lock.lk_lock) == LK_KERNPROC)
+				if (BUF_DISOWNED(bp))
 					mp->mnt_stat.f_asyncreads++;
 				else
 					mp->mnt_stat.f_syncreads++;
 			} else if (bp->b_iocmd == BIO_WRITE) {
-				if (LK_HOLDER(bp->b_lock.lk_lock) == LK_KERNPROC)
+				if (BUF_DISOWNED(bp))
 					mp->mnt_stat.f_asyncwrites++;
 				else
 					mp->mnt_stat.f_syncwrites++;
@@ -156,13 +155,16 @@ g_vfs_done(struct bio *bip)
 			g_print_bio("g_vfs_done():", bip, "error = %d%s",
 			    bip->bio_error,
 			    bip->bio_error != ENXIO ? "" :
-			    " supressing further ENXIO");
+			    " suppressing further ENXIO");
 		}
 	}
-	bp->b_error = bip->bio_error;
 	bp->b_ioflags = bip->bio_flags;
 	if (bip->bio_error)
 		bp->b_ioflags |= BIO_ERROR;
+	if ((bp->b_ioflags & BIO_EXTERR) != 0)
+		bp->b_exterr = bip->bio_exterr;
+	else
+		bp->b_error = bip->bio_error;
 	bp->b_resid = bp->b_bcount - bip->bio_completed;
 	g_destroy_bio(bip);
 
@@ -198,6 +200,8 @@ g_vfs_strategy(struct bufobj *bo, struct buf *bp)
 		mtx_unlock(&sc->sc_mtx);
 		bp->b_error = ENXIO;
 		bp->b_ioflags |= BIO_ERROR;
+		EXTERROR_KE(&bp->b_exterr, ENXIO,
+		    "orphaned or enxio active");
 		bufdone(bp);
 		return;
 	}
@@ -295,7 +299,16 @@ g_vfs_open(struct vnode *vp, struct g_consumer **cpp, const char *fsname, int wr
 		g_wither_geom(gp, ENXIO);
 		return (error);
 	}
-	vnode_create_vobject(vp, pp->mediasize, curthread);
+	/*
+	 * Mediasize might not be set until first access (see g_disk_access()),
+	 * That's why we check it here and not earlier.
+	 */
+	if (pp->mediasize == 0) {
+		(void)g_access(cp, -1, -wr, -wr);
+		g_wither_geom(gp, ENXIO);
+		return (ENXIO);
+	}
+	vnode_create_disk_vobject(vp, pp->mediasize, curthread);
 	*cpp = cp;
 	cp->private = vp;
 	cp->flags |= G_CF_DIRECT_SEND | G_CF_DIRECT_RECEIVE;

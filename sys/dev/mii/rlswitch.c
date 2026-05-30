@@ -34,10 +34,8 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
- * driver for RealTek 8305 pseudo PHYs
+ * driver for Realtek 8305 pseudo PHYs
  */
 
 #include <sys/param.h>

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -135,7 +136,7 @@ zfsdev_ioctl(struct file *filp, unsigned cmd, unsigned long arg)
 
 	vecnum = cmd - ZFS_IOC_FIRST;
 
-	zc = kmem_zalloc(sizeof (zfs_cmd_t), KM_SLEEP);
+	zc = vmem_zalloc(sizeof (zfs_cmd_t), KM_SLEEP);
 
 	if (ddi_copyin((void *)(uintptr_t)arg, zc, sizeof (zfs_cmd_t), 0)) {
 		error = -SET_ERROR(EFAULT);
@@ -146,7 +147,7 @@ zfsdev_ioctl(struct file *filp, unsigned cmd, unsigned long arg)
 	if (error == 0 && rc != 0)
 		error = -SET_ERROR(EFAULT);
 out:
-	kmem_free(zc, sizeof (zfs_cmd_t));
+	vmem_free(zc, sizeof (zfs_cmd_t));
 	return (error);
 
 }
@@ -169,6 +170,8 @@ zfs_ioc_userns_attach(zfs_cmd_t *zc)
 	 */
 	if (error == ENOTTY)
 		error = ZFS_ERR_NOT_USER_NAMESPACE;
+	if (error == ENXIO)
+		error = ZFS_ERR_NO_USER_NS_SUPPORT;
 
 	return (error);
 }
@@ -189,6 +192,8 @@ zfs_ioc_userns_detach(zfs_cmd_t *zc)
 	 */
 	if (error == ENOTTY)
 		error = ZFS_ERR_NOT_USER_NAMESPACE;
+	if (error == ENXIO)
+		error = ZFS_ERR_NO_USER_NS_SUPPORT;
 
 	return (error);
 }
@@ -282,6 +287,8 @@ zfsdev_detach(void)
 #define	ZFS_DEBUG_STR	""
 #endif
 
+zidmap_t *zfs_init_idmap;
+
 static int
 openzfs_init_os(void)
 {
@@ -301,9 +308,17 @@ openzfs_init_os(void)
 	    "ZFS pool version %s, ZFS filesystem version %s\n",
 	    ZFS_META_VERSION, ZFS_META_RELEASE, ZFS_DEBUG_STR,
 	    SPA_VERSION_STRING, ZPL_VERSION_STRING);
+#ifdef HAVE_LINUX_EXPERIMENTAL
+	printk(KERN_NOTICE "ZFS: Using ZFS with kernel %s is EXPERIMENTAL and "
+	    "SERIOUS DATA LOSS may occur!\n", utsname()->release);
+	printk(KERN_NOTICE "ZFS: Please report your results at: "
+	    "https://github.com/openzfs/zfs/issues/new\n");
+#endif
 #ifndef CONFIG_FS_POSIX_ACL
 	printk(KERN_NOTICE "ZFS: Posix ACLs disabled by kernel\n");
 #endif /* CONFIG_FS_POSIX_ACL */
+
+	zfs_init_idmap = (zidmap_t *)zfs_get_init_idmap();
 
 	return (0);
 }

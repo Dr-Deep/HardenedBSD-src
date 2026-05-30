@@ -23,14 +23,13 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <efi.h>
 #include <efilib.h>
 #include <efichar.h>
 #include <uuid.h>
 #include <machine/_inttypes.h>
+#include <Protocol/DevicePathToText.h>
+#include <Protocol/DevicePathFromText.h>
 
 static EFI_GUID ImageDevicePathGUID =
     EFI_LOADED_IMAGE_DEVICE_PATH_PROTOCOL_GUID;
@@ -74,7 +73,7 @@ efi_close_devpath(EFI_HANDLE handle)
 
 	status = BS->CloseProtocol(handle, &DevicePathGUID, IH, NULL);
 	if (EFI_ERROR(status))
-		printf("CloseProtocol error: %lu\n", EFI_ERROR_CODE(status));
+		printf("CloseProtocol error: %lu\n", DECODE_ERROR(status));
 }
 
 static char *
@@ -168,7 +167,7 @@ efi_hw_dev_path(EFI_DEVICE_PATH *node, char *suffix)
 		break;
 	case HW_CONTROLLER_DP:
 		if (asprintf(&name, "Ctrl(%x)%s",
-		    ((CONTROLLER_DEVICE_PATH *)node)->Controller, tail) < 0)
+		    ((CONTROLLER_DEVICE_PATH *)node)->ControllerNumber, tail) < 0)
 			name = NULL;
 		break;
 	default:
@@ -494,7 +493,7 @@ efi_devpath_to_name(EFI_DEVICE_PATH *devpath)
 		free(ptr);
 		ptr = out;
 	}
-	
+
 	return (ptr);
 }
 
@@ -572,6 +571,23 @@ efi_devpath_last_node(EFI_DEVICE_PATH *devpath)
 		return (NULL);
 	while (!IsDevicePathEnd(NextDevicePathNode(devpath)))
 		devpath = NextDevicePathNode(devpath);
+	return (devpath);
+}
+
+/*
+ * Walk device path nodes, return next instance or end node.
+ */
+EFI_DEVICE_PATH *
+efi_devpath_next_instance(EFI_DEVICE_PATH *devpath)
+{
+	while (!IsDevicePathEnd(devpath)) {
+		devpath = NextDevicePathNode(devpath);
+		if (IsDevicePathEndType(devpath) &&
+		    devpath->SubType == END_INSTANCE_DEVICE_PATH_SUBTYPE) {
+			devpath = NextDevicePathNode(devpath);
+			break;
+		}
+	}
 	return (devpath);
 }
 

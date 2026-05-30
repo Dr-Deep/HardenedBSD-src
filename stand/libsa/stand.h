@@ -22,8 +22,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  * From	$NetBSD: stand.h,v 1.22 1997/06/26 19:17:40 drochner Exp $	
  */
 
@@ -54,15 +52,12 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)stand.h	8.1 (Berkeley) 6/11/93
  */
 
 #ifndef	STAND_H
 #define	STAND_H
 
 #include <sys/types.h>
-#include <sys/cdefs.h>
 #include <sys/stat.h>
 #include <sys/dirent.h>
 #include <sys/queue.h>
@@ -87,10 +82,19 @@
 #define	EOFFSET	(ELAST+8)	/* relative seek not supported */
 #define	ESALAST	(ELAST+8)	/* */
 
-/* Partial signal emulation for sig_atomic_t */
-#include <machine/signal.h>
+/*
+ * LUA needs sig_atomic_t. This is defined to be long or int on all our
+ * platforms. On all but powerpc, these are all the same thing as long. 64-bit
+ * powerpc defines this as int, but long can also be accessed atomically. It's
+ * also OK because we don't have signal handlers in the boot loader.
+ */
+typedef long sig_atomic_t;
+
+__BEGIN_DECLS
 
 struct open_file;
+
+#define FS_OPS_NO_DEVOPEN 1
 
 /*
  * This structure is used to define file system operations in a file system
@@ -102,6 +106,7 @@ struct open_file;
  */
 struct fs_ops {
     const char	*fs_name;
+    int		fs_flags;
     int		(*fo_open)(const char *path, struct open_file *f);
     int		(*fo_close)(struct open_file *f);
     int		(*fo_read)(struct open_file *f, void *buf,
@@ -160,6 +165,8 @@ struct devsw {
     int		(*dv_print)(int verbose);	/* print device information */
     void	(*dv_cleanup)(void);
     char *	(*dv_fmtdev)(struct devdesc *);
+    int		(*dv_parsedev)(struct devdesc **, const char *, const char **);
+    bool	(*dv_match)(struct devsw *, const char *);
 };
 
 /*
@@ -170,9 +177,14 @@ extern struct devsw netdev;
 extern int errno;
 
 /*
- * Generic device specifier; architecture-dependent
- * versions may be larger, but should be allowed to
- * overlap.
+ * Generic device specifier; architecture-dependent versions may be larger, but
+ * should be allowed to overlap. The larger device specifiers store more data
+ * than can fit in the generic one that's gleaned after parsing the device
+ * string, or used in some cases to indicate wildcards that match a variety of
+ * situations based on what's on the drive itself rather than what the progammer
+ * might know in advance. Information about open files is stored in d_opendata,
+ * though what's passed into the open routine may differ from what's present
+ * after the open on some configurations.
  */
 struct devdesc {
     struct devsw	*d_dev;
@@ -181,6 +193,9 @@ struct devdesc {
 };
 
 char *devformat(struct devdesc *d);
+int devparse(struct devdesc **, const char *, const char **);
+int devinit(void);
+void	dev_cleanup(void);
 
 struct open_file {
     int			f_flags;	/* see F_* below */
@@ -263,6 +278,11 @@ static __inline int ispunct(int c)
 	    (c >= '[' && c <= '`') || (c >= '{' && c <= '~');
 }
 
+static __inline int isprint(int c)
+{
+	return (c >= ' ') && (c <= '~');
+}
+
 static __inline int toupper(int c)
 {
     return islower(c) ? c - 'a' + 'A' : c;
@@ -306,6 +326,7 @@ extern int	close(int);
 extern void	closeall(void);
 extern ssize_t	read(int, void *, size_t);
 extern ssize_t	write(int, const void *, size_t);
+extern int	ioctl(int, u_long, void *);
 extern struct	dirent *readdirfd(int);
 extern void	preload(int);
 
@@ -331,6 +352,7 @@ extern int	pager_file(const char *fname);
 #define EV_DYNAMIC	(1<<0)		/* value was dynamically allocated, free if changed/unset */
 #define EV_VOLATILE	(1<<1)		/* value is volatile, make a copy of it */
 #define EV_NOHOOK	(1<<2)		/* don't call hook when setting */
+#define EV_NOKENV	(1<<3)		/* don't add to kenv (loader-only) */
 
 struct env_var;
 typedef char	*(ev_format_t)(struct env_var *ev);
@@ -359,6 +381,9 @@ extern int		setenv(const char *name, const char *value,
 			       int overwrite);
 extern int		putenv(char *string);
 extern int		unsetenv(const char *name);
+extern bool		is_restricted_var(const char *name);
+extern void		set_check_restricted(bool);
+extern int		boot_setenv(const char *name, const char *value);
 
 extern ev_sethook_t	env_noset;		/* refuse set operation */
 extern ev_unsethook_t	env_nounset;		/* refuse unset operation */
@@ -486,8 +511,55 @@ extern void *reallocf(void *, size_t);
  */
 caddr_t ptov(uintptr_t);
 
+/* dev_net.c */
+bool is_tftp(void);
+
+/* features.c */
+typedef void (feature_iter_fn)(void *, const char *, const char *, bool);
+
+extern void feature_enable(uint32_t);
+extern bool feature_name_is_enabled(const char *);
+extern void feature_iter(feature_iter_fn *, void *);
+
+/*
+ * Note that these should also be added to the mapping table in features.c,
+ * which the interpreter may query to provide details from.  The name with
+ * FEATURE_ removed is assumed to be the name we'll provide in the loader
+ * features table, just to simplify reasoning about these.
+ */
+#define	FEATURE_EARLY_ACPI	0x0001
+
 /* hexdump.c */
 void	hexdump(caddr_t region, size_t len);
+
+/* nvstore.c */
+typedef int (nvstore_getter_cb_t)(void *, const char *, void **);
+typedef int (nvstore_setter_cb_t)(void *, int, const char *,
+    const void *, size_t);
+typedef int (nvstore_setter_str_cb_t)(void *, const char *, const char *,
+    const char *);
+typedef int (nvstore_unset_cb_t)(void *, const char *);
+typedef int (nvstore_print_cb_t)(void *, void *);
+typedef int (nvstore_iterate_cb_t)(void *, int (*)(void *, void *));
+
+typedef struct nvs_callbacks {
+	nvstore_getter_cb_t	*nvs_getter;
+	nvstore_setter_cb_t	*nvs_setter;
+	nvstore_setter_str_cb_t *nvs_setter_str;
+	nvstore_unset_cb_t	*nvs_unset;
+	nvstore_print_cb_t	*nvs_print;
+	nvstore_iterate_cb_t	*nvs_iterate;
+} nvs_callbacks_t;
+
+int nvstore_init(const char *, nvs_callbacks_t *, void *);
+int nvstore_fini(const char *);
+void *nvstore_get_store(const char *);
+int nvstore_print(void *);
+int nvstore_get_var(void *, const char *, void **);
+int nvstore_set_var(void *, int, const char *, void *, size_t);
+int nvstore_set_var_from_string(void *, const char *, const char *,
+    const char *);
+int nvstore_unset_var(void *, const char *);
 
 /* tslog.c */
 #define TSRAW(a, b, c) tslog(a, b, c)
@@ -498,5 +570,20 @@ void	hexdump(caddr_t region, size_t len);
 void tslog(const char *, const char *, const char *);
 void tslog_setbuf(void * buf, size_t len);
 void tslog_getbuf(void ** buf, size_t * len);
+
+__END_DECLS
+
+/* define _DEBUG_LEVEL n or _DEBUG_LEVEL_VAR before include */
+#ifndef DEBUG_PRINTF
+# if defined(_DEBUG_LEVEL) || defined(_DEBUG_LEVEL_VAR)
+#   ifndef _DEBUG_LEVEL_VAR
+#     define _DEBUG_LEVEL_VAR _debug
+static int _debug = _DEBUG_LEVEL;
+#   endif
+#   define DEBUG_PRINTF(n, args) if (_DEBUG_LEVEL_VAR >= n) printf args
+# else
+#   define DEBUG_PRINTF(n, args)
+# endif
+#endif
 
 #endif	/* STAND_H */

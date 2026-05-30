@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2012 Chelsio Communications, Inc.
  * All rights reserved.
@@ -26,8 +26,6 @@
  * SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_inet.h"
 #include "opt_inet6.h"
 
@@ -75,7 +73,8 @@ t4_alloc_l2e(struct l2t_data *d)
 	struct l2t_entry *end, *e, **p;
 
 	rw_assert(&d->lock, RA_WLOCKED);
-
+	if (__predict_false(d->l2t_stopped))
+		return (NULL);
 	if (!atomic_load_acq_int(&d->nfree))
 		return (NULL);
 
@@ -120,7 +119,7 @@ find_or_alloc_l2e(struct l2t_data *d, uint16_t vlan, uint8_t port, uint8_t *dmac
 				first_free = e;
 		} else if (e->state == L2T_STATE_SWITCHING &&
 		    memcmp(e->dmac, dmac, ETHER_ADDR_LEN) == 0 &&
-		    e->vlan == vlan && e->lport == port)
+		    e->vlan == vlan && e->hw_port == port)
 			return (e);	/* Found existing entry that matches. */
 	}
 
@@ -157,7 +156,7 @@ mk_write_l2e(struct adapter *sc, struct l2t_entry *e, int sync, int reply,
 	INIT_TP_WR(req, 0);
 	OPCODE_TID(req) = htonl(MK_OPCODE_TID(CPL_L2T_WRITE_REQ, idx |
 	    V_SYNC_WR(sync) | V_TID_QID(e->iqid)));
-	req->params = htons(V_L2T_W_PORT(e->lport) | V_L2T_W_NOREPLY(!reply));
+	req->params = htons(V_L2T_W_PORT(e->hw_port) | V_L2T_W_NOREPLY(!reply));
 	req->l2t_idx = htons(idx);
 	req->vlan = htons(e->vlan);
 	memcpy(req->dst_mac, e->dmac, sizeof(req->dst_mac));
@@ -228,7 +227,7 @@ t4_l2t_alloc_tls(struct adapter *sc, struct sge_txq *txq, void *dst,
 		e = &d->l2tab[i];
 		if (e->state != L2T_STATE_TLS)
 			continue;
-		if (e->vlan == vlan && e->lport == port &&
+		if (e->vlan == vlan && e->hw_port == port &&
 		    e->wrq == (struct sge_wrq *)txq &&
 		    memcmp(e->dmac, eth_addr, ETHER_ADDR_LEN) == 0) {
 			if (atomic_fetchadd_int(&e->refcnt, 1) == 0) {
@@ -264,7 +263,7 @@ t4_l2t_alloc_tls(struct adapter *sc, struct sge_txq *txq, void *dst,
 	/* Initialize the entry. */
 	e->state = L2T_STATE_TLS;
 	e->vlan = vlan;
-	e->lport = port;
+	e->hw_port = port;
 	e->iqid = sc->sge.fwq.abs_id;
 	e->wrq = (struct sge_wrq *)txq;
 	memcpy(e->dmac, eth_addr, ETHER_ADDR_LEN);
@@ -293,7 +292,10 @@ t4_l2t_alloc_switching(struct adapter *sc, uint16_t vlan, uint8_t port,
 	int rc;
 
 	rw_wlock(&d->lock);
-	e = find_or_alloc_l2e(d, vlan, port, eth_addr);
+	if (__predict_false(d->l2t_stopped))
+		e = NULL;
+	else
+		e = find_or_alloc_l2e(d, vlan, port, eth_addr);
 	if (e) {
 		if (atomic_load_acq_int(&e->refcnt) == 0) {
 			mtx_lock(&e->lock);    /* avoid race with t4_l2t_free */
@@ -301,7 +303,7 @@ t4_l2t_alloc_switching(struct adapter *sc, uint16_t vlan, uint8_t port,
 			e->iqid = sc->sge.fwq.abs_id;
 			e->state = L2T_STATE_SWITCHING;
 			e->vlan = vlan;
-			e->lport = port;
+			e->hw_port = port;
 			memcpy(e->dmac, eth_addr, ETHER_ADDR_LEN);
 			atomic_store_rel_int(&e->refcnt, 1);
 			atomic_subtract_int(&d->nfree, 1);
@@ -311,7 +313,7 @@ t4_l2t_alloc_switching(struct adapter *sc, uint16_t vlan, uint8_t port,
 				e = NULL;
 		} else {
 			MPASS(e->vlan == vlan);
-			MPASS(e->lport == port);
+			MPASS(e->hw_port == port);
 			atomic_add_int(&e->refcnt, 1);
 		}
 	}
@@ -335,6 +337,7 @@ t4_init_l2t(struct adapter *sc, int flags)
 		return (ENOMEM);
 
 	d->l2t_size = l2t_size;
+	d->l2t_stopped = false;
 	d->rover = d->l2tab;
 	atomic_store_rel_int(&d->nfree, l2t_size);
 	rw_init(&d->lock, "L2T");
@@ -355,8 +358,9 @@ t4_init_l2t(struct adapter *sc, int flags)
 }
 
 int
-t4_free_l2t(struct l2t_data *d)
+t4_free_l2t(struct adapter *sc)
 {
+	struct l2t_data *d = sc->l2t;
 	int i;
 
 	for (i = 0; i < d->l2t_size; i++)
@@ -368,17 +372,50 @@ t4_free_l2t(struct l2t_data *d)
 }
 
 int
+t4_stop_l2t(struct adapter *sc)
+{
+	struct l2t_data *d = sc->l2t;
+
+	if (d == NULL)
+		return (0);
+	rw_wlock(&d->lock);
+	d->l2t_stopped = true;
+	rw_wunlock(&d->lock);
+
+	return (0);
+}
+
+int
+t4_restart_l2t(struct adapter *sc)
+{
+	struct l2t_data *d = sc->l2t;
+
+	if (d == NULL)
+		return (0);
+	rw_wlock(&d->lock);
+	d->l2t_stopped = false;
+	rw_wunlock(&d->lock);
+
+	return (0);
+}
+
+int
 do_l2t_write_rpl(struct sge_iq *iq, const struct rss_header *rss,
     struct mbuf *m)
 {
+	struct adapter *sc = iq->adapter;
 	const struct cpl_l2t_write_rpl *rpl = (const void *)(rss + 1);
-	unsigned int tid = GET_TID(rpl);
-	unsigned int idx = tid % L2T_SIZE;
+	const u_int hwidx = GET_TID(rpl) & ~(F_SYNC_WR | V_TID_QID(M_TID_QID));
+	const bool sync = GET_TID(rpl) & F_SYNC_WR;
 
-	if (__predict_false(rpl->status != CPL_ERR_NONE)) {
-		log(LOG_ERR,
-		    "Unexpected L2T_WRITE_RPL (%u) for entry at hw_idx %u\n",
-		    rpl->status, idx);
+	MPASS(iq->abs_id == G_TID_QID(GET_TID(rpl)));
+
+	if (__predict_false(hwidx < sc->vres.l2t.start) ||
+	    __predict_false(hwidx >= sc->vres.l2t.start + sc->vres.l2t.size) ||
+	    __predict_false(rpl->status != CPL_ERR_NONE)) {
+		CH_ERR(sc, "%s: hwidx %u, rpl %u, sync %u; L2T st %u, sz %u\n",
+		       __func__, hwidx, rpl->status, sync, sc->vres.l2t.start,
+		       sc->vres.l2t.size);
 		return (EINVAL);
 	}
 
@@ -451,9 +488,9 @@ sysctl_l2t(SYSCTL_HANDLER_ARGS)
 			   " %u %2u   %c   %5u %s",
 			   e->idx, ip, e->dmac[0], e->dmac[1], e->dmac[2],
 			   e->dmac[3], e->dmac[4], e->dmac[5],
-			   e->vlan & 0xfff, vlan_prio(e), e->lport,
+			   e->vlan & 0xfff, vlan_prio(e), e->hw_port,
 			   l2e_state(e), atomic_load_acq_int(&e->refcnt),
-			   e->ifp ? e->ifp->if_xname : "-");
+			   e->ifp ? if_name(e->ifp) : "-");
 skip:
 		mtx_unlock(&e->lock);
 	}

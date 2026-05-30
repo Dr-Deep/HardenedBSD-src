@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: (BSD-2-Clause-FreeBSD AND ISC)
+ * SPDX-License-Identifier: (BSD-2-Clause AND ISC)
  *
  * Copyright (c) 1998 Doug Rabson
  * All rights reserved.
@@ -27,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*-
  * Modifications for Intel architecture by Garrett A. Wollman.
  * Copyright 1998 Massachusetts Institute of Technology
@@ -86,7 +84,7 @@ isa_init(device_t dev)
  * necessary to interpose a mapping layer here.
  */
 struct resource *
-isa_alloc_resource(device_t bus, device_t child, int type, int *rid,
+isa_alloc_resource(device_t bus, device_t child, int type, int rid,
 		   rman_res_t start, rman_res_t end, rman_res_t count, u_int flags)
 {
 	/*
@@ -99,31 +97,31 @@ isa_alloc_resource(device_t bus, device_t child, int type, int *rid,
 	struct resource_list_entry *rle;
 
 	if (!passthrough && !isdefault) {
-		rle = resource_list_find(rl, type, *rid);
+		rle = resource_list_find(rl, type, rid);
 		if (!rle) {
-			if (*rid < 0)
+			if (rid < 0)
 				return 0;
 			switch (type) {
 			case SYS_RES_IRQ:
-				if (*rid >= ISA_NIRQ)
+				if (rid >= ISA_NIRQ)
 					return 0;
 				break;
 			case SYS_RES_DRQ:
-				if (*rid >= ISA_NDRQ)
+				if (rid >= ISA_NDRQ)
 					return 0;
 				break;
 			case SYS_RES_MEMORY:
-				if (*rid >= ISA_NMEM)
+				if (rid >= ISA_NMEM)
 					return 0;
 				break;
 			case SYS_RES_IOPORT:
-				if (*rid >= ISA_NPORT)
+				if (rid >= ISA_NPORT)
 					return 0;
 				break;
 			default:
 				return 0;
 			}
-			resource_list_add(rl, type, *rid, start, end, count);
+			resource_list_add(rl, type, rid, start, end, count);
 		}
 	}
 
@@ -132,13 +130,12 @@ isa_alloc_resource(device_t bus, device_t child, int type, int *rid,
 }
 
 int
-isa_release_resource(device_t bus, device_t child, int type, int rid,
-		     struct resource *r)
+isa_release_resource(device_t bus, device_t child, struct resource *r)
 {
 	struct isa_device* idev = DEVTOISA(child);
 	struct resource_list *rl = &idev->id_resources;
 
-	return resource_list_release(rl, bus, child, type, rid, r);
+	return resource_list_release(rl, bus, child, r);
 }
 
 /*

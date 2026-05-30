@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2004 Joerg Wunsch
  *
@@ -30,8 +30,6 @@
  * SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Hardware driver for a Philips PCF8584 I2C bus controller sitting
  * on a generic ISA bus.
@@ -80,7 +78,7 @@ static device_method_t pcf_isa_methods[] = {
 	DEVMETHOD(iicbus_write,		pcf_write),
 	DEVMETHOD(iicbus_read,		pcf_read),
 	DEVMETHOD(iicbus_reset,		pcf_rst_card),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t pcf_isa_driver = {
@@ -162,11 +160,11 @@ pcf_isa_attach(device_t dev)
 		}
 	}
 
-	if ((sc->iicbus = device_add_child(dev, "iicbus", -1)) == NULL)
+	if ((sc->iicbus = device_add_child(dev, "iicbus", DEVICE_UNIT_ANY)) == NULL)
 		device_printf(dev, "could not allocate iicbus instance\n");
 
 	/* probe and attach the iicbus */
-	bus_generic_attach(dev);
+	bus_attach_children(dev);
 
 	return (0);
 
@@ -192,9 +190,6 @@ pcf_isa_detach(device_t dev)
 	sc = DEVTOSOFTC(dev);
 
 	if ((rv = bus_generic_detach(dev)) != 0)
-		return (rv);
-
-	if ((rv = device_delete_child(dev, sc->iicbus)) != 0)
 		return (rv);
 
 	if (sc->res_irq != 0) {

@@ -30,17 +30,11 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	from: @(#)genassym.c	5.11 (Berkeley) 5/10/91
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include "opt_hwpmc_hooks.h"
 #include "opt_kstack_pages.h"
 
-#include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/assym.h>
 #include <sys/bio.h>
@@ -50,7 +44,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/pmckern.h>
 #endif
 #include <sys/errno.h>
-#include <sys/mount.h>
 #include <sys/mutex.h>
 #include <sys/socket.h>
 #include <sys/resourcevar.h>
@@ -61,6 +54,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_param.h>
 #include <vm/pmap.h>
 #include <vm/vm_map.h>
+#include <sys/kexec.h>
 #include <sys/proc.h>
 #include <x86/apicreg.h>
 #include <machine/cpu.h>
@@ -69,6 +63,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/proc.h>
 #include <machine/segments.h>
 #include <machine/efi.h>
+#include <machine/kexec.h>
 
 ASSYM(P_VMSPACE, offsetof(struct proc, p_vmspace));
 ASSYM(VM_PMAP, offsetof(struct vmspace, vm_pmap));
@@ -114,8 +109,7 @@ ASSYM(val_PML4PML4I, PML4PML4I);
 ASSYM(VM_MAXUSER_ADDRESS, VM_MAXUSER_ADDRESS);
 ASSYM(KERNBASE, KERNBASE);
 ASSYM(KERNLOAD, KERNLOAD);
-ASSYM(DMAP_MIN_ADDRESS, DMAP_MIN_ADDRESS);
-ASSYM(DMAP_MAX_ADDRESS, DMAP_MAX_ADDRESS);
+ASSYM(KSTACK_PAGES, KSTACK_PAGES);
 
 ASSYM(PCB_R15, offsetof(struct pcb, pcb_r15));
 ASSYM(PCB_R14, offsetof(struct pcb, pcb_r14));
@@ -300,3 +294,13 @@ ASSYM(EC_R13, offsetof(struct efirt_callinfo, ec_r13));
 ASSYM(EC_R14, offsetof(struct efirt_callinfo, ec_r14));
 ASSYM(EC_R15, offsetof(struct efirt_callinfo, ec_r15));
 ASSYM(EC_RFLAGS, offsetof(struct efirt_callinfo, ec_rflags));
+
+/* Kexec */
+ASSYM(KEXEC_ENTRY, offsetof(struct kexec_image, entry));
+ASSYM(KEXEC_SEGMENTS, offsetof(struct kexec_image, segments));
+ASSYM(KEXEC_SEGMENT_MAX, KEXEC_SEGMENT_MAX);
+ASSYM(KEXEC_IMAGE_SIZE, sizeof(struct kexec_image));
+ASSYM(KEXEC_STAGED_SEGMENT_SIZE, sizeof(struct kexec_segment_stage));
+ASSYM(KEXEC_SEGMENT_SIZE, offsetof(struct kexec_segment_stage, size));
+ASSYM(KEXEC_SEGMENT_MAP, offsetof(struct kexec_segment_stage, map_buf));
+ASSYM(KEXEC_SEGMENT_TARGET, offsetof(struct kexec_segment_stage, target));

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -121,7 +122,7 @@ const pool_config_ops_t libzfs_config_ops = {
 static uint64_t
 label_offset(uint64_t size, int l)
 {
-	ASSERT(P2PHASE_TYPED(size, sizeof (vdev_label_t), uint64_t) == 0);
+	ASSERT0(P2PHASE_TYPED(size, sizeof (vdev_label_t), uint64_t));
 	return (l * sizeof (vdev_label_t) + (l < VDEV_LABELS / 2 ?
 	    0 : size - VDEV_LABELS * sizeof (vdev_label_t)));
 }
@@ -280,7 +281,7 @@ zpool_in_use(libzfs_handle_t *hdl, int fd, pool_state_t *state, char **namestr,
     boolean_t *inuse)
 {
 	nvlist_t *config;
-	char *name = NULL;
+	const char *name = NULL;
 	boolean_t ret;
 	uint64_t guid = 0, vdev_guid;
 	zpool_handle_t *zhp;
@@ -291,10 +292,8 @@ zpool_in_use(libzfs_handle_t *hdl, int fd, pool_state_t *state, char **namestr,
 
 	*inuse = B_FALSE;
 
-	if (zpool_read_label(fd, &config, NULL) != 0) {
-		(void) no_memory(hdl);
+	if (zpool_read_label(fd, &config, NULL) != 0)
 		return (-1);
-	}
 
 	if (config == NULL)
 		return (0);

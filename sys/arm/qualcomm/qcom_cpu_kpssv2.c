@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2021 Adrian Chadd <adrian@FreeBSD.org>
  *
@@ -27,14 +27,10 @@
 
 #include "opt_platform.h"
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
 #include <sys/reboot.h>
-#include <sys/devmap.h>
 #include <sys/smp.h>
 
 #include <vm/vm.h>
@@ -72,7 +68,7 @@ loop_delay(int usec)
  * This is the KPSSv2 (eg IPQ4018) regulator path for CPU
  * and shared L2 cache power-on.
  */
-boolean_t
+bool
 qcom_cpu_kpssv2_regulator_start(u_int id, phandle_t node)
 {
 	phandle_t acc_phandle, l2_phandle, saw_phandle;

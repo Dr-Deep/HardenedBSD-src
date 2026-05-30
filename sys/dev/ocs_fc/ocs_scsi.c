@@ -27,8 +27,6 @@
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /**
@@ -415,7 +413,7 @@ ocs_target_io_cb(ocs_hw_io_t *hio, ocs_remote_node_t *rnode, uint32_t length,
 			}
 			break;
 
-		case SLI4_FC_WCQE_STATUS_TARGET_WQE_TIMEOUT:
+		case SLI4_FC_WCQE_STATUS_WQE_TIMEOUT:
 			/* target IO timed out */
 			scsi_status = OCS_SCSI_STATUS_TIMEDOUT_AND_ABORTED;
 			break;
@@ -722,7 +720,7 @@ ocs_scsi_build_sgls(ocs_hw_t *hw, ocs_hw_io_t *hio, ocs_hw_dif_info_t *hw_dif, o
 			case OCS_HW_DIF_BK_SIZE_520:	blocksize = 520; break;
 			case OCS_HW_DIF_BK_SIZE_4104:	blocksize = 4104; break;
 			default:
-				ocs_log_test(hw->os, "Inavlid hw_dif blocksize %d\n", hw_dif->blk_size);
+				ocs_log_test(hw->os, "Invalid hw_dif blocksize %d\n", hw_dif->blk_size);
 				return -1;
 			}
 			for (i = 0; i < sgl_count; i++) {
@@ -2210,6 +2208,10 @@ ocs_initiator_io_cb(ocs_hw_io_t *hio, ocs_remote_node_t *rnode, uint32_t length,
 			} else {
 				scsi_status = OCS_SCSI_STATUS_ERROR;
 			}
+			break;
+		case SLI4_FC_WCQE_STATUS_WQE_TIMEOUT:
+			/* IO timed out */
+			scsi_status = OCS_SCSI_STATUS_TIMEDOUT_AND_ABORTED;
 			break;
 		case SLI4_FC_WCQE_STATUS_DI_ERROR:
 			if (ext_status & 0x01) {

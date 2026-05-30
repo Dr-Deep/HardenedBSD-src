@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2022, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2026, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -332,6 +332,7 @@ typedef struct acpi_namespace_node
 #define ANOBJ_IS_EXTERNAL               0x08    /* iASL only: This object created via External() */
 #define ANOBJ_METHOD_NO_RETVAL          0x10    /* iASL only: Method has no return value */
 #define ANOBJ_METHOD_SOME_NO_RETVAL     0x20    /* iASL only: Method has at least one return value */
+#define ANOBJ_IS_ALIAS                  0x40    /* iASL only: Node is an alias to another node */
 #define ANOBJ_IS_REFERENCED             0x80    /* iASL only: Object was referenced */
 
 
@@ -480,7 +481,7 @@ ACPI_STATUS (*ACPI_INTERNAL_METHOD) (
  */
 typedef struct acpi_name_info
 {
-    char                        Name[ACPI_NAMESEG_SIZE];
+    char                        Name[ACPI_NAMESEG_SIZE] ACPI_NONSTRING;
     UINT16                      ArgumentList;
     UINT8                       ExpectedBtypes;
 
@@ -568,7 +569,7 @@ typedef ACPI_STATUS (*ACPI_OBJECT_CONVERTER) (
 
 typedef struct acpi_simple_repair_info
 {
-    char                        Name[ACPI_NAMESEG_SIZE];
+    char                        Name[ACPI_NAMESEG_SIZE] ACPI_NONSTRING;
     UINT32                      UnexpectedBtypes;
     UINT32                      PackageIndex;
     ACPI_OBJECT_CONVERTER       ObjectConverter;
@@ -767,6 +768,15 @@ typedef struct acpi_field_info
 
 } ACPI_FIELD_INFO;
 
+/* Information about the interrupt ID and _EVT of a GED device */
+
+typedef struct acpi_ged_handler_info
+{
+    struct acpi_ged_handler_info    *Next;
+    UINT32                          IntId;      /* The interrupt ID that triggers the execution of the EvtMethod. */
+    ACPI_NAMESPACE_NODE             *EvtMethod; /* The _EVT method to be executed when an interrupt with ID = IntID is received */
+
+} ACPI_GED_HANDLER_INFO;
 
 /*****************************************************************************
  *
@@ -786,13 +796,13 @@ typedef struct acpi_field_info
     UINT8                           DescriptorType; /* To differentiate various internal objs */\
     UINT8                           Flags; \
     UINT16                          Value; \
-    UINT16                          State;
+    UINT16                          State
 
     /* There are 2 bytes available here until the next natural alignment boundary */
 
 typedef struct acpi_common_state
 {
-    ACPI_STATE_COMMON
+    ACPI_STATE_COMMON;
 } ACPI_COMMON_STATE;
 
 
@@ -801,7 +811,7 @@ typedef struct acpi_common_state
  */
 typedef struct acpi_update_state
 {
-    ACPI_STATE_COMMON
+    ACPI_STATE_COMMON;
     union acpi_operand_object       *Object;
 
 } ACPI_UPDATE_STATE;
@@ -812,7 +822,7 @@ typedef struct acpi_update_state
  */
 typedef struct acpi_pkg_state
 {
-    ACPI_STATE_COMMON
+    ACPI_STATE_COMMON;
     UINT32                          Index;
     union acpi_operand_object       *SourceObject;
     union acpi_operand_object       *DestObject;
@@ -829,7 +839,7 @@ typedef struct acpi_pkg_state
  */
 typedef struct acpi_control_state
 {
-    ACPI_STATE_COMMON
+    ACPI_STATE_COMMON;
     UINT16                          Opcode;
     union acpi_parse_object         *PredicateOp;
     UINT8                           *AmlPredicateStart;     /* Start of if/while predicate */
@@ -844,7 +854,7 @@ typedef struct acpi_control_state
  */
 typedef struct acpi_scope_state
 {
-    ACPI_STATE_COMMON
+    ACPI_STATE_COMMON;
     ACPI_NAMESPACE_NODE             *Node;
 
 } ACPI_SCOPE_STATE;
@@ -852,7 +862,7 @@ typedef struct acpi_scope_state
 
 typedef struct acpi_pscope_state
 {
-    ACPI_STATE_COMMON
+    ACPI_STATE_COMMON;
     UINT32                          ArgCount;               /* Number of fixed arguments */
     union acpi_parse_object         *Op;                    /* Current op being parsed */
     UINT8                           *ArgEnd;                /* Current argument end */
@@ -868,7 +878,7 @@ typedef struct acpi_pscope_state
  */
 typedef struct acpi_thread_state
 {
-    ACPI_STATE_COMMON
+    ACPI_STATE_COMMON;
     UINT8                           CurrentSyncLevel;       /* Mutex Sync (nested acquire) level */
     struct acpi_walk_state          *WalkStateList;         /* Head of list of WalkStates for this thread */
     union acpi_operand_object       *AcquiredMutexList;     /* List of all currently acquired mutexes */
@@ -883,7 +893,7 @@ typedef struct acpi_thread_state
  */
 typedef struct acpi_result_values
 {
-    ACPI_STATE_COMMON
+    ACPI_STATE_COMMON;
     union acpi_operand_object       *ObjDesc [ACPI_RESULTS_FRAME_OBJ_NUM];
 
 } ACPI_RESULT_VALUES;
@@ -914,7 +924,7 @@ typedef struct acpi_global_notify_handler
  */
 typedef struct acpi_notify_info
 {
-    ACPI_STATE_COMMON
+    ACPI_STATE_COMMON;
     UINT8                           HandlerListId;
     ACPI_NAMESPACE_NODE             *Node;
     union acpi_operand_object       *HandlerListHead;
@@ -1403,6 +1413,8 @@ typedef struct acpi_port_info
 #define ACPI_ADDRESS_TYPE_IO_RANGE              1
 #define ACPI_ADDRESS_TYPE_BUS_NUMBER_RANGE      2
 
+#define ACPI_ADDRESS_TYPE_PCC_NUMBER            0xA
+
 /* Resource descriptor types and masks */
 
 #define ACPI_RESOURCE_NAME_LARGE                0x80
@@ -1452,7 +1464,8 @@ typedef struct acpi_port_info
 #define ACPI_RESOURCE_NAME_PIN_GROUP            0x90
 #define ACPI_RESOURCE_NAME_PIN_GROUP_FUNCTION   0x91
 #define ACPI_RESOURCE_NAME_PIN_GROUP_CONFIG     0x92
-#define ACPI_RESOURCE_NAME_LARGE_MAX            0x92
+#define ACPI_RESOURCE_NAME_CLOCK_INPUT          0x93
+#define ACPI_RESOURCE_NAME_LARGE_MAX            0x93
 
 
 /*****************************************************************************

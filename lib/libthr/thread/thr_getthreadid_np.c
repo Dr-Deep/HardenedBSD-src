@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2011 Jung-uk Kim <jkim@FreeBSD.org>
  *
@@ -25,9 +25,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "namespace.h"
 #include <pthread.h>
 #include <pthread_np.h>
@@ -39,7 +36,7 @@ __weak_reference(_thr_getthreadid_np, _pthread_getthreadid_np);
 __weak_reference(_thr_getthreadid_np, pthread_getthreadid_np);
 
 /*
- * Provide the equivelant to AIX pthread_getthreadid_np() function.
+ * Provide the equivalent to AIX pthread_getthreadid_np() function.
  */
 int
 _thr_getthreadid_np(void)

@@ -29,15 +29,10 @@
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/types.h>
 #include <sys/fcntl.h>
 #include <stdarg.h>
 #include "libc_private.h"
-
-__weak_reference(__sys_open, __open);
 
 #pragma weak open
 int
@@ -53,6 +48,5 @@ open(const char *path, int flags, ...)
 	} else {
 		mode = 0;
 	}
-	return (((int (*)(int, const char *, int, ...))
-	    __libc_interposing[INTERPOS_openat])(AT_FDCWD, path, flags, mode));
+	return (INTERPOS_SYS(openat, AT_FDCWD, path, flags, mode));
 }

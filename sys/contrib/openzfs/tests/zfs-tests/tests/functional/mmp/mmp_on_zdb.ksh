@@ -1,4 +1,5 @@
 #!/bin/ksh
+# SPDX-License-Identifier: CDDL-1.0
 
 #
 # This file and its contents are supplied under the terms of the
@@ -50,7 +51,8 @@ log_onexit cleanup
 verify_runnable "global"
 verify_disk_count "$DISKS" 2
 
-default_mirror_setup_noexit $DISKS
+log_must zpool create -f $TESTPOOL mirror $DISKS
+log_must zfs create $TESTPOOL/$TESTFS
 log_must mmp_set_hostid $HOSTID1
 log_must zpool set multihost=on $TESTPOOL
 log_must zfs snap $TESTPOOL/$TESTFS@snap

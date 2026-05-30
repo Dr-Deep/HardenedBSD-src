@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2020 Jeffrey Roberson <jeff@FreeBSD.org>
  *
@@ -24,8 +24,6 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * $FreeBSD$
- *
  */
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -39,10 +37,9 @@
 #include <sys/mbuf.h>
 #include <sys/smp.h>
 #include <sys/smr.h>
+#include <sys/stdarg.h>
 
 #include <vm/uma.h>
-
-#include <machine/stdarg.h>
 
 static uma_zone_t smrs_zone;
 static smr_t smrs_smr;

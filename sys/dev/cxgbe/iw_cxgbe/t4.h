@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2009-2013 Chelsio, Inc. All rights reserved.
  *
@@ -29,8 +29,6 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
- *
- * $FreeBSD$
  */
 #ifndef __T4_H__
 #define __T4_H__
@@ -66,7 +64,6 @@
 #define T4_MAX_NUM_PD 65536
 #define T4_MAX_MR_SIZE (~0ULL)
 #define T4_PAGESIZE_MASK 0xffffffff000 /* 4KB-8TB */
-#define T4_STAG_UNSET 0xffffffff
 #define T4_FW_MAJ 0
 #define A_PCIE_MA_SYNC 0x30b4
 

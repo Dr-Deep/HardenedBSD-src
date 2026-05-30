@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2015 Netflix, Inc.
  *
@@ -7,26 +7,23 @@
  * modification, are permitted provided that the following conditions
  * are met:
  * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer,
- *    without modification, immediately at the beginning of the file.
+ *    notice, this list of conditions and the following disclaimer.
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
- * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
- * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 
@@ -89,61 +86,28 @@ void
 nvme_print_ident(const struct nvme_controller_data *cdata,
     const struct nvme_namespace_data *data, struct sbuf *sb)
 {
+	nvme_print_ident_short(cdata, data, sb);
+	sbuf_putc(sb, '\n');
+}
 
-	sbuf_printf(sb, "<");
+void
+nvme_print_ident_short(const struct nvme_controller_data *cdata,
+    const struct nvme_namespace_data *data, struct sbuf *sb)
+{
+	sbuf_putc(sb, '<');
 	cam_strvis_sbuf(sb, cdata->mn, sizeof(cdata->mn),
 	    CAM_STRVIS_FLAG_NONASCII_SPC);
-	sbuf_printf(sb, " ");
+	sbuf_putc(sb, ' ');
 	cam_strvis_sbuf(sb, cdata->fr, sizeof(cdata->fr),
 	    CAM_STRVIS_FLAG_NONASCII_SPC);
-	sbuf_printf(sb, " ");
+	sbuf_putc(sb, ' ');
 	cam_strvis_sbuf(sb, cdata->sn, sizeof(cdata->sn),
 	    CAM_STRVIS_FLAG_NONASCII_SPC);
-	sbuf_printf(sb, ">\n");
-}
-
-/* XXX need to do nvme admin opcodes too, but those aren't used yet by nda */
-static const char *
-nvme_opc2str[] = {
-	"FLUSH",
-	"WRITE",
-	"READ",
-	"RSVD-3",
-	"WRITE_UNCORRECTABLE",
-	"COMPARE",
-	"RSVD-6",
-	"RSVD-7",
-	"WRITE_ZEROES",
-	"DATASET_MANAGEMENT",
-	"RSVD-a",
-	"RSVD-b",
-	"RSVD-c",
-	"RESERVATION_REGISTER",
-	"RESERVATION_REPORT",
-	"RSVD-f",
-	"RSVD-10",
-	"RESERVATION_ACQUIRE",
-	"RSVD-12",
-	"RSVD-13",
-	"RSVD-14",
-	"RESERVATION_RELEASE",
-};
-
-const char *
-nvme_op_string(const struct nvme_command *cmd, int admin)
-{
-
-	if (admin) {
-		return "ADMIN";
-	} else {
-		if (cmd->opc >= nitems(nvme_opc2str))
-			return "UNKNOWN";
-		return nvme_opc2str[cmd->opc];
-	}
+	sbuf_putc(sb, '>');
 }
 
 const char *
-nvme_cmd_string(const struct nvme_command *cmd, char *cmd_string, size_t len)
+nvme_command_string(struct ccb_nvmeio *nvmeio, char *cmd_string, size_t len)
 {
 	struct sbuf sb;
 	int error;
@@ -152,7 +116,7 @@ nvme_cmd_string(const struct nvme_command *cmd, char *cmd_string, size_t len)
 		return ("");
 
 	sbuf_new(&sb, cmd_string, len, SBUF_FIXEDLEN);
-	nvme_cmd_sbuf(cmd, &sb);
+	nvme_command_sbuf(nvmeio, &sb);
 
 	error = sbuf_finish(&sb);
 	if (error != 0 &&
@@ -189,10 +153,21 @@ int
 nvme_command_sbuf(struct ccb_nvmeio *nvmeio, struct sbuf *sb)
 {
 
-	sbuf_printf(sb, "%s. NCB: ", nvme_op_string(&nvmeio->cmd,
-	    nvmeio->ccb_h.func_code == XPT_NVME_ADMIN));
+	nvme_opcode_sbuf(nvmeio->ccb_h.func_code == XPT_NVME_ADMIN,
+	    nvmeio->cmd.opc, sb);
+	sbuf_cat(sb, ". NCB: ");
 	nvme_cmd_sbuf(&nvmeio->cmd, sb);
 	return(0);
+}
+
+/*
+ * nvme_status_sbuf() returns 0 for success and -1 for failure.
+ */
+int
+nvme_status_sbuf(struct ccb_nvmeio *nvmeio, struct sbuf *sb)
+{
+	nvme_cpl_sbuf(&nvmeio->cpl, sb);
+	return (0);
 }
 
 #ifdef _KERNEL

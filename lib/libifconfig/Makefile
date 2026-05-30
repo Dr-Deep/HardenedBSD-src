@@ -1,6 +1,3 @@
-# $FreeBSD$
-
-PACKAGE=	lib${LIB}
 LIB=		ifconfig
 INTERNALLIB=	true
 
@@ -20,6 +17,7 @@ SRCS=		libifconfig.c \
 		libifconfig_internal.c \
 		libifconfig_lagg.c \
 		libifconfig_media.c \
+		libifconfig_nl.c \
 		libifconfig_sfp.c
 
 GEN=		libifconfig_sfp_tables.h \

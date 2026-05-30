@@ -31,9 +31,6 @@
  * Rev. 1, 04/2013
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
@@ -45,7 +42,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/timetc.h>
 
 #include <dev/sound/pcm/sound.h>
-#include <dev/sound/chip.h>
 #include <mixer_if.h>
 
 #include <dev/ofw/openfirm.h>
@@ -177,7 +173,7 @@ struct sc_info {
 	bus_space_tag_t		bst;
 	bus_space_handle_t	bsh;
 	device_t		dev;
-	struct mtx		*lock;
+	struct mtx		lock;
 	void			*ih;
 	int			pos;
 	int			dma_size;
@@ -246,10 +242,10 @@ ssimixer_init(struct snd_mixer *m)
 	mask = SOUND_MASK_PCM;
 	mask |= SOUND_MASK_VOLUME;
 
-	snd_mtxlock(sc->lock);
+	mtx_lock(&sc->lock);
 	pcm_setflags(scp->dev, pcm_getflags(scp->dev) | SD_F_SOFTPCMVOL);
 	mix_setdevs(m, mask);
-	snd_mtxunlock(sc->lock);
+	mtx_unlock(&sc->lock);
 
 	return (0);
 }
@@ -294,14 +290,14 @@ ssichan_init(kobj_t obj, void *devinfo, struct snd_dbuf *b,
 	scp = (struct sc_pcminfo *)devinfo;
 	sc = scp->sc;
 
-	snd_mtxlock(sc->lock);
+	mtx_lock(&sc->lock);
 	ch = &scp->chan[0];
 	ch->dir = dir;
 	ch->run = 0;
 	ch->buffer = b;
 	ch->channel = c;
 	ch->parent = scp;
-	snd_mtxunlock(sc->lock);
+	mtx_unlock(&sc->lock);
 
 	if (sndbuf_setup(ch->buffer, sc->buf_base, sc->dma_size) != 0) {
 		device_printf(scp->dev, "Can't setup sndbuf.\n");
@@ -322,9 +318,9 @@ ssichan_free(kobj_t obj, void *data)
 	device_printf(scp->dev, "ssichan_free()\n");
 #endif
 
-	snd_mtxlock(sc->lock);
+	mtx_lock(&sc->lock);
 	/* TODO: free channel buffer */
-	snd_mtxunlock(sc->lock);
+	mtx_unlock(&sc->lock);
 
 	return (0);
 }
@@ -402,7 +398,7 @@ ssichan_setblocksize(kobj_t obj, void *data, uint32_t blocksize)
 
 	setup_dma(scp);
 
-	return (sndbuf_getblksz(ch->buffer));
+	return (ch->buffer->blksz);
 }
 
 uint32_t
@@ -419,7 +415,7 @@ ssi_dma_intr(void *arg, int chn)
 	sc = scp->sc;
 	conf = sc->conf;
 
-	bufsize = sndbuf_getsize(ch->buffer);
+	bufsize = ch->buffer->bufsize;
 
 	sc->pos += conf->period;
 	if (sc->pos >= bufsize)
@@ -491,8 +487,8 @@ setup_dma(struct sc_pcminfo *scp)
 	conf->saddr = sc->buf_base_phys;
 	conf->daddr = rman_get_start(sc->res[0]) + SSI_STX0;
 	conf->event = sc->sdma_ev_tx; /* SDMA TX event */
-	conf->period = sndbuf_getblksz(ch->buffer);
-	conf->num_bd = sndbuf_getblkcnt(ch->buffer);
+	conf->period = ch->buffer->blksz;
+	conf->num_bd = ch->buffer->blkcnt;
 
 	/*
 	 * Word Length
@@ -501,7 +497,7 @@ setup_dma(struct sc_pcminfo *scp)
 	 * SSI supports 24 at max.
 	 */
 
-	fmt = sndbuf_getfmt(ch->buffer);
+	fmt = ch->buffer->fmt;
 
 	if (fmt & AFMT_16BIT) {
 		conf->word_length = 16;
@@ -569,7 +565,7 @@ ssichan_trigger(kobj_t obj, void *data, int go)
 	scp = ch->parent;
 	sc = scp->sc;
 
-	snd_mtxlock(sc->lock);
+	mtx_lock(&sc->lock);
 
 	switch (go) {
 	case PCMTRIG_START:
@@ -594,7 +590,7 @@ ssichan_trigger(kobj_t obj, void *data, int go)
 		break;
 	}
 
-	snd_mtxunlock(sc->lock);
+	mtx_unlock(&sc->lock);
 
 	return (0);
 }
@@ -740,11 +736,7 @@ ssi_attach(device_t dev)
 	sc->pos = 0;
 	sc->conf = malloc(sizeof(struct sdma_conf), M_DEVBUF, M_WAITOK | M_ZERO);
 
-	sc->lock = snd_mtxcreate(device_get_nameunit(dev), "ssi softc");
-	if (sc->lock == NULL) {
-		device_printf(dev, "Can't create mtx\n");
-		return (ENXIO);
-	}
+	mtx_init(&sc->lock, device_get_nameunit(dev), "ssi softc", MTX_DEF);
 
 	if (bus_alloc_resources(dev, ssi_spec, sc->res)) {
 		device_printf(dev, "could not allocate resources\n");
@@ -814,18 +806,18 @@ ssi_attach(device_t dev)
 
 	pcm_setflags(dev, pcm_getflags(dev) | SD_F_MPSAFE);
 
-	err = pcm_register(dev, scp, 1, 0);
-	if (err) {
-		device_printf(dev, "Can't register pcm.\n");
-		return (ENXIO);
-	}
+	pcm_init(dev, scp);
 
 	scp->chnum = 0;
 	pcm_addchan(dev, PCMDIR_PLAY, &ssichan_class, scp);
 	scp->chnum++;
 
 	snprintf(status, SND_STATUSLEN, "at simplebus");
-	pcm_setstatus(dev, status);
+	err = pcm_register(dev, status);
+	if (err) {
+		device_printf(dev, "Can't register pcm.\n");
+		return (ENXIO);
+	}
 
 	mixer_init(dev, &ssimixer_class, scp);
 	setup_ssi(sc);

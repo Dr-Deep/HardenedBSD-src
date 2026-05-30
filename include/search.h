@@ -3,7 +3,6 @@
  * Public domain.
  *
  *	$NetBSD: search.h,v 1.16 2005/02/03 04:39:32 perry Exp $
- * $FreeBSD$
  */
 
 #ifndef _SEARCH_H_
@@ -78,6 +77,7 @@ void	 twalk(const posix_tnode *, void (*)(const posix_tnode *, VISIT, int));
 int	 hcreate_r(size_t, struct hsearch_data *);
 void	 hdestroy_r(struct hsearch_data *);
 int	 hsearch_r(ENTRY, ACTION, ENTRY **, struct hsearch_data *);
+void	 tdestroy(void *, void (*)(void *));
 #endif
 
 __END_DECLS

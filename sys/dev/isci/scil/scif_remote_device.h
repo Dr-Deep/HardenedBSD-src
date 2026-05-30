@@ -50,8 +50,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #ifndef _SCIF_REMOTE_DEVICE_H_
 #define _SCIF_REMOTE_DEVICE_H_
@@ -242,7 +240,7 @@ SCI_REMOTE_DEVICE_HANDLE_T scif_remote_device_get_scic_handle(
 
 /**
  * @brief This method returns the maximum queue depth supported for the
- *        supplied target by this SCI Framework impementation.
+ *        supplied target by this SCI Framework implementation.
  *
  * @param[in]  remote_device This parameter specifies the framework
  *             device for which to return the maximum queue depth.

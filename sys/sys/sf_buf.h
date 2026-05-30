@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2014 Gleb Smirnoff <glebius@FreeBSD.org>
  * Copyright (c) 2003-2004 Alan L. Cox <alc@cs.rice.edu>
@@ -25,8 +25,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _SYS_SF_BUF_H_
@@ -112,13 +110,13 @@ struct sf_buf *sf_buf_alloc(struct vm_page *, int);
 void sf_buf_free(struct sf_buf *);
 void sf_buf_ref(struct sf_buf *);
 
-static inline vm_offset_t
+static inline void *
 sf_buf_kva(struct sf_buf *sf)
 {
 	if (PMAP_HAS_DMAP)
-		return (PHYS_TO_DMAP(VM_PAGE_TO_PHYS((vm_page_t)sf)));
+		return (VM_PAGE_TO_DMAP((vm_page_t)sf));
 
-        return (sf->kva);
+        return ((void *)sf->kva);
 }
 
 static inline vm_page_t
@@ -137,7 +135,7 @@ static inline void
 sf_buf_map(struct sf_buf *sf, int flags)
 {
 
-	pmap_qenter(sf->kva, &sf->m, 1);
+	pmap_qenter((void *)sf->kva, &sf->m, 1);
 }
 
 static inline int

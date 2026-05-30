@@ -32,24 +32,10 @@
  * SUCH DAMAGE.
  */
 
-#ifndef lint
-static const char copyright[] =
-"@(#) Copyright (c) 1989, 1993, 1994\n\
-	The Regents of the University of California.  All rights reserved.\n";
-#endif /* not lint */
-
-#ifndef lint
-#if 0
-static const char sccsid[] = "@(#)du.c	8.5 (Berkeley) 5/4/95";
-#endif
-#endif /* not lint */
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/queue.h>
 #include <sys/stat.h>
-#include <err.h>
+
 #include <errno.h>
 #include <fnmatch.h>
 #include <fts.h>
@@ -59,14 +45,18 @@ __FBSDID("$FreeBSD$");
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <sysexits.h>
 #include <unistd.h>
+#include <libxo/xo.h>
 
 #define SI_OPT	(CHAR_MAX + 1)
 
 #define UNITS_2		1
 #define UNITS_SI	2
+
+#define DU_XO_VERSION "1"
 
 static SLIST_HEAD(ignhead, ignentry) ignores;
 struct ignentry {
@@ -74,21 +64,24 @@ struct ignentry {
 	SLIST_ENTRY(ignentry)	next;
 };
 
-static int	linkchk(FTSENT *);
-static void	usage(void);
-static void	prthumanval(int64_t);
+static bool	check_threshold(FTSENT *);
 static void	ignoreadd(const char *);
 static void	ignoreclean(void);
-static int	ignorep(FTSENT *);
+static bool	ignorep(FTSENT *);
+static bool	linkchk(FTSENT *);
+static void	print_file_size(FTSENT *);
+static void	prthumanval(const char *, int64_t);
+static void	record_file_size(FTSENT *);
 static void	siginfo(int __unused);
+static void	usage(void);
 
 static int	nodumpflag = 0;
 static int	Aflag, hflag;
 static long	blocksize, cblocksize;
 static volatile sig_atomic_t info;
+static off_t	threshold, threshold_sign;
 
-static const struct option long_options[] =
-{
+static const struct option long_options[] = {
 	{ "si", no_argument, NULL, SI_OPT },
 	{ NULL, no_argument, NULL, 0 },
 };
@@ -98,8 +91,8 @@ main(int argc, char *argv[])
 {
 	FTS		*fts;
 	FTSENT		*p;
-	off_t		savednumber, curblocks;
-	off_t		threshold, threshold_sign;
+	int64_t		num;
+	off_t		savednumber;
 	int		ftsoptions;
 	int		depth;
 	int		Hflag, Lflag, aflag, sflag, dflag, cflag;
@@ -121,6 +114,10 @@ main(int argc, char *argv[])
 	depth = INT_MAX;
 	SLIST_INIT(&ignores);
 
+	argc = xo_parse_args(argc, argv);
+	if (argc < 0)
+		exit(EX_USAGE);
+
 	while ((ch = getopt_long(argc, argv, "+AB:HI:LPasd:cghklmnrt:x",
 	    long_options, NULL)) != -1)
 		switch (ch) {
@@ -131,7 +128,7 @@ main(int argc, char *argv[])
 			errno = 0;
 			cblocksize = atoi(optarg);
 			if (errno == ERANGE || cblocksize <= 0) {
-				warnx("invalid argument to option B: %s",
+				xo_warnx("invalid argument to option B: %s",
 				    optarg);
 				usage();
 			}
@@ -161,7 +158,7 @@ main(int argc, char *argv[])
 			errno = 0;
 			depth = atoi(optarg);
 			if (errno == ERANGE || depth < 0) {
-				warnx("invalid argument to option d: %s",
+				xo_warnx("invalid argument to option d: %s",
 				    optarg);
 				usage();
 			}
@@ -192,12 +189,13 @@ main(int argc, char *argv[])
 			break;
 		case 'r':		 /* Compatibility. */
 			break;
-		case 't' :
-			if (expand_number(optarg, &threshold) != 0 ||
-			    threshold == 0) {
-				warnx("invalid threshold: %s", optarg);
+		case 't':
+			if (expand_number(optarg, &num) != 0 || num == 0) {
+				xo_warnx("invalid threshold: %s", optarg);
 				usage();
-			} else if (threshold < 0)
+			}
+			threshold = num;
+			if (threshold < 0)
 				threshold_sign = -1;
 			break;
 		case 'x':
@@ -243,7 +241,7 @@ main(int argc, char *argv[])
 	if (sflag)
 		depth = 0;
 
-	if (!*argv) {
+	if (argc == 0) {
 		argv = save;
 		argv[0] = dot;
 		argv[1] = NULL;
@@ -266,37 +264,26 @@ main(int argc, char *argv[])
 	(void)signal(SIGINFO, siginfo);
 
 	if ((fts = fts_open(argv, ftsoptions, NULL)) == NULL)
-		err(1, "fts_open");
+		xo_err(1, "fts_open");
 
-	while (errno = 0, (p = fts_read(fts)) != NULL) {
+	xo_set_version(DU_XO_VERSION);
+	xo_open_container("disk-usage-information");
+	xo_open_list("paths");
+	for (errno = 0; (p = fts_read(fts)) != NULL; errno = 0) {
 		switch (p->fts_info) {
 		case FTS_D:			/* Ignore. */
 			if (ignorep(p))
 				fts_set(fts, p, FTS_SKIP);
 			break;
-		case FTS_DP:
+		case FTS_DP:			/* Directory files */
 			if (ignorep(p))
 				break;
 
-			curblocks = Aflag ?
-			    howmany(p->fts_statp->st_size, cblocksize) :
-			    howmany(p->fts_statp->st_blocks, cblocksize);
-			p->fts_parent->fts_bignum += p->fts_bignum +=
-			    curblocks;
+			record_file_size(p);
 
-			if (p->fts_level <= depth && threshold <=
-			    threshold_sign * howmany(p->fts_bignum *
-			    cblocksize, blocksize)) {
-				if (hflag > 0) {
-					prthumanval(p->fts_bignum);
-					(void)printf("\t%s\n", p->fts_path);
-				} else {
-					(void)printf("%jd\t%s\n",
-					    (intmax_t)howmany(p->fts_bignum *
-					    cblocksize, blocksize),
-					    p->fts_path);
-				}
-			}
+			if (p->fts_level <= depth && check_threshold(p))
+				print_file_size(p);
+
 			if (info) {
 				info = 0;
 				(void)printf("\t%s\n", p->fts_path);
@@ -307,10 +294,10 @@ main(int argc, char *argv[])
 		case FTS_DNR:			/* Warn, continue. */
 		case FTS_ERR:
 		case FTS_NS:
-			warnx("%s: %s", p->fts_path, strerror(p->fts_errno));
+			xo_warnx("%s: %s", p->fts_path, strerror(p->fts_errno));
 			rval = 1;
 			break;
-		default:
+		default:			/* All other files */
 			if (ignorep(p))
 				break;
 
@@ -318,45 +305,37 @@ main(int argc, char *argv[])
 			    linkchk(p))
 				break;
 
-			curblocks = Aflag ?
-			    howmany(p->fts_statp->st_size, cblocksize) :
-			    howmany(p->fts_statp->st_blocks, cblocksize);
+			record_file_size(p);
 
-			if (aflag || p->fts_level == 0) {
-				if (hflag > 0) {
-					prthumanval(curblocks);
-					(void)printf("\t%s\n", p->fts_path);
-				} else {
-					(void)printf("%jd\t%s\n",
-					    (intmax_t)howmany(curblocks *
-					    cblocksize, blocksize),
-					    p->fts_path);
-				}
-			}
-
-			p->fts_parent->fts_bignum += curblocks;
+			if ((aflag || p->fts_level == 0) && check_threshold(p))
+				print_file_size(p);
 		}
-		savednumber = p->fts_parent->fts_bignum;
+		savednumber = p->fts_parent->fts_number;
 	}
+	xo_close_list("paths");
 
-	if (errno)
-		err(1, "fts_read");
+	if (errno != 0)
+		xo_err(1, "fts_read");
 
 	if (cflag) {
 		if (hflag > 0) {
-			prthumanval(savednumber);
-			(void)printf("\ttotal\n");
+			prthumanval("{:total-blocks/%4s}\ttotal\n",
+			    savednumber);
 		} else {
-			(void)printf("%jd\ttotal\n", (intmax_t)howmany(
+			xo_emit("{:total-blocks/%jd}\ttotal\n",
+			    (intmax_t)howmany(
 			    savednumber * cblocksize, blocksize));
 		}
 	}
 
 	ignoreclean();
+	xo_close_container("disk-usage-information");
+	if (xo_finish() < 0)
+		xo_err(1, "stdout");
 	exit(rval);
 }
 
-static int
+static bool
 linkchk(FTSENT *p)
 {
 	struct links_entry {
@@ -384,7 +363,7 @@ linkchk(FTSENT *p)
 		number_buckets = links_hash_initial_size;
 		buckets = malloc(number_buckets * sizeof(buckets[0]));
 		if (buckets == NULL)
-			errx(1, "No memory for hardlink detection");
+			xo_errx(1, "No memory for hardlink detection");
 		for (i = 0; i < number_buckets; i++)
 			buckets[i] = NULL;
 	}
@@ -406,7 +385,7 @@ linkchk(FTSENT *p)
 
 		if (new_buckets == NULL) {
 			stop_allocating = 1;
-			warnx("No more memory for tracking hard links");
+			xo_warnx("No more memory for tracking hard links");
 		} else {
 			for (i = 0; i < number_buckets; i++) {
 				while (buckets[i] != NULL) {
@@ -432,7 +411,7 @@ linkchk(FTSENT *p)
 	}
 
 	/* Try to locate this entry in the hash table. */
-	hash = ( st->st_dev ^ st->st_ino ) % number_buckets;
+	hash = (st->st_dev ^ st->st_ino) % number_buckets;
 	for (le = buckets[hash]; le != NULL; le = le->next) {
 		if (le->dev == st->st_dev && le->ino == st->st_ino) {
 			/*
@@ -455,12 +434,12 @@ linkchk(FTSENT *p)
 					free_list = le;
 				}
 			}
-			return (1);
+			return (true);
 		}
 	}
 
 	if (stop_allocating)
-		return (0);
+		return (false);
 
 	/* Add this entry to the links cache. */
 	if (free_list != NULL) {
@@ -472,8 +451,8 @@ linkchk(FTSENT *p)
 		le = malloc(sizeof(struct links_entry));
 	if (le == NULL) {
 		stop_allocating = 1;
-		warnx("No more memory for tracking hard links");
-		return (0);
+		xo_warnx("No more memory for tracking hard links");
+		return (false);
 	}
 	le->dev = st->st_dev;
 	le->ino = st->st_ino;
@@ -484,11 +463,11 @@ linkchk(FTSENT *p)
 	if (buckets[hash] != NULL)
 		buckets[hash]->previous = le;
 	buckets[hash] = le;
-	return (0);
+	return (false);
 }
 
 static void
-prthumanval(int64_t bytes)
+prthumanval(const char *fmt, int64_t bytes)
 {
 	char buf[5];
 	int flags;
@@ -502,16 +481,16 @@ prthumanval(int64_t bytes)
 
 	humanize_number(buf, sizeof(buf), bytes, "", HN_AUTOSCALE, flags);
 
-	(void)printf("%4s", buf);
+	xo_emit(fmt, buf);
 }
 
 static void
 usage(void)
 {
-	(void)fprintf(stderr,
-		"usage: du [-Aclnx] [-H | -L | -P] [-g | -h | -k | -m] "
-		"[-a | -s | -d depth] [-B blocksize] [-I mask] "
-		"[-t threshold] [file ...]\n");
+	xo_error("%s\n%s\n%s\n",
+	    "usage: du [--libxo] [-Aclnx] [-H | -L | -P] [-g | -h | -k | -m]",
+	    "          [-a | -s | -d depth] [-B blocksize] [-I mask] [-t threshold]",
+	    "          [file ...]");
 	exit(EX_USAGE);
 }
 
@@ -522,10 +501,10 @@ ignoreadd(const char *mask)
 
 	ign = calloc(1, sizeof(*ign));
 	if (ign == NULL)
-		errx(1, "cannot allocate memory");
+		xo_errx(1, "cannot allocate memory");
 	ign->mask = strdup(mask);
 	if (ign->mask == NULL)
-		errx(1, "cannot allocate memory");
+		xo_errx(1, "cannot allocate memory");
 	SLIST_INSERT_HEAD(&ignores, ign, next);
 }
 
@@ -542,22 +521,59 @@ ignoreclean(void)
 	}
 }
 
-static int
+static bool
 ignorep(FTSENT *ent)
 {
 	struct ignentry *ign;
 
 	if (nodumpflag && (ent->fts_statp->st_flags & UF_NODUMP))
-		return 1;
-	SLIST_FOREACH(ign, &ignores, next)
+		return (true);
+	SLIST_FOREACH(ign, &ignores, next) {
 		if (fnmatch(ign->mask, ent->fts_name, 0) != FNM_NOMATCH)
-			return 1;
-	return 0;
+			return (true);
+	}
+	return (false);
 }
 
 static void
 siginfo(int sig __unused)
 {
-
 	info = 1;
+}
+
+/*
+ * Record the total disk/block size of the file or directory. The fts_number
+ * variable provided in FTSENT is used for keeping track of the total size.
+ * See FTS(3).
+ */
+static void
+record_file_size(FTSENT *p)
+{
+	p->fts_number += Aflag ?
+	    howmany(p->fts_statp->st_size, cblocksize) :
+	    howmany(p->fts_statp->st_blocks, cblocksize);
+
+	p->fts_parent->fts_number += p->fts_number;
+}
+
+static bool
+check_threshold(FTSENT *p)
+{
+	return (threshold <= threshold_sign *
+	    howmany(p->fts_number * cblocksize, blocksize));
+}
+
+static void
+print_file_size(FTSENT *p)
+{
+	xo_open_instance("paths");
+	if (hflag > 0) {
+		prthumanval("{:blocks/%4s}", p->fts_number);
+		xo_emit("\t{:path/%s}\n", p->fts_path);
+	} else {
+		xo_emit("{:blocks/%jd}\t{:path/%s}\n",
+		    (intmax_t)howmany(p->fts_number * cblocksize, blocksize),
+		p->fts_path);
+	}
+	xo_close_instance("paths");
 }

@@ -21,16 +21,11 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
  * Allwinner USB PHY
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -45,10 +40,10 @@ __FBSDID("$FreeBSD$");
 #include <dev/ofw/ofw_bus_subr.h>
 #include <dev/gpio/gpiobusvar.h>
 
-#include <dev/extres/clk/clk.h>
-#include <dev/extres/hwreset/hwreset.h>
-#include <dev/extres/regulator/regulator.h>
-#include <dev/extres/phy/phy_usb.h>
+#include <dev/clk/clk.h>
+#include <dev/hwreset/hwreset.h>
+#include <dev/regulator/regulator.h>
+#include <dev/phy/phy_usb.h>
 
 #include "phynode_if.h"
 
@@ -61,6 +56,8 @@ enum awusbphy_type {
 	AWUSBPHY_TYPE_A64,
 	AWUSBPHY_TYPE_A83T,
 	AWUSBPHY_TYPE_H6,
+	AWUSBPHY_TYPE_H616,
+	AWUSBPHY_TYPE_D1,
 };
 
 struct aw_usbphy_conf {
@@ -126,6 +123,20 @@ static const struct aw_usbphy_conf h6_usbphy_conf = {
 	.phy0_route = true,
 };
 
+static const struct aw_usbphy_conf h616_usbphy_conf = {
+	.num_phys = 4,
+	.phy_type = AWUSBPHY_TYPE_H616,
+	.pmu_unk1 = false,
+	.phy0_route = true,
+};
+
+static const struct aw_usbphy_conf d1_usbphy_conf = {
+	.num_phys = 2,
+	.phy_type = AWUSBPHY_TYPE_D1,
+	.pmu_unk1 = true,
+	.phy0_route = true,
+};
+
 static struct ofw_compat_data compat_data[] = {
 	{ "allwinner,sun4i-a10-usb-phy",	(uintptr_t)&a10_usbphy_conf },
 	{ "allwinner,sun5i-a13-usb-phy",	(uintptr_t)&a13_usbphy_conf },
@@ -135,6 +146,8 @@ static struct ofw_compat_data compat_data[] = {
 	{ "allwinner,sun50i-a64-usb-phy",	(uintptr_t)&a64_usbphy_conf },
 	{ "allwinner,sun8i-a83t-usb-phy",	(uintptr_t)&a83t_usbphy_conf },
 	{ "allwinner,sun50i-h6-usb-phy",	(uintptr_t)&h6_usbphy_conf },
+	{ "allwinner,sun50i-h616-usb-phy",	(uintptr_t)&h616_usbphy_conf },
+	{ "allwinner,sun20i-d1-usb-phy",	(uintptr_t)&d1_usbphy_conf },
 	{ NULL,					0 }
 };
 

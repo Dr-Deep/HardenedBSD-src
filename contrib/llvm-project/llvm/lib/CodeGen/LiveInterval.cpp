@@ -348,23 +348,8 @@ private:
 //===----------------------------------------------------------------------===//
 
 LiveRange::iterator LiveRange::find(SlotIndex Pos) {
-  // This algorithm is basically std::upper_bound.
-  // Unfortunately, std::upper_bound cannot be used with mixed types until we
-  // adopt C++0x. Many libraries can do it, but not all.
-  if (empty() || Pos >= endIndex())
-    return end();
-  iterator I = begin();
-  size_t Len = size();
-  do {
-    size_t Mid = Len >> 1;
-    if (Pos < I[Mid].end) {
-      Len = Mid;
-    } else {
-      I += Mid + 1;
-      Len -= Mid + 1;
-    }
-  } while (Len);
-  return I;
+  return llvm::partition_point(*this,
+                               [&](const Segment &X) { return X.end <= Pos; });
 }
 
 VNInfo *LiveRange::createDeadDef(SlotIndex Def, VNInfo::Allocator &VNIAlloc) {
@@ -460,7 +445,7 @@ bool LiveRange::overlaps(const LiveRange &Other, const CoalescerPair &CP,
 
   while (true) {
     // J has just been advanced to satisfy:
-    assert(J->end >= I->start);
+    assert(J->end > I->start);
     // Check for an overlap.
     if (J->start < I->end) {
       // I and J are overlapping. Find the later start.
@@ -475,11 +460,11 @@ bool LiveRange::overlaps(const LiveRange &Other, const CoalescerPair &CP,
       std::swap(I, J);
       std::swap(IE, JE);
     }
-    // Advance J until J->end >= I->start.
+    // Advance J until J->end > I->start.
     do
       if (++J == JE)
         return false;
-    while (J->end < I->start);
+    while (J->end <= I->start);
   }
 }
 
@@ -578,13 +563,15 @@ VNInfo *LiveRange::extendInBlock(SlotIndex StartIdx, SlotIndex Kill) {
   return CalcLiveRangeUtilVector(this).extendInBlock(StartIdx, Kill);
 }
 
-/// Remove the specified segment from this range.  Note that the segment must
-/// be in a single Segment in its entirety.
 void LiveRange::removeSegment(SlotIndex Start, SlotIndex End,
                               bool RemoveDeadValNo) {
   // Find the Segment containing this span.
   iterator I = find(Start);
-  assert(I != end() && "Segment is not in range!");
+
+  // No Segment found, so nothing to do.
+  if (I == end())
+    return;
+
   assert(I->containsInterval(Start, End)
          && "Segment is not entirely in range!");
 
@@ -643,7 +630,8 @@ void LiveRange::join(LiveRange &Other,
                      const int *LHSValNoAssignments,
                      const int *RHSValNoAssignments,
                      SmallVectorImpl<VNInfo *> &NewVNInfo) {
-  verify();
+  assert(verify());
+  assert(Other.verify());
 
   // Determine if any of our values are mapped.  This is uncommon, so we want
   // to avoid the range scan if not.
@@ -809,7 +797,7 @@ void LiveRange::flushSegmentSet() {
       "segment set can be used only initially before switching to the array");
   segments.append(segmentSet->begin(), segmentSet->end());
   segmentSet = nullptr;
-  verify();
+  assert(verify());
 }
 
 bool LiveRange::isLiveAtIndexes(ArrayRef<SlotIndex> Slots) const {
@@ -881,14 +869,14 @@ void LiveInterval::clearSubRanges() {
 /// For each VNI in \p SR, check whether or not that value defines part
 /// of the mask describe by \p LaneMask and if not, remove that value
 /// from \p SR.
-static void stripValuesNotDefiningMask(unsigned Reg, LiveInterval::SubRange &SR,
+static void stripValuesNotDefiningMask(Register Reg, LiveInterval::SubRange &SR,
                                        LaneBitmask LaneMask,
                                        const SlotIndexes &Indexes,
                                        const TargetRegisterInfo &TRI,
                                        unsigned ComposeSubRegIdx) {
   // Phys reg should not be tracked at subreg level.
   // Same for noreg (Reg == 0).
-  if (!Register::isVirtualRegister(Reg) || !Reg)
+  if (!Reg || !Reg.isVirtual())
     return;
   // Remove the values that don't define those lanes.
   SmallVector<VNInfo *, 8> ToBeRemoved;
@@ -978,7 +966,7 @@ void LiveInterval::computeSubRangeUndefs(SmallVectorImpl<SlotIndex> &Undefs,
                                          LaneBitmask LaneMask,
                                          const MachineRegisterInfo &MRI,
                                          const SlotIndexes &Indexes) const {
-  assert(Register::isVirtualRegister(reg()));
+  assert(reg().isVirtual());
   LaneBitmask VRegMask = MRI.getMaxLaneMaskForVReg(reg());
   assert((VRegMask & LaneMask).any());
   const TargetRegisterInfo &TRI = *MRI.getTargetRegisterInfo();
@@ -1067,24 +1055,36 @@ LLVM_DUMP_METHOD void LiveInterval::dump() const {
 #endif
 
 #ifndef NDEBUG
-void LiveRange::verify() const {
+bool LiveRange::verify() const {
   for (const_iterator I = begin(), E = end(); I != E; ++I) {
-    assert(I->start.isValid());
-    assert(I->end.isValid());
-    assert(I->start < I->end);
-    assert(I->valno != nullptr);
-    assert(I->valno->id < valnos.size());
-    assert(I->valno == valnos[I->valno->id]);
+    if (!I->start.isValid())
+      return false;
+    if (!I->end.isValid())
+      return false;
+    if (I->start >= I->end)
+      return false;
+    if (I->valno == nullptr)
+      return false;
+    if (I->valno->id >= valnos.size())
+      return false;
+    if (I->valno != valnos[I->valno->id])
+      return false;
     if (std::next(I) != E) {
-      assert(I->end <= std::next(I)->start);
-      if (I->end == std::next(I)->start)
-        assert(I->valno != std::next(I)->valno);
+      if (I->end > std::next(I)->start)
+        return false;
+      if (I->end == std::next(I)->start) {
+        if (I->valno == std::next(I)->valno)
+          return false;
+      }
     }
   }
+
+  return true;
 }
 
-void LiveInterval::verify(const MachineRegisterInfo *MRI) const {
-  super::verify();
+bool LiveInterval::verify(const MachineRegisterInfo *MRI) const {
+  if (!super::verify())
+    return false;
 
   // Make sure SubRanges are fine and LaneMasks are disjunct.
   LaneBitmask Mask;
@@ -1092,18 +1092,28 @@ void LiveInterval::verify(const MachineRegisterInfo *MRI) const {
                                        : LaneBitmask::getAll();
   for (const SubRange &SR : subranges()) {
     // Subrange lanemask should be disjunct to any previous subrange masks.
-    assert((Mask & SR.LaneMask).none());
+    if ((Mask & SR.LaneMask).any())
+      return false;
+
     Mask |= SR.LaneMask;
 
     // subrange mask should not contained in maximum lane mask for the vreg.
-    assert((Mask & ~MaxMask).none());
-    // empty subranges must be removed.
-    assert(!SR.empty());
+    if ((Mask & ~MaxMask).any())
+      return false;
 
-    SR.verify();
+    // empty subranges must be removed.
+    if (SR.empty())
+      return false;
+
+    if (!SR.verify())
+      return false;
+
     // Main liverange should cover subrange.
-    assert(covers(SR));
+    if (!covers(SR))
+      return false;
   }
+
+  return true;
 }
 #endif
 
@@ -1152,8 +1162,8 @@ void LiveRangeUpdater::print(raw_ostream &OS) const {
   for (const auto &S : make_range(LR->begin(), WriteI))
     OS << ' ' << S;
   OS << "\n  Spills:";
-  for (unsigned I = 0, E = Spills.size(); I != E; ++I)
-    OS << ' ' << Spills[I];
+  for (const LiveRange::Segment &Spill : Spills)
+    OS << ' ' << Spill;
   OS << "\n  Area 2:";
   for (const auto &S : make_range(ReadI, LR->end()))
     OS << ' ' << S;
@@ -1295,7 +1305,7 @@ void LiveRangeUpdater::flush() {
   // Nothing to merge?
   if (Spills.empty()) {
     LR->segments.erase(WriteI, ReadI);
-    LR->verify();
+    assert(LR->verify());
     return;
   }
 
@@ -1313,7 +1323,7 @@ void LiveRangeUpdater::flush() {
   }
   ReadI = WriteI + Spills.size();
   mergeSpills();
-  LR->verify();
+  assert(LR->verify());
 }
 
 unsigned ConnectedVNInfoEqClasses::Classify(const LiveRange &LR) {

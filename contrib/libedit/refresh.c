@@ -1,4 +1,4 @@
-/*	$NetBSD: refresh.c,v 1.58 2021/09/09 20:24:07 christos Exp $	*/
+/*	$NetBSD: refresh.c,v 1.61 2026/01/18 17:18:37 christos Exp $	*/
 
 /*-
  * Copyright (c) 1992, 1993
@@ -37,7 +37,7 @@
 #if 0
 static char sccsid[] = "@(#)refresh.c	8.1 (Berkeley) 6/4/93";
 #else
-__RCSID("$NetBSD: refresh.c,v 1.58 2021/09/09 20:24:07 christos Exp $");
+__RCSID("$NetBSD: refresh.c,v 1.61 2026/01/18 17:18:37 christos Exp $");
 #endif
 #endif /* not lint && not SCCSID */
 
@@ -168,7 +168,7 @@ re_putliteral(EditLine *el, const wchar_t *begin, const wchar_t *end)
 	int i, w;
 
 	c = literal_add(el, begin, end, &w);
-	if (c == 0 || w <= 0)
+	if (c == 0 || w < 0)
 		return;
 	el->el_vdisplay[cur->v][cur->h] = c;
 
@@ -178,7 +178,7 @@ re_putliteral(EditLine *el, const wchar_t *begin, const wchar_t *end)
 	while (--i > 0)
 		el->el_vdisplay[cur->v][cur->h + i] = MB_FILL_CHAR;
 
-	cur->h += w;
+	cur->h += w ? w : 1;
 	if (cur->h >= sizeh) {
 		/* assure end of line */
 		el->el_vdisplay[cur->v][sizeh] = '\0';
@@ -212,7 +212,7 @@ re_putc(EditLine *el, wint_t c, int shift)
 	if (!shift)
 		return;
 
-	cur->h += w;	/* advance to next place */
+	cur->h += w ? w : 1;	/* advance to next place */
 	if (cur->h >= sizeh) {
 		/* assure end of line */
 		el->el_vdisplay[cur->v][sizeh] = '\0';
@@ -1155,6 +1155,10 @@ re_fastaddc(EditLine *el)
 	wchar_t c;
 	int rhdiff;
 
+	if (el->el_line.cursor == el->el_line.buffer) {
+		re_refresh(el);
+		return;
+	}
 	c = el->el_line.cursor[-1];
 
 	if (c == '\t' || el->el_line.cursor != el->el_line.lastchar) {
@@ -1210,16 +1214,24 @@ re_clear_display(EditLine *el)
 libedit_private void
 re_clear_lines(EditLine *el)
 {
+	int i;
 
 	if (EL_CAN_CEOL) {
-		int i;
 		for (i = el->el_refresh.r_oldcv; i >= 0; i--) {
+			if (i > 0) {
+				terminal__putc(el, '\r');
+				terminal__putc(el, '\n');
+			}
 			/* for each line on the screen */
 			terminal_move_to_line(el, i);
 			terminal_move_to_char(el, 0);
 			terminal_clear_EOL(el, el->el_terminal.t_size.h);
 		}
 	} else {
+		for (i = el->el_refresh.r_oldcv; i > 0; i--) {
+			terminal__putc(el, '\r');
+			terminal__putc(el, '\n');
+		}
 		terminal_move_to_line(el, el->el_refresh.r_oldcv);
 					/* go to last line */
 		terminal__putc(el, '\r');	/* go to BOL */

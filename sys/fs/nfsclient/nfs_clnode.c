@@ -34,9 +34,6 @@
  *	from nfs_node.c	8.6 (Berkeley) 5/22/95
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/fcntl.h>
@@ -50,6 +47,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/taskqueue.h>
 #include <sys/vnode.h>
 
+#include <vm/vm_param.h>
+#include <vm/vnode_pager.h>
 #include <vm/uma.h>
 
 #include <fs/nfs/nfsport.h>
@@ -61,7 +60,6 @@ __FBSDID("$FreeBSD$");
 #include <nfs/nfs_lock.h>
 
 extern struct vop_vector newnfs_vnodeops;
-extern struct buf_ops buf_ops_newnfs;
 MALLOC_DECLARE(M_NEWNFSREQ);
 
 uma_zone_t newnfsnode_zone;
@@ -133,7 +131,6 @@ ncl_nget(struct mount *mntp, u_int8_t *fhp, int fhsize, struct nfsnode **npp,
 	}
 	vp = nvp;
 	KASSERT(vp->v_bufobj.bo_bsize != 0, ("ncl_nget: bo_bsize == 0"));
-	vp->v_bufobj.bo_ops = &buf_ops_newnfs;
 	vp->v_data = np;
 	np->n_vnode = vp;
 	/* 
@@ -156,8 +153,8 @@ ncl_nget(struct mount *mntp, u_int8_t *fhp, int fhsize, struct nfsnode **npp,
 	 * Are we getting the root? If so, make sure the vnode flags
 	 * are correct 
 	 */
-	if ((fhsize == nmp->nm_fhsize) &&
-	    !bcmp(fhp, nmp->nm_fh, fhsize)) {
+	if (fhsize == NFSX_FHMAX + 1 || (fhsize == nmp->nm_fhsize &&
+	    !bcmp(fhp, nmp->nm_fh, fhsize))) {
 		if (vp->v_type == VNON)
 			vp->v_type = VDIR;
 		vp->v_vflag |= VV_ROOT;
@@ -178,6 +175,7 @@ ncl_nget(struct mount *mntp, u_int8_t *fhp, int fhsize, struct nfsnode **npp,
 		uma_zfree(newnfsnode_zone, np);
 		return (error);
 	}
+	vn_set_state(vp, VSTATE_CONSTRUCTED);
 	error = vfs_hash_insert(vp, hash, lkflags, 
 	    td, &nvp, newnfs_vncmpf, np->n_fhp);
 	if (error)
@@ -207,7 +205,7 @@ nfs_freesillyrename(void *arg, __unused int pending)
 }
 
 static void
-ncl_releasesillyrename(struct vnode *vp, struct thread *td)
+ncl_releasesillyrename(struct vnode *vp, bool flushed, struct thread *td)
 {
 	struct nfsnode *np;
 	struct sillyrename *sp;
@@ -222,7 +220,8 @@ ncl_releasesillyrename(struct vnode *vp, struct thread *td)
 		sp = NULL;
 	if (sp != NULL) {
 		NFSUNLOCKNODE(np);
-		(void) ncl_vinvalbuf(vp, 0, td, 1);
+		if (flushed)
+			(void)ncl_vinvalbuf(vp, 0, td, 1);
 		/*
 		 * Remove the silly file that was rename'd earlier
 		 */
@@ -240,10 +239,13 @@ ncl_inactive(struct vop_inactive_args *ap)
 	struct vnode *vp = ap->a_vp;
 	struct nfsnode *np;
 	struct thread *td;
-	boolean_t retv;
+	struct nfsmount *nmp;
+	bool flushed;
 
 	td = curthread;
 	np = VTONFS(vp);
+	nmp = VFSTONFS(vp->v_mount);
+	flushed = true;
 	if (NFS_ISV4(vp) && vp->v_type == VREG) {
 		NFSLOCKNODE(np);
 		np->n_openstateid = NULL;
@@ -254,21 +256,18 @@ ncl_inactive(struct vop_inactive_args *ap)
 		 * buffers/pages must be flushed before the close, so that the
 		 * stateid is available for the writes.
 		 */
-		if (vp->v_object != NULL) {
-			VM_OBJECT_WLOCK(vp->v_object);
-			retv = vm_object_page_clean(vp->v_object, 0, 0,
-			    OBJPC_SYNC);
-			VM_OBJECT_WUNLOCK(vp->v_object);
-		} else
-			retv = TRUE;
-		if (retv == TRUE) {
+		if ((nmp->nm_flag & NFSMNT_NOCTO) == 0 || !NFSHASNFSV4N(nmp) ||
+		    nfscl_mustflush(vp) != 0) {
+			vnode_pager_clean_sync(vp);
 			(void)ncl_flush(vp, MNT_WAIT, td, 1, 0);
-			(void)nfsrpc_close(vp, 1, td);
+		} else {
+			flushed = false;
 		}
+		(void)nfsrpc_close(vp, 1, td);
 	}
 
 	NFSLOCKNODE(np);
-	ncl_releasesillyrename(vp, td);
+	ncl_releasesillyrename(vp, flushed, td);
 
 	/*
 	 * NMODIFIED means that there might be dirty/stale buffers
@@ -305,7 +304,7 @@ ncl_reclaim(struct vop_reclaim_args *ap)
 		nfs_reclaim_p(ap);
 
 	NFSLOCKNODE(np);
-	ncl_releasesillyrename(vp, td);
+	ncl_releasesillyrename(vp, true, td);
 
 	if (NFS_ISV4(vp) && vp->v_type == VREG) {
 		np->n_openstateid = NULL;
@@ -326,7 +325,7 @@ ncl_reclaim(struct vop_reclaim_args *ap)
 		MNT_ILOCK(mp);
 		if ((mp->mnt_kern_flag & MNTK_UNMOUNTF) == 0) {
 			MNT_IUNLOCK(mp);
-			nfscl_delegreturnvp(vp, td);
+			nfscl_delegreturnvp(vp, true, td);
 		} else
 			MNT_IUNLOCK(mp);
 	} else

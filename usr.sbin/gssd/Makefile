@@ -1,8 +1,6 @@
-# $FreeBSD$
-
 .include <src.opts.mk>
 
-PACKAGE=	kerberos
+PACKAGE=	gssd
 
 PROG=	gssd
 MAN=	gssd.8
@@ -11,12 +9,16 @@ SRCS=	gssd.c gssd.h gssd_svc.c gssd_xdr.c gssd_prot.c
 CFLAGS+= -I.
 WARNS?= 1
 
-LIBADD=	gssapi
-.if ${MK_KERBEROS_SUPPORT} != "no"
-LIBADD+=	krb5 roken
+.if ${MK_MITKRB5} != "no"
+# MIT KRB5
+LIBADD+=	gssapi_krb5 krb5 k5crypto krb5profile krb5support
+CFLAGS+= -DMK_MITKRB5=yes
 .else
-CFLAGS+= -DWITHOUT_KERBEROS
+# Heimdal
+LIBADD+=	gssapi krb5 roken
 .endif
+
+CFI_OVERRIDE=	-fno-sanitize=cfi-icall
 
 CLEANFILES= gssd_svc.c gssd_xdr.c gssd.h
 

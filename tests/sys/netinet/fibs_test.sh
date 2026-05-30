@@ -29,10 +29,6 @@
 #
 #  Authors: Alan Somers         (Spectra Logic Corporation)
 #
-# $FreeBSD$
-
-# All of the tests in this file requires the test-suite config variable "fibs"
-# to be defined to a space-delimited list of FIBs that may be used for testing.
 
 # arpresolve should check the interface fib for routes to a target when
 # creating an ARP table entry.  This is a regression for kern/167947, where
@@ -49,7 +45,6 @@ arpresolve_checks_interface_fib_head()
 {
 	atf_set "descr" "arpresolve should check the interface fib, not the default fib, for routes"
 	atf_set "require.user" "root"
-	atf_set "require.config" "fibs"
 	atf_set "require.progs" "nping"
 }
 arpresolve_checks_interface_fib_body()
@@ -101,7 +96,6 @@ loopback_and_network_routes_on_nondefault_fib_head()
 {
 	atf_set "descr" "When creating and deleting loopback IPv4 routes, use the interface's fib"
 	atf_set "require.user" "root"
-	atf_set "require.config" "fibs"
 }
 
 loopback_and_network_routes_on_nondefault_fib_body()
@@ -158,7 +152,6 @@ loopback_and_network_routes_on_nondefault_fib_inet6_head()
 {
 	atf_set "descr" "When creating and deleting loopback IPv6 routes, use the interface's fib"
 	atf_set "require.user" "root"
-	atf_set "require.config" "fibs"
 }
 
 loopback_and_network_routes_on_nondefault_fib_inet6_body()
@@ -217,7 +210,6 @@ default_route_with_multiple_fibs_on_same_subnet_head()
 {
 	atf_set "descr" "Multiple interfaces on the same subnet but with different fibs can both have default IPv4 routes"
 	atf_set "require.user" "root"
-	atf_set "require.config" "fibs"
 }
 
 default_route_with_multiple_fibs_on_same_subnet_body()
@@ -264,7 +256,6 @@ default_route_with_multiple_fibs_on_same_subnet_inet6_head()
 {
 	atf_set "descr" "Multiple interfaces on the same subnet but with different fibs can both have default IPv6 routes"
 	atf_set "require.user" "root"
-	atf_set "require.config" "fibs"
 }
 
 default_route_with_multiple_fibs_on_same_subnet_inet6_body()
@@ -316,7 +307,6 @@ same_ip_multiple_ifaces_fib0_head()
 {
 	atf_set "descr" "Can remove an IPv4 alias from an interface when the same IPv4 is also assigned to another interface."
 	atf_set "require.user" "root"
-	atf_set "require.config" "fibs"
 }
 same_ip_multiple_ifaces_fib0_body()
 {
@@ -330,6 +320,9 @@ same_ip_multiple_ifaces_fib0_body()
 	# Setup the interfaces, then remove one alias.  It should not panic.
 	setup_tap 0 inet ${ADDR} ${MASK0}
 	TAP0=${TAP}
+	# After commit 361a8395f0b0e6f254fd138798232529679d99f6 it became
+	# an error to assign the same interface address twice.
+	atf_expect_fail "The test results in an ifconfig error and thus spuriously fails"
 	setup_tap 0 inet ${ADDR} ${MASK1}
 	TAP1=${TAP}
 	ifconfig ${TAP1} -alias ${ADDR}
@@ -359,18 +352,16 @@ same_ip_multiple_ifaces_head()
 {
 	atf_set "descr" "Can remove an IPv4 alias from an interface when the same address is also assigned to another interface, on non-default FIBs."
 	atf_set "require.user" "root"
-	atf_set "require.config" "fibs"
 }
 same_ip_multiple_ifaces_body()
 {
-	atf_expect_fail "kern/189088 Assigning the same IP to multiple interfaces in different FIBs creates a host route for only one"
 	ADDR="192.0.2.2"
 	MASK0="24"
 	MASK1="32"
 
 	# Unlike most of the tests in this file, this is applicable regardless
 	# of net.add_addr_allfibs
-	get_fibs 2
+	get_fibs 4
 
 	# Setup the interfaces, then remove one alias.  It should not panic.
 	setup_tap ${FIB0} inet ${ADDR} ${MASK0}
@@ -382,13 +373,13 @@ same_ip_multiple_ifaces_body()
 		setfib ${FIB1} netstat -rn -f inet
 
 	# Do it again, in the opposite order.  It should not panic.
-	setup_tap ${FIB0} inet ${ADDR} ${MASK0}
+	setup_tap ${FIB2} inet ${ADDR} ${MASK0}
 	TAP0=${TAP}
-	setup_tap ${FIB1} inet ${ADDR} ${MASK1}
+	setup_tap ${FIB3} inet ${ADDR} ${MASK1}
 	TAP1=${TAP}
 	ifconfig ${TAP0} -alias ${ADDR}
 	atf_check -o not-match:"^${ADDR}[[:space:]]" \
-		setfib ${FIB0} netstat -rn -f inet
+		setfib ${FIB2} netstat -rn -f inet
 }
 same_ip_multiple_ifaces_cleanup()
 {
@@ -405,7 +396,6 @@ same_ip_multiple_ifaces_inet6_head()
 {
 	atf_set "descr" "Can remove an IPv6 alias from an interface when the same address is also assigned to another interface, on non-default FIBs."
 	atf_set "require.user" "root"
-	atf_set "require.config" "fibs"
 }
 same_ip_multiple_ifaces_inet6_body()
 {
@@ -447,7 +437,7 @@ slaac_on_nondefault_fib6_head()
 {
 	atf_set "descr" "SLAAC correctly installs routes on non-default FIBs"
 	atf_set "require.user" "root"
-	atf_set "require.config" "fibs" "allow_sysctl_side_effects"
+	atf_set "require.config" "allow_sysctl_side_effects"
 }
 slaac_on_nondefault_fib6_body()
 {
@@ -534,7 +524,6 @@ subnet_route_with_multiple_fibs_on_same_subnet_head()
 {
 	atf_set "descr" "Multiple FIBs can have IPv4 subnet routes for the same subnet"
 	atf_set "require.user" "root"
-	atf_set "require.config" "fibs"
 }
 
 subnet_route_with_multiple_fibs_on_same_subnet_body()
@@ -571,7 +560,6 @@ subnet_route_with_multiple_fibs_on_same_subnet_inet6_head()
 {
 	atf_set "descr" "Multiple FIBs can have IPv6 subnet routes for the same subnet"
 	atf_set "require.user" "root"
-	atf_set "require.config" "fibs"
 }
 
 subnet_route_with_multiple_fibs_on_same_subnet_inet6_body()
@@ -621,7 +609,6 @@ udp_dontroute_head()
 {
 	atf_set "descr" "Source address selection for UDP packets with SO_DONTROUTE on non-default FIBs works"
 	atf_set "require.user" "root"
-	atf_set "require.config" "fibs"
 }
 
 udp_dontroute_body()
@@ -672,14 +659,10 @@ udp_dontroute6_head()
 {
 	atf_set "descr" "Source address selection for UDP IPv6 packets with SO_DONTROUTE on non-default FIBs works"
 	atf_set "require.user" "root"
-	atf_set "require.config" "fibs"
 }
 
 udp_dontroute6_body()
 {
-	if [ "$(atf_config_get ci false)" = "true" ]; then
-		atf_skip "https://bugs.freebsd.org/244172"
-	fi
 	# Configure the TAP interface to use an RFC3849 nonrouteable address
 	# and a non-default fib
 	ADDR0="2001:db8::2"
@@ -749,15 +732,13 @@ get_fibs()
 {
 	NUMFIBS=$1
 	net_fibs=`sysctl -n net.fibs`
+	if [ $net_fibs -lt $(($NUMFIBS + 1)) ]; then
+		atf_check -o ignore sysctl net.fibs=$(($NUMFIBS + 1))
+		net_fibs=`sysctl -n net.fibs`
+	fi
 	i=0
 	while [ $i -lt "$NUMFIBS" ]; do
-		fib=`atf_config_get "fibs" | \
-			awk -v i=$(( i + 1 )) '{print $i}'`
-		echo "fib is ${fib}"
-		eval FIB${i}=${fib}
-		if [ "$fib" -ge "$net_fibs" ]; then
-			atf_skip "The ${i}th configured fib is ${fib}, which is not less than net.fibs, which is ${net_fibs}"
-		fi
+		eval FIB${i}=$(($i + 1))
 		i=$(( $i + 1 ))
 	done
 }
@@ -817,9 +798,7 @@ setup_iface()
 	local ADDR=$4
 	local MASK=$5
 	local FLAGS=$6
-	echo setfib ${FIB} \
-		ifconfig $IFACE ${PROTO} ${ADDR}/${MASK} fib $FIB $FLAGS
-	setfib ${FIB} ifconfig $IFACE ${PROTO} ${ADDR}/${MASK} fib $FIB $FLAGS
+	atf_check setfib ${FIB} ifconfig $IFACE ${PROTO} ${ADDR}/${MASK} fib $FIB $FLAGS
 }
 
 # Create a tap(4) interface, configure it, and register it for cleanup.

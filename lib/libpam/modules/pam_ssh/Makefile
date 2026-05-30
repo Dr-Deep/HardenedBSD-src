@@ -1,12 +1,12 @@
 # PAM module for SSH
-# $FreeBSD$
 
 SSHDIR=	${SRCTOP}/crypto/openssh
 
-LIB=	pam_ssh
-MAN=	pam_ssh.8
-SRCS=	pam_ssh.c
 PACKAGE=	ssh
+
+LIB=		pam_ssh
+MANNODEV=	pam_ssh.8
+SRCS=		pam_ssh.c
 
 WARNS?=	5
 CFLAGS+= -I${SSHDIR} -include ssh_namespace.h

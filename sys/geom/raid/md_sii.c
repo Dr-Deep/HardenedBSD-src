@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2011 Alexander Motin <mav@FreeBSD.org>
  * Copyright (c) 2000 - 2008 Søren Schmidt <sos@FreeBSD.org>
@@ -26,9 +26,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/bio.h>
@@ -923,6 +920,13 @@ g_raid_md_taste_sii(struct g_raid_md_object *md, struct g_class *mp,
 	G_RAID_DEBUG(1, "Tasting SiI on %s", cp->provider->name);
 	mdi = (struct g_raid_md_sii_object *)md;
 	pp = cp->provider;
+
+	/* Explicitly reject providers with too small sector size */
+	if (pp->sectorsize < sizeof(struct sii_raid_conf)) {
+		G_RAID_DEBUG(1, "SiI sector size too small on %s: %u < %zu",
+		    pp->name, pp->sectorsize, sizeof(struct sii_raid_conf));
+		return (G_RAID_MD_TASTE_FAIL);
+	}
 
 	/* Read metadata from device. */
 	meta = NULL;

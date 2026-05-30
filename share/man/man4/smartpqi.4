@@ -1,5 +1,7 @@
-.\" Copyright (c) 2018 Murthy Bhat
-.\" All rights reserved.
+.\" Copyright (C) 2019-2026, Microchip Technology Inc. and its subsidiaries
+.\" Copyright (C) 2016-2018, Microsemi Corporation
+.\" Copyright (C) 2016, PMC-Sierra, Inc.
+.\" Written by John Hall <john.hall@microchip.com>
 .\"
 .\" Redistribution and use in source and binary forms, with or without
 .\" modification, are permitted provided that the following conditions
@@ -22,25 +24,22 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\" $FreeBSD$ stable/10/share/man/man4/smartpqi.4 195614 2017-01-11 08:10:18Z jkim $
-.Dd April 6, 2018
-.Dt SMARTPQI 4
+.Dd April 14, 2026
+.Dt SMARTPQI 4 amd64
 .Os
 .Sh NAME
 .Nm smartpqi
-.Nd Microsemi smartpqi SCSI driver for PQI controllers
+.Nd "Microchip Smart Storage SCSI driver"
 .Sh SYNOPSIS
-To compile this driver into the kernel,
-place the following lines in your
-kernel configuration file:
+To compile this driver into the kernel, place these lines in the kernel
+configuration file:
 .Bd -ragged -offset indent
 .Cd device pci
 .Cd device scbus
 .Cd device smartpqi
 .Ed
 .Pp
-Alternatively, to load the driver as a
-module at boot time, place the following line in
+The driver can be loaded as a module at boot time by placing this line in
 .Xr loader.conf 5 :
 .Bd -literal -offset indent
 smartpqi_load="YES"
@@ -48,36 +47,131 @@ smartpqi_load="YES"
 .Sh DESCRIPTION
 The
 .Nm
-SCSI driver provides support for the new generation of PQI controllers from
-Microsemi.
-The
-.Nm
-driver is the first SCSI driver to implement the PQI queuing model.
-.Pp
-The
-.Nm
-driver will replace the aacraid driver for Adaptec Series 9 controllers.
-.Pp
-The
-.Pa /dev/smartpqi?
-device nodes provide access to the management interface of the controller.
-One node exists per installed card.
+driver provides support for Microchip Technology Inc. / Adaptec SmartRaid and
+SmartHBA SATA/SAS/NVMe PCIe controllers
 .Sh HARDWARE
 Controllers supported by the
 .Nm
-driver include:
+driver include, but not limited to:
 .Pp
 .Bl -bullet -compact
 .It
 HPE Gen10 Smart Array Controller Family
 .It
-OEM Controllers based on the Microsemi Chipset
+Adaptec SmartRaid and SmartHBA Controllers
+.It
+OEM Controllers based on the Microchip Technology Inc. SmartROC
+and SmartIOC Chipsets
 .El
+.Sh DEBUGGING
+Driver diagnostic printing is controlled at boot time in
+.Xr loader.conf 5
+by using the global
+.Va hw.smartpqi.debug_level
+tunable, or at runtime via the per-controller
+.Va dev.smartpqi.<unit>.debug_level
+sysctl.
+.Pp
+The
+.Va debug_level
+variable is set with an integer value.
+The default value is 0x0060 (warn && error).
+.Pp
+The following levels are available:
+.Bl -column "FlagXX" "NameXXXX" "Description" -offset indent
+.It Em Flag Ta Em Name Ta Em Description
+.It 0x0001 Ta init Ta System initialization operations
+.It 0x0002 Ta info Ta Basic information
+.It 0x0004 Ta function Ta Used to show function entry and exit
+.It 0x0008 Ta io Ta Logging data from controller
+.It 0x0010 Ta discovery Ta Device discovery state transitions
+.It 0x0020 Ta warning Ta Operational warnings
+.It 0x0040 Ta error Ta Parameter errors and programming bugs
+.It 0x0080 Ta note Ta More detailed information
+.El
+.Pp
+In addition to the level-gated debug output, the driver always logs
+device addition, device removal, and controller events
+(hotplug, hardware, physical/logical device changes, AIO state and
+configuration changes) via
+.Xr device_printf 9 ,
+which appear in
+.Xr dmesg 8
+regardless of the
+.Va debug_level
+setting.
+.Pp
+For example, to enable discovery logging at runtime on the first controller:
+.Bd -literal -offset indent
+sysctl dev.smartpqi.0.debug_level=0x0070
+.Ed
+.Sh DEVICE HINTS
+The following tunable values can be set in
+.Pa /boot/device.hints
+to control the behavior of the
+.Nm
+driver.
+These hints are specified as:
+.Bd -literal -offset indent
+hint.smartpqi.<unit>.<variable>=<value>
+.Ed
+.Pp
+The supported variables are:
+.Bl -tag -width ".Va aio_raid1_write_disable"
+.It Va stream_disable
+If set to 0, disables Stream Detection.
+.Pp
+Default is (enabled).
+.It Va sata_unique_wwn_disable
+If set to 0, disables SATA Unique World Wide Number.
+.Pp
+Default is (enabled).
+.It Va aio_raid1_write_disable
+If set to 0, disables acceleration of RAID1 writes
+.Pp
+Default is (enabled).
+.It Va aio_raid5_write_disable
+If set to 0, disables acceleration of RAID5 writes
+.Pp
+Default is (enabled).
+.It Va aio_raid6_write_disable
+If set to 0, disables acceleration of RAID6 writes
+.Pp
+Default is (enabled).
+.It Va queue_depth
+Sets queue depth for the controller. If the queue depth value
+is greater than the maximum supported queue size of the driver or
+controller, it will be set to the lowest size. If the queue
+depth value is lower than the minimum queue depth then this will
+be set to the minimum queue depth.
+.Pp
+Default is driver-determined.
+.It Va sg_count
+Sets the scatter gather (sg) count. If this sg count is greater
+than maximum sg count it will be set to the maximum sg count.
+If this sg count is less than minimum sg count it will be set to
+the minimum sg count.
+.Pp
+Default is driver-determined.
+.El
+.Pp
+For example, to disable Stream Detection on the first controller, add
+the following line to
+.Pa /boot/device.hints :
+.Bd -literal -offset indent
+hint.smartpqi.0.stream_disable="0"
+.Ed
 .Sh FILES
-.Bl -tag -width /boot/kernel/aac.ko -compact
+.Bl -tag -width /boot/kernel/smartpqi.ko -compact
 .It Pa /dev/smartpqi?
 smartpqi management interface
 .El
+.Sh NOTES
+.Ss Configuration
+To configure a Microchip Smart Storage controller,
+refer to the User Guide for the controller,
+which can be found by searching for the specific controller at
+https://www.microchip.com/design-centers/storage
 .Sh SEE ALSO
 .Xr kld 4 ,
 .Xr linux 4 ,
@@ -86,18 +180,16 @@ smartpqi management interface
 .Xr xpt 4 ,
 .Xr loader.conf 5 ,
 .Xr camcontrol 8 ,
-.Xr kldload 8
-.Rs
-.%T "Microsemi Website"
-.%U https://www.microsemi.com/
-.Re
+.Xr dmesg 8 ,
+.Xr kldload 8 ,
+.Xr sysctl 8
 .Sh HISTORY
 The
 .Nm
 driver first appeared in
 .Fx 11.1 .
 .Sh AUTHORS
-.An Murthy Bhat
-.Aq murthy.bhat@microsemi.com
+.An John Hall
+.Aq john.hall@microchip.com
 .Sh BUGS
 The controller is not actually paused on suspend/resume.

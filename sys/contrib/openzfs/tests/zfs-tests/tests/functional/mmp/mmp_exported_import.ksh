@@ -1,4 +1,5 @@
 #!/bin/ksh -p
+# SPDX-License-Identifier: CDDL-1.0
 #
 # CDDL HEADER START
 #
@@ -27,7 +28,7 @@
 #	3. Verify multihost=off and hostids differ (no activity check)
 #	4. Verify multihost=off and hostid zero allowed (no activity check)
 #	5. Verify multihost=on and hostids match (no activity check)
-#	6. Verify multihost=on and hostids differ (no activity check)
+#	6. Verify multihost=on and hostids differ (activity check)
 #	7. Verify multihost=on and hostid zero fails (no activity check)
 #
 
@@ -39,7 +40,7 @@ verify_runnable "both"
 
 function cleanup
 {
-	default_cleanup_noexit
+	datasetexists $TESTPOOL && destroy_pool $TESTPOOL
 	log_must mmp_clear_hostid
 }
 
@@ -48,9 +49,10 @@ log_onexit cleanup
 
 # 1. Create a zpool
 log_must mmp_set_hostid $HOSTID1
-default_setup_noexit $DISK
+log_must zpool create -f $TESTPOOL $DISK
 
 # 2. Verify multihost=off and hostids match (no activity check)
+log_note "Verify multihost=off and hostids match (no activity check)"
 log_must zpool set multihost=off $TESTPOOL
 
 for opt in "" "-f"; do
@@ -59,6 +61,7 @@ for opt in "" "-f"; do
 done
 
 # 3. Verify multihost=off and hostids differ (no activity check)
+log_note "Verify multihost=off and hostids differ (no activity check)"
 for opt in "" "-f"; do
 	log_must mmp_pool_set_hostid $TESTPOOL $HOSTID1
 	log_must zpool export $TESTPOOL
@@ -68,6 +71,7 @@ for opt in "" "-f"; do
 done
 
 # 4. Verify multihost=off and hostid zero allowed (no activity check)
+log_note "Verify multihost=off and hostid zero allowed (no activity check)"
 log_must mmp_clear_hostid
 
 for opt in "" "-f"; do
@@ -76,6 +80,7 @@ for opt in "" "-f"; do
 done
 
 # 5. Verify multihost=on and hostids match (no activity check)
+log_note "Verify multihost=on and hostids match (no activity check)"
 log_must mmp_pool_set_hostid $TESTPOOL $HOSTID1
 log_must zpool set multihost=on $TESTPOOL
 
@@ -84,16 +89,18 @@ for opt in "" "-f"; do
 	log_must import_no_activity_check $TESTPOOL $opt
 done
 
-# 6. Verify multihost=on and hostids differ (no activity check)
+# 6. Verify multihost=on and hostids differ (activity check)
+log_note "Verify multihost=on and hostids differ (activity check)"
 for opt in "" "-f"; do
 	log_must mmp_pool_set_hostid $TESTPOOL $HOSTID1
 	log_must zpool export $TESTPOOL
 	log_must mmp_clear_hostid
 	log_must mmp_set_hostid $HOSTID2
-	log_must import_no_activity_check $TESTPOOL $opt
+	log_must import_activity_check $TESTPOOL $opt
 done
 
 # 7. Verify multihost=on and hostid zero fails (no activity check)
+log_note "Verify multihost=on and hostid zero fails (no activity check)"
 log_must zpool export $TESTPOOL
 log_must mmp_clear_hostid
 

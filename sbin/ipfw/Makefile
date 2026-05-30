@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 .include <src.opts.mk>
 
 PACKAGE=ipfw
@@ -18,6 +16,9 @@ CFLAGS+=-DPF
 
 LIBADD=	jail util
 MAN=	ipfw.8
+
+HAS_TESTS=
+SUBDIR.${MK_TESTS}=     tests
 
 .include <bsd.prog.mk>
 

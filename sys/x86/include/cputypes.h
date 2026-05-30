@@ -23,8 +23,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _X86_CPUTYPES_H_
@@ -46,5 +44,19 @@
 #define	CPU_VENDOR_RISE		0xdead2bad	/* Rise */
 #define	CPU_VENDOR_CENTAUR	CPU_VENDOR_IDT
 #define	CPU_VENDOR_HYGON	0x1d94		/* Hygon */
+
+#define CPU_AMD_ZEN1		0x00
+#define CPU_AMD_ZEN2		0x01
+#define CPU_AMD_ZEN3		0x02
+#define CPU_AMD_ZEN4		0x03
+#define CPU_AMD_ZEN5		0x04
+#define CPU_AMD_ZEN6		0x05
+#define CPU_AMD_UNKNOWN		0xffffffff
+
+#ifdef _KERNEL
+#ifndef LOCORE
+u_int	ident_zen_cpu(void);
+#endif
+#endif
 
 #endif /* !_X86_CPUTYPES_H_ */

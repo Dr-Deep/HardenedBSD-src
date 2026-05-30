@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1998 Nicolas Souchu
  * All rights reserved.
@@ -24,15 +24,13 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #ifndef __DEV_SMBUS_SMBCONF_H
 #define	__DEV_SMBUS_SMBCONF_H
 
 #include <sys/queue.h>
 
-#define SMBPRI (PZERO+8)		/* XXX sleep/wakeup queue priority */
+#define SMBPRI (PWAIT)		/* XXX sleep/wakeup queue priority */
 
 #define n(flags) (~(flags) & (flags))
 
@@ -77,7 +75,7 @@
  * ivars codes
  */
 enum smbus_ivars {
-    SMBUS_IVAR_ADDR,	/* slave address of the device */
+	SMBUS_IVAR_ADDR = BUS_IVARS_PRIVATE, /* slave address of the device */
 };
 
 int	smbus_request_bus(device_t, device_t, int);

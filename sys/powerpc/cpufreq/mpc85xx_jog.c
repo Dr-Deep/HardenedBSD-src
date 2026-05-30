@@ -24,9 +24,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
@@ -121,7 +118,7 @@ static struct ofw_compat_data jog_compat[] = {
 };
 
 static struct ofw_compat_data *
-mpc85xx_jog_devcompat()
+mpc85xx_jog_devcompat(void)
 {
 	phandle_t node;
 	int i;
@@ -146,7 +143,7 @@ mpc85xx_jog_identify(driver_t *driver, device_t parent)
 	struct ofw_compat_data *compat;
 
 	/* Make sure we're not being doubly invoked. */
-	if (device_find_child(parent, "mpc85xx_jog", -1) != NULL)
+	if (device_find_child(parent, "mpc85xx_jog", DEVICE_UNIT_ANY) != NULL)
 		return;
 
 	compat = mpc85xx_jog_devcompat();
@@ -157,7 +154,7 @@ mpc85xx_jog_identify(driver_t *driver, device_t parent)
 	 * We attach a child for every CPU since settings need to
 	 * be performed on every CPU in the SMP case.
 	 */
-	if (BUS_ADD_CHILD(parent, 10, "jog", -1) == NULL)
+	if (BUS_ADD_CHILD(parent, 10, "jog", DEVICE_UNIT_ANY) == NULL)
 		device_printf(parent, "add jog child failed\n");
 }
 

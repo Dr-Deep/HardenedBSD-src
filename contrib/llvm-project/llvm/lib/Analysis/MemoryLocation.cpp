@@ -8,14 +8,12 @@
 
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
-#include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/IntrinsicsARM.h"
-#include "llvm/IR/LLVMContext.h"
-#include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
+#include <optional>
 using namespace llvm;
 
 void LocationSize::print(raw_ostream &OS) const {
@@ -35,7 +33,7 @@ void LocationSize::print(raw_ostream &OS) const {
 }
 
 MemoryLocation MemoryLocation::get(const LoadInst *LI) {
-  const auto &DL = LI->getModule()->getDataLayout();
+  const auto &DL = LI->getDataLayout();
 
   return MemoryLocation(
       LI->getPointerOperand(),
@@ -44,7 +42,7 @@ MemoryLocation MemoryLocation::get(const LoadInst *LI) {
 }
 
 MemoryLocation MemoryLocation::get(const StoreInst *SI) {
-  const auto &DL = SI->getModule()->getDataLayout();
+  const auto &DL = SI->getDataLayout();
 
   return MemoryLocation(SI->getPointerOperand(),
                         LocationSize::precise(DL.getTypeStoreSize(
@@ -58,7 +56,7 @@ MemoryLocation MemoryLocation::get(const VAArgInst *VI) {
 }
 
 MemoryLocation MemoryLocation::get(const AtomicCmpXchgInst *CXI) {
-  const auto &DL = CXI->getModule()->getDataLayout();
+  const auto &DL = CXI->getDataLayout();
 
   return MemoryLocation(CXI->getPointerOperand(),
                         LocationSize::precise(DL.getTypeStoreSize(
@@ -67,7 +65,7 @@ MemoryLocation MemoryLocation::get(const AtomicCmpXchgInst *CXI) {
 }
 
 MemoryLocation MemoryLocation::get(const AtomicRMWInst *RMWI) {
-  const auto &DL = RMWI->getModule()->getDataLayout();
+  const auto &DL = RMWI->getDataLayout();
 
   return MemoryLocation(RMWI->getPointerOperand(),
                         LocationSize::precise(DL.getTypeStoreSize(
@@ -75,7 +73,8 @@ MemoryLocation MemoryLocation::get(const AtomicRMWInst *RMWI) {
                         RMWI->getAAMetadata());
 }
 
-Optional<MemoryLocation> MemoryLocation::getOrNone(const Instruction *Inst) {
+std::optional<MemoryLocation>
+MemoryLocation::getOrNone(const Instruction *Inst) {
   switch (Inst->getOpcode()) {
   case Instruction::Load:
     return get(cast<LoadInst>(Inst));
@@ -88,15 +87,11 @@ Optional<MemoryLocation> MemoryLocation::getOrNone(const Instruction *Inst) {
   case Instruction::AtomicRMW:
     return get(cast<AtomicRMWInst>(Inst));
   default:
-    return None;
+    return std::nullopt;
   }
 }
 
 MemoryLocation MemoryLocation::getForSource(const MemTransferInst *MTI) {
-  return getForSource(cast<AnyMemTransferInst>(MTI));
-}
-
-MemoryLocation MemoryLocation::getForSource(const AtomicMemTransferInst *MTI) {
   return getForSource(cast<AnyMemTransferInst>(MTI));
 }
 
@@ -109,48 +104,46 @@ MemoryLocation MemoryLocation::getForDest(const MemIntrinsic *MI) {
   return getForDest(cast<AnyMemIntrinsic>(MI));
 }
 
-MemoryLocation MemoryLocation::getForDest(const AtomicMemIntrinsic *MI) {
-  return getForDest(cast<AnyMemIntrinsic>(MI));
-}
-
 MemoryLocation MemoryLocation::getForDest(const AnyMemIntrinsic *MI) {
   assert(MI->getRawDest() == MI->getArgOperand(0));
   return getForArgument(MI, 0, nullptr);
 }
 
-Optional<MemoryLocation>
+std::optional<MemoryLocation>
 MemoryLocation::getForDest(const CallBase *CB, const TargetLibraryInfo &TLI) {
-  if (!CB->onlyAccessesArgMemory())
-    return None;
+  // Check that the only possible writes are to arguments.
+  MemoryEffects WriteME = CB->getMemoryEffects() & MemoryEffects::writeOnly();
+  if (!WriteME.onlyAccessesArgPointees())
+    return std::nullopt;
 
   if (CB->hasOperandBundles())
     // TODO: remove implementation restriction
-    return None;
+    return std::nullopt;
 
   Value *UsedV = nullptr;
-  Optional<unsigned> UsedIdx;
+  std::optional<unsigned> UsedIdx;
   for (unsigned i = 0; i < CB->arg_size(); i++) {
     if (!CB->getArgOperand(i)->getType()->isPointerTy())
       continue;
-     if (CB->onlyReadsMemory(i))
-       continue;
+    if (CB->onlyReadsMemory(i))
+      continue;
     if (!UsedV) {
       // First potentially writing parameter
       UsedV = CB->getArgOperand(i);
       UsedIdx = i;
       continue;
     }
-    UsedIdx = None;
+    UsedIdx = std::nullopt;
     if (UsedV != CB->getArgOperand(i))
       // Can't describe writing to two distinct locations.
       // TODO: This results in an inprecision when two values derived from the
       // same object are passed as arguments to the same function.
-      return None;
+      return std::nullopt;
   }
   if (!UsedV)
     // We don't currently have a way to represent a "does not write" result
     // and thus have to be conservative and return unknown.
-    return None;
+    return std::nullopt;
 
   if (UsedIdx)
     return getForArgument(CB, *UsedIdx, &TLI);
@@ -165,7 +158,7 @@ MemoryLocation MemoryLocation::getForArgument(const CallBase *Call,
 
   // We may be able to produce an exact size for known intrinsics.
   if (const IntrinsicInst *II = dyn_cast<IntrinsicInst>(Call)) {
-    const DataLayout &DL = II->getModule()->getDataLayout();
+    const DataLayout &DL = II->getDataLayout();
 
     switch (II->getIntrinsicID()) {
     default:
@@ -182,6 +175,18 @@ MemoryLocation MemoryLocation::getForArgument(const CallBase *Call,
       if (ConstantInt *LenCI = dyn_cast<ConstantInt>(II->getArgOperand(2)))
         return MemoryLocation(Arg, LocationSize::precise(LenCI->getZExtValue()),
                               AATags);
+      return MemoryLocation::getAfter(Arg, AATags);
+
+    case Intrinsic::experimental_memset_pattern:
+      assert((ArgIdx == 0 || ArgIdx == 1) &&
+             "Invalid argument index for memory intrinsic");
+      if (ConstantInt *LenCI = dyn_cast<ConstantInt>(II->getArgOperand(2)))
+        return MemoryLocation(
+            Arg,
+            LocationSize::precise(
+                LenCI->getZExtValue() *
+                DL.getTypeAllocSize(II->getArgOperand(1)->getType())),
+            AATags);
       return MemoryLocation::getAfter(Arg, AATags);
 
     case Intrinsic::lifetime_start:
@@ -255,12 +260,17 @@ MemoryLocation MemoryLocation::getForArgument(const CallBase *Call,
       assert((ArgIdx == 0 || ArgIdx == 1) && "Invalid argument index for str function");
       return MemoryLocation::getAfter(Arg, AATags);
 
-    case LibFunc_memset_chk: {
+    case LibFunc_memset_chk:
       assert(ArgIdx == 0 && "Invalid argument index for memset_chk");
+      [[fallthrough]];
+    case LibFunc_memcpy_chk: {
+      assert((ArgIdx == 0 || ArgIdx == 1) &&
+             "Invalid argument index for memcpy_chk");
       LocationSize Size = LocationSize::afterPointer();
       if (const auto *Len = dyn_cast<ConstantInt>(Call->getArgOperand(2))) {
-        // memset_chk writes at most Len bytes. It may write less, if Len
-        // exceeds the specified max size and aborts.
+        // memset_chk writes at most Len bytes, memcpy_chk reads/writes at most
+        // Len bytes. They may read/write less, if Len exceeds the specified max
+        // size and aborts.
         Size = LocationSize::upperBound(Len->getZExtValue());
       }
       return MemoryLocation(Arg, Size, AATags);

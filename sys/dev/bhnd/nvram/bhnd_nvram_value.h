@@ -26,7 +26,6 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGES.
  * 
- * $FreeBSD$
  */
 
 #ifndef _BHND_NVRAM_BHND_NVRAM_VALUE_H_
@@ -35,7 +34,7 @@
 #include <sys/refcount.h>
 
 #ifdef _KERNEL
-#include <machine/stdarg.h>
+#include <sys/stdarg.h>
 #else /* !_KERNEL */
 #include <stdarg.h>
 #endif /* _KERNEL */

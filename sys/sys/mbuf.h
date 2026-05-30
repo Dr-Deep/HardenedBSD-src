@@ -28,9 +28,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)mbuf.h	8.5 (Berkeley) 2/19/95
- * $FreeBSD$
  */
 
 #ifndef _SYS_MBUF_H_
@@ -42,12 +39,7 @@
 #include <sys/systm.h>
 #include <sys/refcount.h>
 #include <vm/uma.h>
-#ifdef WITNESS
-#include <sys/lock.h>
-#endif
-#endif
 
-#ifdef _KERNEL
 #include <sys/sdt.h>
 
 #define	MBUF_PROBE1(probe, arg0)					\
@@ -73,6 +65,7 @@ SDT_PROBE_DECLARE(sdt, , , m__cljget);
 SDT_PROBE_DECLARE(sdt, , , m__cljset);
 SDT_PROBE_DECLARE(sdt, , , m__free);
 SDT_PROBE_DECLARE(sdt, , , m__freem);
+SDT_PROBE_DECLARE(sdt, , , m__freemp);
 
 #endif /* _KERNEL */
 
@@ -586,6 +579,10 @@ m_epg_pagelen(const struct mbuf *m, int pidx, int pgoff)
 #define	M_HASHTYPE_TEST(m, v)	(M_HASHTYPE_GET(m) == (v))
 #define	M_HASHTYPE_ISHASH(m)	\
     (((m)->m_pkthdr.rsstype & M_HASHTYPE_HASHPROP) != 0)
+#define	M_HASHTYPE_ISHASH_TCP(m)				\
+    (((m)->m_pkthdr.rsstype & (M_HASHTYPE_RSS_TCP_IPV4 |		\
+				M_HASHTYPE_RSS_TCP_IPV6 |		\
+				M_HASHTYPE_RSS_TCP_IPV6_EX)) != 0)
 #define	M_HASHTYPE_SETINNER(m)	do {			\
 	(m)->m_pkthdr.rsstype |= M_HASHTYPE_INNER;	\
     } while (0)
@@ -601,6 +598,7 @@ m_epg_pagelen(const struct mbuf *m, int pidx, int pgoff)
 #define	EXT_PACKET	6	/* mbuf+cluster from packet zone */
 #define	EXT_MBUF	7	/* external mbuf reference */
 #define	EXT_RXRING	8	/* data in NIC receive ring */
+#define	EXT_CTL		9	/* buffer from a ctl(4) backend */
 
 #define	EXT_VENDOR1	224	/* for vendor-internal use */
 #define	EXT_VENDOR2	225	/* for vendor-internal use */
@@ -647,16 +645,15 @@ m_epg_pagelen(const struct mbuf *m, int pidx, int pgoff)
 
 /*
  * Flags indicating checksum, segmentation and other offload work to be
- * done, or already done, by hardware or lower layers.  It is split into
- * separate inbound and outbound flags.
+ * done, or already done, by hardware or lower layers.
  *
- * Outbound flags that are set by upper protocol layers requesting lower
+ * Flags that are set by upper protocol layers requesting lower
  * layers, or ideally the hardware, to perform these offloading tasks.
- * For outbound packets this field and its flags can be directly tested
- * against ifnet if_hwassist.  Note that the outbound and the inbound flags do
- * not collide right now but they could be allowed to (as long as the flags are
- * scrubbed appropriately when the direction of an mbuf changes).  CSUM_BITS
- * would also have to split into CSUM_BITS_TX and CSUM_BITS_RX.
+ * Before passing packets to a network interface this field and its flags can
+ * be directly tested against ifnet if_hwassist.  Note that the flags
+ * CSUM_IP_SCTP, CSUM_IP_TCP, and CSUM_IP_UDP can appear on input processing
+ * of SCTP, TCP, and UDP.  In such a case the checksum will not be computed or
+ * validated by SCTP, TCP, or TCP, since the packet has not been on the wire.
  *
  * CSUM_INNER_<x> is the same as CSUM_<x> but it applies to the inner frame.
  * The CSUM_ENCAP_<x> bits identify the outer encapsulation.
@@ -683,9 +680,9 @@ m_epg_pagelen(const struct mbuf *m, int pidx, int pgoff)
 #define	CSUM_INNER_IP_TSO	0x00020000
 
 #define	CSUM_ENCAP_VXLAN	0x00040000	/* VXLAN outer encapsulation */
-#define	CSUM_ENCAP_RSVD1	0x00080000
+#define	CSUM_ENCAP_GENEVE	0x00080000	/* GENEVE outer encapsulation */
 
-/* Inbound checksum support where the checksum was verified by hardware. */
+/* Flags used to indicate that the checksum was verified by hardware. */
 #define	CSUM_INNER_L3_CALC	0x00100000
 #define	CSUM_INNER_L3_VALID	0x00200000
 #define	CSUM_INNER_L4_CALC	0x00400000
@@ -705,7 +702,7 @@ m_epg_pagelen(const struct mbuf *m, int pidx, int pgoff)
     CSUM_INNER_IP6_TSO | CSUM_IP6_UDP | CSUM_IP6_TCP | CSUM_IP6_SCTP | \
     CSUM_IP6_TSO | CSUM_IP6_ISCSI | CSUM_INNER_IP | CSUM_INNER_IP_UDP | \
     CSUM_INNER_IP_TCP | CSUM_INNER_IP_TSO | CSUM_ENCAP_VXLAN | \
-    CSUM_ENCAP_RSVD1 | CSUM_SND_TAG)
+    CSUM_ENCAP_GENEVE | CSUM_SND_TAG)
 
 #define CSUM_FLAGS_RX (CSUM_INNER_L3_CALC | CSUM_INNER_L3_VALID | \
     CSUM_INNER_L4_CALC | CSUM_INNER_L4_VALID | CSUM_L3_CALC | CSUM_L3_VALID | \
@@ -721,7 +718,7 @@ m_epg_pagelen(const struct mbuf *m, int pidx, int pgoff)
     "\11CSUM_INNER_IP6_TSO\12CSUM_IP6_UDP\13CSUM_IP6_TCP\14CSUM_IP6_SCTP" \
     "\15CSUM_IP6_TSO\16CSUM_IP6_ISCSI\17CSUM_INNER_IP\20CSUM_INNER_IP_UDP" \
     "\21CSUM_INNER_IP_TCP\22CSUM_INNER_IP_TSO\23CSUM_ENCAP_VXLAN" \
-    "\24CSUM_ENCAP_RSVD1\25CSUM_INNER_L3_CALC\26CSUM_INNER_L3_VALID" \
+    "\24CSUM_ENCAP_GENEVE\25CSUM_INNER_L3_CALC\26CSUM_INNER_L3_VALID" \
     "\27CSUM_INNER_L4_CALC\30CSUM_INNER_L4_VALID\31CSUM_L3_CALC" \
     "\32CSUM_L3_VALID\33CSUM_L4_CALC\34CSUM_L4_VALID\35CSUM_L5_CALC" \
     "\36CSUM_L5_VALID\37CSUM_COALESCED\40CSUM_SND_TAG"
@@ -791,15 +788,11 @@ m_epg_pagelen(const struct mbuf *m, int pidx, int pgoff)
 #ifdef _KERNEL
 union if_snd_tag_alloc_params;
 
-#ifdef WITNESS
 #define	MBUF_CHECKSLEEP(how) do {					\
 	if (how == M_WAITOK)						\
 		WITNESS_WARN(WARN_GIANTOK | WARN_SLEEPOK, NULL,		\
 		    "Sleeping in \"%s\"", __func__);			\
 } while (0)
-#else
-#define	MBUF_CHECKSLEEP(how) do {} while (0)
-#endif
 
 /*
  * Network buffer allocation API
@@ -818,12 +811,12 @@ void		 mb_dupcl(struct mbuf *, struct mbuf *);
 void		 mb_free_ext(struct mbuf *);
 void		 mb_free_extpg(struct mbuf *);
 void		 mb_free_mext_pgs(struct mbuf *);
-struct mbuf	*mb_alloc_ext_pgs(int, m_ext_free_t);
+struct mbuf	*mb_alloc_ext_pgs(int, m_ext_free_t, int);
 struct mbuf	*mb_alloc_ext_plus_pages(int, int);
 struct mbuf	*mb_mapped_to_unmapped(struct mbuf *, int, int, int,
 		    struct mbuf **);
 int		 mb_unmapped_compress(struct mbuf *m);
-struct mbuf 	*mb_unmapped_to_ext(struct mbuf *m);
+int		 mb_unmapped_to_ext(struct mbuf *m, struct mbuf **mres);
 void		 mb_free_notready(struct mbuf *m, int count);
 void		 m_adj(struct mbuf *, int);
 void		 m_adj_decap(struct mbuf *, int);
@@ -854,6 +847,7 @@ void		 m_extadd(struct mbuf *, char *, u_int, m_ext_free_t,
 u_int		 m_fixhdr(struct mbuf *);
 struct mbuf	*m_fragment(struct mbuf *, int, int);
 void		 m_freem(struct mbuf *);
+void		 m_freemp(struct mbuf *);
 void		 m_free_raw(struct mbuf *);
 struct mbuf	*m_get2(int, int, short, int);
 struct mbuf	*m_get3(int, int, short, int);
@@ -894,9 +888,11 @@ m_gettype(int size)
 	case MCLBYTES:
 		type = EXT_CLUSTER;
 		break;
+#if MJUMPAGESIZE != MCLBYTES
 	case MJUMPAGESIZE:
 		type = EXT_JUMBOP;
 		break;
+#endif
 	case MJUM9BYTES:
 		type = EXT_JUMBO9;
 		break;
@@ -942,9 +938,11 @@ m_getzone(int size)
 	case MCLBYTES:
 		zone = zone_clust;
 		break;
+#if MJUMPAGESIZE != MCLBYTES
 	case MJUMPAGESIZE:
 		zone = zone_jumbop;
 		break;
+#endif
 	case MJUM9BYTES:
 		zone = zone_jumbo9;
 		break;
@@ -1064,9 +1062,11 @@ m_cljset(struct mbuf *m, void *cl, int type)
 	case EXT_CLUSTER:
 		size = MCLBYTES;
 		break;
+#if MJUMPAGESIZE != MCLBYTES
 	case EXT_JUMBOP:
 		size = MJUMPAGESIZE;
 		break;
+#endif
 	case EXT_JUMBO9:
 		size = MJUM9BYTES;
 		break;
@@ -1118,7 +1118,7 @@ static inline u_int
 m_extrefcnt(struct mbuf *m)
 {
 
-	KASSERT(m->m_flags & M_EXT, ("%s: M_EXT missing", __func__));
+	KASSERT(m->m_flags & M_EXT, ("%s: M_EXT missing for %p", __func__, m));
 
 	return ((m->m_ext.ext_flags & EXT_FLAG_EMBREF) ? m->m_ext.ext_count :
 	    *m->m_ext.ext_cnt);
@@ -1150,13 +1150,13 @@ m_extrefcnt(struct mbuf *m)
 /* Check if the supplied mbuf has a packet header, or else panic. */
 #define	M_ASSERTPKTHDR(m)						\
 	KASSERT((m) != NULL && (m)->m_flags & M_PKTHDR,			\
-	    ("%s: no mbuf packet header!", __func__))
+	    ("%s: no mbuf %p packet header!", __func__, (m)))
 
 /* Check if the supplied mbuf has no send tag, or else panic. */
 #define	M_ASSERT_NO_SND_TAG(m)						\
 	KASSERT((m) != NULL && (m)->m_flags & M_PKTHDR &&		\
 	       ((m)->m_pkthdr.csum_flags & CSUM_SND_TAG) == 0,		\
-	    ("%s: receive mbuf has send tag!", __func__))
+	    ("%s: receive mbuf %p has send tag!", __func__, (m)))
 
 /* Check if mbuf is multipage. */
 #define M_ASSERTEXTPG(m)						\
@@ -1170,7 +1170,7 @@ m_extrefcnt(struct mbuf *m)
  */
 #define	M_ASSERTVALID(m)						\
 	KASSERT((((struct mbuf *)m)->m_flags & 0) == 0,			\
-	    ("%s: attempted use of a free mbuf!", __func__))
+	    ("%s: attempted use of a free mbuf %p!", __func__, (m)))
 
 /* Check whether any mbuf in the chain is unmapped. */
 #ifdef INVARIANTS
@@ -1215,12 +1215,9 @@ m_extrefcnt(struct mbuf *m)
 static __inline void
 m_align(struct mbuf *m, int len)
 {
-#ifdef INVARIANTS
-	const char *msg = "%s: not a virgin mbuf";
-#endif
 	int adjust;
-
-	KASSERT(m->m_data == M_START(m), (msg, __func__));
+	KASSERT(m->m_data == M_START(m),
+	    ("%s: not a virgin mbuf %p", __func__, m));
 
 	adjust = M_SIZE(m) - len;
 	m->m_data += adjust &~ (sizeof(long)-1);
@@ -1245,6 +1242,16 @@ m_align(struct mbuf *m, int len)
 	(M_WRITABLE(m) ? ((m)->m_data - M_START(m)) : 0)
 
 /*
+ * So M_TRAILINGROOM() is for when you want to know how much space
+ * would be there if it was writable. This can be used to
+ * detect changes in mbufs by knowing the value at one point
+ * and then being able to compare it later to the current M_TRAILINGROOM().
+ * The TRAILINGSPACE() macro is not suitable for this since an mbuf
+ * at one point might not be writable and then later it becomes writable
+ * even though the space at the back of it has not changed.
+ */
+#define M_TRAILINGROOM(m) ((M_START(m) + M_SIZE(m)) - ((m)->m_data + (m)->m_len))
+/*
  * Compute the amount of space available after the end of data in an mbuf.
  *
  * The M_WRITABLE() is a temporary, conservative safety measure: the burden
@@ -1254,9 +1261,7 @@ m_align(struct mbuf *m, int len)
  * for mbufs with external storage.  We now allow mbuf-embedded data to be
  * read-only as well.
  */
-#define	M_TRAILINGSPACE(m)						\
-	(M_WRITABLE(m) ?						\
-	    ((M_START(m) + M_SIZE(m)) - ((m)->m_data + (m)->m_len)) : 0)
+#define	M_TRAILINGSPACE(m) (M_WRITABLE(m) ? M_TRAILINGROOM(m) : 0)
 
 /*
  * Arrange to prepend space of size plen to mbuf m.  If a new mbuf must be
@@ -1288,7 +1293,7 @@ m_align(struct mbuf *m, int len)
 
 /* Return the rcvif of a packet header. */
 static __inline struct ifnet *
-m_rcvif(struct mbuf *m)
+m_rcvif(const struct mbuf *m)
 {
 
 	M_ASSERTPKTHDR(m);
@@ -1386,6 +1391,10 @@ extern bool		mb_use_ext_pgs;	/* Use ext_pgs for sendfile */
 #define	PACKET_TAG_CARP				28 /* CARP info */
 #define	PACKET_TAG_IPSEC_NAT_T_PORTS		29 /* two uint16_t */
 #define	PACKET_TAG_ND_OUTGOING			30 /* ND outgoing */
+#define	PACKET_TAG_PF_REASSEMBLED		31
+#define	PACKET_TAG_IPSEC_ACCEL_OUT		32  /* IPSEC accel out */
+#define	PACKET_TAG_IPSEC_ACCEL_IN		33  /* IPSEC accel in */
+#define	PACKET_TAG_OVPN				34 /* if_ovpn */
 
 /* Specific cookies and tags. */
 
@@ -1529,14 +1538,16 @@ m_free(struct mbuf *m)
 static __inline int
 rt_m_getfib(struct mbuf *m)
 {
-	KASSERT(m->m_flags & M_PKTHDR , ("Attempt to get FIB from non header mbuf."));
+	KASSERT(m->m_flags & M_PKTHDR,
+	    ("%s: Attempt to get FIB from non header mbuf %p", __func__, m));
 	return (m->m_pkthdr.fibnum);
 }
 
 #define M_GETFIB(_m)   rt_m_getfib(_m)
 
 #define M_SETFIB(_m, _fib) do {						\
-        KASSERT((_m)->m_flags & M_PKTHDR, ("Attempt to set FIB on non header mbuf."));	\
+        KASSERT((_m)->m_flags & M_PKTHDR, \
+	    ("%s: Attempt to set FIB on non header mbuf %p", __func__, (_m))); \
 	((_m)->m_pkthdr.fibnum) = (_fib);				\
 } while (0)
 
@@ -1558,6 +1569,10 @@ uint32_t	m_infiniband_tcpip_hash(const uint32_t, const struct mbuf *, uint32_t);
  #define M_PROFILE(m)
 #endif
 
+/*
+ * Structure describing a packet queue: mbufs linked by m_stailqpkt.
+ * Does accounting of number of packets and has a cap.
+ */
 struct mbufq {
 	STAILQ_HEAD(, mbuf)	mq_head;
 	int			mq_len;
@@ -1610,6 +1625,12 @@ mbufq_last(const struct mbufq *mq)
 	return (STAILQ_LAST(&mq->mq_head, mbuf, m_stailqpkt));
 }
 
+static inline bool
+mbufq_empty(const struct mbufq *mq)
+{
+	return (mq->mq_len == 0);
+}
+
 static inline int
 mbufq_full(const struct mbufq *mq)
 {
@@ -1633,6 +1654,14 @@ mbufq_enqueue(struct mbufq *mq, struct mbuf *m)
 	STAILQ_INSERT_TAIL(&mq->mq_head, m, m_stailqpkt);
 	mq->mq_len++;
 	return (0);
+}
+
+static inline void
+mbufq_remove(struct mbufq *mq, struct mbuf *m)
+{
+
+	STAILQ_REMOVE(&mq->mq_head, m, mbuf, m_stailqpkt);
+	mq->mq_len--;
 }
 
 static inline struct mbuf *
@@ -1669,17 +1698,152 @@ mbufq_concat(struct mbufq *mq_dst, struct mbufq *mq_src)
 	mq_src->mq_len = 0;
 }
 
+/*
+ * Structure describing a chain of mbufs linked by m_stailq, also tracking
+ * the pointer to the last.  Also does accounting of data length and memory
+ * usage.
+ * To be used as an argument to mbuf chain allocation and manipulation KPIs,
+ * and can be allocated on the stack of a caller.  Kernel facilities may use
+ * it internally as a most simple implementation of a stream data buffer.
+ */
+struct mchain {
+	STAILQ_HEAD(, mbuf) mc_q;
+	u_int mc_len;
+	u_int mc_mlen;
+};
+
+#define	MCHAIN_INITIALIZER(mc)	\
+	(struct mchain){ .mc_q = STAILQ_HEAD_INITIALIZER((mc)->mc_q) }
+
+static inline struct mbuf *
+mc_first(struct mchain *mc)
+{
+	return (STAILQ_FIRST(&mc->mc_q));
+}
+
+static inline struct mbuf *
+mc_last(struct mchain *mc)
+{
+	return (STAILQ_LAST(&mc->mc_q, mbuf, m_stailq));
+}
+
+static inline bool
+mc_empty(struct mchain *mc)
+{
+	return (STAILQ_EMPTY(&mc->mc_q));
+}
+
+/* Account addition of m to mc. */
+static inline void
+mc_inc(struct mchain *mc, struct mbuf *m)
+{
+	mc->mc_len += m->m_len;
+	mc->mc_mlen += MSIZE;
+	if (m->m_flags & M_EXT)
+		mc->mc_mlen += m->m_ext.ext_size;
+}
+
+/* Account removal of m from mc. */
+static inline void
+mc_dec(struct mchain *mc, struct mbuf *m)
+{
+	MPASS(mc->mc_len >= m->m_len);
+	mc->mc_len -= m->m_len;
+	MPASS(mc->mc_mlen >= MSIZE);
+	mc->mc_mlen -= MSIZE;
+	if (m->m_flags & M_EXT) {
+		MPASS(mc->mc_mlen >= m->m_ext.ext_size);
+		mc->mc_mlen -= m->m_ext.ext_size;
+	}
+}
+
+/*
+ * Get mchain from a classic mbuf chain linked by m_next.  Two hacks here:
+ * we use the fact that m_next is alias to m_stailq, we use internal queue(3)
+ * fields.
+ */
+static inline void
+mc_init_m(struct mchain *mc, struct mbuf *m)
+{
+	struct mbuf *last;
+
+	STAILQ_FIRST(&mc->mc_q) = m;
+	mc->mc_len = mc->mc_mlen = 0;
+	STAILQ_FOREACH(m, &mc->mc_q, m_stailq) {
+		mc_inc(mc, m);
+		last = m;
+	}
+	mc->mc_q.stqh_last = &STAILQ_NEXT(last, m_stailq);
+}
+
+static inline void
+mc_freem(struct mchain *mc)
+{
+	if (!mc_empty(mc))
+		m_freem(mc_first(mc));
+}
+
+static inline void
+mc_prepend(struct mchain *mc, struct mbuf *m)
+{
+	STAILQ_INSERT_HEAD(&mc->mc_q, m, m_stailq);
+	mc_inc(mc, m);
+}
+
+static inline void
+mc_append(struct mchain *mc, struct mbuf *m)
+{
+	STAILQ_INSERT_TAIL(&mc->mc_q, m, m_stailq);
+	mc_inc(mc, m);
+}
+
+static inline void
+mc_concat(struct mchain *head, struct mchain *tail)
+{
+	STAILQ_CONCAT(&head->mc_q, &tail->mc_q);
+	head->mc_len += tail->mc_len;
+	head->mc_mlen += tail->mc_mlen;
+	tail->mc_len = tail->mc_mlen = 0;
+}
+
+/*
+ * Note: STAILQ_REMOVE() is expensive. mc_remove_after() needs to be provided
+ * as long as there consumers that would benefit from it.
+ */
+static inline void
+mc_remove(struct mchain *mc, struct mbuf *m)
+{
+	STAILQ_REMOVE(&mc->mc_q, m, mbuf, m_stailq);
+	mc_dec(mc, m);
+}
+
+int mc_get(struct mchain *, u_int, int, short, int);
+int mc_split(struct mchain *, struct mchain *, u_int, int);
+int mc_uiotomc(struct mchain *, struct uio *, u_int, u_int, int, int);
+
 #ifdef _SYS_TIMESPEC_H_
 static inline void
 mbuf_tstmp2timespec(struct mbuf *m, struct timespec *ts)
 {
 
-	KASSERT((m->m_flags & M_PKTHDR) != 0, ("mbuf %p no M_PKTHDR", m));
-	KASSERT((m->m_flags & (M_TSTMP|M_TSTMP_LRO)) != 0, ("mbuf %p no M_TSTMP or M_TSTMP_LRO", m));
+	M_ASSERTPKTHDR(m);
+	KASSERT((m->m_flags & (M_TSTMP|M_TSTMP_LRO)) != 0,
+	    ("%s: mbuf %p no M_TSTMP or M_TSTMP_LRO", __func__, m));
 	ts->tv_sec = m->m_pkthdr.rcv_tstmp / 1000000000;
 	ts->tv_nsec = m->m_pkthdr.rcv_tstmp % 1000000000;
 }
 #endif
+
+static inline void
+mbuf_tstmp2timeval(struct mbuf *m, struct timeval *tv)
+{
+
+	M_ASSERTPKTHDR(m);
+	KASSERT((m->m_flags & (M_TSTMP|M_TSTMP_LRO)) != 0,
+	    ("%s: mbuf %p no M_TSTMP or M_TSTMP_LRO", __func__, m));
+	tv->tv_sec = m->m_pkthdr.rcv_tstmp / 1000000000;
+	tv->tv_usec = (m->m_pkthdr.rcv_tstmp % 1000000000) / 1000;
+}
 
 #ifdef DEBUGNET
 /* Invoked from the debugnet client code. */

@@ -29,20 +29,6 @@
  * SUCH DAMAGE.
  */
 
-#ifndef lint
-static const char copyright[] =
-"@(#) Copyright (c) 1988, 1993\n\
-	The Regents of the University of California.  All rights reserved.\n";
-#endif /* not lint */
-
-#ifndef lint
-#if 0
-static char sccsid[] = "@(#)kdump.c	8.1 (Berkeley) 6/6/93";
-#endif
-#endif /* not lint */
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #define _WANT_KERNEL_ERRNO
 #ifdef __LP64__
 #define	_WANT_KEVENT32
@@ -54,15 +40,19 @@ __FBSDID("$FreeBSD$");
 #include <sys/_bitset.h>
 #include <sys/bitset.h>
 #include <sys/errno.h>
+#include <sys/exterr_cat.h>
 #include <sys/time.h>
 #include <sys/uio.h>
 #include <sys/event.h>
 #include <sys/ktrace.h>
 #include <sys/mman.h>
 #include <sys/ioctl.h>
+#include <sys/inotify.h>
+#include <sys/poll.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/sysent.h>
+#include <sys/thr.h>
 #include <sys/umtx.h>
 #include <sys/un.h>
 #include <sys/queue.h>
@@ -72,6 +62,7 @@ __FBSDID("$FreeBSD$");
 #endif
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <netlink/netlink.h>
 #include <ctype.h>
 #include <capsicum_helpers.h>
 #include <err.h>
@@ -99,36 +90,42 @@ __FBSDID("$FreeBSD$");
 #include <casper/cap_pwd.h>
 #endif
 
-int fetchprocinfo(struct ktr_header *, u_int *);
-u_int findabi(struct ktr_header *);
-int fread_tail(void *, int, int);
-void dumpheader(struct ktr_header *, u_int);
-void dumptimeval(struct ktr_header_v0 *kth);
-void dumptimespec(struct ktr_header *kth);
-void ktrsyscall(struct ktr_syscall *, u_int);
-void ktrsysret(struct ktr_sysret *, u_int);
-void ktrnamei(char *, int);
-void hexdump(char *, int, int);
-void visdump(char *, int, int);
-void ktrgenio(struct ktr_genio *, int);
-void ktrpsig(struct ktr_psig *);
-void ktrcsw(struct ktr_csw *);
-void ktrcsw_old(struct ktr_csw_old *);
-void ktruser(int, void *);
-void ktrcaprights(cap_rights_t *);
-void ktritimerval(struct itimerval *it);
-void ktrsockaddr(struct sockaddr *);
-void ktrstat(struct stat *);
-void ktrstruct(char *, size_t);
-void ktrcapfail(struct ktr_cap_fail *);
-void ktrfault(struct ktr_fault *);
-void ktrfaultend(struct ktr_faultend *);
-void ktrkevent(struct kevent *);
-void ktrstructarray(struct ktr_struct_array *, size_t);
-void ktrbitset(char *, struct bitset *, size_t);
-void ktrsyscall_freebsd(struct ktr_syscall *ktr, register_t **resip,
+static int fetchprocinfo(struct ktr_header *, u_int *);
+static u_int findabi(struct ktr_header *);
+static int fread_tail(void *, int, int);
+static void dumpheader(struct ktr_header *, u_int);
+static void dumptimeval(struct ktr_header_v0 *kth);
+static void dumptimespec(struct ktr_header *kth);
+static void ktrsyscall(struct ktr_syscall *, u_int);
+static void ktrsysret(struct ktr_sysret *, u_int);
+static void ktrnamei(char *, int);
+static void hexdump(char *, int, int);
+static void visdump(char *, int, int);
+static void ktrgenio(struct ktr_genio *, int);
+static void ktrpsig(struct ktr_psig *);
+static void ktrcsw(struct ktr_csw *);
+static void ktrcsw_old(struct ktr_csw_old *);
+static void ktruser(int, void *);
+static void ktrcaprights(cap_rights_t *);
+static void ktrinotify(struct inotify_event *);
+static void ktritimerval(struct itimerval *it);
+static void ktrsockaddr(struct sockaddr *);
+static void ktrsplice(struct splice *);
+static void ktrstat(struct stat *);
+static void ktrstruct(char *, size_t);
+static void ktrthrparam(struct thr_param *);
+static void ktrcapfail(struct ktr_cap_fail *);
+static void ktrfault(struct ktr_fault *);
+static void ktrfaultend(struct ktr_faultend *);
+static void ktrkevent(struct kevent *);
+static void ktrpollfd(struct pollfd *);
+static void ktrstructarray(struct ktr_struct_array *, size_t);
+static void ktrbitset(char *, struct bitset *, size_t);
+static void ktrsyscall_freebsd(struct ktr_syscall *ktr, register_t **resip,
     int *resnarg, char *resc, u_int sv_flags);
-void usage(void);
+static void ktrexecve(char *, int);
+static void ktrexterr(struct ktr_exterr *);
+static void usage(void);
 
 #define	TIMESTAMP_NONE		0x0
 #define	TIMESTAMP_ABSOLUTE	0x1
@@ -449,15 +446,15 @@ main(int argc, char *argv[])
 			ktr_header.ktr_type &= ~KTR_DROP;
 			if (!drop_logged && threads) {
 				printf(
-				    "%6jd %6jd %-8.*s Events dropped.\n",
-				    (intmax_t)ktr_header.ktr_pid,
+				    "%6d %6d %-8.*s Events dropped.\n",
+				    ktr_header.ktr_pid,
 				    ktr_header.ktr_tid > 0 ?
-				    (intmax_t)ktr_header.ktr_tid : 0,
+				    (lwpid_t)ktr_header.ktr_tid : 0,
 				    MAXCOMLEN, ktr_header.ktr_comm);
 				drop_logged = 1;
 			} else if (!drop_logged) {
-				printf("%6jd %-8.*s Events dropped.\n",
-				    (intmax_t)ktr_header.ktr_pid, MAXCOMLEN,
+				printf("%6d %-8.*s Events dropped.\n",
+				    ktr_header.ktr_pid, MAXCOMLEN,
 				    ktr_header.ktr_comm);
 				drop_logged = 1;
 			}
@@ -526,6 +523,13 @@ main(int argc, char *argv[])
 		case KTR_STRUCT_ARRAY:
 			ktrstructarray((struct ktr_struct_array *)m, ktrlen);
 			break;
+		case KTR_ARGS:
+		case KTR_ENVS:
+			ktrexecve(m, ktrlen);
+			break;
+		case KTR_EXTERR:
+			ktrexterr((struct ktr_exterr *)m);
+			break;
 		default:
 			printf("\n");
 			break;
@@ -536,7 +540,7 @@ main(int argc, char *argv[])
 	return 0;
 }
 
-int
+static int
 fread_tail(void *buf, int size, int num)
 {
 	int i;
@@ -548,7 +552,7 @@ fread_tail(void *buf, int size, int num)
 	return (i);
 }
 
-int
+static int
 fetchprocinfo(struct ktr_header *kth, u_int *flags)
 {
 	struct proc_info *pi;
@@ -583,7 +587,7 @@ fetchprocinfo(struct ktr_header *kth, u_int *flags)
 	return (0);
 }
 
-u_int
+static u_int
 findabi(struct ktr_header *kth)
 {
 	struct proc_info *pi;
@@ -596,7 +600,7 @@ findabi(struct ktr_header *kth)
 	return (0);
 }
 
-void
+static void
 dumptimeval(struct ktr_header_v0 *kth)
 {
 	static struct timeval prevtime, prevtime_e;
@@ -630,7 +634,7 @@ dumptimeval(struct ktr_header_v0 *kth)
 	}
 }
 
-void
+static void
 dumptimespec(struct ktr_header *kth)
 {
 	static struct timespec prevtime, prevtime_e;
@@ -664,7 +668,26 @@ dumptimespec(struct ktr_header *kth)
 	}
 }
 
-void
+static const char * const hdr_names[] = {
+	[KTR_SYSCALL] =		"CALL",
+	[KTR_SYSRET] =		"RET ",
+	[KTR_NAMEI] =		"NAMI",
+	[KTR_GENIO] =		"GIO ",
+	[KTR_PSIG] =		"PSIG",
+	[KTR_CSW] =		"CSW ",
+	[KTR_USER] =		"USER",
+	[KTR_STRUCT] =		"STRU",
+	[KTR_STRUCT_ARRAY] =	"STRU",
+	[KTR_SYSCTL] =		"SCTL",
+	[KTR_CAPFAIL] =		"CAP ",
+	[KTR_FAULT] =		"PFLT",
+	[KTR_FAULTEND] =	"PRET",
+	[KTR_ARGS] =		"ARGS",
+	[KTR_ENVS] =		"ENVS",
+	[KTR_EXTERR] =		"EERR",
+};
+
+static void
 dumpheader(struct ktr_header *kth, u_int sv_flags)
 {
 	static char unknown[64];
@@ -672,47 +695,12 @@ dumpheader(struct ktr_header *kth, u_int sv_flags)
 	const char *arch;
 	const char *type;
 
-	switch (kth->ktr_type) {
-	case KTR_SYSCALL:
-		type = "CALL";
-		break;
-	case KTR_SYSRET:
-		type = "RET ";
-		break;
-	case KTR_NAMEI:
-		type = "NAMI";
-		break;
-	case KTR_GENIO:
-		type = "GIO ";
-		break;
-	case KTR_PSIG:
-		type = "PSIG";
-		break;
-	case KTR_CSW:
-		type = "CSW ";
-		break;
-	case KTR_USER:
-		type = "USER";
-		break;
-	case KTR_STRUCT:
-	case KTR_STRUCT_ARRAY:
-		type = "STRU";
-		break;
-	case KTR_SYSCTL:
-		type = "SCTL";
-		break;
-	case KTR_CAPFAIL:
-		type = "CAP ";
-		break;
-	case KTR_FAULT:
-		type = "PFLT";
-		break;
-	case KTR_FAULTEND:
-		type = "PRET";
-		break;
-	default:
-		sprintf(unknown, "UNKNOWN(%d)", kth->ktr_type);
+	if (kth->ktr_type < 0 || (size_t)kth->ktr_type >= nitems(hdr_names)) {
+		snprintf(unknown, sizeof(unknown), "UNKNOWN(%d)",
+		    kth->ktr_type);
 		type = unknown;
+	} else {
+		type = hdr_names[kth->ktr_type];
 	}
 
 	/*
@@ -724,12 +712,11 @@ dumpheader(struct ktr_header *kth, u_int sv_flags)
 	 * negative tid's as 0.
 	 */
 	if (threads)
-		printf("%6jd %6jd %-8.*s ", (intmax_t)kth->ktr_pid,
-		    kth->ktr_tid > 0 ? (intmax_t)kth->ktr_tid : 0,
+		printf("%6d %6d %-8.*s ", kth->ktr_pid,
+		    kth->ktr_tid > 0 ? (lwpid_t)kth->ktr_tid : 0,
 		    MAXCOMLEN, kth->ktr_comm);
 	else
-		printf("%6jd %-8.*s ", (intmax_t)kth->ktr_pid, MAXCOMLEN,
-		    kth->ktr_comm);
+		printf("%6d %-8.*s ", kth->ktr_pid, MAXCOMLEN, kth->ktr_comm);
         if (timestamp) {
 		if (version == KTR_VERSION0)
 			dumptimeval((struct ktr_header_v0 *)kth);
@@ -826,7 +813,7 @@ print_signal(int signo)
 		printf("SIG %d", signo);
 }
 
-void
+static void
 ktrsyscall(struct ktr_syscall *ktr, u_int sv_flags)
 {
 	int narg = ktr->ktr_narg;
@@ -862,7 +849,7 @@ ktrsyscall(struct ktr_syscall *ktr, u_int sv_flags)
 	putchar('\n');
 }
 
-void
+static void
 ktrsyscall_freebsd(struct ktr_syscall *ktr, register_t **resip,
     int *resnarg, char *resc, u_int sv_flags)
 {
@@ -937,7 +924,8 @@ ktrsyscall_freebsd(struct ktr_syscall *ktr, register_t **resip,
 				print_number(ip, narg, c);
 				print_number(ip, narg, c);
 				putchar(',');
-				print_mask_arg(sysdecode_close_range_flags, *ip);
+				print_mask_arg0(sysdecode_close_range_flags,
+				    *ip);
 				ip += 3;
 				narg -= 3;
 				break;
@@ -954,7 +942,8 @@ ktrsyscall_freebsd(struct ktr_syscall *ktr, register_t **resip,
 				narg -= 2;
 				break;
 			case SYS_wait4:
-				print_number(ip, narg, c);
+				*ip = (pid_t)*ip;
+				print_decimal_number(ip, narg, c);
 				print_number(ip, narg, c);
 				putchar(',');
 				print_mask_arg0(sysdecode_wait4_options, *ip);
@@ -967,7 +956,7 @@ ktrsyscall_freebsd(struct ktr_syscall *ktr, register_t **resip,
 				c = ',';
 				ip++;
 				narg--;
-				print_number64(first, ip, narg, c);
+				print_decimal_number64(first, ip, narg, c);
 				print_number(ip, narg, c);
 				putchar(',');
 				print_mask_arg(sysdecode_wait6_options, *ip);
@@ -1003,14 +992,14 @@ ktrsyscall_freebsd(struct ktr_syscall *ktr, register_t **resip,
 				print_number(ip, narg, c);
 				print_number(ip, narg, c);
 				putchar(',');
-				print_mask_arg(sysdecode_mount_flags, *ip);
+				print_mask_arg0(sysdecode_mount_flags, *ip);
 				ip++;
 				narg--;
 				break;
 			case SYS_unmount:
 				print_number(ip, narg, c);
 				putchar(',');
-				print_mask_arg(sysdecode_mount_flags, *ip);
+				print_mask_arg0(sysdecode_mount_flags, *ip);
 				ip++;
 				narg--;
 				break;
@@ -1044,7 +1033,8 @@ ktrsyscall_freebsd(struct ktr_syscall *ktr, register_t **resip,
 				narg--;
 				break;
 			case SYS_kill:
-				print_number(ip, narg, c);
+				*ip = (pid_t)*ip;
+				print_decimal_number(ip, narg, c);
 				putchar(',');
 				print_signal(*ip);
 				ip++;
@@ -1468,7 +1458,7 @@ ktrsyscall_freebsd(struct ktr_syscall *ktr, register_t **resip,
 				print_number(ip, narg, c);
 				print_number(ip, narg, c);
 				putchar(',');
-				print_mask_arg(sysdecode_mount_flags, *ip);
+				print_mask_arg0(sysdecode_mount_flags, *ip);
 				ip++;
 				narg--;
 				break;
@@ -1618,7 +1608,7 @@ ktrsyscall_freebsd(struct ktr_syscall *ktr, register_t **resip,
 	*resnarg = narg;
 }
 
-void
+static void
 ktrsysret(struct ktr_sysret *ktr, u_int sv_flags)
 {
 	register_t ret = ktr->ktr_retval;
@@ -1651,13 +1641,28 @@ ktrsysret(struct ktr_sysret *ktr, u_int sv_flags)
 	putchar('\n');
 }
 
-void
+static void
 ktrnamei(char *cp, int len)
 {
 	printf("\"%.*s\"\n", len, cp);
 }
 
-void
+static void
+ktrexecve(char *m, int len)
+{
+	int i = 0;
+
+	while (i < len) {
+		printf("\"%s\"", m + i);
+		i += strlen(m + i) + 1;
+		if (i != len) {
+			printf(", ");
+		}
+	}
+	printf("\n");
+}
+
+static void
 hexdump(char *p, int len, int screenwidth)
 {
 	int n, i;
@@ -1703,7 +1708,7 @@ hexdump(char *p, int len, int screenwidth)
 		printf("\n");
 }
 
-void
+static void
 visdump(char *dp, int datalen, int screenwidth)
 {
 	int col = 0;
@@ -1749,7 +1754,7 @@ visdump(char *dp, int datalen, int screenwidth)
 	printf("\"\n");
 }
 
-void
+static void
 ktrgenio(struct ktr_genio *ktr, int len)
 {
 	int datalen = len - sizeof (struct ktr_genio);
@@ -1787,7 +1792,7 @@ ktrgenio(struct ktr_genio *ktr, int len)
 		visdump(dp, datalen, screenwidth);
 }
 
-void
+static void
 ktrpsig(struct ktr_psig *psig)
 {
 	const char *str;
@@ -1808,21 +1813,21 @@ ktrpsig(struct ktr_psig *psig)
 	putchar('\n');
 }
 
-void
+static void
 ktrcsw_old(struct ktr_csw_old *cs)
 {
 	printf("%s %s\n", cs->out ? "stop" : "resume",
 		cs->user ? "user" : "kernel");
 }
 
-void
+static void
 ktrcsw(struct ktr_csw *cs)
 {
 	printf("%s %s \"%s\"\n", cs->out ? "stop" : "resume",
 	    cs->user ? "user" : "kernel", cs->wmesg);
 }
 
-void
+static void
 ktruser(int len, void *p)
 {
 	unsigned char *cp;
@@ -1842,7 +1847,7 @@ ktruser(int len, void *p)
 	printf("\n");
 }
 
-void
+static void
 ktrcaprights(cap_rights_t *rightsp)
 {
 
@@ -1858,7 +1863,15 @@ ktrtimeval(struct timeval *tv)
 	printf("{%ld, %ld}", (long)tv->tv_sec, tv->tv_usec);
 }
 
-void
+static void
+ktrinotify(struct inotify_event *ev)
+{
+	printf(
+    "inotify { .wd = %d, .mask = %#x, .cookie = %u, .len = %u, .name = %s }\n",
+	    ev->wd, ev->mask, ev->cookie, ev->len, ev->name);
+}
+
+static void
 ktritimerval(struct itimerval *it)
 {
 
@@ -1869,7 +1882,7 @@ ktritimerval(struct itimerval *it)
 	printf(" }\n");
 }
 
-void
+static void
 ktrsockaddr(struct sockaddr *sa)
 {
 /*
@@ -1929,13 +1942,42 @@ ktrsockaddr(struct sockaddr *sa)
 		printf("%.*s", (int)sizeof(sa_un.sun_path), sa_un.sun_path);
 		break;
 	}
+	case AF_NETLINK: {
+		struct sockaddr_nl sa_nl;
+
+		memset(&sa_nl, 0, sizeof(sa_nl));
+		memcpy(&sa_nl, sa, sa->sa_len);
+		printf("netlink[pid=%u, groups=0x%x]",
+		    sa_nl.nl_pid, sa_nl.nl_groups);
+		break;
+	}
 	default:
 		printf("unknown address family");
 	}
 	printf(" }\n");
 }
 
-void
+static void
+ktrsplice(struct splice *sp)
+{
+	printf("struct splice { fd=%d, max=%#jx, idle=%jd.%06jd }\n",
+	    sp->sp_fd, (uintmax_t)sp->sp_max, (intmax_t)sp->sp_idle.tv_sec,
+	    (intmax_t)sp->sp_idle.tv_usec);
+}
+
+static void
+ktrthrparam(struct thr_param *tp)
+{
+	printf("thr param { start=%p arg=%p stack_base=%p "
+	    "stack_size=%#zx tls_base=%p tls_size=%#zx child_tidp=%p "
+	    "parent_tidp=%p flags=",
+	    tp->start_func, tp->arg, tp->stack_base, tp->stack_size,
+	    tp->tls_base, tp->tls_size, tp->child_tid, tp->parent_tid);
+	print_mask_arg(sysdecode_thr_create_flags, tp->flags);
+	printf(" rtp=%p }\n", tp->rtp);
+}
+
+static void
 ktrstat(struct stat *statp)
 {
 	char mode[12], timestr[PATH_MAX + 4];
@@ -2040,7 +2082,7 @@ ktrstat(struct stat *statp)
 	printf(" }\n");
 }
 
-void
+static void
 ktrbitset(char *name, struct bitset *set, size_t setlen)
 {
 	int i, maxi, c = 0;
@@ -2064,7 +2106,7 @@ ktrbitset(char *name, struct bitset *set, size_t setlen)
 		printf(" ]\n");
 }
 
-void
+static void
 ktrstruct(char *buf, size_t buflen)
 {
 	char *name, *data;
@@ -2097,6 +2139,17 @@ ktrstruct(char *buf, size_t buflen)
 			goto invalid;
 		memcpy(&rights, data, datalen);
 		ktrcaprights(&rights);
+	} else if (strcmp(name, "inotify") == 0) {
+		struct inotify_event *ev;
+
+		if (datalen < sizeof(struct inotify_event) ||
+		    datalen > sizeof(struct inotify_event) + NAME_MAX + 1)
+			goto invalid;
+		ev = malloc(datalen);
+		if (ev == NULL)
+			err(1, "malloc");
+		memcpy(ev, data, datalen);
+		ktrinotify(ev);
 	} else if (strcmp(name, "itimerval") == 0) {
 		if (datalen != sizeof(struct itimerval))
 			goto invalid;
@@ -2123,6 +2176,20 @@ ktrstruct(char *buf, size_t buflen)
 		memcpy(set, data, datalen);
 		ktrbitset(name, set, datalen);
 		free(set);
+	} else if (strcmp(name, "splice") == 0) {
+		struct splice sp;
+
+		if (datalen != sizeof(sp))
+			goto invalid;
+		memcpy(&sp, data, datalen);
+		ktrsplice(&sp);
+	} else if (strcmp(name, "thrparam") == 0) {
+		struct thr_param tp;
+
+		if (datalen != sizeof(tp))
+			goto invalid;
+		memcpy(&tp, data, datalen);
+		ktrthrparam(&tp);
 	} else {
 #ifdef SYSDECODE_HAVE_LINUX
 		if (ktrstruct_linux(name, data, datalen) == false)
@@ -2134,43 +2201,82 @@ invalid:
 	printf("invalid record\n");
 }
 
-void
+static void
 ktrcapfail(struct ktr_cap_fail *ktr)
 {
+	union ktr_cap_data *kcd = &ktr->cap_data;
+
 	switch (ktr->cap_type) {
 	case CAPFAIL_NOTCAPABLE:
 		/* operation on fd with insufficient capabilities */
 		printf("operation requires ");
-		sysdecode_cap_rights(stdout, &ktr->cap_needed);
+		sysdecode_cap_rights(stdout, &kcd->cap_needed);
 		printf(", descriptor holds ");
-		sysdecode_cap_rights(stdout, &ktr->cap_held);
+		sysdecode_cap_rights(stdout, &kcd->cap_held);
 		break;
 	case CAPFAIL_INCREASE:
 		/* requested more capabilities than fd already has */
 		printf("attempt to increase capabilities from ");
-		sysdecode_cap_rights(stdout, &ktr->cap_held);
+		sysdecode_cap_rights(stdout, &kcd->cap_held);
 		printf(" to ");
-		sysdecode_cap_rights(stdout, &ktr->cap_needed);
+		sysdecode_cap_rights(stdout, &kcd->cap_needed);
 		break;
 	case CAPFAIL_SYSCALL:
 		/* called restricted syscall */
-		printf("disallowed system call");
+		printf("system call not allowed: ");
+		syscallname(ktr->cap_code, ktr->cap_svflags);
+		if (syscallabi(ktr->cap_svflags) == SYSDECODE_ABI_FREEBSD) {
+			switch (ktr->cap_code) {
+			case SYS_sysarch:
+				printf(", op: ");
+				print_integer_arg(sysdecode_sysarch_number,
+				    kcd->cap_int);
+				break;
+			case SYS_fcntl:
+				printf(", cmd: ");
+				print_integer_arg(sysdecode_fcntl_cmd,
+				    kcd->cap_int);
+				break;
+			}
+		}
 		break;
-	case CAPFAIL_LOOKUP:
+	case CAPFAIL_SIGNAL:
+		/* sent signal to proc other than self */
+		syscallname(ktr->cap_code, ktr->cap_svflags);
+		printf(": signal delivery not allowed: ");
+		print_integer_arg(sysdecode_signal, kcd->cap_int);
+		break;
+	case CAPFAIL_PROTO:
+		/* created socket with restricted protocol */
+		syscallname(ktr->cap_code, ktr->cap_svflags);
+		printf(": protocol not allowed: ");
+		print_integer_arg(sysdecode_ipproto, kcd->cap_int);
+		break;
+	case CAPFAIL_SOCKADDR:
+		/* unable to look up address */
+		syscallname(ktr->cap_code, ktr->cap_svflags);
+		printf(": restricted address lookup: ");
+		ktrsockaddr(&kcd->cap_sockaddr);
+		return;
+	case CAPFAIL_NAMEI:
 		/* absolute or AT_FDCWD path, ".." path, etc. */
-		printf("restricted VFS lookup");
-		break;
+		syscallname(ktr->cap_code, ktr->cap_svflags);
+		printf(": restricted VFS lookup: %s\n", kcd->cap_path);
+		return;
+	case CAPFAIL_CPUSET:
+		/* modification of an external cpuset */
+		syscallname(ktr->cap_code, ktr->cap_svflags);
+		printf(": restricted cpuset operation\n");
+		return;
 	default:
-		printf("unknown capability failure: ");
-		sysdecode_cap_rights(stdout, &ktr->cap_needed);
-		printf(" ");
-		sysdecode_cap_rights(stdout, &ktr->cap_held);
-		break;
+		syscallname(ktr->cap_code, ktr->cap_svflags);
+		printf(": unknown capability failure\n");
+		return;
 	}
 	printf("\n");
 }
 
-void
+static void
 ktrfault(struct ktr_fault *ktr)
 {
 
@@ -2179,7 +2285,7 @@ ktrfault(struct ktr_fault *ktr)
 	printf("\n");
 }
 
-void
+static void
 ktrfaultend(struct ktr_faultend *ktr)
 {
 	const char *str;
@@ -2192,7 +2298,7 @@ ktrfaultend(struct ktr_faultend *ktr)
 	printf("\n");
 }
 
-void
+static void
 ktrkevent(struct kevent *kev)
 {
 
@@ -2223,10 +2329,23 @@ ktrkevent(struct kevent *kev)
 	printf(", data=%#jx, udata=%p }", (uintmax_t)kev->data, kev->udata);
 }
 
-void
+static void
+ktrpollfd(struct pollfd *pfd)
+{
+
+	printf("{ fd=%d", pfd->fd);
+	printf(", events=");
+	print_mask_arg0(sysdecode_pollfd_events, pfd->events);
+	printf(", revents=");
+	print_mask_arg0(sysdecode_pollfd_events, pfd->revents);
+	printf("}");
+}
+
+static void
 ktrstructarray(struct ktr_struct_array *ksa, size_t buflen)
 {
 	struct kevent kev;
+	struct pollfd pfd;
 	char *name, *data;
 	size_t namelen, datalen;
 	int i;
@@ -2286,11 +2405,7 @@ ktrstructarray(struct ktr_struct_array *ksa, size_t buflen)
 			kev.filter = kev32.filter;
 			kev.flags = kev32.flags;
 			kev.fflags = kev32.fflags;
-#if BYTE_ORDER == BIG_ENDIAN
-			kev.data = kev32.data2 | ((int64_t)kev32.data1 << 32);
-#else
-			kev.data = kev32.data1 | ((int64_t)kev32.data2 << 32);
-#endif
+			memcpy(&kev.data, &kev32.data, sizeof(kev.data));
 			kev.udata = (void *)(uintptr_t)kev32.udata;
 			ktrkevent(&kev);
 		} else if (strcmp(name, "freebsd11_kevent32") == 0) {
@@ -2308,6 +2423,11 @@ ktrstructarray(struct ktr_struct_array *ksa, size_t buflen)
 			kev.udata = (void *)(uintptr_t)kev32.udata;
 			ktrkevent(&kev);
 #endif
+		} else if (strcmp(name, "pollfd") == 0) {
+			if (ksa->struct_size != sizeof(pfd))
+				goto bad_size;
+			memcpy(&pfd, data, sizeof(pfd));
+			ktrpollfd(&pfd);
 		} else {
 			printf("<unknown structure> }\n");
 			return;
@@ -2323,7 +2443,34 @@ bad_size:
 	return;
 }
 
-void
+static const char * const cat_to_filenames[] = {
+#include <exterr_cat_filenames.h>
+};
+
+static const char *
+cat_to_filename(int category)
+{
+	if (category < 0 || (unsigned)category >= nitems(cat_to_filenames) ||
+	    cat_to_filenames[category] == NULL)
+		return ("unknown");
+	return (cat_to_filenames[category]);
+}
+
+static void
+ktrexterr(struct ktr_exterr *ke)
+{
+	char *msg;
+	struct uexterror *ue;
+
+	ue = &ke->ue;
+	asprintf(&msg, ue->msg, (uintmax_t)ue->p1, (uintmax_t)ue->p2);
+	printf("{ errno %d sys/%s:%u \"%s\" (category %u p1 %#jx p2 %#jx) }\n",
+	    ue->error, cat_to_filename(ue->cat), ue->src_line, msg,
+	    ue->cat, (uintmax_t)ue->p1, (uintmax_t)ue->p2);
+	free(msg);
+}
+
+static void
 usage(void)
 {
 	fprintf(stderr, "usage: kdump [-dEnlHRrSsTA] [-f trfile] "

@@ -18,11 +18,17 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSet.h"
+#include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/DroppedVariableStatsIR.h"
 #include "llvm/IR/OptBisect.h"
 #include "llvm/IR/PassTimingInfo.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Compiler.h"
+#include "llvm/Support/TimeProfiler.h"
 #include "llvm/Transforms/IPO/SampleProfileProbe.h"
 
 #include <string>
@@ -32,6 +38,7 @@ namespace llvm {
 
 class Module;
 class Function;
+class MachineFunction;
 class PassInstrumentationCallbacks;
 
 /// Instrumentation to print IR before/after passes.
@@ -40,43 +47,78 @@ class PassInstrumentationCallbacks;
 /// (typically Loop or SCC).
 class PrintIRInstrumentation {
 public:
-  ~PrintIRInstrumentation();
+  LLVM_ABI ~PrintIRInstrumentation();
 
-  void registerCallbacks(PassInstrumentationCallbacks &PIC);
+  LLVM_ABI void registerCallbacks(PassInstrumentationCallbacks &PIC);
 
 private:
+  struct PassRunDescriptor {
+    const Module *M;
+    const unsigned PassNumber;
+    const std::string IRFileDisplayName;
+    const std::string IRName;
+    const StringRef PassID;
+
+    PassRunDescriptor(const Module *M, unsigned PassNumber,
+                      std::string &&IRFileDisplayName, std::string &&IRName,
+                      const StringRef PassID)
+        : M{M}, PassNumber{PassNumber}, IRFileDisplayName(IRFileDisplayName),
+          IRName{IRName}, PassID(PassID) {}
+  };
+
   void printBeforePass(StringRef PassID, Any IR);
   void printAfterPass(StringRef PassID, Any IR);
   void printAfterPassInvalidated(StringRef PassID);
 
   bool shouldPrintBeforePass(StringRef PassID);
   bool shouldPrintAfterPass(StringRef PassID);
+  bool shouldPrintBeforeCurrentPassNumber();
+  bool shouldPrintAfterCurrentPassNumber();
+  bool shouldPrintPassNumbers();
+  bool shouldPrintBeforeSomePassNumber();
+  bool shouldPrintAfterSomePassNumber();
 
-  using PrintModuleDesc = std::tuple<const Module *, std::string, StringRef>;
+  void pushPassRunDescriptor(StringRef PassID, Any IR, unsigned PassNumber);
+  PassRunDescriptor popPassRunDescriptor(StringRef PassID);
 
-  void pushModuleDesc(StringRef PassID, Any IR);
-  PrintModuleDesc popModuleDesc(StringRef PassID);
+  enum class IRDumpFileSuffixType {
+    Before,
+    After,
+    Invalidated,
+  };
+
+  static StringRef
+  getFileSuffix(PrintIRInstrumentation::IRDumpFileSuffixType Type);
+  std::string fetchDumpFilename(StringRef PassId, StringRef IRFileDisplayName,
+                                unsigned PassNumber,
+                                IRDumpFileSuffixType SuffixType);
 
   PassInstrumentationCallbacks *PIC;
-  /// Stack of Module description, enough to print the module after a given
+  /// Stack of Pass Run descriptions, enough to print the IR unit after a given
   /// pass.
-  SmallVector<PrintModuleDesc, 2> ModuleDescStack;
+  SmallVector<PassRunDescriptor, 2> PassRunDescriptorStack;
+
+  /// Used for print-at-pass-number
+  unsigned CurrentPassNumber = 0;
 };
 
 class OptNoneInstrumentation {
 public:
   OptNoneInstrumentation(bool DebugLogging) : DebugLogging(DebugLogging) {}
-  void registerCallbacks(PassInstrumentationCallbacks &PIC);
+  LLVM_ABI void registerCallbacks(PassInstrumentationCallbacks &PIC);
 
 private:
   bool DebugLogging;
   bool shouldRun(StringRef PassID, Any IR);
 };
 
-class OptBisectInstrumentation {
+class OptPassGateInstrumentation {
+  LLVMContext &Context;
+  bool HasWrittenIR = false;
 public:
-  OptBisectInstrumentation() = default;
-  void registerCallbacks(PassInstrumentationCallbacks &PIC);
+  OptPassGateInstrumentation(LLVMContext &Context) : Context(Context) {}
+  LLVM_ABI bool shouldRun(StringRef PassName, Any IR);
+  LLVM_ABI void registerCallbacks(PassInstrumentationCallbacks &PIC);
 };
 
 struct PrintPassOptions {
@@ -95,7 +137,7 @@ class PrintPassInstrumentation {
 public:
   PrintPassInstrumentation(bool Enabled, PrintPassOptions Opts)
       : Enabled(Enabled), Opts(Opts) {}
-  void registerCallbacks(PassInstrumentationCallbacks &PIC);
+  LLVM_ABI void registerCallbacks(PassInstrumentationCallbacks &PIC);
 
 private:
   bool Enabled;
@@ -123,34 +165,33 @@ public:
   // in the Graph (BBGuard). That is if any of the block is deleted or RAUWed
   // then the CFG is treated poisoned and no block pointer of the Graph is used.
   struct CFG {
-    Optional<DenseMap<intptr_t, BBGuard>> BBGuards;
+    std::optional<DenseMap<intptr_t, BBGuard>> BBGuards;
     DenseMap<const BasicBlock *, DenseMap<const BasicBlock *, unsigned>> Graph;
 
-    CFG(const Function *F, bool TrackBBLifetime);
+    LLVM_ABI CFG(const Function *F, bool TrackBBLifetime);
 
     bool operator==(const CFG &G) const {
       return !isPoisoned() && !G.isPoisoned() && Graph == G.Graph;
     }
 
     bool isPoisoned() const {
-      return BBGuards &&
-             std::any_of(BBGuards->begin(), BBGuards->end(),
-                         [](const auto &BB) { return BB.second.isPoisoned(); });
+      return BBGuards && llvm::any_of(*BBGuards, [](const auto &BB) {
+               return BB.second.isPoisoned();
+             });
     }
 
-    static void printDiff(raw_ostream &out, const CFG &Before,
-                          const CFG &After);
-    bool invalidate(Function &F, const PreservedAnalyses &PA,
-                    FunctionAnalysisManager::Invalidator &);
+    LLVM_ABI static void printDiff(raw_ostream &out, const CFG &Before,
+                                   const CFG &After);
+    LLVM_ABI bool invalidate(Function &F, const PreservedAnalyses &PA,
+                             FunctionAnalysisManager::Invalidator &);
   };
 
-#ifdef LLVM_ENABLE_ABI_BREAKING_CHECKS
+#if LLVM_ENABLE_ABI_BREAKING_CHECKS
   SmallVector<StringRef, 8> PassStack;
 #endif
 
-  static cl::opt<bool> VerifyPreservedCFG;
-  void registerCallbacks(PassInstrumentationCallbacks &PIC,
-                         FunctionAnalysisManager &FAM);
+  LLVM_ABI void registerCallbacks(PassInstrumentationCallbacks &PIC,
+                                  ModuleAnalysisManager &MAM);
 };
 
 // Base class for classes that report changes to the IR.
@@ -168,7 +209,7 @@ public:
 // 6.  When a pass is run on an IR that is not interesting (based on options).
 // 7.  When a pass is ignored (pass manager or adapter pass).
 // 8.  To compare two IR representations (of type \p T).
-template <typename IRUnitT> class ChangeReporter {
+template <typename IRUnitT> class LLVM_ABI ChangeReporter {
 protected:
   ChangeReporter(bool RunInVerboseMode) : VerboseMode(RunInVerboseMode) {}
 
@@ -177,26 +218,15 @@ public:
 
   // Determine if this pass/IR is interesting and if so, save the IR
   // otherwise it is left on the stack without data.
-  void saveIRBeforePass(Any IR, StringRef PassID);
+  void saveIRBeforePass(Any IR, StringRef PassID, StringRef PassName);
   // Compare the IR from before the pass after the pass.
-  void handleIRAfterPass(Any IR, StringRef PassID);
+  void handleIRAfterPass(Any IR, StringRef PassID, StringRef PassName);
   // Handle the situation where a pass is invalidated.
   void handleInvalidatedPass(StringRef PassID);
 
 protected:
   // Register required callbacks.
   void registerRequiredCallbacks(PassInstrumentationCallbacks &PIC);
-
-  // Return true when this is a defined function for which printing
-  // of changes is desired.
-  bool isInterestingFunction(const Function &F);
-
-  // Return true when this is a pass for which printing of changes is desired.
-  bool isInterestingPass(StringRef PassID);
-
-  // Return true when this is a pass on IR for which printing
-  // of changes is desired.
-  bool isInteresting(Any IR, StringRef PassID);
 
   // Called on the first IR processed.
   virtual void handleInitialIR(Any IR) = 0;
@@ -228,7 +258,7 @@ protected:
 // An abstract template base class that handles printing banners and
 // reporting when things have not changed or are filtered out.
 template <typename IRUnitT>
-class TextChangeReporter : public ChangeReporter<IRUnitT> {
+class LLVM_ABI TextChangeReporter : public ChangeReporter<IRUnitT> {
 protected:
   TextChangeReporter(bool Verbose);
 
@@ -252,7 +282,7 @@ protected:
 // by unwrapAndPrint.  The string representation is stored in a std::string
 // to preserve it as the IR changes in each pass.  Note that the banner is
 // included in this representation but it is massaged before reporting.
-class IRChangedPrinter : public TextChangeReporter<std::string> {
+class LLVM_ABI IRChangedPrinter : public TextChangeReporter<std::string> {
 public:
   IRChangedPrinter(bool VerboseMode)
       : TextChangeReporter<std::string>(VerboseMode) {}
@@ -269,6 +299,32 @@ protected:
                    Any) override;
 };
 
+class LLVM_ABI IRChangedTester : public IRChangedPrinter {
+public:
+  IRChangedTester() : IRChangedPrinter(true) {}
+  ~IRChangedTester() override;
+  void registerCallbacks(PassInstrumentationCallbacks &PIC);
+
+protected:
+  void handleIR(const std::string &IR, StringRef PassID);
+
+  // Check initial IR
+  void handleInitialIR(Any IR) override;
+  // Do nothing.
+  void omitAfter(StringRef PassID, std::string &Name) override;
+  // Do nothing.
+  void handleInvalidated(StringRef PassID) override;
+  // Do nothing.
+  void handleFiltered(StringRef PassID, std::string &Name) override;
+  // Do nothing.
+  void handleIgnored(StringRef PassID, std::string &Name) override;
+
+  // Call test as interesting IR has changed.
+  void handleAfter(StringRef PassID, std::string &Name,
+                   const std::string &Before, const std::string &After,
+                   Any) override;
+};
+
 // Information that needs to be saved for a basic block in order to compare
 // before and after the pass to determine if it was changed by a pass.
 template <typename T> class BlockDataT {
@@ -276,6 +332,11 @@ public:
   BlockDataT(const BasicBlock &B) : Label(B.getName().str()), Data(B) {
     raw_string_ostream SS(Body);
     B.print(SS, nullptr, true, true);
+  }
+
+  BlockDataT(const MachineBasicBlock &B) : Label(B.getName().str()), Data(B) {
+    raw_string_ostream SS(Body);
+    B.print(SS);
   }
 
   bool operator==(const BlockDataT &That) const { return Body == That.Body; }
@@ -329,6 +390,7 @@ protected:
 class EmptyData {
 public:
   EmptyData(const BasicBlock &) {}
+  EmptyData(const MachineBasicBlock &) {}
 };
 
 // The data saved for comparing functions.
@@ -370,7 +432,8 @@ public:
 
 protected:
   // Generate the data for \p F into \p Data.
-  static bool generateFunctionData(IRDataT<T> &Data, const Function &F);
+  template <typename FunctionT>
+  static bool generateFunctionData(IRDataT<T> &Data, const FunctionT &F);
 
   const IRDataT<T> &Before;
   const IRDataT<T> &After;
@@ -382,7 +445,8 @@ protected:
 // and added, respectively.  Changes to the IR that do not affect basic
 // blocks are not reported as having changed the IR.  The option
 // -print-module-scope does not affect this change reporter.
-class InLineChangePrinter : public TextChangeReporter<IRDataT<EmptyData>> {
+class LLVM_ABI InLineChangePrinter
+    : public TextChangeReporter<IRDataT<EmptyData>> {
 public:
   InLineChangePrinter(bool VerboseMode, bool ColourMode)
       : TextChangeReporter<IRDataT<EmptyData>>(VerboseMode),
@@ -392,13 +456,13 @@ public:
 
 protected:
   // Create a representation of the IR.
-  virtual void generateIRRepresentation(Any IR, StringRef PassID,
-                                        IRDataT<EmptyData> &Output) override;
+  void generateIRRepresentation(Any IR, StringRef PassID,
+                                IRDataT<EmptyData> &Output) override;
 
   // Called when an interesting IR has changed.
-  virtual void handleAfter(StringRef PassID, std::string &Name,
-                           const IRDataT<EmptyData> &Before,
-                           const IRDataT<EmptyData> &After, Any) override;
+  void handleAfter(StringRef PassID, std::string &Name,
+                   const IRDataT<EmptyData> &Before,
+                   const IRDataT<EmptyData> &After, Any) override;
 
   void handleFunctionCompare(StringRef Name, StringRef Prefix, StringRef PassID,
                              StringRef Divider, bool InModule, unsigned Minor,
@@ -413,7 +477,26 @@ class VerifyInstrumentation {
 
 public:
   VerifyInstrumentation(bool DebugLogging) : DebugLogging(DebugLogging) {}
-  void registerCallbacks(PassInstrumentationCallbacks &PIC);
+  LLVM_ABI void registerCallbacks(PassInstrumentationCallbacks &PIC,
+                                  ModuleAnalysisManager *MAM);
+};
+
+/// This class implements --time-trace functionality for new pass manager.
+/// It provides the pass-instrumentation callbacks that measure the pass
+/// execution time. They collect time tracing info by TimeProfiler.
+class TimeProfilingPassesHandler {
+public:
+  LLVM_ABI TimeProfilingPassesHandler();
+  // We intend this to be unique per-compilation, thus no copies.
+  TimeProfilingPassesHandler(const TimeProfilingPassesHandler &) = delete;
+  void operator=(const TimeProfilingPassesHandler &) = delete;
+
+  LLVM_ABI void registerCallbacks(PassInstrumentationCallbacks &PIC);
+
+private:
+  // Implementation of pass instrumentation callbacks.
+  void runBeforePass(StringRef PassID, Any IR);
+  void runAfterPass();
 };
 
 // Class that holds transitions between basic blocks.  The transitions
@@ -421,7 +504,8 @@ public:
 class DCData {
 public:
   // Fill the map with the transitions from basic block \p B.
-  DCData(const BasicBlock &B);
+  LLVM_ABI DCData(const BasicBlock &B);
+  LLVM_ABI DCData(const MachineBasicBlock &B);
 
   // Return an iterator to the names of the successor blocks.
   StringMap<std::string>::const_iterator begin() const {
@@ -449,7 +533,7 @@ protected:
 
 // A change reporter that builds a website with links to pdf files showing
 // dot control flow graphs with changed instructions shown in colour.
-class DotCfgChangeReporter : public ChangeReporter<IRDataT<DCData>> {
+class LLVM_ABI DotCfgChangeReporter : public ChangeReporter<IRDataT<DCData>> {
 public:
   DotCfgChangeReporter(bool Verbose);
   ~DotCfgChangeReporter() override;
@@ -491,43 +575,63 @@ protected:
   std::unique_ptr<raw_fd_ostream> HTML;
 };
 
+// Print IR on crash.
+class PrintCrashIRInstrumentation {
+public:
+  PrintCrashIRInstrumentation()
+      : SavedIR("*** Dump of IR Before Last Pass Unknown ***") {}
+  LLVM_ABI ~PrintCrashIRInstrumentation();
+  LLVM_ABI void registerCallbacks(PassInstrumentationCallbacks &PIC);
+  LLVM_ABI void reportCrashIR();
+
+protected:
+  std::string SavedIR;
+
+private:
+  // The crash reporter that will report on a crash.
+  static PrintCrashIRInstrumentation *CrashReporter;
+  // Crash handler registered when print-on-crash is specified.
+  static void SignalHandler(void *);
+};
+
 /// This class provides an interface to register all the standard pass
 /// instrumentations and manages their state (if any).
 class StandardInstrumentations {
   PrintIRInstrumentation PrintIR;
   PrintPassInstrumentation PrintPass;
   TimePassesHandler TimePasses;
+  TimeProfilingPassesHandler TimeProfilingPasses;
   OptNoneInstrumentation OptNone;
-  OptBisectInstrumentation OptBisect;
+  OptPassGateInstrumentation OptPassGate;
   PreservedCFGCheckerInstrumentation PreservedCFGChecker;
   IRChangedPrinter PrintChangedIR;
   PseudoProbeVerifier PseudoProbeVerification;
   InLineChangePrinter PrintChangedDiff;
   DotCfgChangeReporter WebsiteChangeReporter;
+  PrintCrashIRInstrumentation PrintCrashIR;
+  IRChangedTester ChangeTester;
   VerifyInstrumentation Verify;
+  DroppedVariableStatsIR DroppedStatsIR;
 
   bool VerifyEach;
 
 public:
-  StandardInstrumentations(bool DebugLogging, bool VerifyEach = false,
+  LLVM_ABI
+  StandardInstrumentations(LLVMContext &Context, bool DebugLogging,
+                           bool VerifyEach = false,
                            PrintPassOptions PrintPassOpts = PrintPassOptions());
 
   // Register all the standard instrumentation callbacks. If \p FAM is nullptr
   // then PreservedCFGChecker is not enabled.
-  void registerCallbacks(PassInstrumentationCallbacks &PIC,
-                         FunctionAnalysisManager *FAM = nullptr);
+  LLVM_ABI void registerCallbacks(PassInstrumentationCallbacks &PIC,
+                                  ModuleAnalysisManager *MAM = nullptr);
 
   TimePassesHandler &getTimePasses() { return TimePasses; }
 };
 
-extern template class ChangeReporter<std::string>;
-extern template class TextChangeReporter<std::string>;
-
 extern template class BlockDataT<EmptyData>;
 extern template class FuncDataT<EmptyData>;
 extern template class IRDataT<EmptyData>;
-extern template class ChangeReporter<IRDataT<EmptyData>>;
-extern template class TextChangeReporter<IRDataT<EmptyData>>;
 extern template class IRComparer<EmptyData>;
 
 } // namespace llvm

@@ -1,6 +1,6 @@
 #!/bin/sh
 #-
-# SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+# SPDX-License-Identifier: BSD-2-Clause
 #
 # Copyright (c) 2013 Dag-Erling Smørgrav
 # All rights reserved.
@@ -26,7 +26,6 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 #
 
 D="${DESTDIR}"
@@ -119,8 +118,8 @@ set_chrootdir() {
 get_nameservers() {
 	while read line ; do
 		local bareline=${line%%\#*}
-		local key=${bareline%% *}
-		local value=${bareline#* }
+		local key=${bareline%%[[:space:]]*}
+		local value=${bareline#*[[:space:]]}
 		case ${key} in
 		nameserver)
 			case ${value} in
@@ -146,8 +145,8 @@ gen_resolv_conf() {
 	local edns0=no
 	while read line ; do
 		local bareline=${line%%\#*}
-		local key=${bareline%% *}
-		local value=${bareline#* }
+		local key=${bareline%%[[:space:]]*}
+		local value=${bareline#*[[:space:]]}
 		case ${key} in
 		nameserver)
 			case ${value} in
@@ -195,7 +194,7 @@ do_not_edit() {
 gen_resolvconf_conf() {
 	local style="$1"
 	do_not_edit
-	echo "resolv_conf=\"/dev/null\" # prevent updating ${resolv_conf}"
+	echo "libc=\"NO\""
 	if [ "${style}" = "dynamic" ] ; then
 		echo "unbound_conf=\"${forward_conf}\""
 		echo "unbound_pid=\"${pidfile}\""
@@ -262,6 +261,7 @@ gen_unbound_conf() {
 	if [ "${use_tls}" = "yes" ] ; then
 		echo "        tls-cert-bundle: /etc/ssl/cert.pem"
 	fi
+	echo "        so-sndbuf: 0"
 	echo ""
 	if [ -f "${forward_conf}" ] ; then
 		echo "include: ${forward_conf}"

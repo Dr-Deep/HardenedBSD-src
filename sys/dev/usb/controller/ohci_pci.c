@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -29,9 +29,6 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 /*
  * USB Open Host Controller driver.
@@ -242,7 +239,7 @@ ohci_pci_attach(device_t self)
 		device_printf(self, "Could not allocate irq\n");
 		goto error;
 	}
-	sc->sc_bus.bdev = device_add_child(self, "usbus", -1);
+	sc->sc_bus.bdev = device_add_child(self, "usbus", DEVICE_UNIT_ANY);
 	if (!sc->sc_bus.bdev) {
 		device_printf(self, "Could not add USB device\n");
 		goto error;
@@ -296,13 +293,8 @@ ohci_pci_attach(device_t self)
 
 	/* sc->sc_bus.usbrev; set by ohci_init() */
 
-#if (__FreeBSD_version >= 700031)
 	err = bus_setup_intr(self, sc->sc_irq_res, INTR_TYPE_BIO | INTR_MPSAFE,
 	    NULL, (driver_intr_t *)ohci_interrupt, sc, &sc->sc_intr_hdl);
-#else
-	err = bus_setup_intr(self, sc->sc_irq_res, INTR_TYPE_BIO | INTR_MPSAFE,
-	    (driver_intr_t *)ohci_interrupt, sc, &sc->sc_intr_hdl);
-#endif
 	if (err) {
 		device_printf(self, "Could not setup irq, %d\n", err);
 		sc->sc_intr_hdl = NULL;
@@ -327,9 +319,12 @@ static int
 ohci_pci_detach(device_t self)
 {
 	ohci_softc_t *sc = device_get_softc(self);
+	int error;
 
 	/* during module unload there are lots of children leftover */
-	device_delete_children(self);
+	error = bus_generic_detach(self);
+	if (error != 0)
+		return (error);
 
 	pci_disable_busmaster(self);
 

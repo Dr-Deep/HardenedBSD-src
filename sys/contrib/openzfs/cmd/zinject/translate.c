@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -84,7 +85,7 @@ static int
 parse_pathname(const char *inpath, char *dataset, char *relpath,
     struct stat64 *statbuf)
 {
-	struct extmnttab mp;
+	struct mnttab mp;
 	const char *rel;
 	char fullpath[MAXPATHLEN];
 
@@ -115,12 +116,12 @@ parse_pathname(const char *inpath, char *dataset, char *relpath,
 		return (-1);
 	}
 
-	(void) strcpy(dataset, mp.mnt_special);
+	(void) strlcpy(dataset, mp.mnt_special, MAXNAMELEN);
 
 	rel = fullpath + strlen(mp.mnt_mountp);
 	if (rel[0] == '/')
 		rel++;
-	(void) strcpy(relpath, rel);
+	(void) strlcpy(relpath, rel, MAXPATHLEN);
 
 	return (0);
 }
@@ -164,22 +165,28 @@ initialize_range(err_type_t type, int level, char *range,
 		record->zi_start = 0;
 		record->zi_end = -1ULL;
 	} else {
-		char *end;
+		char *comma;
+		int error;
 
-		/* XXX add support for suffixes */
-		record->zi_start = strtoull(range, &end, 10);
+		comma = strchr(range, ',');
+		if (comma != NULL)
+			*comma = '\0';
 
+		error = zfs_nicestrtonum(g_zfs, range,
+		    &record->zi_start);
 
-		if (*end == '\0')
+		if (comma != NULL)
+			*comma = ',';
+
+		if (error != 0)
+			goto bad_range;
+
+		if (comma != NULL) {
+			if (zfs_nicestrtonum(g_zfs, comma + 1,
+			    &record->zi_end) != 0)
+				goto bad_range;
+		} else {
 			record->zi_end = record->zi_start + 1;
-		else if (*end == ',')
-			record->zi_end = strtoull(end + 1, &end, 10);
-
-		if (*end != '\0') {
-			(void) fprintf(stderr, "invalid range '%s': must be "
-			    "a numeric range of the form 'start[,end]'\n",
-			    range);
-			return (-1);
 		}
 	}
 
@@ -212,6 +219,11 @@ initialize_range(err_type_t type, int level, char *range,
 	record->zi_level = level;
 
 	return (0);
+
+bad_range:
+	(void) fprintf(stderr, "invalid range '%s': must be of the form "
+	    "'start[,end]'\n", range);
+	return (-1);
 }
 
 int
@@ -258,7 +270,7 @@ translate_record(err_type_t type, const char *object, const char *range,
 		}
 
 		dataset[0] = '\0';
-		(void) strcpy(poolname, object);
+		(void) strlcpy(poolname, object, MAXNAMELEN);
 		return (0);
 	}
 
@@ -298,7 +310,7 @@ translate_record(err_type_t type, const char *object, const char *range,
 	/*
 	 * Copy the pool name
 	 */
-	(void) strcpy(poolname, dataset);
+	(void) strlcpy(poolname, dataset, MAXNAMELEN);
 	if ((slash = strchr(poolname, '/')) != NULL)
 		*slash = '\0';
 

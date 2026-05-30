@@ -1,9 +1,5 @@
-# $FreeBSD$
-
-PACKAGE=	kerberos-lib
-
 LIB=	kafs5
-LDFLAGS=	-Wl,--no-undefined
+LDFLAGS+=	-Wl,--no-undefined
 LIBADD=	asn1 krb5 roken
 INCS=	kafs.h
 MAN=	kafs5.3

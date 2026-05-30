@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2016 Landon Fuller <landonf@FreeBSD.org>
  * Copyright (c) 2017 The FreeBSD Foundation
@@ -32,9 +32,6 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGES.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -76,7 +73,6 @@ struct bhnd_erom_iores {
 	device_t		 owner;		/**< device from which we'll allocate resources */
 	int			 owner_rid;	/**< rid to use when allocating new mappings */
 	struct bhnd_resource	*mapped;	/**< current mapping, or NULL */
-	int			 mapped_rid;	/**< resource ID of current mapping, or -1 */
 };
 
 /**
@@ -159,7 +155,7 @@ bhnd_erom_probe_driver_classes(devclass_t bus_devclass,
 
 /**
  * Allocate and return a new device enumeration table parser.
- * 
+ *
  * @param cls		The parser class for which an instance will be
  *			allocated.
  * @param eio		The bus I/O callbacks to use when reading the device
@@ -167,7 +163,7 @@ bhnd_erom_probe_driver_classes(devclass_t bus_devclass,
  * @param cid		The device's chip identifier.
  *
  * @retval non-NULL	success
- * @retval NULL		if an error occured allocating or initializing the
+ * @retval NULL		if an error occurred allocating or initializing the
  *			EROM parser.
  */
 bhnd_erom_t *
@@ -393,7 +389,6 @@ bhnd_erom_iores_new(device_t dev, int rid)
 	iores->owner = dev;
 	iores->owner_rid = rid;
 	iores->mapped = NULL;
-	iores->mapped_rid = -1;
 
 	return (&iores->eio);
 }
@@ -423,19 +418,15 @@ bhnd_erom_iores_map(struct bhnd_erom_io *eio, bhnd_addr_t addr,
 		}
 
 		/* Otherwise, we need to drop the existing mapping */
-		bhnd_release_resource(iores->owner, SYS_RES_MEMORY,
-		    iores->mapped_rid, iores->mapped);
+		bhnd_release_resource(iores->owner, iores->mapped);
 		iores->mapped = NULL;
-		iores->mapped_rid = -1;
 	}
 
 	/* Try to allocate the new mapping */
-	iores->mapped_rid = iores->owner_rid;
 	iores->mapped = bhnd_alloc_resource(iores->owner, SYS_RES_MEMORY,
-	    &iores->mapped_rid, addr, addr+size-1, size,
+	    iores->owner_rid, addr, addr+size-1, size,
 	    RF_ACTIVE|RF_SHAREABLE);
 	if (iores->mapped == NULL) {
-		iores->mapped_rid = -1;
 		return (ENXIO);
 	}
 
@@ -484,10 +475,8 @@ bhnd_erom_iores_fini(struct bhnd_erom_io *eio)
 
 	/* Release any mapping */
 	if (iores->mapped) {
-		bhnd_release_resource(iores->owner, SYS_RES_MEMORY,
-		    iores->mapped_rid, iores->mapped);
+		bhnd_release_resource(iores->owner, iores->mapped);
 		iores->mapped = NULL;
-		iores->mapped_rid = -1;
 	}
 
 	free(eio, M_BHND);

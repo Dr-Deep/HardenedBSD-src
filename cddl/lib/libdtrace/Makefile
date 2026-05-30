@@ -1,10 +1,13 @@
-# $FreeBSD$
+SHLIBDIR?=	/lib
+
+.include <src.opts.mk>
 
 .PATH: ${SRCTOP}/cddl/contrib/opensolaris/lib/libdtrace/common
 .PATH: ${SRCTOP}/cddl/contrib/opensolaris/lib/libgen/common
 
 PACKAGE=	dtrace
 LIB=		dtrace
+
 SRCS=		dt_aggregate.c \
 		dt_as.c \
 		dt_buf.c \
@@ -48,7 +51,8 @@ SRCS=		dt_aggregate.c \
 		dt_xlator.c \
 		gmatch.c
 
-DSRCS=		errno.d			\
+DSRCS=		cam.d			\
+		errno.d			\
 		io.d			\
 		ip.d			\
 		psinfo.d		\
@@ -74,16 +78,18 @@ SYSINCS+=	${SRCTOP}/sys/cddl/contrib/opensolaris/uts/common/sys/ctf_api.h
 WARNS?=		1
 
 CFLAGS+= -DIN_BASE
-CFLAGS+= -I${SRCTOP}/sys/contrib/openzfs/include
-CFLAGS+= -I${SRCTOP}/sys/contrib/openzfs/lib/libspl/include/
-CFLAGS+= -I${SRCTOP}/sys/contrib/openzfs/lib/libspl/include/os/freebsd
+CFLAGS+= -DSKIP_SPL_SYS_CONDVAR_H
+CFLAGS+= -I${ZFSTOP}/include
+CFLAGS+= -I${ZFSTOP}/lib/libspl/include/
+CFLAGS+= -I${ZFSTOP}/lib/libspl/include/os/freebsd
 CFLAGS+= -I${SRCTOP}/sys
-CFLAGS+= -include ${SRCTOP}/sys/contrib/openzfs/include/os/freebsd/spl/sys/ccompile.h
+CFLAGS+= -include ${ZFSTOP}/include/os/freebsd/spl/sys/ccompile.h
 CFLAGS+= -DHAVE_ISSETUGID
 
 
 CFLAGS+=	-I${.OBJDIR} -I${.CURDIR} \
 		-I${SRCTOP}/sys/cddl/dev/dtrace/${MACHINE_ARCH} \
+		-I${SRCTOP}/sys/cddl/dev/kinst \
 		-I${SRCTOP}/sys/cddl/compat/opensolaris \
 		-I${SRCTOP}/cddl/compat/opensolaris/include \
 		-I${OPENSOLARIS_USR_DISTDIR}/head \
@@ -121,13 +127,28 @@ CFLAGS+=	-I${OPENSOLARIS_SYS_DISTDIR}/uts/intel
 .endif
 
 .if ${MACHINE_ARCH} == "i386" || ${MACHINE_ARCH} == "amd64"
-SRCS+=		dis_tables.c
+SRCS+=		dis_tables.c instr_size.c
 DSRCS+=		regs_x86.d
+.endif
+
+.if ${MACHINE_CPUARCH} == "riscv"
+SRCS+=		instr_size.c
+DSRCS+=		regs_riscv.d
+.endif
+
+.if ${MACHINE_CPUARCH} == "aarch64"
+SRCS+=		instr_size.c
+DSRCS+=		regs_aarch64.d
 .endif
 
 YFLAGS+=-d
 
-LIBADD=	ctf elf proc pthread rtld_db
+.if ${MK_DTRACE_ASAN} != "no"
+CFLAGS+=	-fsanitize=address -fsanitize=undefined
+LDFLAGS+=	-fsanitize=address -fsanitize=undefined
+.endif
+
+LIBADD=	ctf elf proc pthread rtld_db xo
 
 CLEANFILES=	dt_errtags.c dt_names.c
 

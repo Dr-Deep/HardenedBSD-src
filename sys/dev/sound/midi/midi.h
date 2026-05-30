@@ -1,8 +1,12 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2003 Mathew Kanner
  * All rights reserved.
+ * Copyright (c) 2025 The FreeBSD Foundation
+ *
+ * Portions of this software were developed by Christos Margiolis
+ * <christos@FreeBSD.org> under sponsorship from the FreeBSD Foundation.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -24,8 +28,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef MIDI_H
@@ -41,19 +43,11 @@ MALLOC_DECLARE(M_MIDI);
 #define M_RXEN		0x04
 #define M_TXEN		0x08
 
-#define MIDI_TYPE unsigned char
-
 struct snd_midi;
 
-struct snd_midi *
-midi_init(kobj_class_t _mpu_cls, int _unit, int _channel, void *cookie);
+struct snd_midi *midi_init(kobj_class_t _mpu_cls, void *cookie);
 int	midi_uninit(struct snd_midi *_m);
-int	midi_out(struct snd_midi *_m, MIDI_TYPE *_buf, int _size);
-int	midi_in(struct snd_midi *_m, MIDI_TYPE *_buf, int _size);
-
-kobj_t	midimapper_addseq(void *arg1, int *unit, void **cookie);
-int	midimapper_open(void *arg1, void **cookie);
-int	midimapper_close(void *arg1, void *cookie);
-kobj_t	midimapper_fetch_synth(void *arg, void *cookie, int unit);
+int	midi_out(struct snd_midi *_m, uint8_t *_buf, int _size);
+int	midi_in(struct snd_midi *_m, uint8_t *_buf, int _size);
 
 #endif

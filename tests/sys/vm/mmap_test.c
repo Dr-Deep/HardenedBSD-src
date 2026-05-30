@@ -22,8 +22,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include <sys/param.h>
@@ -37,21 +35,6 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-
-static const struct {
-	void	*addr;
-	int	ok[2];	/* Depending on security.bsd.map_at_zero {0, !=0}. */
-} map_at_zero_tests[] = {
-	{ (void *)0,			{ 0, 1 } }, /* Test sysctl. */
-	{ (void *)1,			{ 0, 0 } },
-	{ (void *)(PAGE_SIZE - 1),	{ 0, 0 } },
-	{ (void *)PAGE_SIZE,		{ 1, 1 } },
-	{ (void *)-1,			{ 0, 0 } },
-	{ (void *)(-PAGE_SIZE),		{ 0, 0 } },
-	{ (void *)(-1 - PAGE_SIZE),	{ 0, 0 } },
-	{ (void *)(-1 - PAGE_SIZE - 1),	{ 0, 0 } },
-	{ (void *)(0x1000 * PAGE_SIZE),	{ 1, 1 } },
-};
 
 #define	MAP_AT_ZERO	"security.bsd.map_at_zero"
 
@@ -70,6 +53,22 @@ ATF_TC_BODY(mmap__map_at_zero, tc)
 	int map_at_zero;
 	bool allow_wx;
 	int prot_flags;
+	size_t pgsz = getpagesize();
+
+	const struct {
+		void	*addr;
+		int	ok[2];	/* Depending on security.bsd.map_at_zero {0, !=0}. */
+	} map_at_zero_tests[] = {
+		{ (void *)0,			{ 0, 1 } }, /* Test sysctl. */
+		{ (void *)1,			{ 0, 0 } },
+		{ (void *)(pgsz - 1),		{ 0, 0 } },
+		{ (void *)pgsz,			{ 1, 1 } },
+		{ (void *)-1,			{ 0, 0 } },
+		{ (void *)(-pgsz),		{ 0, 0 } },
+		{ (void *)(-1 - pgsz),		{ 0, 0 } },
+		{ (void *)(-1 - pgsz - 1),	{ 0, 0 } },
+		{ (void *)(0x1000 * pgsz),	{ 1, 1 } },
+	};
 
 	len = sizeof(map_at_zero);
 	if (sysctlbyname(MAP_AT_ZERO, &map_at_zero, &len, NULL, 0) == -1) {
@@ -297,14 +296,82 @@ ATF_TC_BODY(mmap__write_only, tc)
 	munmap(p, pagesize);
 }
 
+ATF_TC_WITHOUT_HEAD(mmap__maxprot_basic);
+ATF_TC_BODY(mmap__maxprot_basic, tc)
+{
+	void *p;
+	int error, pagesize;
+
+	ATF_REQUIRE((pagesize = getpagesize()) > 0);
+
+	p = mmap(NULL, pagesize, PROT_READ | PROT_MAX(PROT_READ),
+	    MAP_ANON, -1, 0);
+	ATF_REQUIRE(p != MAP_FAILED);
+
+	error = mprotect(p, pagesize, PROT_WRITE);
+	ATF_REQUIRE_ERRNO(EACCES, error == -1);
+	error = mprotect(p, pagesize, PROT_READ | PROT_WRITE);
+	ATF_REQUIRE_ERRNO(EACCES, error == -1);
+	error = mprotect(p, pagesize, PROT_READ | PROT_EXEC);
+	ATF_REQUIRE_ERRNO(EACCES, error == -1);
+
+	ATF_REQUIRE(munmap(p, pagesize) == 0);
+}
+
+/* Make sure that PROT_MAX applies as expected to mappings of shm objects */
+ATF_TC_WITHOUT_HEAD(mmap__maxprot_shm);
+ATF_TC_BODY(mmap__maxprot_shm, tc)
+{
+	void *p;
+	int error, fd, pagesize;
+
+	ATF_REQUIRE((pagesize = getpagesize()) > 0);
+
+	fd = shm_open(SHM_ANON, O_RDWR, 0644);
+	ATF_REQUIRE(fd >= 0);
+
+	error = ftruncate(fd, pagesize);
+	ATF_REQUIRE(error == 0);
+
+	p = mmap(NULL, pagesize, PROT_READ | PROT_MAX(PROT_READ),
+	    MAP_PRIVATE, fd, 0);
+	ATF_REQUIRE(p != MAP_FAILED);
+
+	error = mprotect(p, pagesize, PROT_WRITE);
+	ATF_REQUIRE_ERRNO(EACCES, error == -1);
+	error = mprotect(p, pagesize, PROT_READ | PROT_WRITE);
+	ATF_REQUIRE_ERRNO(EACCES, error == -1);
+	error = mprotect(p, pagesize, PROT_READ | PROT_EXEC);
+	ATF_REQUIRE_ERRNO(EACCES, error == -1);
+
+	ATF_REQUIRE(munmap(p, pagesize) == 0);
+
+	/* Again, this time with a shared mapping. */
+	p = mmap(NULL, pagesize, PROT_READ | PROT_MAX(PROT_READ),
+	    MAP_SHARED, fd, 0);
+	ATF_REQUIRE(p != MAP_FAILED);
+
+	error = mprotect(p, pagesize, PROT_WRITE);
+	ATF_REQUIRE_ERRNO(EACCES, error == -1);
+	error = mprotect(p, pagesize, PROT_READ | PROT_WRITE);
+	ATF_REQUIRE_ERRNO(EACCES, error == -1);
+	error = mprotect(p, pagesize, PROT_READ | PROT_EXEC);
+	ATF_REQUIRE_ERRNO(EACCES, error == -1);
+
+	ATF_REQUIRE(munmap(p, pagesize) == 0);
+
+	ATF_REQUIRE(close(fd) == 0);
+}
+
 ATF_TP_ADD_TCS(tp)
 {
-
 	ATF_TP_ADD_TC(tp, mmap__map_at_zero);
 	ATF_TP_ADD_TC(tp, mmap__bad_arguments);
 	ATF_TP_ADD_TC(tp, mmap__dev_zero_private);
 	ATF_TP_ADD_TC(tp, mmap__dev_zero_shared);
 	ATF_TP_ADD_TC(tp, mmap__write_only);
+	ATF_TP_ADD_TC(tp, mmap__maxprot_basic);
+	ATF_TP_ADD_TC(tp, mmap__maxprot_shm);
 
 	return (atf_no_error());
 }

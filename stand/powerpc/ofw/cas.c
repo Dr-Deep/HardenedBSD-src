@@ -23,9 +23,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <openfirm.h>
 #include <stand.h>
 
@@ -39,14 +36,20 @@ __FBSDID("$FreeBSD$");
 #endif
 
 /* PVR */
+#define PVR_CPU_P6		0x003e0000
+#define PVR_CPU_P7		0x003f0000
+#define PVR_CPU_P7PLUS		0x004a0000
 #define PVR_CPU_P8E		0x004b0000
 #define PVR_CPU_P8NVL		0x004c0000
 #define PVR_CPU_P8		0x004d0000
 #define PVR_CPU_P9		0x004e0000
+#define PVR_CPU_P10		0x00800000
+#define PVR_CPU_P11		0x00820000
 #define PVR_CPU_MASK		0xffff0000
 
 #define PVR_ISA_207		0x0f000004
 #define PVR_ISA_300		0x0f000005
+#define PVR_ISA_31		0x0f000006
 #define PVR_ISA_MASK		0xffffffff
 
 /* loader version of kernel's CPU_MAXSIZE */
@@ -125,7 +128,7 @@ struct opt_vec5 {
 } __packed;
 
 static struct ibm_arch_vec {
-	struct pvr		pvr_list[7];
+	struct pvr		pvr_list[13];
 	uint8_t			num_opts;
 	struct opt_vec_ignore	vec1;
 	struct opt_vec_ignore	vec2;
@@ -134,12 +137,18 @@ static struct ibm_arch_vec {
 	struct opt_vec5		vec5;
 } __packed ibm_arch_vec = {
 	/* pvr_list */ {
+		{ htobe32(PVR_CPU_MASK), htobe32(PVR_CPU_P6) },
+		{ htobe32(PVR_CPU_MASK), htobe32(PVR_CPU_P7) },
+		{ htobe32(PVR_CPU_MASK), htobe32(PVR_CPU_P7PLUS) },
 		{ htobe32(PVR_CPU_MASK), htobe32(PVR_CPU_P8) },
 		{ htobe32(PVR_CPU_MASK), htobe32(PVR_CPU_P8E) },
 		{ htobe32(PVR_CPU_MASK), htobe32(PVR_CPU_P8NVL) },
 		{ htobe32(PVR_CPU_MASK), htobe32(PVR_CPU_P9) },
+		{ htobe32(PVR_CPU_MASK), htobe32(PVR_CPU_P10) },
+		{ htobe32(PVR_CPU_MASK), htobe32(PVR_CPU_P11) },
 		{ htobe32(PVR_ISA_MASK), htobe32(PVR_ISA_207) },
 		{ htobe32(PVR_ISA_MASK), htobe32(PVR_ISA_300) },
+		{ htobe32(PVR_ISA_MASK), htobe32(PVR_ISA_31) },
 		{ 0, 0xffffffffu }			/* terminator */
 	},
 	4,	/* num_opts (4 actually means 5 option vectors) */
@@ -188,7 +197,7 @@ ppc64_cas(void)
 {
 	phandle_t pkg;
 	ihandle_t inst;
-	cell_t err;
+	cell_t err = 0;
 	uint8_t buf[16], idx, val;
 	int i, len, rc, radix_mmu;
 	const char *var;

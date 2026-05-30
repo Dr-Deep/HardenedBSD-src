@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2005 Peter Grehan
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _MACHINE_MMUVAR_H_
@@ -38,9 +36,9 @@ typedef	void	(*pmap_kenter_attr_t)(vm_offset_t, vm_paddr_t, vm_memattr_t);
 typedef	void	(*pmap_kremove_t)(vm_offset_t);
 typedef	void	*(*pmap_mapdev_t)(vm_paddr_t, vm_size_t);
 typedef	void	*(*pmap_mapdev_attr_t)(vm_paddr_t, vm_size_t, vm_memattr_t);
-typedef	void	(*pmap_unmapdev_t)(vm_offset_t, vm_size_t);
+typedef	void	(*pmap_unmapdev_t)(void *, vm_size_t);
 typedef	void	(*pmap_page_set_memattr_t)(vm_page_t, vm_memattr_t);
-typedef	int	(*pmap_change_attr_t)(vm_offset_t, vm_size_t, vm_memattr_t);
+typedef	int	(*pmap_change_attr_t)(void *, vm_size_t, vm_memattr_t);
 typedef	int	(*pmap_map_user_ptr_t)(pmap_t, volatile const void *,
  		    void **, size_t, size_t *);
 typedef	int	(*pmap_decode_kernel_ptr_t)(vm_offset_t, int *, vm_offset_t *);
@@ -62,23 +60,23 @@ typedef	void	(*pmap_enter_object_t)(pmap_t, vm_offset_t, vm_offset_t,
 typedef	void	(*pmap_enter_quick_t)(pmap_t, vm_offset_t, vm_page_t, vm_prot_t);
 typedef	vm_paddr_t	(*pmap_extract_t)(pmap_t, vm_offset_t);
 typedef	vm_page_t	(*pmap_extract_and_hold_t)(pmap_t, vm_offset_t, vm_prot_t);
-typedef	void	(*pmap_growkernel_t)(vm_offset_t);
+typedef	int	(*pmap_growkernel_nopanic_t)(vm_offset_t);
 typedef	void	(*pmap_init_t)(void);
-typedef	boolean_t	(*pmap_is_modified_t)(vm_page_t);
-typedef	boolean_t	(*pmap_is_prefaultable_t)(pmap_t, vm_offset_t);
-typedef	boolean_t	(*pmap_is_referenced_t)(vm_page_t);
+typedef	bool	(*pmap_is_modified_t)(vm_page_t);
+typedef	bool	(*pmap_is_prefaultable_t)(pmap_t, vm_offset_t);
+typedef	bool	(*pmap_is_referenced_t)(vm_page_t);
 typedef	int	(*pmap_ts_referenced_t)(vm_page_t);
-typedef	vm_offset_t	(*pmap_map_t)(vm_offset_t *, vm_paddr_t, vm_paddr_t, int);
+typedef	void	*(*pmap_map_t)(vm_offset_t *, vm_paddr_t, vm_paddr_t, int);
 typedef	void	(*pmap_object_init_pt_t)(pmap_t, vm_offset_t, vm_object_t,
 		    vm_pindex_t, vm_size_t);
-typedef	boolean_t	(*pmap_page_exists_quick_t)(pmap_t, vm_page_t);
-typedef	boolean_t	(*pmap_page_is_mapped_t)(vm_page_t);
+typedef	bool	(*pmap_page_exists_quick_t)(pmap_t, vm_page_t);
+typedef	bool	(*pmap_page_is_mapped_t)(vm_page_t);
 typedef	void	(*pmap_page_init_t)(vm_page_t);
 typedef	int	(*pmap_page_wired_mappings_t)(vm_page_t);
 typedef	void	(*pmap_pinit0_t)(pmap_t);
 typedef	void	(*pmap_protect_t)(pmap_t, vm_offset_t, vm_offset_t, vm_prot_t);
-typedef	void	(*pmap_qenter_t)(vm_offset_t, vm_page_t *, int);
-typedef	void	(*pmap_qremove_t)(vm_offset_t, int);
+typedef	void	(*pmap_qenter_t)(void *, vm_page_t *, int);
+typedef	void	(*pmap_qremove_t)(void *, int);
 typedef	void	(*pmap_release_t)(pmap_t);
 typedef	void	(*pmap_remove_t)(pmap_t, vm_offset_t, vm_offset_t);
 typedef	void	(*pmap_remove_all_t)(vm_page_t);
@@ -99,8 +97,8 @@ typedef	void	(*pmap_dumpsys_pa_init_t)(void);
 typedef	size_t	(*pmap_dumpsys_scan_pmap_t)(struct bitset *dump_bitset);
 typedef	void	*(*pmap_dumpsys_dump_pmap_init_t)(unsigned);
 typedef	void	*(*pmap_dumpsys_dump_pmap_t)(void *, void *, u_long *);
-typedef	vm_offset_t	(*pmap_quick_enter_page_t)(vm_page_t);
-typedef	void	(*pmap_quick_remove_page_t)(vm_offset_t);
+typedef	void	*(*pmap_quick_enter_page_t)(vm_page_t);
+typedef	void	(*pmap_quick_remove_page_t)(void *);
 typedef	bool	(*pmap_ps_enabled_t)(pmap_t);
 typedef	void	(*pmap_tlbie_all_t)(void);
 typedef void	(*pmap_installer_t)(void);
@@ -132,7 +130,7 @@ struct pmap_funcs {
 	pmap_enter_quick_t	enter_quick;
 	pmap_extract_t	extract;
 	pmap_extract_and_hold_t	extract_and_hold;
-	pmap_growkernel_t	growkernel;
+	pmap_growkernel_nopanic_t	growkernel_nopanic;
 	pmap_init_t	init;
 	pmap_is_modified_t	is_modified;
 	pmap_is_prefaultable_t	is_prefaultable;

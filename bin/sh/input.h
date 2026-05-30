@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -28,9 +30,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)input.h	8.2 (Berkeley) 5/4/95
- * $FreeBSD$
  */
 
 /* PEOF (the end of file marker) is defined in syntax.h */
@@ -55,7 +54,7 @@ void pungetc(void);
 void pushstring(const char *, int, struct alias *);
 void setinputfile(const char *, int, int);
 void setinputfd(int, int);
-void setinputstring(const char *, int);
+void setinputstring(const char *);
 void popfile(void);
 struct parsefile *getcurrentfile(void);
 void popfilesupto(struct parsefile *);

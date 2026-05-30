@@ -25,8 +25,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #ifndef	_LINUXKPI_LINUX_COMPLETION_H_
 #define	_LINUXKPI_LINUX_COMPLETION_H_
@@ -62,7 +60,8 @@ struct completion {
 
 extern void linux_complete_common(struct completion *, int);
 extern int linux_wait_for_common(struct completion *, int);
-extern int linux_wait_for_timeout_common(struct completion *, int, int);
+extern unsigned long linux_wait_for_timeout_common(struct completion *,
+    unsigned long, int);
 extern int linux_try_wait_for_completion(struct completion *);
 extern int linux_completion_done(struct completion *);
 

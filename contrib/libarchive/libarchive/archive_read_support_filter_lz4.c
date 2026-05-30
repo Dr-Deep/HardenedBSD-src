@@ -25,8 +25,6 @@
 
 #include "archive_platform.h"
 
-__FBSDID("$FreeBSD$");
-
 #ifdef HAVE_ERRNO_H
 #include <errno.h>
 #endif
@@ -51,8 +49,11 @@ __FBSDID("$FreeBSD$");
 #include "archive_xxhash.h"
 
 #define LZ4_MAGICNUMBER		0x184d2204
-#define LZ4_SKIPPABLED		0x184d2a50
 #define LZ4_LEGACY		0x184c2102
+
+// Note: LZ4 and zstd share the same skippable frame format with the same magic numbers.
+#define LZ4_SKIPPABLE_START 0x184D2A50
+#define LZ4_SKIPPABLE_MASK 0xFFFFFFF0
 
 #if defined(HAVE_LIBLZ4)
 struct private_data {
@@ -143,19 +144,67 @@ lz4_reader_bid(struct archive_read_filter_bidder *self,
 {
 	const unsigned char *buffer;
 	ssize_t avail;
-	int bits_checked;
-	uint32_t number;
+	int bits_checked = 0;
+	ssize_t min_lz4_archive_size = 11;
 
-	(void)self; /* UNUSED */
+	// LZ4 skippable frames contain a 4 byte magic number followed by
+	// a 4 byte frame data size, then that number of bytes of data. Regular
+	// frames contain a 4 byte magic number followed by a 2-14 byte frame
+	// header, some data, and a 3 byte end marker.
+	ssize_t min_lz4_frame_size = 8;
 
-	/* Minimal lz4 archive is 11 bytes. */
-	buffer = __archive_read_filter_ahead(filter, 11, &avail);
+	ssize_t offset_in_buffer = 0;
+	ssize_t max_lookahead = 64 * 1024;
+
+	(void)self; // UNUSED
+
+	// Zstd and LZ4 skippable frame magic numbers are identical. To
+	// differentiate these two, we need to look for a non-skippable
+	// frame.
+
+	// Minimal lz4 archive is 11 bytes.
+	buffer = __archive_read_filter_ahead(filter, min_lz4_archive_size, &avail);
 	if (buffer == NULL)
 		return (0);
 
-	/* First four bytes must be LZ4 magic numbers. */
-	bits_checked = 0;
-	if ((number = archive_le32dec(buffer)) == LZ4_MAGICNUMBER) {
+	uint32_t magic_number = archive_le32dec(buffer);
+
+	while ((magic_number & LZ4_SKIPPABLE_MASK) == LZ4_SKIPPABLE_START) {
+
+		offset_in_buffer += 4; // Skip over the magic number
+
+		// Ensure that we can read another 4 bytes.
+		if (offset_in_buffer + 4 > avail) {
+			buffer = __archive_read_filter_ahead(filter, offset_in_buffer + 4, &avail);
+			if (buffer == NULL)
+				return (0);
+		}
+
+		uint32_t frame_data_size = archive_le32dec(buffer + offset_in_buffer);
+
+		// Skip over the 4 frame data size bytes, plus the value stored there.
+		offset_in_buffer += 4 + frame_data_size;
+
+		// There should be at least one more frame if this is LZ4 data.
+		if (offset_in_buffer + min_lz4_frame_size > avail) { // TODO: should this be >= ?
+			if (offset_in_buffer + min_lz4_frame_size > max_lookahead)
+				return (0); 
+
+			buffer = __archive_read_filter_ahead(filter, offset_in_buffer + min_lz4_frame_size, &avail);
+			if (buffer == NULL)
+				return (0); 
+		}
+
+		magic_number = archive_le32dec(buffer + offset_in_buffer);
+	}
+
+	// We have skipped over any skippable frames. Either a regular LZ4 frame
+	// follows, or this isn't LZ4 data.
+
+	bits_checked = offset_in_buffer;
+	buffer = buffer + offset_in_buffer;
+
+	if (magic_number == LZ4_MAGICNUMBER) {
 		unsigned char flag, BD;
 
 		bits_checked += 32;
@@ -177,11 +226,16 @@ lz4_reader_bid(struct archive_read_filter_bidder *self,
 		if (BD & ~0x70)
 			return (0);
 		bits_checked += 8;
-	} else if (number == LZ4_LEGACY) {
-		bits_checked += 32;
+
+		return (bits_checked);
 	}
-	
-	return (bits_checked);
+
+	if (magic_number == LZ4_LEGACY) {
+		bits_checked += 32;
+		return (bits_checked);
+	}
+
+	return (0);
 }
 
 #if !defined(HAVE_LIBLZ4)
@@ -225,7 +279,7 @@ lz4_reader_init(struct archive_read_filter *self)
 	self->code = ARCHIVE_FILTER_LZ4;
 	self->name = "lz4";
 
-	state = (struct private_data *)calloc(sizeof(*state), 1);
+	state = calloc(1, sizeof(*state));
 	if (state == NULL) {
 		archive_set_error(&self->archive->archive, ENOMEM,
 		    "Can't allocate data for lz4 decompression");
@@ -250,7 +304,7 @@ lz4_allocate_out_block(struct archive_read_filter *self)
 		out_block_size += 64 * 1024;
 	if (state->out_block_size < out_block_size) {
 		free(state->out_block);
-		out_block = (unsigned char *)malloc(out_block_size);
+		out_block = malloc(out_block_size);
 		state->out_block_size = out_block_size;
 		if (out_block == NULL) {
 			archive_set_error(&self->archive->archive, ENOMEM,
@@ -273,7 +327,7 @@ lz4_allocate_out_block_for_legacy(struct archive_read_filter *self)
 
 	if (state->out_block_size < out_block_size) {
 		free(state->out_block);
-		out_block = (unsigned char *)malloc(out_block_size);
+		out_block = malloc(out_block_size);
 		state->out_block_size = out_block_size;
 		if (out_block == NULL) {
 			archive_set_error(&self->archive->archive, ENOMEM,
@@ -309,7 +363,7 @@ lz4_filter_read(struct archive_read_filter *self, const void **p)
 	case READ_LEGACY_STREAM:
 		/* Reading a lz4 stream already failed. */
 		archive_set_error(&self->archive->archive,
-		    ARCHIVE_ERRNO_MISC, "Invalid sequence.");
+		    ARCHIVE_ERRNO_MISC, "Invalid sequence");
 		return (ARCHIVE_FATAL);
 	case READ_DEFAULT_BLOCK:
 		ret = lz4_filter_read_default_stream(self, p);
@@ -323,9 +377,8 @@ lz4_filter_read(struct archive_read_filter *self, const void **p)
 		break;
 	default:
 		archive_set_error(&self->archive->archive,
-		    ARCHIVE_ERRNO_MISC, "Program error.");
+		    ARCHIVE_ERRNO_MISC, "Program error");
 		return (ARCHIVE_FATAL);
-		break;
 	}
 
 	while (state->stage == SELECT_STREAM) {
@@ -345,7 +398,7 @@ lz4_filter_read(struct archive_read_filter *self, const void **p)
 			return lz4_filter_read_default_stream(self, p);
 		else if (number == LZ4_LEGACY)
 			return lz4_filter_read_legacy_stream(self, p);
-		else if ((number & ~0xF) == LZ4_SKIPPABLED) {
+		else if ((number & LZ4_SKIPPABLE_MASK) == LZ4_SKIPPABLE_START) {
 			read_buf = __archive_read_filter_ahead(
 				self->upstream, 4, NULL);
 			if (read_buf == NULL) {
@@ -449,8 +502,10 @@ lz4_filter_read_descriptor(struct archive_read_filter *self)
 	chsum = __archive_xxhash.XXH32(read_buf, (int)descriptor_bytes -1, 0);
 	chsum = (chsum >> 8) & 0xff;
 	chsum_verifier = read_buf[descriptor_bytes-1] & 0xff;
+#ifndef DONT_FAIL_ON_CRC_ERROR
 	if (chsum != chsum_verifier)
 		goto malformed_error;
+#endif
 
 	__archive_read_filter_consume(self->upstream, descriptor_bytes);
 
@@ -520,8 +575,10 @@ lz4_filter_read_data_block(struct archive_read_filter *self, const void **p)
 			read_buf + 4, (int)compressed_size, 0);
 		unsigned int chsum_block =
 		    archive_le32dec(read_buf + 4 + compressed_size);
+#ifndef DONT_FAIL_ON_CRC_ERROR
 		if (chsum != chsum_block)
 			goto malformed_error;
+#endif
 	}
 
 
@@ -580,7 +637,7 @@ lz4_filter_read_data_block(struct archive_read_filter *self, const void **p)
 		    state->out_block + prefix64k, (int)compressed_size,
 		    state->flags.block_maximum_size,
 		    state->out_block,
-		    prefix64k);
+		    (int)prefix64k);
 #else
 		uncompressed_size = LZ4_decompress_safe_withPrefix64k(
 		    read_buf + 4,
@@ -652,10 +709,12 @@ lz4_filter_read_default_stream(struct archive_read_filter *self, const void **p)
 			    state->xxh32_state);
 			state->xxh32_state = NULL;
 			if (checksum != checksum_stream) {
+#ifndef DONT_FAIL_ON_CRC_ERROR
 				archive_set_error(&self->archive->archive,
 				    ARCHIVE_ERRNO_MISC,
 				    "lz4 stream checksum error");
 				return (ARCHIVE_FATAL);
+#endif
 			}
 		} else if (ret > 0)
 			__archive_xxhash.XXH32_update(state->xxh32_state,

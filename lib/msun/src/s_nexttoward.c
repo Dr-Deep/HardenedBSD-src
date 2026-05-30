@@ -1,4 +1,3 @@
-/* @(#)s_nextafter.c 5.1 93/09/24 */
 /*
  * ====================================================
  * Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
@@ -9,9 +8,6 @@
  * is preserved.
  * ====================================================
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 /*
  * We assume that a long double has a 15-bit exponent.  On systems
@@ -37,15 +33,14 @@ nexttoward(double x, long double y)
 	int32_t hx,ix;
 	u_int32_t lx;
 
+	if(isnan(x) || isnan(y))
+	   return x+y;	/* x or y is nan */
+	if(x==y) return (double)y;		/* x=y, return y */
+
 	EXTRACT_WORDS(hx,lx,x);
 	ix = hx&0x7fffffff;		/* |x| */
 	uy.e = y;
 
-	if(((ix>=0x7ff00000)&&((ix-0x7ff00000)|lx)!=0) ||
-	    (uy.bits.exp == 0x7fff &&
-	     ((uy.bits.manh&~LDBL_NBIT)|uy.bits.manl) != 0))
-	   return x+y;	/* x or y is nan */
-	if(x==y) return (double)y;		/* x=y, return y */
 	if(x==0.0) {
 	    INSERT_WORDS(x,uy.bits.sign<<31,1);	/* return +-minsubnormal */
 	    t = x*x;

@@ -1,9 +1,5 @@
-# $FreeBSD$
-
-PACKAGE=	kerberos-lib
-
 LIB=	gssapi_ntlm
-LDFLAGS= -Wl,-Bsymbolic -Wl,--no-undefined
+LDFLAGS+= -Wl,-Bsymbolic -Wl,--no-undefined
 LIBADD=	crypto gssapi krb5 heimntlm roken
 SHLIB_MAJOR=	10
 
@@ -44,6 +40,7 @@ CFLAGS+=-I${KRB5DIR}/lib/gssapi/gssapi
 CFLAGS+=-I${KRB5DIR}/lib/gssapi/ntlm
 CFLAGS+=-I${KRB5DIR}/lib/krb5
 CFLAGS+=-I${KRB5DIR}/lib/ntlm
+CFLAGS+=-DOPENSSL_API_COMPAT=0x10100000L
 
 .include <bsd.lib.mk>
 

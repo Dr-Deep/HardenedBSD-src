@@ -30,9 +30,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	from: @(#)isa.h	5.7 (Berkeley) 5/9/91
- * $FreeBSD$
  */
 
 #ifndef _ISA_ISA_H_
@@ -52,7 +49,7 @@
 #define	IO_RTC		0x070		/* RTC */
 #define	IO_ICU2		0x0A0		/* 8259A Interrupt Controller #2 */
 
-#define	IO_MDA		0x3B0		/* Monochome Adapter */
+#define	IO_MDA		0x3B0		/* Monochrome Adapter */
 #define	IO_VGA		0x3C0		/* E/VGA Ports */
 #define	IO_CGA		0x3D0		/* CGA Ports */
 

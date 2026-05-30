@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 PACKAGE=	tests
 
 _LIBARCHIVEDIR=	${SRCTOP}/contrib/libarchive
@@ -28,13 +26,14 @@ CFLAGS.test_utils.c+=	-Wno-cast-align
 CPIO_SRCS= cmdline.c
 
 .PATH:	${_LIBARCHIVEDIR}/libarchive_fe
-CPIO_SRCS+= err.c
+CPIO_SRCS+= lafe_err.c
 
 .PATH:	${_LIBARCHIVEDIR}/cpio/test
 TESTS_SRCS=	\
 	test_0.c				\
 	test_basic.c				\
 	test_cmdline.c				\
+	test_extract_cpio_absolute_paths.c	\
 	test_extract_cpio_Z.c			\
 	test_extract_cpio_bz2.c			\
 	test_extract_cpio_grz.c			\

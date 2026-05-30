@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2019 The FreeBSD Foundation
  *
@@ -26,8 +26,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 extern "C" {
@@ -114,12 +112,15 @@ TEST_F(Lookup, attr_cache)
 	// fuse(4) does not _yet_ support inode generations
 	//EXPECT_EQ(generation, sb.st_gen);
 
-	//st_birthtim and st_flags are not supported by protocol 7.8.  They're
-	//only supported as OS-specific extensions to OSX.
-	//EXPECT_EQ(, sb.st_birthtim);
-	//EXPECT_EQ(, sb.st_flags);
-	
-	//FUSE can't set st_blksize until protocol 7.9
+	/*
+	 * st_birthtim and st_flags are not supported by the fuse protocol.
+	 * They're only supported as OS-specific extensions to OSX.  For
+	 * birthtime, the convention for "not supported" is "negative one
+	 * second".
+	 */
+	EXPECT_EQ(-1, sb.st_birthtim.tv_sec);
+	EXPECT_EQ(0, sb.st_birthtim.tv_nsec);
+	EXPECT_EQ(0u, sb.st_flags);
 }
 
 /*
@@ -289,7 +290,7 @@ TEST_F(Lookup, ejustreturn)
 	.WillOnce(Invoke(ReturnImmediate([=](auto in __unused, auto& out) {
 		out.header.len = sizeof(out.header);
 		out.header.error = 2;
-		m_mock->m_expected_write_errno = EINVAL;
+		out.expected_errno = EINVAL;
 	})));
 
 	EXPECT_NE(0, access(FULLPATH, F_OK));
@@ -559,6 +560,7 @@ TEST_F(LookupExportable, dotdot_entry_cache_timeout)
 		SET_OUT_HEADER_LEN(out, entry);
 		out.body.entry.attr.mode = S_IFDIR | 0755;
 		out.body.entry.nodeid = foo_ino;
+		out.body.entry.attr.ino = foo_ino;
 		out.body.entry.attr_valid = UINT64_MAX;
 		out.body.entry.entry_valid = 0;	// immediate timeout
 	})));
@@ -567,6 +569,7 @@ TEST_F(LookupExportable, dotdot_entry_cache_timeout)
 		SET_OUT_HEADER_LEN(out, entry);
 		out.body.entry.attr.mode = S_IFDIR | 0755;
 		out.body.entry.nodeid = bar_ino;
+		out.body.entry.attr.ino = bar_ino;
 		out.body.entry.attr_valid = UINT64_MAX;
 		out.body.entry.entry_valid = UINT64_MAX;
 	})));
@@ -576,6 +579,7 @@ TEST_F(LookupExportable, dotdot_entry_cache_timeout)
 		SET_OUT_HEADER_LEN(out, entry);
 		out.body.entry.attr.mode = S_IFDIR | 0755;
 		out.body.entry.nodeid = FUSE_ROOT_ID;
+		out.body.entry.attr.ino = FUSE_ROOT_ID;
 		out.body.entry.attr_valid = UINT64_MAX;
 		out.body.entry.entry_valid = UINT64_MAX;
 	})));
@@ -606,6 +610,7 @@ TEST_F(LookupExportable, dotdot_no_parent_nid)
 		SET_OUT_HEADER_LEN(out, entry);
 		out.body.entry.attr.mode = S_IFDIR | 0755;
 		out.body.entry.nodeid = foo_ino;
+		out.body.entry.attr.ino = foo_ino;
 		out.body.entry.attr_valid = UINT64_MAX;
 		out.body.entry.entry_valid = UINT64_MAX;
 	})));
@@ -614,6 +619,7 @@ TEST_F(LookupExportable, dotdot_no_parent_nid)
 		SET_OUT_HEADER_LEN(out, entry);
 		out.body.entry.attr.mode = S_IFDIR | 0755;
 		out.body.entry.nodeid = bar_ino;
+		out.body.entry.attr.ino = bar_ino;
 		out.body.entry.attr_valid = UINT64_MAX;
 		out.body.entry.entry_valid = UINT64_MAX;
 	})));
@@ -631,6 +637,7 @@ TEST_F(LookupExportable, dotdot_no_parent_nid)
 		SET_OUT_HEADER_LEN(out, entry);
 		out.body.entry.attr.mode = S_IFDIR | 0755;
 		out.body.entry.nodeid = foo_ino;
+		out.body.entry.attr.ino = foo_ino;
 		out.body.entry.attr_valid = UINT64_MAX;
 		out.body.entry.entry_valid = UINT64_MAX;
 	})));
@@ -639,6 +646,7 @@ TEST_F(LookupExportable, dotdot_no_parent_nid)
 		SET_OUT_HEADER_LEN(out, entry);
 		out.body.entry.attr.mode = S_IFDIR | 0755;
 		out.body.entry.nodeid = FUSE_ROOT_ID;
+		out.body.entry.attr.ino = FUSE_ROOT_ID;
 		out.body.entry.attr_valid = UINT64_MAX;
 		out.body.entry.entry_valid = UINT64_MAX;
 	})));

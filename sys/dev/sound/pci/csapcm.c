@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1999 Seigo Tanimura
  * All rights reserved.
@@ -36,14 +36,11 @@
 
 #include <dev/sound/pcm/sound.h>
 #include <dev/sound/pcm/ac97.h>
-#include <dev/sound/chip.h>
 #include <dev/sound/pci/csareg.h>
 #include <dev/sound/pci/csavar.h>
 
 #include <dev/pci/pcireg.h>
 #include <dev/pci/pcivar.h>
-
-SND_DECLARE_FILE("$FreeBSD$");
 
 /* Buffer size on dma transfer. Fixed for CS416x. */
 #define CS461x_BUFFSIZE   (4 * 1024)
@@ -486,7 +483,7 @@ csa_setupchan(struct csa_chinfo *ch)
 
 	if (ch->dir == PCMDIR_PLAY) {
 		/* direction */
-		csa_writemem(resp, BA1_PBA, sndbuf_getbufaddr(ch->buffer));
+		csa_writemem(resp, BA1_PBA, ch->buffer->buf_addr);
 
 		/* format */
 		csa->pfie = csa_readmem(resp, BA1_PFIE) & ~0x0000f03f;
@@ -515,7 +512,7 @@ csa_setupchan(struct csa_chinfo *ch)
 		csa_setplaysamplerate(resp, ch->spd);
 	} else if (ch->dir == PCMDIR_REC) {
 		/* direction */
-		csa_writemem(resp, BA1_CBA, sndbuf_getbufaddr(ch->buffer));
+		csa_writemem(resp, BA1_CBA, ch->buffer->buf_addr);
 
 		/* format */
 		csa_writemem(resp, BA1_CIE, (csa_readmem(resp, BA1_CIE) & ~0x0000003f) | 0x00000001);
@@ -605,11 +602,11 @@ csachan_getptr(kobj_t obj, void *data)
 	resp = &csa->res;
 
 	if (ch->dir == PCMDIR_PLAY) {
-		ptr = csa_readmem(resp, BA1_PBA) - sndbuf_getbufaddr(ch->buffer);
+		ptr = csa_readmem(resp, BA1_PBA) - ch->buffer->buf_addr;
 		if ((ch->fmt & AFMT_U8) != 0 || (ch->fmt & AFMT_S8) != 0)
 			ptr >>= 1;
 	} else {
-		ptr = csa_readmem(resp, BA1_CBA) - sndbuf_getbufaddr(ch->buffer);
+		ptr = csa_readmem(resp, BA1_CBA) - ch->buffer->buf_addr;
 		if ((ch->fmt & AFMT_U8) != 0 || (ch->fmt & AFMT_S8) != 0)
 			ptr >>= 1;
 	}
@@ -821,8 +818,9 @@ pcmcsa_attach(device_t dev)
 		return (ENXIO);
 	}
 
-	snprintf(status, SND_STATUSLEN, "at irq %jd %s",
-			rman_get_start(resp->irq),PCM_KLDSTRING(snd_csa));
+	snprintf(status, SND_STATUSLEN, "irq %jd on %s",
+			rman_get_start(resp->irq),
+			device_get_nameunit(device_get_parent(dev)));
 
 	/* Enable interrupt. */
 	if (snd_setup_intr(dev, resp->irq, 0, csa_intr, csa, &csa->ih)) {
@@ -834,14 +832,14 @@ pcmcsa_attach(device_t dev)
 	csa_writemem(resp, BA1_CIE, (csa_readmem(resp, BA1_CIE) & ~0x0000003f) | 0x00000001);
 	csa_active(csa, -1);
 
-	if (pcm_register(dev, csa, 1, 1)) {
+	pcm_init(dev, csa);
+	pcm_addchan(dev, PCMDIR_REC, &csachan_class, csa);
+	pcm_addchan(dev, PCMDIR_PLAY, &csachan_class, csa);
+	if (pcm_register(dev, status)) {
 		ac97_destroy(codec);
 		csa_releaseres(csa, dev);
 		return (ENXIO);
 	}
-	pcm_addchan(dev, PCMDIR_REC, &csachan_class, csa);
-	pcm_addchan(dev, PCMDIR_PLAY, &csachan_class, csa);
-	pcm_setstatus(dev, status);
 
 	return (0);
 }
@@ -1026,7 +1024,7 @@ static device_method_t pcmcsa_methods[] = {
 	DEVMETHOD(device_suspend, pcmcsa_suspend),
 	DEVMETHOD(device_resume, pcmcsa_resume),
 
-	{ 0, 0 },
+	DEVMETHOD_END
 };
 
 static driver_t pcmcsa_driver = {

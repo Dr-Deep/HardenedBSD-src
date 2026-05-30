@@ -25,9 +25,6 @@
  *
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/exec.h>
@@ -52,6 +49,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_param.h>
 
 #include <machine/armreg.h>
+#include <machine/elf.h>
 #include <machine/kdb.h>
 #include <machine/md_var.h>
 #include <machine/pcb.h>
@@ -59,6 +57,10 @@ __FBSDID("$FreeBSD$");
 #ifdef VFP
 #include <machine/vfp.h>
 #endif
+
+#define	CTX_SIZE_SVE(buf_size)					\
+    roundup2(sizeof(struct sve_context) + (buf_size),		\
+      _Alignof(struct sve_context))
 
 _Static_assert(sizeof(mcontext_t) == 880, "mcontext_t size incorrect");
 _Static_assert(sizeof(ucontext_t) == 960, "ucontext_t size incorrect");
@@ -123,6 +125,13 @@ set_regs(struct thread *td, struct reg *regs)
 #endif
 	{
 		frame->tf_elr = regs->elr;
+		/*
+		 * frame->tf_spsr and regs->spsr on FreeBSD 13 was 32-bit
+		 * where from 14 they are 64 bit. As PSR_SETTABLE_64 clears
+		 * the upper 32 bits no compatibility handling is needed,
+		 * however if this is ever not the case we will need to add
+		 * these, similar to how it is done in set_mcontext.
+		 */
 		frame->tf_spsr &= ~PSR_SETTABLE_64;
 		frame->tf_spsr |= regs->spsr & PSR_SETTABLE_64;
 		/* Enable single stepping if userspace asked fot it */
@@ -151,16 +160,17 @@ fill_fpregs(struct thread *td, struct fpreg *regs)
 		 */
 		if (td == curthread)
 			vfp_save_state(td, pcb);
+	}
 
-		KASSERT(pcb->pcb_fpusaved == &pcb->pcb_fpustate,
-		    ("Called fill_fpregs while the kernel is using the VFP"));
-		memcpy(regs->fp_q, pcb->pcb_fpustate.vfp_regs,
-		    sizeof(regs->fp_q));
-		regs->fp_cr = pcb->pcb_fpustate.vfp_fpcr;
-		regs->fp_sr = pcb->pcb_fpustate.vfp_fpsr;
-	} else
+	KASSERT(pcb->pcb_fpusaved == &pcb->pcb_fpustate,
+	    ("Called fill_fpregs while the kernel is using the VFP"));
+	memcpy(regs->fp_q, pcb->pcb_fpustate.vfp_regs,
+	    sizeof(regs->fp_q));
+	regs->fp_cr = pcb->pcb_fpustate.vfp_fpcr;
+	regs->fp_sr = pcb->pcb_fpustate.vfp_fpsr;
+#else
+	memset(regs, 0, sizeof(*regs));
 #endif
-		memset(regs, 0, sizeof(*regs));
 	return (0);
 }
 
@@ -184,17 +194,27 @@ int
 fill_dbregs(struct thread *td, struct dbreg *regs)
 {
 	struct debug_monitor_state *monitor;
+	uint64_t dfr0;
 	int i;
 	uint8_t debug_ver, nbkpts, nwtpts;
 
 	memset(regs, 0, sizeof(*regs));
 
-	extract_user_id_field(ID_AA64DFR0_EL1, ID_AA64DFR0_DebugVer_SHIFT,
-	    &debug_ver);
-	extract_user_id_field(ID_AA64DFR0_EL1, ID_AA64DFR0_BRPs_SHIFT,
-	    &nbkpts);
-	extract_user_id_field(ID_AA64DFR0_EL1, ID_AA64DFR0_WRPs_SHIFT,
-	    &nwtpts);
+	/*
+	 * Read these the Debug Feature Register 0 to get info we need.
+	 * It will be identical on FreeBSD and Linux, so there is no need
+	 * to check which the target is.
+	 */
+	if (!get_user_reg(ID_AA64DFR0_EL1, &dfr0, true)) {
+		debug_ver = ID_AA64DFR0_DebugVer_8;
+		nbkpts = 0;
+		nwtpts = 0;
+	} else {
+		debug_ver = ID_AA64DFR0_DebugVer_VAL(dfr0) >>
+		    ID_AA64DFR0_DebugVer_SHIFT;
+		nbkpts = ID_AA64DFR0_BRPs_VAL(dfr0) >> ID_AA64DFR0_BRPs_SHIFT;
+		nwtpts = ID_AA64DFR0_WRPs_VAL(dfr0) >> ID_AA64DFR0_WRPs_SHIFT;
+	}
 
 	/*
 	 * The BRPs field contains the number of breakpoints - 1. Armv8-A
@@ -394,6 +414,7 @@ exec_setregs(struct thread *td, struct image_params *imgp, uintptr_t stack)
 {
 	struct trapframe *tf = td->td_frame;
 	struct pcb *pcb = td->td_pcb;
+	uint64_t new_tcr, tcr;
 
 	memset(tf, 0, sizeof(struct trapframe));
 
@@ -416,8 +437,39 @@ exec_setregs(struct thread *td, struct image_params *imgp, uintptr_t stack)
 	 */
 	bzero(&pcb->pcb_dbg_regs, sizeof(pcb->pcb_dbg_regs));
 
+	/* If the process is new enough enable TBI */
+	if (td->td_proc->p_osrel >= TBI_VERSION)
+		new_tcr = TCR_TBI0;
+	else
+		new_tcr = 0;
+	td->td_proc->p_md.md_tcr = new_tcr;
+	td->td_md.md_sctlr = 0;
+
+	/* TODO: should create a pmap function for this... */
+	tcr = READ_SPECIALREG(tcr_el1);
+	if ((tcr & MD_TCR_FIELDS) != new_tcr) {
+		uint64_t asid;
+
+		tcr &= ~MD_TCR_FIELDS;
+		tcr |= new_tcr;
+		WRITE_SPECIALREG(tcr_el1, tcr);
+		isb();
+
+		/*
+		 * TCR_EL1.TBI0 is permitted to be cached in the TLB, so
+		 * we need to perform a TLB invalidation.
+		 */
+		asid = READ_SPECIALREG(ttbr0_el1) & TTBR_ASID_MASK;
+		__asm __volatile(
+		    "tlbi aside1is, %0		\n"
+		    "dsb ish			\n"
+		    "isb			\n"
+		    : : "r" (asid));
+	}
+
 	/* Generate new pointer authentication keys */
 	ptrauth_exec(td);
+	mte_exec(td);
 }
 
 /* Sanity check these are the same size, they will be memcpy'd to and from */
@@ -453,10 +505,27 @@ get_mcontext(struct thread *td, mcontext_t *mcp, int clear_ret)
 int
 set_mcontext(struct thread *td, mcontext_t *mcp)
 {
+#define	PSR_13_MASK	0xfffffffful
+	struct arm64_reg_context ctx;
 	struct trapframe *tf = td->td_frame;
-	uint32_t spsr;
+	struct pcb *pcb;
+	uint64_t spsr;
+	vm_offset_t addr;
+	int error, seen_types;
+	bool done;
 
 	spsr = mcp->mc_gpregs.gp_spsr;
+#ifdef COMPAT_FREEBSD13
+	if (td->td_proc->p_osrel < P_OSREL_ARM64_SPSR) {
+		/*
+		 * Before FreeBSD 14 gp_spsr was 32 bit. The size of mc_gpregs
+		 * was identical because of padding so mask of the upper bits
+		 * that may be invalid on earlier releases.
+		 */
+		spsr &= PSR_13_MASK;
+	}
+#endif
+
 	if ((spsr & PSR_M_MASK) != PSR_M_EL0t ||
 	    (spsr & PSR_AARCH32) != 0 ||
 	    (spsr & PSR_DAIF) != (td->td_frame->tf_spsr & PSR_DAIF))
@@ -467,7 +536,14 @@ set_mcontext(struct thread *td, mcontext_t *mcp)
 	tf->tf_sp = mcp->mc_gpregs.gp_sp;
 	tf->tf_lr = mcp->mc_gpregs.gp_lr;
 	tf->tf_elr = mcp->mc_gpregs.gp_elr;
-	tf->tf_spsr = mcp->mc_gpregs.gp_spsr;
+#ifdef COMPAT_FREEBSD13
+	if (td->td_proc->p_osrel < P_OSREL_ARM64_SPSR) {
+		/* Keep the upper 32 bits of spsr on older releases */
+		tf->tf_spsr &= ~PSR_13_MASK;
+		tf->tf_spsr |= spsr;
+	} else
+#endif
+		tf->tf_spsr = spsr;
 	if ((tf->tf_spsr & PSR_SS) != 0) {
 		td->td_pcb->pcb_flags |= PCB_SINGLE_STEP;
 
@@ -475,9 +551,74 @@ set_mcontext(struct thread *td, mcontext_t *mcp)
 		    READ_SPECIALREG(mdscr_el1) | MDSCR_SS);
 		isb();
 	}
+
 	set_fpcontext(td, mcp);
 
+	/* Read any register contexts we find */
+	if (mcp->mc_ptr != 0) {
+		addr = mcp->mc_ptr;
+		pcb = td->td_pcb;
+
+#define	CTX_TYPE_FLAG_SVE	(1 << 0)
+
+		seen_types = 0;
+		done = false;
+		do {
+			if (!__is_aligned(addr,
+			    _Alignof(struct arm64_reg_context)))
+				return (EINVAL);
+
+			error = copyin((const void *)addr, &ctx, sizeof(ctx));
+			if (error != 0)
+				return (error);
+
+			switch (ctx.ctx_id) {
+#ifdef VFP
+			case ARM64_CTX_SVE: {
+				struct sve_context sve_ctx;
+				size_t buf_size;
+
+				if ((seen_types & CTX_TYPE_FLAG_SVE) != 0)
+					return (EINVAL);
+				seen_types |= CTX_TYPE_FLAG_SVE;
+
+				if (pcb->pcb_svesaved == NULL)
+					return (EINVAL);
+
+				/* XXX: Check pcb_svesaved is valid */
+
+				buf_size = sve_buf_size(td);
+				/* Check the size is valid */
+				if (ctx.ctx_size != CTX_SIZE_SVE(buf_size))
+					return (EINVAL);
+
+				memset(pcb->pcb_svesaved, 0,
+				    sve_max_buf_size());
+
+				/* Copy the SVE registers from userspace */
+				if (copyin((void *)(addr + sizeof(sve_ctx)),
+				    pcb->pcb_svesaved, buf_size) != 0)
+					return (EINVAL);
+
+				pcb->pcb_fpflags |= PCB_FP_SVEVALID;
+				break;
+			}
+#endif
+			case ARM64_CTX_END:
+				done = true;
+				break;
+			default:
+				return (EINVAL);
+			}
+
+			addr += ctx.ctx_size;
+		} while (!done);
+
+#undef CTX_TYPE_FLAG_SVE
+	}
+
 	return (0);
+#undef PSR_13_MASK
 }
 
 static void
@@ -486,30 +627,27 @@ get_fpcontext(struct thread *td, mcontext_t *mcp)
 #ifdef VFP
 	struct pcb *curpcb;
 
-	critical_enter();
+	MPASS(td == curthread);
 
 	curpcb = curthread->td_pcb;
-
 	if ((curpcb->pcb_fpflags & PCB_FP_STARTED) != 0) {
 		/*
 		 * If we have just been running VFP instructions we will
 		 * need to save the state to memcpy it below.
 		 */
 		vfp_save_state(td, curpcb);
-
-		KASSERT(curpcb->pcb_fpusaved == &curpcb->pcb_fpustate,
-		    ("Called get_fpcontext while the kernel is using the VFP"));
-		KASSERT((curpcb->pcb_fpflags & ~PCB_FP_USERMASK) == 0,
-		    ("Non-userspace FPU flags set in get_fpcontext"));
-		memcpy(mcp->mc_fpregs.fp_q, curpcb->pcb_fpustate.vfp_regs,
-		    sizeof(mcp->mc_fpregs.fp_q));
-		mcp->mc_fpregs.fp_cr = curpcb->pcb_fpustate.vfp_fpcr;
-		mcp->mc_fpregs.fp_sr = curpcb->pcb_fpustate.vfp_fpsr;
-		mcp->mc_fpregs.fp_flags = curpcb->pcb_fpflags;
-		mcp->mc_flags |= _MC_FP_VALID;
 	}
 
-	critical_exit();
+	KASSERT(curpcb->pcb_fpusaved == &curpcb->pcb_fpustate,
+	    ("Called get_fpcontext while the kernel is using the VFP"));
+	KASSERT((curpcb->pcb_fpflags & ~PCB_FP_USERMASK) == 0,
+	    ("Non-userspace FPU flags set in get_fpcontext"));
+	memcpy(mcp->mc_fpregs.fp_q, curpcb->pcb_fpustate.vfp_regs,
+	    sizeof(mcp->mc_fpregs.fp_q));
+	mcp->mc_fpregs.fp_cr = curpcb->pcb_fpustate.vfp_fpcr;
+	mcp->mc_fpregs.fp_sr = curpcb->pcb_fpustate.vfp_fpsr;
+	mcp->mc_fpregs.fp_flags = curpcb->pcb_fpflags;
+	mcp->mc_flags |= _MC_FP_VALID;
 #endif
 }
 
@@ -519,8 +657,7 @@ set_fpcontext(struct thread *td, mcontext_t *mcp)
 #ifdef VFP
 	struct pcb *curpcb;
 
-	critical_enter();
-
+	MPASS(td == curthread);
 	if ((mcp->mc_flags & _MC_FP_VALID) != 0) {
 		curpcb = curthread->td_pcb;
 
@@ -528,7 +665,9 @@ set_fpcontext(struct thread *td, mcontext_t *mcp)
 		 * Discard any vfp state for the current thread, we
 		 * are about to override it.
 		 */
+		critical_enter();
 		vfp_discard(td);
+		critical_exit();
 
 		KASSERT(curpcb->pcb_fpusaved == &curpcb->pcb_fpustate,
 		    ("Called set_fpcontext while the kernel is using the VFP"));
@@ -536,10 +675,8 @@ set_fpcontext(struct thread *td, mcontext_t *mcp)
 		    sizeof(mcp->mc_fpregs.fp_q));
 		curpcb->pcb_fpustate.vfp_fpcr = mcp->mc_fpregs.fp_cr;
 		curpcb->pcb_fpustate.vfp_fpsr = mcp->mc_fpregs.fp_sr;
-		curpcb->pcb_fpflags = mcp->mc_fpregs.fp_flags & PCB_FP_USERMASK;
+		curpcb->pcb_fpflags = mcp->mc_fpregs.fp_flags & PCB_FP_STARTED;
 	}
-
-	critical_exit();
 #endif
 }
 
@@ -552,15 +689,88 @@ sys_sigreturn(struct thread *td, struct sigreturn_args *uap)
 	if (copyin(uap->sigcntxp, &uc, sizeof(uc)))
 		return (EFAULT);
 
+	/* Stop an interrupt from causing the sve state to be dropped */
+	td->td_sa.code = -1;
 	error = set_mcontext(td, &uc.uc_mcontext);
 	if (error != 0)
 		return (error);
+
+	/*
+	 * Sync the VFP and SVE registers. To be backwards compatible we
+	 * use the VFP registers to restore the lower bits of the SVE
+	 * register it aliases.
+	 */
+	vfp_to_sve_sync(td);
 
 	/* Restore signal mask. */
 	kern_sigprocmask(td, SIG_SETMASK, &uc.uc_sigmask, NULL, 0);
 
 	return (EJUSTRETURN);
 }
+
+static bool
+sendsig_ctx_end(struct thread *td, vm_offset_t *addrp)
+{
+	struct arm64_reg_context end_ctx;
+	vm_offset_t ctx_addr;
+
+	*addrp -= sizeof(end_ctx);
+	ctx_addr = *addrp;
+
+	memset(&end_ctx, 0, sizeof(end_ctx));
+	end_ctx.ctx_id = ARM64_CTX_END;
+	end_ctx.ctx_size = sizeof(end_ctx);
+
+	if (copyout(&end_ctx, (void *)ctx_addr, sizeof(end_ctx)) != 0)
+		return (false);
+
+	return (true);
+}
+
+static bool
+sendsig_ctx_sve(struct thread *td, vm_offset_t *addrp)
+{
+	struct sve_context ctx;
+	struct pcb *pcb;
+	size_t buf_size, ctx_size;
+	vm_offset_t ctx_addr;
+
+	pcb = td->td_pcb;
+	/* Do nothing if sve hasn't started */
+	if (pcb->pcb_svesaved == NULL)
+		return (true);
+
+	MPASS(pcb->pcb_svesaved != NULL);
+
+	buf_size = sve_buf_size(td);
+	ctx_size = CTX_SIZE_SVE(buf_size);
+
+	/* Address for the full context */
+	*addrp -= ctx_size;
+	ctx_addr = *addrp;
+
+	memset(&ctx, 0, sizeof(ctx));
+	ctx.sve_ctx.ctx_id = ARM64_CTX_SVE;
+	ctx.sve_ctx.ctx_size = ctx_size;
+	ctx.sve_vector_len = pcb->pcb_sve_len;
+	ctx.sve_flags = 0;
+
+	/* Copy out the header and data */
+	if (copyout(&ctx, (void *)ctx_addr, sizeof(ctx)) != 0)
+		return (false);
+	if (copyout(pcb->pcb_svesaved, (void *)(ctx_addr + sizeof(ctx)),
+	    buf_size) != 0)
+		return (false);
+
+	return (true);
+}
+
+typedef bool(*ctx_func)(struct thread *, vm_offset_t *);
+static const ctx_func ctx_funcs[] = {
+	sendsig_ctx_end,	/* Must be first to end the linked list */
+	sendsig_ctx_sve,
+	NULL,
+};
 
 void
 sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
@@ -570,6 +780,7 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	struct trapframe *tf;
 	struct sigframe *fp, frame;
 	struct sigacts *psp;
+	vm_offset_t addr;
 	int onstack, sig;
 
 	td = curthread;
@@ -589,18 +800,14 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	/* Allocate and validate space for the signal handler context. */
 	if ((td->td_pflags & TDP_ALTSTACK) != 0 && !onstack &&
 	    SIGISMEMBER(psp->ps_sigonstack, sig)) {
-		fp = (struct sigframe *)((uintptr_t)td->td_sigstk.ss_sp +
+		addr = ((uintptr_t)td->td_sigstk.ss_sp +
 		    td->td_sigstk.ss_size);
 #if defined(COMPAT_43)
 		td->td_sigstk.ss_flags |= SS_ONSTACK;
 #endif
 	} else {
-		fp = (struct sigframe *)td->td_frame->tf_sp;
+		addr = td->td_frame->tf_sp;
 	}
-
-	/* Make room, keeping the stack aligned */
-	fp--;
-	fp = (struct sigframe *)STACKALIGN(fp);
 
 	/* Fill in the frame to copy out */
 	bzero(&frame, sizeof(frame));
@@ -612,6 +819,26 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	    (onstack ? SS_ONSTACK : 0) : SS_DISABLE;
 	mtx_unlock(&psp->ps_mtx);
 	PROC_UNLOCK(td->td_proc);
+
+	for (int i = 0; ctx_funcs[i] != NULL; i++) {
+		if (!ctx_funcs[i](td, &addr)) {
+			/* Process has trashed its stack. Kill it. */
+			CTR4(KTR_SIG,
+			    "sendsig: frame sigexit td=%p fp=%#lx func[%d]=%p",
+			    td, addr, i, ctx_funcs[i]);
+			PROC_LOCK(p);
+			sigexit(td, SIGILL);
+			/* NOTREACHED */
+		}
+	}
+
+	/* Point at the first context */
+	frame.sf_uc.uc_mcontext.mc_ptr = addr;
+
+	/* Make room, keeping the stack aligned */
+	fp = (struct sigframe *)addr;
+	fp--;
+	fp = STACKALIGN(fp);
 
 	/* Copy the sigframe out to the user's stack. */
 	if (copyout(&frame, fp, sizeof(*fp)) != 0) {

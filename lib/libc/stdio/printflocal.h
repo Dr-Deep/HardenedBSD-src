@@ -30,8 +30,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -51,6 +49,7 @@
 #define	PTRDIFFT	0x800		/* ptrdiff_t */
 #define	INTMAXT		0x1000		/* intmax_t */
 #define	CHARINT		0x2000		/* print char using int format */
+#define	FASTINT		0x4000		/* int_fastN_t */
 
 /*
  * Macros for converting digits to letters and vice versa
@@ -83,10 +82,8 @@ union arg {
 	ptrdiff_t *pptrdiffarg;
 	ssize_t	*pssizearg;
 	intmax_t *pintmaxarg;
-#ifndef NO_FLOATING_POINT
 	double	doublearg;
 	long double longdoublearg;
-#endif
 	wint_t	wintarg;
 	wchar_t	*pwchararg;
 };

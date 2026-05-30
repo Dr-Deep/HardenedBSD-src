@@ -26,9 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <stand.h>
 #include <string.h>
 #include <sys/param.h>
@@ -40,17 +37,24 @@ __FBSDID("$FreeBSD$");
 #include <machine/metadata.h>
 #include <machine/psl.h>
 
+#ifdef EFI
 #include <efi.h>
 #include <efilib.h>
+#else
+#include "kboot.h"
+#endif
 
 #include "bootstrap.h"
-#include "loader_efi.h"
+#include "modinfo.h"
 
 #if defined(__amd64__)
 #include <machine/specialreg.h>
 #endif
 
+#ifdef EFI
+#include "loader_efi.h"
 #include "gfx_fb.h"
+#endif
 
 #if defined(LOADER_FDT_SUPPORT)
 #include <fdt_platform.h>
@@ -60,17 +64,16 @@ __FBSDID("$FreeBSD$");
 #include "geliboot.h"
 #endif
 
-int bi_load(char *args, vm_offset_t *modulep, vm_offset_t *kernendp,
-    bool exit_bs);
-
 static int
 bi_getboothowto(char *kargs)
 {
-	const char *sw, *tmp;
-	char *opts;
-	char *console;
-	int howto, speed, port;
+#if defined(EFI) && (defined(__i386__) || defined(__amd64__))
+	const char *tmp;
+	int speed, port;
 	char buf[50];
+#endif
+	char *console;
+	int howto;
 
 	howto = boot_parse_cmdline(kargs);
 	howto |= boot_env_to_howto();
@@ -81,6 +84,7 @@ bi_getboothowto(char *kargs)
 			howto |= RB_SERIAL;
 		if (strcmp(console, "nullconsole") == 0)
 			howto |= RB_MUTE;
+#ifdef EFI
 #if defined(__i386__) || defined(__amd64__)
 		if (strcmp(console, "efi") == 0 &&
 		    getenv("efi_8250_uid") != NULL &&
@@ -108,10 +112,17 @@ bi_getboothowto(char *kargs)
 			if (tmp != NULL)
 				speed = strtol(tmp, NULL, 0);
 			tmp = getenv("efi_com_port");
-			if (tmp == NULL)
-				tmp = getenv("comconsole_port");
 			if (tmp != NULL)
 				port = strtol(tmp, NULL, 0);
+			if (port <= 0) {
+				tmp = getenv("comconsole_port");
+				if (tmp != NULL)
+					port = strtol(tmp, NULL, 0);
+				else {
+					if (port == 0)
+						port = 0x3f8;
+				}
+			}
 			if (speed != -1 && port != -1) {
 				snprintf(buf, sizeof(buf), "io:%d,br:%d", port,
 				    speed);
@@ -120,139 +131,13 @@ bi_getboothowto(char *kargs)
 			}
 		}
 #endif
+#endif
 	}
 
 	return (howto);
 }
 
-/*
- * Copy the environment into the load area starting at (addr).
- * Each variable is formatted as <name>=<value>, with a single nul
- * separating each variable, and a double nul terminating the environment.
- */
-static vm_offset_t
-bi_copyenv(vm_offset_t start)
-{
-	struct env_var *ep;
-	vm_offset_t addr, last;
-	size_t len;
-
-	addr = last = start;
-
-	/* Traverse the environment. */
-	for (ep = environ; ep != NULL; ep = ep->ev_next) {
-		len = strlen(ep->ev_name);
-		if ((size_t)archsw.arch_copyin(ep->ev_name, addr, len) != len)
-			break;
-		addr += len;
-		if (archsw.arch_copyin("=", addr, 1) != 1)
-			break;
-		addr++;
-		if (ep->ev_value != NULL) {
-			len = strlen(ep->ev_value);
-			if ((size_t)archsw.arch_copyin(ep->ev_value, addr, len) != len)
-				break;
-			addr += len;
-		}
-		if (archsw.arch_copyin("", addr, 1) != 1)
-			break;
-		last = ++addr;
-	}
-
-	if (archsw.arch_copyin("", last++, 1) != 1)
-		last = start;
-	return(last);
-}
-
-/*
- * Copy module-related data into the load area, where it can be
- * used as a directory for loaded modules.
- *
- * Module data is presented in a self-describing format.  Each datum
- * is preceded by a 32-bit identifier and a 32-bit size field.
- *
- * Currently, the following data are saved:
- *
- * MOD_NAME	(variable)		module name (string)
- * MOD_TYPE	(variable)		module type (string)
- * MOD_ARGS	(variable)		module parameters (string)
- * MOD_ADDR	sizeof(vm_offset_t)	module load address
- * MOD_SIZE	sizeof(size_t)		module size
- * MOD_METADATA	(variable)		type-specific metadata
- */
-#define	COPY32(v, a, c) {					\
-	uint32_t x = (v);					\
-	if (c)							\
-		archsw.arch_copyin(&x, a, sizeof(x));		\
-	a += sizeof(x);						\
-}
-
-#define	MOD_STR(t, a, s, c) {					\
-	COPY32(t, a, c);					\
-	COPY32(strlen(s) + 1, a, c);				\
-	if (c)							\
-		archsw.arch_copyin(s, a, strlen(s) + 1);	\
-	a += roundup(strlen(s) + 1, sizeof(u_long));		\
-}
-
-#define	MOD_NAME(a, s, c)	MOD_STR(MODINFO_NAME, a, s, c)
-#define	MOD_TYPE(a, s, c)	MOD_STR(MODINFO_TYPE, a, s, c)
-#define	MOD_ARGS(a, s, c)	MOD_STR(MODINFO_ARGS, a, s, c)
-
-#define	MOD_VAR(t, a, s, c) {					\
-	COPY32(t, a, c);					\
-	COPY32(sizeof(s), a, c);				\
-	if (c)							\
-		archsw.arch_copyin(&s, a, sizeof(s));		\
-	a += roundup(sizeof(s), sizeof(u_long));		\
-}
-
-#define	MOD_ADDR(a, s, c)	MOD_VAR(MODINFO_ADDR, a, s, c)
-#define	MOD_SIZE(a, s, c)	MOD_VAR(MODINFO_SIZE, a, s, c)
-
-#define	MOD_METADATA(a, mm, c) {				\
-	COPY32(MODINFO_METADATA | mm->md_type, a, c);		\
-	COPY32(mm->md_size, a, c);				\
-	if (c)							\
-		archsw.arch_copyin(mm->md_data, a, mm->md_size);	\
-	a += roundup(mm->md_size, sizeof(u_long));		\
-}
-
-#define	MOD_END(a, c) {						\
-	COPY32(MODINFO_END, a, c);				\
-	COPY32(0, a, c);					\
-}
-
-static vm_offset_t
-bi_copymodules(vm_offset_t addr)
-{
-	struct preloaded_file *fp;
-	struct file_metadata *md;
-	int c;
-	uint64_t v;
-
-	c = addr != 0;
-	/* Start with the first module on the list, should be the kernel. */
-	for (fp = file_findfile(NULL, NULL); fp != NULL; fp = fp->f_next) {
-		MOD_NAME(addr, fp->f_name, c); /* This must come first. */
-		MOD_TYPE(addr, fp->f_type, c);
-		if (fp->f_args)
-			MOD_ARGS(addr, fp->f_args, c);
-		v = fp->f_addr;
-#if defined(__arm__)
-		v -= __elfN(relocation_offset);
-#endif
-		MOD_ADDR(addr, v, c);
-		v = fp->f_size;
-		MOD_SIZE(addr, v, c);
-		for (md = fp->f_metadata; md != NULL; md = md->md_next)
-			if (!(md->md_type & MODINFOMD_NOCOPY))
-				MOD_METADATA(addr, md, c);
-	}
-	MOD_END(addr, c);
-	return(addr);
-}
-
+#ifdef EFI
 static EFI_STATUS
 efi_do_vmap(EFI_MEMORY_DESCRIPTOR *mm, UINTN sz, UINTN mmsz, UINT32 mmver)
 {
@@ -296,7 +181,7 @@ bi_load_efi_data(struct preloaded_file *kfp, bool exit_bs)
 	struct efi_map_header *efihdr;
 	bool do_vmap;
 
-#if defined(__amd64__) || defined(__aarch64__)
+#ifdef MODINFOMD_EFI_FB
 	struct efi_fb efifb;
 
 	efifb.fb_addr = gfx_state.tg_fb.fb_addr;
@@ -309,16 +194,19 @@ bi_load_efi_data(struct preloaded_file *kfp, bool exit_bs)
 	efifb.fb_mask_blue = gfx_state.tg_fb.fb_mask_blue;
 	efifb.fb_mask_reserved = gfx_state.tg_fb.fb_mask_reserved;
 
-	printf("EFI framebuffer information:\n");
-	printf("addr, size     0x%jx, 0x%jx\n", efifb.fb_addr, efifb.fb_size);
-	printf("dimensions     %d x %d\n", efifb.fb_width, efifb.fb_height);
-	printf("stride         %d\n", efifb.fb_stride);
-	printf("masks          0x%08x, 0x%08x, 0x%08x, 0x%08x\n",
-	    efifb.fb_mask_red, efifb.fb_mask_green, efifb.fb_mask_blue,
-	    efifb.fb_mask_reserved);
+	if (efifb.fb_addr != 0) {
+		printf("EFI framebuffer information:\n");
+		printf("addr, size     0x%jx, 0x%jx\n",
+		    efifb.fb_addr, efifb.fb_size);
+		printf("dimensions     %d x %d\n",
+		    efifb.fb_width, efifb.fb_height);
+		printf("stride         %d\n", efifb.fb_stride);
+		printf("masks          0x%08x, 0x%08x, 0x%08x, 0x%08x\n",
+		    efifb.fb_mask_red, efifb.fb_mask_green, efifb.fb_mask_blue,
+		    efifb.fb_mask_reserved);
 
-	if (efifb.fb_addr != 0)
 		file_addmetadata(kfp, MODINFOMD_EFI_FB, sizeof(efifb), &efifb);
+	}
 #endif
 
 	do_vmap = true;
@@ -363,7 +251,7 @@ bi_load_efi_data(struct preloaded_file *kfp, bool exit_bs)
 
 			if (status != EFI_BUFFER_TOO_SMALL) {
 				printf("%s: GetMemoryMap error %lu\n", __func__,
-	                           EFI_ERROR_CODE(status));
+	                           DECODE_ERROR(status));
 				return (EINVAL);
 			}
 
@@ -378,7 +266,7 @@ bi_load_efi_data(struct preloaded_file *kfp, bool exit_bs)
 					pages, &addr);
 			if (EFI_ERROR(status)) {
 				printf("%s: AllocatePages error %lu\n", __func__,
-				    EFI_ERROR_CODE(status));
+				    DECODE_ERROR(status));
 				return (ENOMEM);
 			}
 
@@ -401,7 +289,7 @@ bi_load_efi_data(struct preloaded_file *kfp, bool exit_bs)
 
 	if (retry == 0) {
 		BS->FreePages(addr, pages);
-		printf("ExitBootServices error %lu\n", EFI_ERROR_CODE(status));
+		printf("ExitBootServices error %lu\n", DECODE_ERROR(status));
 		return (EINVAL);
 	}
 
@@ -421,6 +309,7 @@ bi_load_efi_data(struct preloaded_file *kfp, bool exit_bs)
 
 	return (0);
 }
+#endif
 
 /*
  * Load the information expected by an amd64 kernel.
@@ -438,11 +327,24 @@ bi_load(char *args, vm_offset_t *modulep, vm_offset_t *kernendp, bool exit_bs)
 	struct devdesc *rootdev;
 	struct file_metadata *md;
 	vm_offset_t addr;
-	uint64_t kernend, module;
+	uint64_t kernend;
+#ifdef MODINFOMD_MODULEP
+	uint64_t module;
+#endif
 	uint64_t envp;
 	vm_offset_t size;
 	char *rootdevname;
 	int howto;
+#ifdef __i386__
+	/*
+	 * The 32-bit UEFI loader is used to
+	 * boot the 64-bit kernel on machines
+	 * that support it.
+	 */
+	bool is64 = true;
+#else
+	bool is64 = sizeof(long) == 8;
+#endif
 #if defined(LOADER_FDT_SUPPORT)
 	vm_offset_t dtbp;
 	int dtb_size;
@@ -462,7 +364,6 @@ bi_load(char *args, vm_offset_t *modulep, vm_offset_t *kernendp, bool exit_bs)
 #endif
 	};
 #endif
-
 	howto = bi_getboothowto(args);
 
 	/*
@@ -482,66 +383,90 @@ bi_load(char *args, vm_offset_t *modulep, vm_offset_t *kernendp, bool exit_bs)
 
 	addr = 0;
 	for (xp = file_findfile(NULL, NULL); xp != NULL; xp = xp->f_next) {
-		if (addr < (xp->f_addr + xp->f_size))
+		if (addr < xp->f_addr + xp->f_size)
 			addr = xp->f_addr + xp->f_size;
 	}
 
 	/* Pad to a page boundary. */
-	addr = roundup(addr, PAGE_SIZE);
+	addr = md_align(addr);
 
+#ifdef EFI
 	addr = build_font_module(addr);
 
 	/* Pad to a page boundary. */
-	addr = roundup(addr, PAGE_SIZE);
+	addr = md_align(addr);
+
+	addr = build_splash_module(addr, SPLASH_STARTUP);
+
+	/* Pad to a page boundary. */
+	addr = md_align(addr);
+
+	addr = build_splash_module(addr, SPLASH_SHUTDOWN);
+
+	/* Pad to a page boundary. */
+	addr = md_align(addr);
+#endif
 
 	/* Copy our environment. */
 	envp = addr;
-	addr = bi_copyenv(addr);
+	addr = md_copyenv(addr);
 
 	/* Pad to a page boundary. */
-	addr = roundup(addr, PAGE_SIZE);
+	addr = md_align(addr);
 
 #if defined(LOADER_FDT_SUPPORT)
 	/* Handle device tree blob */
 	dtbp = addr;
 	dtb_size = fdt_copy(addr);
-		
+
 	/* Pad to a page boundary */
 	if (dtb_size)
-		addr += roundup(dtb_size, PAGE_SIZE);
+		addr += md_align(dtb_size);
 #endif
 
-	kfp = file_findfile(NULL, "elf kernel");
-	if (kfp == NULL)
-		kfp = file_findfile(NULL, "elf64 kernel");
+	kfp = file_findfile(NULL, md_kerntype);
 	if (kfp == NULL)
 		panic("can't find kernel file");
 	kernend = 0;	/* fill it in later */
 
 	/* Figure out the size and location of the metadata. */
-	module = *modulep = addr;
+	*modulep = addr;
 
 	file_addmetadata(kfp, MODINFOMD_HOWTO, sizeof(howto), &howto);
 	file_addmetadata(kfp, MODINFOMD_ENVP, sizeof(envp), &envp);
 #if defined(LOADER_FDT_SUPPORT)
 	if (dtb_size)
 		file_addmetadata(kfp, MODINFOMD_DTBP, sizeof(dtbp), &dtbp);
-	else
+	else if (getenv("acpi.revision") == NULL) {
 		printf("WARNING! Trying to fire up the kernel, but no "
 		    "device tree blob found!\n");
+	}
 #endif
 	file_addmetadata(kfp, MODINFOMD_KERNEND, sizeof(kernend), &kernend);
 #ifdef MODINFOMD_MODULEP
+	module = *modulep;
 	file_addmetadata(kfp, MODINFOMD_MODULEP, sizeof(module), &module);
 #endif
+#ifdef EFI
+#ifndef __i386__
 	file_addmetadata(kfp, MODINFOMD_FW_HANDLE, sizeof(ST), &ST);
+#endif
+#if defined(__amd64__) || defined(__i386__)
+	file_addmetadata(kfp, MODINFOMD_EFI_ARCH, sizeof(MACHINE_ARCH),
+	    MACHINE_ARCH);
+#endif
+#endif
 #ifdef LOADER_GELI_SUPPORT
 	geli_export_key_metadata(kfp);
 #endif
+#ifdef EFI
 	bi_load_efi_data(kfp, exit_bs);
+#else
+	bi_loadsmap(kfp);
+#endif
 
-	size = bi_copymodules(0);
-	kernend = roundup(addr + size, PAGE_SIZE);
+	size = md_copymodules(0, is64);	/* Find the size of the modules */
+	kernend = md_align(addr + size);
 	*kernendp = kernend;
 
 	/* patch MODINFOMD_KERNEND */
@@ -565,7 +490,7 @@ bi_load(char *args, vm_offset_t *modulep, vm_offset_t *kernendp, bool exit_bs)
 #endif
 
 	/* Copy module list and metadata. */
-	(void)bi_copymodules(addr);
+	(void)md_copymodules(addr, is64);
 
 	return (0);
 }

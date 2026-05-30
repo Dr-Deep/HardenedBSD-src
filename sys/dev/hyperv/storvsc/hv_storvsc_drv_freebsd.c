@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2009-2012,2016-2017 Microsoft Corp.
  * Copyright (c) 2012 NetApp Inc.
@@ -34,8 +34,6 @@
  * converted into VSCSI protocol messages which are delivered to the parent
  * partition StorVSP driver over the Hyper-V VMBUS.
  */
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/proc.h>
@@ -956,13 +954,18 @@ storvsc_init_requests(device_t dev)
 		bus_get_dma_tag(dev),		/* parent */
 		1,				/* alignment */
 		PAGE_SIZE,			/* boundary */
+#if defined(__i386__) && defined(PAE)
+		BUS_SPACE_MAXADDR_48BIT,	/* lowaddr */
+		BUS_SPACE_MAXADDR_48BIT,	/* highaddr */
+#else
 		BUS_SPACE_MAXADDR,		/* lowaddr */
 		BUS_SPACE_MAXADDR,		/* highaddr */
+#endif
 		NULL, NULL,			/* filter, filterarg */
 		STORVSC_DATA_SIZE_MAX,		/* maxsize */
 		STORVSC_DATA_SEGCNT_MAX,	/* nsegments */
 		STORVSC_DATA_SEGSZ_MAX,		/* maxsegsize */
-		0,				/* flags */
+		BUS_DMA_KEEP_PG_OFFSET,		/* flags */
 		NULL,				/* lockfunc */
 		NULL,				/* lockfuncarg */
 		&sc->storvsc_req_dtag);
@@ -2085,7 +2088,7 @@ create_storvsc_request(union ccb *ccb, struct hv_storvsc_request *reqp)
 		break;
 	}
 	default:
-		printf("Unknow flags: %d\n", ccb->ccb_h.flags);
+		printf("Unknown flags: %d\n", ccb->ccb_h.flags);
 		return(EINVAL);
 	}
 

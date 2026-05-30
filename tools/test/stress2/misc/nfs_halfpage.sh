@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #
-# SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+# SPDX-License-Identifier: BSD-2-Clause
 #
 # Copyright (c) 2017 Konstantin Belousov <kib@FreeBSD.org>
 #
@@ -35,6 +35,11 @@
 # https://reviews.freebsd.org/D11697
 # Committed as r321580 + r321581.
 
+[ -z "$nfs_export" ] && exit 0
+ping -c 2 `echo $nfs_export | sed 's/:.*//'` > /dev/null 2>&1 ||
+    exit 0
+
+mount | grep "$mntpoint" | grep -q nfs && umount $mntpoint
 dir=/tmp
 odir=`pwd`
 cd $dir
@@ -43,11 +48,6 @@ mycc -o nfs_halfpage -Wall -Wextra -O0 -g nfs_halfpage.c || exit 1
 rm -f nfs_halfpage.c
 cd $odir
 
-[ -z "$nfs_export" ] && exit 0
-ping -c 2 `echo $nfs_export | sed 's/:.*//'` > /dev/null 2>&1 ||
-    exit 0
-
-mount | grep "$mntpoint" | grep -q nfs && umount $mntpoint
 mount -t nfs -o tcp -o retrycnt=3 -o intr,soft -o rw $nfs_export $mntpoint
 
 file=$mntpoint/nfs_halfpage.file

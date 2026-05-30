@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1998 - 2008 Søren Schmidt <sos@FreeBSD.org>
  * All rights reserved.
@@ -25,9 +25,6 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -815,13 +812,13 @@ ata_pio_read(struct ata_request *request, int length)
 {
 	struct ata_channel *ch = device_get_softc(request->parent);
 	struct bio *bio;
-	uint8_t *addr;
-	vm_offset_t page;
+	uint8_t *addr, *page;
 	int todo, done, off, moff, resid, size, i;
 	uint8_t buf[2] __aligned(2);
 
 	todo = min(request->transfersize, length);
-	page = done = resid = 0;
+	page = NULL;
+	done = resid = 0;
 	while (done < todo) {
 		size = todo - done;
 
@@ -840,7 +837,7 @@ ata_pio_read(struct ata_request *request, int length)
 				    bio->bio_ma[moff / PAGE_SIZE]);
 				moff %= PAGE_SIZE;
 				size = min(size, PAGE_SIZE - moff);
-				addr = (void *)(page + moff);
+				addr = page + moff;
 			}
 		} else
 			panic("ata_pio_read: Unsupported CAM data type %x\n",
@@ -880,9 +877,9 @@ ata_pio_read(struct ata_request *request, int length)
 		} else
 			ATA_IDX_INSL_STRM(ch, ATA_DATA, (void*)addr, size / 4);
 
-		if (page) {
+		if (page != NULL) {
 			pmap_quick_remove_page(page);
-			page = 0;
+			page = NULL;
 		}
 		done += size;
 	}
@@ -901,13 +898,13 @@ ata_pio_write(struct ata_request *request, int length)
 {
 	struct ata_channel *ch = device_get_softc(request->parent);
 	struct bio *bio;
-	uint8_t *addr;
-	vm_offset_t page;
+	uint8_t *addr, *page;
 	int todo, done, off, moff, resid, size, i;
 	uint8_t buf[2] __aligned(2);
 
 	todo = min(request->transfersize, length);
-	page = done = resid = 0;
+	page = NULL;
+	done = resid = 0;
 	while (done < todo) {
 		size = todo - done;
 
@@ -926,7 +923,7 @@ ata_pio_write(struct ata_request *request, int length)
 				    bio->bio_ma[moff / PAGE_SIZE]);
 				moff %= PAGE_SIZE;
 				size = min(size, PAGE_SIZE - moff);
-				addr = (void *)(page + moff);
+				addr = page + moff;
 			}
 		} else
 			panic("ata_pio_write: Unsupported CAM data type %x\n",
@@ -965,9 +962,9 @@ ata_pio_write(struct ata_request *request, int length)
 			ATA_IDX_OUTSL_STRM(ch, ATA_DATA,
 			    (void*)addr, size / sizeof(int32_t));
 
-		if (page) {
+		if (page != NULL) {
 			pmap_quick_remove_page(page);
-			page = 0;
+			page = NULL;
 		}
 		done += size;
 	}

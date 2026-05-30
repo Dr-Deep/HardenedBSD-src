@@ -1,10 +1,14 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2005-2009 Ariff Abdullah <ariff@FreeBSD.org>
  * Portions Copyright (c) Ryan Beasley <ryan.beasley@gmail.com> - GSoC 2006
  * Copyright (c) 1999 Cameron Grant <cg@FreeBSD.org>
  * All rights reserved.
+ * Copyright (c) 2024-2025 The FreeBSD Foundation
+ *
+ * Portions of this software were developed by Christos Margiolis
+ * <christos@FreeBSD.org> under sponsorship from the FreeBSD Foundation.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,8 +30,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 struct pcmchan_caps {
@@ -86,7 +88,6 @@ struct pcm_channel {
 	kobj_t methods;
 
 	pid_t pid;
-	int refcount;
 	struct pcm_feeder *feeder;
 	u_int32_t align;
 
@@ -106,9 +107,10 @@ struct pcm_channel {
 	void *devinfo;
 	device_t dev;
 	int unit;
+	int type;
 	char name[CHN_NAMELEN];
 	char comm[MAXCOMLEN + 1];
-	struct mtx *lock;
+	struct mtx lock;
 	int trigger;
 	/**
 	 * For interrupt manipulations.
@@ -119,6 +121,8 @@ struct pcm_channel {
 	 * lock.
 	 */
 	unsigned int inprog;
+	/* Incrememnt/decrement around cv_timedwait_sig() in chn_sleep(). */
+	unsigned int sleeping;
 	/**
 	 * Special channel operations should examine @c inprog after acquiring
 	 * lock.  If zero, operations may continue.  Else, thread should
@@ -160,6 +164,9 @@ struct pcm_channel {
 			struct {
 				SLIST_ENTRY(pcm_channel) link;
 			} opened;
+			struct {
+				SLIST_ENTRY(pcm_channel) link;
+			} primary;
 		} pcm;
 	} channels;
 
@@ -168,8 +175,6 @@ struct pcm_channel {
 
 	int16_t volume[SND_VOL_C_MAX][SND_CHN_T_VOL_MAX];
   	int8_t muted[SND_VOL_C_MAX][SND_CHN_T_VOL_MAX];
-
-	void *data1, *data2;
 };
 
 #define CHN_HEAD(x, y)			&(x)->y.head
@@ -177,6 +182,7 @@ struct pcm_channel {
 #define CHN_LINK(y)			y.link
 #define CHN_EMPTY(x, y)			SLIST_EMPTY(CHN_HEAD(x, y))
 #define CHN_FIRST(x, y)			SLIST_FIRST(CHN_HEAD(x, y))
+#define CHN_NEXT(elm, list)		SLIST_NEXT((elm), CHN_LINK(list))
 
 #define CHN_FOREACH(x, y, z)						\
 	SLIST_FOREACH(x, CHN_HEAD(y, z), CHN_LINK(z))
@@ -189,9 +195,6 @@ struct pcm_channel {
 
 #define CHN_INSERT_AFTER(x, y, z)					\
 	SLIST_INSERT_AFTER(x, y, CHN_LINK(z))
-
-#define CHN_REMOVE(x, y, z)						\
-	SLIST_REMOVE(CHN_HEAD(x, z), y, pcm_channel, CHN_LINK(z))
 
 #define CHN_INSERT_HEAD_SAFE(x, y, z)		do {			\
 	struct pcm_channel *t = NULL;					\
@@ -213,20 +216,25 @@ struct pcm_channel {
 		CHN_INSERT_AFTER(x, y, z);				\
 } while (0)
 
-#define CHN_REMOVE_SAFE(x, y, z)		do {			\
-	struct pcm_channel *t = NULL;					\
-	CHN_FOREACH(t, x, z) {						\
-		if (t == y)						\
-			break;						\
-	} 								\
-	if (t == y)							\
-		CHN_REMOVE(x, y, z);					\
+#define CHN_REMOVE(holder, elm, list)		do {			\
+	if (CHN_FIRST(holder, list) == (elm)) {				\
+		SLIST_REMOVE_HEAD(CHN_HEAD(holder, list), CHN_LINK(list)); \
+	} else {							\
+		struct pcm_channel *t = NULL;				\
+		CHN_FOREACH(t, holder, list) {				\
+			if (CHN_NEXT(t, list) == (elm)) {		\
+				SLIST_REMOVE_AFTER(t, CHN_LINK(list));	\
+				break;					\
+			}						\
+		}							\
+	}								\
 } while (0)
 
 #define CHN_INSERT_SORT(w, x, y, z)		do {			\
 	struct pcm_channel *t, *a = NULL;				\
 	CHN_FOREACH(t, x, z) {						\
-		if ((y)->unit w t->unit)				\
+		if (((y)->type w t->type) ||				\
+		    (((y)->type == t->type) && ((y)->unit w t->unit)))	\
 			a = t;						\
 		else							\
 			break;						\
@@ -240,34 +248,28 @@ struct pcm_channel {
 #define CHN_INSERT_SORT_ASCEND(x, y, z)		CHN_INSERT_SORT(>, x, y, z)
 #define CHN_INSERT_SORT_DESCEND(x, y, z)	CHN_INSERT_SORT(<, x, y, z)
 
-#define CHN_UNIT(x)	(snd_unit2u((x)->unit))
-#define CHN_DEV(x)	(snd_unit2d((x)->unit))
-#define CHN_CHAN(x)	(snd_unit2c((x)->unit))
-
 #define CHN_BUF_PARENT(x, y)						\
 	(((x) != NULL && (x)->parentchannel != NULL &&			\
 	(x)->parentchannel->bufhard != NULL) ?				\
 	(x)->parentchannel->bufhard : (y))
 
-#define CHN_BROADCAST(x)	do {					\
-	if ((x)->cv_waiters != 0)					\
-		cv_broadcastpri(x, PRIBIO);				\
-} while (0)
-
 #include "channel_if.h"
 
-int chn_reinit(struct pcm_channel *c);
 int chn_write(struct pcm_channel *c, struct uio *buf);
 int chn_read(struct pcm_channel *c, struct uio *buf);
 u_int32_t chn_start(struct pcm_channel *c, int force);
 int chn_sync(struct pcm_channel *c, int threshold);
 int chn_flush(struct pcm_channel *c);
+int chn_polltrigger(struct pcm_channel *c);
 int chn_poll(struct pcm_channel *c, int ev, struct thread *td);
 
-int chn_init(struct pcm_channel *c, void *devinfo, int dir, int direction);
-int chn_kill(struct pcm_channel *c);
+char *chn_mkname(char *buf, size_t len, struct pcm_channel *c);
+struct pcm_channel *chn_init(struct snddev_info *d, struct pcm_channel *parent,
+    kobj_class_t cls, int dir, void *devinfo);
+void chn_kill(struct pcm_channel *c);
+void chn_shutdown(struct pcm_channel *c);
+int chn_release(struct pcm_channel *c);
 int chn_reset(struct pcm_channel *c, u_int32_t fmt, u_int32_t spd);
-int chn_setvolume(struct pcm_channel *c, int left, int right);
 int chn_setvolume_multi(struct pcm_channel *c, int vc, int left, int right,
     int center);
 int chn_setvolume_matrix(struct pcm_channel *c, int vc, int vt, int val);
@@ -295,7 +297,6 @@ int chn_oss_setorder(struct pcm_channel *, unsigned long long *);
 int chn_oss_getmask(struct pcm_channel *, uint32_t *);
 
 void chn_resetbuf(struct pcm_channel *c);
-void chn_intr_locked(struct pcm_channel *c);
 void chn_intr(struct pcm_channel *c);
 int chn_abort(struct pcm_channel *c);
 
@@ -304,25 +305,18 @@ int chn_notify(struct pcm_channel *c, u_int32_t flags);
 int chn_getrates(struct pcm_channel *c, int **rates);
 int chn_syncdestroy(struct pcm_channel *c);
 
-#define CHN_SETVOLUME(...)		chn_setvolume_matrix(__VA_ARGS__)
-#if defined(SND_DIAGNOSTIC) || defined(INVARIANTS)
-#define CHN_GETVOLUME(...)		chn_getvolume_matrix(__VA_ARGS__)
-#else
-#define CHN_GETVOLUME(x, y, z)		((x)->volume[y][z])
-#endif
-
-#define CHN_GETMUTE(x, y, z)		((x)->muted[y][z])
-
 #ifdef OSSV4_EXPERIMENT
 int chn_getpeaks(struct pcm_channel *c, int *lpeak, int *rpeak);
 #endif
 
-#define CHN_LOCKOWNED(c)	mtx_owned((c)->lock)
-#define CHN_LOCK(c)		mtx_lock((c)->lock)
-#define CHN_UNLOCK(c)		mtx_unlock((c)->lock)
-#define CHN_TRYLOCK(c)		mtx_trylock((c)->lock)
-#define CHN_LOCKASSERT(c)	mtx_assert((c)->lock, MA_OWNED)
-#define CHN_UNLOCKASSERT(c)	mtx_assert((c)->lock, MA_NOTOWNED)
+#define CHN_LOCKOWNED(c)	mtx_owned(&(c)->lock)
+#define CHN_LOCK(c)		mtx_lock(&(c)->lock)
+#define CHN_UNLOCK(c)		mtx_unlock(&(c)->lock)
+#define CHN_TRYLOCK(c)		mtx_trylock(&(c)->lock)
+#define CHN_LOCKASSERT(c)	mtx_assert(&(c)->lock, MA_OWNED)
+#define CHN_UNLOCKASSERT(c)	mtx_assert(&(c)->lock, MA_NOTOWNED)
+
+#define CHN_BROADCAST(x)	cv_broadcastpri(x, PRIBIO)
 
 int snd_fmtvalid(uint32_t fmt, uint32_t *fmtlist);
 
@@ -336,10 +330,12 @@ extern int chn_latency_profile;
 extern int report_soft_formats;
 extern int report_soft_matrix;
 
-#define PCMDIR_PLAY		1
-#define PCMDIR_PLAY_VIRTUAL	2
-#define PCMDIR_REC		-1
-#define PCMDIR_REC_VIRTUAL	-2
+enum {
+	PCMDIR_PLAY = 1,
+	PCMDIR_PLAY_VIRTUAL,
+	PCMDIR_REC,
+	PCMDIR_REC_VIRTUAL,
+};
 
 #define PCMTRIG_START 1
 #define PCMTRIG_EMLDMAWR 2
@@ -356,7 +352,7 @@ extern int report_soft_matrix;
 #define CHN_F_RUNNING		0x00000004  /* dma is running */
 #define CHN_F_TRIGGERED		0x00000008
 #define CHN_F_NOTRIGGER		0x00000010
-#define CHN_F_SLEEPING		0x00000020
+/* unused			0x00000020 */
 
 #define CHN_F_NBIO              0x00000040  /* do non-blocking i/o */
 #define CHN_F_MMAP		0x00000080  /* has been mmap()ed */
@@ -364,7 +360,7 @@ extern int report_soft_matrix;
 #define CHN_F_BUSY              0x00000100  /* has been opened 	*/
 #define CHN_F_DIRTY		0x00000200  /* need re-config */
 #define CHN_F_DEAD		0x00000400  /* too many errors, dead, mdk */
-#define CHN_F_SILENCE		0x00000800  /* silence, nil, null, yada */
+/* unused			0x00000800 */
 
 #define	CHN_F_HAS_SIZE		0x00001000  /* user set block size */
 #define CHN_F_HAS_VCHAN		0x00002000  /* vchan master */
@@ -384,13 +380,13 @@ extern int report_soft_matrix;
 				"\003RUNNING"				\
 				"\004TRIGGERED"				\
 				"\005NOTRIGGER"				\
-				"\006SLEEPING"				\
+				/* \006 */				\
 				"\007NBIO"				\
 				"\010MMAP"				\
 				"\011BUSY"				\
 				"\012DIRTY"				\
 				"\013DEAD"				\
-				"\014SILENCE"				\
+				/* \014 */				\
 				"\015HAS_SIZE"				\
 				"\016HAS_VCHAN"				\
 				"\017VCHAN_PASSTHROUGH"			\
@@ -402,18 +398,15 @@ extern int report_soft_matrix;
 
 #define CHN_F_RESET		(CHN_F_BUSY | CHN_F_DEAD |		\
 				 CHN_F_VIRTUAL | CHN_F_HAS_VCHAN |	\
-				 CHN_F_VCHAN_DYNAMIC |			\
+				 CHN_F_VCHAN_DYNAMIC | CHN_F_NBIO |	\
 				 CHN_F_PASSTHROUGH | CHN_F_EXCLUSIVE)
 
 #define CHN_F_MMAP_INVALID	(CHN_F_DEAD | CHN_F_RUNNING)
 
 					
 
-#define CHN_N_RATE		0x00000001
-#define CHN_N_FORMAT		0x00000002
-#define CHN_N_VOLUME		0x00000004
-#define CHN_N_BLOCKSIZE		0x00000008
-#define CHN_N_TRIGGER		0x00000010
+#define CHN_N_BLOCKSIZE		0x00000001
+#define CHN_N_TRIGGER		0x00000002
 
 #define CHN_LATENCY_MIN		0
 #define CHN_LATENCY_MAX		10

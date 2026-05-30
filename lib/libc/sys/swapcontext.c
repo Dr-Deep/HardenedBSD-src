@@ -28,9 +28,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/signal.h>
 #include <sys/ucontext.h>
@@ -38,7 +35,6 @@ __FBSDID("$FreeBSD$");
 #include <stddef.h>
 #include "libc_private.h"
 
-__weak_reference(__sys_swapcontext, __swapcontext);
 __sym_compat(swapcontext, __impl_swapcontext, FBSD_1.0);
 __weak_reference(swapcontext, __impl_swapcontext);
 __sym_default(swapcontext, swapcontext, FBSD_1.2);
@@ -47,7 +43,5 @@ __sym_default(swapcontext, swapcontext, FBSD_1.2);
 int
 swapcontext(ucontext_t *oucp, const ucontext_t *ucp)
 {
-
-	return (((int (*)(ucontext_t *, const ucontext_t *))
-	    __libc_interposing[INTERPOS_swapcontext])(oucp, ucp));
+	return (INTERPOS_SYS(swapcontext, oucp, ucp));
 }

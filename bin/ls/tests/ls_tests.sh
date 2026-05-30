@@ -24,7 +24,6 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
-# $FreeBSD$
 #
 
 create_test_dir()
@@ -477,6 +476,35 @@ b_flag_body()
 	atf_check -e empty -o match:'y\\vz' -s exit:0 ls -b
 }
 
+atf_test_case childerr
+childerr_head()
+{
+	atf_set "descr" "Verify that fts_children() in pre-order errors are checked"
+	atf_set "require.user" "unprivileged"
+}
+
+childerr_body()
+{
+	atf_check mkdir -p root/dir root/edir
+	atf_check touch root/c
+
+	# Check that listing an empty directory hasn't regressed into being
+	# called an error.
+	atf_check -o match:"total 0" -e empty ls -l root/dir
+
+	atf_check chmod 0 root/dir
+
+	# If we did not abort after fts_children() properly, then stdout would
+	# have an output of the total files enumerated (0).  Thus, assert that
+	# it's empty and that we see the correct error on stderr.
+	atf_check -s not-exit:0 -e match:"Permission denied" ls -l root/dir
+
+	# Now ensure that we didn't just stop there, we printed out a directory
+	# that would've been enumerated later.
+	atf_check -s not-exit:0 -o match:"^root/edir" \
+	    -e match:"Permission denied" ls -lR root
+}
+
 atf_test_case d_flag
 d_flag_head()
 {
@@ -525,18 +553,19 @@ f_flag_body()
 atf_test_case g_flag
 g_flag_head()
 {
-	atf_set "descr" "Verify that -g does nothing (compatibility flag)"
+	atf_set "descr" "Verify that -g implies -l but omits the owner name field"
 }
 
 g_flag_body()
 {
-	create_test_inputs2
-	for file in $files; do
-		atf_check -e empty -o match:"$(ls -a $file)" -s exit:0 \
-		    ls -ag $file
-		atf_check -e empty -o match:"$(ls -la $file)" -s exit:0 \
-		    ls -alg $file
-	done
+	atf_check -e empty -o empty -s exit:0 touch a.file
+
+	mtime_in_secs=$(stat -f "%m" -t "%s" a.file)
+	mtime=$(date -j -f "%s" $mtime_in_secs +"%b[[:space:]]+%e[[:space:]]+%H:%M")
+
+	expected_output=$(stat -f "%Sp[[:space:]]+%l[[:space:]]+%Sg[[:space:]]+%z[[:space:]]+$mtime[[:space:]]+a\\.file" a.file)
+
+	atf_check -e empty -o match:"$expected_output" -s exit:0 ls -g a.file
 }
 
 atf_test_case h_flag
@@ -689,7 +718,7 @@ n_flag_body()
 
 	atf_check -e empty \
 	    -o match:'\-rw\-r\-\-r\-\-[[:space:]]+1[[:space:]]+'"$nobody_uid[[:space:]]+$daemon_gid"'[[:space:]]+.+a\.file' \
-	    ls -ln a.file
+	    ls -n a.file
 
 }
 
@@ -800,6 +829,21 @@ s_flag_body()
 	done
 }
 
+atf_test_case scomma_flag
+scomma_flag_head()
+{
+	atf_set "descr" "Verify that -s, prints out the size with ',' delimiters"
+}
+
+scomma_flag_body()
+{
+	export LC_ALL=en_US.UTF-8
+	atf_check -e ignore dd if=/dev/urandom of=file bs=65536 count=64
+	blocks=$(stat -f "%b" file)
+	cblocks=$(printf "%'d" $blocks)
+	atf_check -e empty -o match:"$cblocks[[:space:]]+file" ls -s, file
+}
+
 atf_test_case t_flag
 t_flag_head()
 {
@@ -844,6 +888,20 @@ u_flag_body()
 
 	atf_check -e empty -o match:'b\.file' -s exit:0 sh -c 'ls -lu | tail -n 1'
 	atf_check -e empty -o match:'a\.file.*b\.file' -s exit:0 ls -Cu
+}
+
+atf_test_case v_flag
+v_flag_head()
+{
+	atf_set "descr" "Verify that the output from ls -v sorts based on strverscmp(3)"
+}
+
+v_flag_body()
+{
+	create_test_dir
+
+	atf_check -e empty -o empty -s exit:0 touch 000 00 01 010 09 0 1 9 10
+	atf_check -e empty -o match:"000.00.01.010.09.0.1.9.10" -s exit:0 sh -c 'ls -Cv'
 }
 
 atf_test_case x_flag
@@ -942,6 +1000,7 @@ atf_init_test_cases()
 	#atf_add_test_case Z_flag
 	atf_add_test_case a_flag
 	atf_add_test_case b_flag
+	atf_add_test_case childerr
 	#atf_add_test_case c_flag
 	atf_add_test_case d_flag
 	atf_add_test_case f_flag
@@ -958,8 +1017,10 @@ atf_init_test_cases()
 	atf_add_test_case q_flag_and_w_flag
 	atf_add_test_case r_flag
 	atf_add_test_case s_flag
+	atf_add_test_case scomma_flag
 	atf_add_test_case t_flag
 	atf_add_test_case u_flag
+	atf_add_test_case v_flag
 	atf_add_test_case x_flag
 	atf_add_test_case y_flag
 	atf_add_test_case 1_flag

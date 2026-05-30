@@ -1,8 +1,8 @@
-# $FreeBSD$
-
 PACKAGE=	clibs
 SHLIB_NAME=	libgcc_s.so.1
 SHLIBDIR?=	/lib
+
+SHLIB_LDSCRIPT=libgcc_s.ldscript
 
 # Enabling UBSan triggers "undefined reference to vtable for __cxxabiv1::__function_type_info"
 MK_UBSAN:=	no
@@ -14,7 +14,9 @@ MK_LTOLIB=	no
 WARNS?=	2
 
 LDFLAGS+=	-nodefaultlibs
+LDFLAGS+=	-Wl,-Bsymbolic
 LIBADD+=	c
+LIBADD+=	compiler_rt
 
 VERSION_DEF=	${.CURDIR}/Versions.def
 SYMBOL_MAPS=	${.CURDIR}/Symbol.map
@@ -49,8 +51,7 @@ SRCS+=		s_scalbnf.c
 
 # Don't include long double routines on architectures where long double
 # is the same size as double.
-.if ${MACHINE_CPUARCH} != "mips" && ${MACHINE_CPUARCH} != "arm" && \
-    ${MACHINE_CPUARCH} != "powerpc"
+.if ${MACHINE_CPUARCH} != "arm" && ${MACHINE_CPUARCH} != "powerpc"
 SRCS+=		s_fmaxl.c
 SRCS+=		s_logbl.c
 SRCS+=		s_scalbnl.c

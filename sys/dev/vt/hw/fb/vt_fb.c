@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2013 The FreeBSD Foundation
  *
@@ -28,15 +28,13 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/malloc.h>
 #include <sys/queue.h>
 #include <sys/fbio.h>
 #include <sys/kernel.h>
+#include <sys/endian.h>
 #include <dev/vt/vt.h>
 #include <dev/vt/hw/fb/vt_fb.h>
 #include <dev/vt/colors/vt_termcolors.h>
@@ -52,6 +50,7 @@ static struct vt_driver vt_fb_driver = {
 	.vd_bitblt_text = vt_fb_bitblt_text,
 	.vd_invalidate_text = vt_fb_invalidate_text,
 	.vd_bitblt_bmp = vt_fb_bitblt_bitmap,
+	.vd_bitblt_argb = vt_fb_bitblt_argb,
 	.vd_drawrect = vt_fb_drawrect,
 	.vd_setpixel = vt_fb_setpixel,
 	.vd_postswitch = vt_fb_postswitch,
@@ -76,15 +75,31 @@ static void
 vt_fb_mem_wr2(struct fb_info *sc, uint32_t o, uint16_t v)
 {
 
-	KASSERT((o < sc->fb_size), ("Offset %#08x out of fb size", o));
+	KASSERT((o + 1 < sc->fb_size), ("Offset %#08x out of fb size", o + 1));
 	*(uint16_t *)(sc->fb_vbase + o) = v;
+}
+
+static void
+vt_fb_mem_wr3(struct fb_info *sc, uint32_t o, uint32_t v)
+{
+	uint8_t *b = (uint8_t *)sc->fb_vbase + o;
+
+	KASSERT((o + 2 < sc->fb_size), ("Offset %#08x out of fb size", o + 2));
+	/*
+	 * We want to write three bytes, independent
+	 * of endianness. Multiply _QUAD_LOWWORD and
+	 * _QUAD_HIGHWORD by 2 to skip the middle byte.
+	 */
+	b[_QUAD_LOWWORD * 2] = v & 0xff;
+	b[1] = (v >> 8) & 0xff;
+	b[_QUAD_HIGHWORD * 2] = (v >> 16) & 0xff;
 }
 
 static void
 vt_fb_mem_wr4(struct fb_info *sc, uint32_t o, uint32_t v)
 {
 
-	KASSERT((o < sc->fb_size), ("Offset %#08x out of fb size", o));
+	KASSERT((o + 3 < sc->fb_size), ("Offset %#08x out of fb size", o + 3));
 	*(uint32_t *)(sc->fb_vbase + o) = v;
 }
 
@@ -189,9 +204,7 @@ vt_fb_setpixel(struct vt_device *vd, int x, int y, term_color_t color)
 		vt_fb_mem_wr2(info, o, c);
 		break;
 	case 3:
-		vt_fb_mem_wr1(info, o, (c >> 16) & 0xff);
-		vt_fb_mem_wr1(info, o + 1, (c >> 8) & 0xff);
-		vt_fb_mem_wr1(info, o + 2, c & 0xff);
+		vt_fb_mem_wr3(info, o, c);
 		break;
 	case 4:
 		vt_fb_mem_wr4(info, o, c);
@@ -248,12 +261,7 @@ vt_fb_blank(struct vt_device *vd, term_color_t color)
 	case 3:
 		for (h = 0; h < info->fb_height; h++)
 			for (o = 0; o < info->fb_stride - 2; o += 3) {
-				vt_fb_mem_wr1(info, h*info->fb_stride + o,
-				    (c >> 16) & 0xff);
-				vt_fb_mem_wr1(info, h*info->fb_stride + o + 1,
-				    (c >> 8) & 0xff);
-				vt_fb_mem_wr1(info, h*info->fb_stride + o + 2,
-				    c & 0xff);
+				vt_fb_mem_wr3(info, h*info->fb_stride + o, c);
 			}
 		break;
 	case 4:
@@ -319,10 +327,7 @@ vt_fb_bitblt_bitmap(struct vt_device *vd, const struct vt_window *vw,
 				vt_fb_mem_wr2(info, o, cc);
 				break;
 			case 3:
-				/* Packed mode, so unaligned. Byte access. */
-				vt_fb_mem_wr1(info, o, (cc >> 16) & 0xff);
-				vt_fb_mem_wr1(info, o + 1, (cc >> 8) & 0xff);
-				vt_fb_mem_wr1(info, o + 2, cc & 0xff);
+				vt_fb_mem_wr3(info, o, cc);
 				break;
 			case 4:
 				vt_fb_mem_wr4(info, o, cc);
@@ -333,6 +338,52 @@ vt_fb_bitblt_bitmap(struct vt_device *vd, const struct vt_window *vw,
 			}
 		}
 	}
+}
+
+int
+vt_fb_bitblt_argb(struct vt_device *vd, const struct vt_window *vw,
+    const uint8_t *argb,
+    unsigned int width, unsigned int height,
+  unsigned int x, unsigned int y)
+{
+	struct fb_info *info;
+	uint32_t o, cc;
+	int bpp, xi, yi;
+
+	info = vd->vd_softc;
+	bpp = FBTYPE_GET_BYTESPP(info);
+	if (bpp != 4)
+		return (EOPNOTSUPP);
+
+	if (info->fb_flags & FB_FLAG_NOWRITE)
+		return (0);
+
+	KASSERT((info->fb_vbase != 0), ("Unmapped framebuffer"));
+
+	/* Bound by right and bottom edges. */
+	if (y + height > vw->vw_draw_area.tr_end.tp_row) {
+		if (y >= vw->vw_draw_area.tr_end.tp_row)
+			return (EINVAL);
+		height = vw->vw_draw_area.tr_end.tp_row - y;
+	}
+	if (x + width > vw->vw_draw_area.tr_end.tp_col) {
+		if (x >= vw->vw_draw_area.tr_end.tp_col)
+			return (EINVAL);
+		width = vw->vw_draw_area.tr_end.tp_col - x;
+	}
+	for (yi = 0; yi < height; yi++) {
+		for (xi = 0; xi < (width * 4); xi += 4) {
+			o = (y + yi) * info->fb_stride + (x + (xi / 4)) * bpp;
+			o += vd->vd_transpose;
+			cc = (argb[yi * width * 4 + xi] << 16) |
+				(argb[yi * width * 4 + xi + 1] << 8) |
+				(argb[yi * width * 4 + xi + 2]) |
+				(argb[yi * width * 4 + xi + 3] << 24);
+			vt_fb_mem_wr4(info, o, cc);
+		}
+	}
+
+	return (0);
 }
 
 void
@@ -517,19 +568,21 @@ vt_fb_fini(struct vt_device *vd, void *softc)
 int
 vt_fb_attach(struct fb_info *info)
 {
+	int ret;
 
-	vt_allocate(&vt_fb_driver, info);
+	ret = vt_allocate(&vt_fb_driver, info);
 
-	return (0);
+	return (ret);
 }
 
 int
 vt_fb_detach(struct fb_info *info)
 {
+	int ret;
 
-	vt_deallocate(&vt_fb_driver, info);
+	ret = vt_deallocate(&vt_fb_driver, info);
 
-	return (0);
+	return (ret);
 }
 
 void

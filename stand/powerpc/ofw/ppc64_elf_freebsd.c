@@ -24,9 +24,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #define __ELF_WORD_SIZE 64
 
 #include <sys/param.h>
@@ -41,6 +38,7 @@ __FBSDID("$FreeBSD$");
 #include "bootstrap.h"
 #include "libofw.h"
 #include "openfirm.h"
+#include "modinfo.h"
 
 extern char		end[];
 extern vm_offset_t	reloc;	/* From <arch>/conf.c */
@@ -59,7 +57,7 @@ ppc64_ofw_elf_loadfile(char *filename, uint64_t dest,
 	 * No need to sync the icache for modules: this will
 	 * be done by the kernel after relocation.
 	 */
-	if (!strcmp((*result)->f_type, "elf kernel"))
+	if (!strcmp((*result)->f_type, md_kerntype))
 		__syncicache((void *) (*result)->f_addr, (*result)->f_size);
 	return (0);
 }
@@ -103,8 +101,7 @@ ppc64_ofw_elf_exec(struct preloaded_file *fp)
 	panic("exec returned");
 }
 
-struct file_format	ofw_elf64 =
-{
-	ppc64_ofw_elf_loadfile,
-	ppc64_ofw_elf_exec
+struct file_format	ofw_elf64 = {
+	.l_load = ppc64_ofw_elf_loadfile,
+	.l_exec = ppc64_ofw_elf_exec
 };

@@ -1,7 +1,7 @@
 /*      $NetBSD: ppc_reloc.c,v 1.10 2001/09/10 06:09:41 mycroft Exp $   */
 
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (C) 1998   Tsubai Masanari
  * All rights reserved.
@@ -27,8 +27,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include <sys/param.h>
@@ -53,6 +51,17 @@ struct funcdesc {
 	Elf_Addr env;
 };
 #endif
+
+bool
+arch_digest_dynamic(struct Struct_Obj_Entry *obj, const Elf_Dyn *dynp)
+{
+	if (dynp->d_tag == DT_PPC64_GLINK) {
+		obj->glink = (Elf_Addr)(obj->relocbase + dynp->d_un.d_ptr);
+		return (true);
+	}
+
+	return (false);
+}
 
 /*
  * Process the R_PPC_COPY relocations
@@ -247,7 +256,7 @@ reloc_nonplt_object(Obj_Entry *obj_rtld __unused, Obj_Entry *obj,
 		 * modules. If we run out of space, we generate an
 		 * error.
 		 */
-		if (!defobj->tls_done) {
+		if (!defobj->tls_static) {
 			if (!allocate_tls_offset(
 				    __DECONST(Obj_Entry *, defobj))) {
 				_rtld_error("%s: No space available for static "
@@ -318,7 +327,6 @@ reloc_non_plt(Obj_Entry *obj, Obj_Entry *obj_rtld, int flags,
 {
 	const Elf_Rela *relalim;
 	const Elf_Rela *rela;
-	const Elf_Phdr *phdr;
 	SymCache *cache;
 	int bytes = obj->dynsymcount * sizeof(SymCache);
 	int r = -1;
@@ -350,20 +358,6 @@ reloc_non_plt(Obj_Entry *obj, Obj_Entry *obj_rtld, int flags,
 done:
 	if (cache)
 		munmap(cache, bytes);
-
-	/*
-	 * Synchronize icache for executable segments in case we made
-	 * any changes.
-	 */
-	for (phdr = obj->phdr;
-	    (const char *)phdr < (const char *)obj->phdr + obj->phsize;
-	    phdr++) {
-		if (phdr->p_type == PT_LOAD && (phdr->p_flags & PF_X) != 0) {
-			__syncicache(obj->relocbase + phdr->p_vaddr,
-			    phdr->p_memsz);
-		}
-	}
-
 	return (r);
 }
 
@@ -701,7 +695,7 @@ powerpc64_abi_variant_hook(Elf_Auxinfo** aux_info)
 }
 
 void
-ifunc_init(Elf_Auxinfo aux_info[__min_size(AT_COUNT)] __unused)
+ifunc_init(Elf_Auxinfo *aux_info[__min_size(AT_COUNT)] __unused)
 {
 
 }
@@ -716,7 +710,8 @@ allocate_initial_tls(Obj_Entry *list)
 	* use.
 	*/
 
-	tls_static_space = tls_last_offset + tls_last_size + RTLD_STATIC_TLS_EXTRA;
+	tls_static_space = tls_last_offset + tls_last_size +
+	    ld_static_tls_extra;
 
 	_tcb_set(allocate_tls(list, NULL, TLS_TCB_SIZE, TLS_TCB_ALIGN));
 }
@@ -724,11 +719,30 @@ allocate_initial_tls(Obj_Entry *list)
 void*
 __tls_get_addr(tls_index* ti)
 {
-	uintptr_t **dtvp;
-	char *p;
+	return (tls_get_addr_common(_tcb_get(), ti->ti_module, ti->ti_offset +
+	    TLS_DTV_OFFSET));
+}
 
-	dtvp = &_tcb_get()->tcb_dtv;
-	p = tls_get_addr_common(dtvp, ti->ti_module, ti->ti_offset);
+void
+arch_fix_auxv(Elf_Auxinfo *aux, Elf_Auxinfo *aux_info[])
+{
+	Elf_Auxinfo *auxp;
 
-	return (p + TLS_DTV_OFFSET);
+	for (auxp = aux; auxp->a_type != AT_NULL; auxp++) {
+		if (auxp->a_type == 23) /* AT_STACKPROT */
+			return;
+	}
+
+	/* Remap from old-style auxv numbers. */
+	aux_info[23] = aux_info[21]; /* AT_STACKPROT */
+	aux_info[21] = aux_info[19]; /* AT_PAGESIZESLEN */
+	aux_info[19] = aux_info[17]; /* AT_NCPUS */
+	aux_info[17] = aux_info[15]; /* AT_CANARYLEN */
+	aux_info[15] = aux_info[13]; /* AT_EXECPATH */
+	aux_info[13] = NULL;	     /* AT_GID */
+
+	aux_info[20] = aux_info[18]; /* AT_PAGESIZES */
+	aux_info[18] = aux_info[16]; /* AT_OSRELDATE */
+	aux_info[16] = aux_info[14]; /* AT_CANARY */
+	aux_info[14] = NULL;	     /* AT_EGID */
 }

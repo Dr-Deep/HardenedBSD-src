@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -30,27 +31,15 @@
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 
-/* Grsecurity kernel API change */
-#ifdef MODULE_PARAM_CALL_CONST
 typedef const struct kernel_param zfs_kernel_param_t;
-#else
-typedef struct kernel_param zfs_kernel_param_t;
-#endif
 
 #define	ZMOD_RW 0644
 #define	ZMOD_RD 0444
 
-#define	INT int
-#define	LONG long
-/* BEGIN CSTYLED */
-#define	UINT uint
-#define	ULONG ulong
-/* END CSTYLED */
-#define	STRING charp
-
 enum scope_prefix_types {
 	zfs,
 	zfs_arc,
+	zfs_brt,
 	zfs_condense,
 	zfs_dbuf,
 	zfs_dbuf_cache,
@@ -71,14 +60,34 @@ enum scope_prefix_types {
 	zfs_trim,
 	zfs_txg,
 	zfs_vdev,
-	zfs_vdev_cache,
+	zfs_vdev_disk,
 	zfs_vdev_file,
 	zfs_vdev_mirror,
+	zfs_vol,
 	zfs_vnops,
 	zfs_zevent,
 	zfs_zio,
 	zfs_zil
 };
+
+/*
+ * Our uint64 params are called U64 in part because we had them before Linux
+ * provided ULLONG param ops. Now it does, and we use them, but we retain the
+ * U64 name to keep many existing tunables working without issue.
+ */
+#define	spl_param_set_u64	param_set_ullong
+#define	spl_param_get_u64	param_get_ullong
+#define	spl_param_ops_U64	param_ops_ullong
+
+/*
+ * We keep our own names for param ops to make expanding them in
+ * ZFS_MODULE_PARAM easy.
+ */
+#define	spl_param_ops_INT	param_ops_int
+#define	spl_param_ops_LONG	param_ops_long
+#define	spl_param_ops_UINT	param_ops_uint
+#define	spl_param_ops_ULONG	param_ops_ulong
+#define	spl_param_ops_STRING	param_ops_charp
 
 /*
  * Declare a module parameter / sysctl node
@@ -112,7 +121,8 @@ enum scope_prefix_types {
 	_Static_assert( \
 	    sizeof (scope_prefix) == sizeof (enum scope_prefix_types), \
 	    "" #scope_prefix " size mismatch with enum scope_prefix_types"); \
-	module_param(name_prefix ## name, type, perm); \
+	module_param_cb(name_prefix ## name, &spl_param_ops_ ## type, \
+	    &name_prefix ## name, perm); \
 	MODULE_PARM_DESC(name_prefix ## name, desc)
 
 /*

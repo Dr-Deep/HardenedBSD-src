@@ -26,15 +26,12 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * PnP enumerator using the PCI BIOS.
  */
 
 #include <stand.h>
-#include <machine/stdarg.h>
+#include <sys/stdarg.h>
 #include <bootstrap.h>
 #include <isapnp.h>
 #include <btxv86.h>

@@ -1,7 +1,7 @@
 /*-
  * Implementation of the SCSI Transport
  *
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1997, 1998, 1999 Justin T. Gibbs.
  * Copyright (c) 1997, 1998, 1999 Kenneth D. Merry.
@@ -29,9 +29,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/bus.h>
 #include <sys/systm.h>
@@ -43,6 +40,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/fcntl.h>
 #include <sys/md5.h>
 #include <sys/sbuf.h>
+#include <sys/stdarg.h>
 
 #include <sys/lock.h>
 #include <sys/mutex.h>
@@ -62,12 +60,10 @@ __FBSDID("$FreeBSD$");
 #include <cam/scsi/scsi_all.h>
 #include <cam/scsi/scsi_message.h>
 #include <cam/scsi/scsi_pass.h>
-#include <machine/stdarg.h>	/* for xpt_print below */
-#include "opt_cam.h"
 
 struct scsi_quirk_entry {
 	struct scsi_inquiry_pattern inq_pat;
-	u_int8_t quirks;
+	uint8_t quirks;
 #define	CAM_QUIRK_NOLUNS	0x01
 #define	CAM_QUIRK_NOVPDS	0x02
 #define	CAM_QUIRK_HILUNS	0x04
@@ -81,6 +77,22 @@ struct scsi_quirk_entry {
 static int cam_srch_hi = 0;
 SYSCTL_INT(_kern_cam, OID_AUTO, cam_srch_hi, CTLFLAG_RWTUN,
     &cam_srch_hi, 0, "Search above LUN 7 for SCSI3 and greater devices");
+
+static int tur_timeout = 1000;	/* 1s now, 60s before */
+SYSCTL_INT(_kern_cam, OID_AUTO, tur_timeout, CTLFLAG_RWTUN,
+    &tur_timeout, 0, "TESTUNITREADY timeout on probing");
+
+static int inquiry_timeout = 1000; /* 1s now, 60s before */
+SYSCTL_INT(_kern_cam, OID_AUTO, inquiry_timeout, CTLFLAG_RWTUN,
+    &inquiry_timeout, 0, "INQUIRY timeout on probing");
+
+static int reportluns_timeout = 60000; /* 60s */
+SYSCTL_INT(_kern_cam, OID_AUTO, reportluns_timeout, CTLFLAG_RWTUN,
+    &reportluns_timeout, 0, "REPORTLUNS timeout on probing");
+
+static int modesense_timeout = 1000; /* 1s now, 60s */
+SYSCTL_INT(_kern_cam, OID_AUTO, modesense_timeout, CTLFLAG_RWTUN,
+    &modesense_timeout, 0, "MODESENSE timeout on probing");
 
 #define	CAM_SCSI2_MAXLUN	8
 #define	CAM_CAN_GET_SIMPLE_LUN(x, i)				\
@@ -134,6 +146,7 @@ typedef enum {
 	PROBE_TUR,
 	PROBE_INQUIRY,	/* this counts as DV0 for Basic Domain Validation */
 	PROBE_FULL_INQUIRY,
+	PROBE_REPORT_WLUNS,
 	PROBE_REPORT_LUNS,
 	PROBE_MODE_SENSE,
 	PROBE_SUPPORTED_VPD_LIST,
@@ -152,6 +165,7 @@ static char *probe_action_text[] = {
 	"PROBE_TUR",
 	"PROBE_INQUIRY",
 	"PROBE_FULL_INQUIRY",
+	"PROBE_REPORT_WLUNS",
 	"PROBE_REPORT_LUNS",
 	"PROBE_MODE_SENSE",
 	"PROBE_SUPPORTED_VPD_LIST",
@@ -187,7 +201,7 @@ typedef struct {
 	probe_action	action;
 	probe_flags	flags;
 	MD5_CTX		context;
-	u_int8_t	digest[16];
+	uint8_t	digest[16];
 	struct cam_periph *periph;
 } probe_softc;
 
@@ -571,7 +585,7 @@ static int       proberequestbackoff(struct cam_periph *periph,
 static void	 probedone(struct cam_periph *periph, union ccb *done_ccb);
 static void	 probe_purge_old(struct cam_path *path,
 				 struct scsi_report_luns_data *new,
-				 probe_flags flags);
+				 probe_flags flags, bool is_wlun);
 static void	 probecleanup(struct cam_periph *periph);
 static void	 scsi_find_quirk(struct cam_ed *device);
 static void	 scsi_scan_bus(struct cam_periph *periph, union ccb *ccb);
@@ -587,18 +601,15 @@ static void	 scsi_set_transfer_settings(struct ccb_trans_settings *cts,
 					    struct cam_path *path,
 					    int async_update);
 static void	 scsi_toggle_tags(struct cam_path *path);
-static void	 scsi_dev_async(u_int32_t async_code,
+static void	 scsi_dev_async(uint32_t async_code,
 				struct cam_eb *bus,
 				struct cam_et *target,
 				struct cam_ed *device,
 				void *async_arg);
 static void	 scsi_action(union ccb *start_ccb);
-static void	 scsi_announce_periph(struct cam_periph *periph);
 static void	 scsi_announce_periph_sbuf(struct cam_periph *periph, struct sbuf *sb);
-static void	 scsi_proto_announce(struct cam_ed *device);
 static void	 scsi_proto_announce_sbuf(struct cam_ed *device,
 					  struct sbuf *sb);
-static void	 scsi_proto_denounce(struct cam_ed *device);
 static void	 scsi_proto_denounce_sbuf(struct cam_ed *device,
 					  struct sbuf *sb);
 static void	 scsi_proto_debug_out(union ccb *ccb);
@@ -608,7 +619,6 @@ static struct xpt_xport_ops scsi_xport_ops = {
 	.alloc_device = scsi_alloc_device,
 	.action = scsi_action,
 	.async = scsi_dev_async,
-	.announce = scsi_announce_periph,
 	.announce_sbuf = scsi_announce_periph_sbuf,
 };
 #define SCSI_XPT_XPORT(x, X)			\
@@ -626,13 +636,12 @@ SCSI_XPT_XPORT(usb, USB);
 SCSI_XPT_XPORT(iscsi, ISCSI);
 SCSI_XPT_XPORT(srp, SRP);
 SCSI_XPT_XPORT(ppb, PPB);
+SCSI_XPT_XPORT(ufshci, UFSHCI);
 
 #undef SCSI_XPORT_XPORT
 
 static struct xpt_proto_ops scsi_proto_ops = {
-	.announce = scsi_proto_announce,
 	.announce_sbuf = scsi_proto_announce_sbuf,
-	.denounce = scsi_proto_denounce,
 	.denounce_sbuf = scsi_proto_denounce_sbuf,
 	.debug_out = scsi_proto_debug_out,
 };
@@ -656,16 +665,14 @@ proberegister(struct cam_periph *periph, void *arg)
 
 	request_ccb = (union ccb *)arg;
 	if (request_ccb == NULL) {
-		printf("proberegister: no probe CCB, "
-		       "can't register device\n");
+		printf("proberegister: no probe CCB, can't register device\n");
 		return(CAM_REQ_CMP_ERR);
 	}
 
 	softc = (probe_softc *)malloc(sizeof(*softc), M_CAMXPT, M_NOWAIT);
 
 	if (softc == NULL) {
-		printf("proberegister: Unable to probe new device. "
-		       "Unable to allocate softc\n");
+		printf("proberegister: Unable to probe new device. Unable to allocate softc\n");
 		return(CAM_REQ_CMP_ERR);
 	}
 	TAILQ_INIT(&softc->request_ccbs);
@@ -769,7 +776,7 @@ again:
 				     probedone,
 				     MSG_SIMPLE_Q_TAG,
 				     SSD_FULL_SIZE,
-				     /*timeout*/60000);
+				     /*timeout*/tur_timeout);
 		break;
 	}
 	case PROBE_INQUIRY:
@@ -820,12 +827,29 @@ again:
 			     /*retries*/4,
 			     probedone,
 			     MSG_SIMPLE_Q_TAG,
-			     (u_int8_t *)inq_buf,
+			     (uint8_t *)inq_buf,
 			     inquiry_len,
 			     /*evpd*/FALSE,
 			     /*page_code*/0,
 			     SSD_MIN_SIZE,
-			     /*timeout*/60 * 1000);
+			     /*timeout*/inquiry_timeout);
+		break;
+	}
+	case PROBE_REPORT_WLUNS:
+	{
+		void *rp;
+
+		rp = malloc(periph->path->target->rpl_size,
+		    M_CAMXPT, M_NOWAIT | M_ZERO);
+		if (rp == NULL) {
+			xpt_print(periph->path,
+			    "Unable to alloc report wluns storage\n");
+			PROBE_SET_ACTION(softc, PROBE_REPORT_LUNS);
+			goto again;
+		}
+		scsi_report_luns(csio, 5, probedone, MSG_SIMPLE_Q_TAG,
+		    RPL_REPORT_WELLKNOWN, rp, periph->path->target->rpl_size,
+		    SSD_FULL_SIZE, reportluns_timeout);
 		break;
 	}
 	case PROBE_REPORT_LUNS:
@@ -848,7 +872,7 @@ again:
 		}
 		scsi_report_luns(csio, 5, probedone, MSG_SIMPLE_Q_TAG,
 		    RPL_REPORT_DEFAULT, rp, periph->path->target->rpl_size,
-		    SSD_FULL_SIZE, 60000); break;
+		    SSD_FULL_SIZE, reportluns_timeout);
 		break;
 	}
 	case PROBE_MODE_SENSE:
@@ -871,11 +895,11 @@ again:
 					mode_buf,
 					mode_buf_len,
 					SSD_FULL_SIZE,
-					/*timeout*/60000);
+					/*timeout*/modesense_timeout);
 			break;
 		}
-		xpt_print(periph->path, "Unable to mode sense control page - "
-		    "malloc failure\n");
+		xpt_print(periph->path,
+		    "Unable to mode sense control page - malloc failure\n");
 		PROBE_SET_ACTION(softc, PROBE_SUPPORTED_VPD_LIST);
 	}
 	/* FALLTHROUGH */
@@ -896,7 +920,7 @@ again:
 				     /*retries*/4,
 				     probedone,
 				     MSG_SIMPLE_Q_TAG,
-				     (u_int8_t *)vpd_list,
+				     (uint8_t *)vpd_list,
 				     sizeof(*vpd_list),
 				     /*evpd*/TRUE,
 				     SVPD_SUPPORTED_PAGE_LIST,
@@ -990,7 +1014,7 @@ done:
 				     /*retries*/4,
 				     probedone,
 				     MSG_SIMPLE_Q_TAG,
-				     (u_int8_t *)serial_buf,
+				     (uint8_t *)serial_buf,
 				     sizeof(*serial_buf),
 				     /*evpd*/TRUE,
 				     SVPD_UNIT_SERIAL_NUMBER,
@@ -1010,15 +1034,15 @@ done:
 		inquiry_len = roundup2(SID_ADDITIONAL_LENGTH(inq_buf), 2);
 		inq_buf = malloc(inquiry_len, M_CAMXPT, M_NOWAIT);
 		if (inq_buf == NULL) {
-			xpt_print(periph->path, "malloc failure- skipping Basic"
-			    "Domain Validation\n");
+			xpt_print(periph->path,
+			    "malloc failure- skipping Basic Domain Validation\n");
 			PROBE_SET_ACTION(softc, PROBE_DV_EXIT);
 			scsi_test_unit_ready(csio,
 					     /*retries*/4,
 					     probedone,
 					     MSG_SIMPLE_Q_TAG,
 					     SSD_FULL_SIZE,
-					     /*timeout*/60000);
+					     /*timeout*/tur_timeout);
 			break;
 		}
 
@@ -1026,12 +1050,12 @@ done:
 			     /*retries*/4,
 			     probedone,
 			     MSG_SIMPLE_Q_TAG,
-			     (u_int8_t *)inq_buf,
+			     (uint8_t *)inq_buf,
 			     inquiry_len,
 			     /*evpd*/FALSE,
 			     /*page_code*/0,
 			     SSD_MIN_SIZE,
-			     /*timeout*/60 * 1000);
+			     /*timeout*/inquiry_timeout);
 		break;
 	}
 	default:
@@ -1172,7 +1196,8 @@ probedone(struct cam_periph *periph, union ccb *done_ccb)
 	probe_softc *softc;
 	struct cam_path *path;
 	struct scsi_inquiry_data *inq_buf;
-	u_int32_t  priority;
+	uint32_t  priority;
+	struct ccb_pathinq cpi;
 
 	CAM_DEBUG(done_ccb->ccb_h.path, CAM_DEBUG_TRACE, ("probedone\n"));
 
@@ -1180,6 +1205,7 @@ probedone(struct cam_periph *periph, union ccb *done_ccb)
 	path = done_ccb->ccb_h.path;
 	priority = done_ccb->ccb_h.pinfo.priority;
 	cam_periph_assert(periph, MA_OWNED);
+	xpt_path_inq(&cpi, path);
 
 	switch (softc->action) {
 	case PROBE_TUR:
@@ -1211,7 +1237,7 @@ out:
 	case PROBE_FULL_INQUIRY:
 	{
 		if (cam_ccb_status(done_ccb) == CAM_REQ_CMP) {
-			u_int8_t periph_qual;
+			uint8_t periph_qual;
 
 			path->device->flags |= CAM_DEV_INQUIRY_DATA_VALID;
 			scsi_find_quirk(path->device);
@@ -1246,8 +1272,10 @@ out:
 				    SID_ANSI_REV(inq_buf) > SCSI_REV_SPC2 &&
 				    (SCSI_QUIRK(path->device)->quirks &
 				     CAM_QUIRK_NORPTLUNS) == 0) {
-					PROBE_SET_ACTION(softc,
-					    PROBE_REPORT_LUNS);
+					if (cpi.hba_misc & PIM_WLUNS)
+						PROBE_SET_ACTION(softc, PROBE_REPORT_WLUNS);
+					else
+						PROBE_SET_ACTION(softc, PROBE_REPORT_LUNS);
 					/*
 					 * Start with room for *one* lun.
 					 */
@@ -1270,7 +1298,10 @@ out:
 			    SID_ANSI_REV(inq_buf) >= SCSI_REV_SPC2 &&
 			    (SCSI_QUIRK(path->device)->quirks &
 			     CAM_QUIRK_NORPTLUNS) == 0) {
-				PROBE_SET_ACTION(softc, PROBE_REPORT_LUNS);
+				if (cpi.hba_misc & PIM_WLUNS)
+					PROBE_SET_ACTION(softc,	PROBE_REPORT_WLUNS);
+				else
+					PROBE_SET_ACTION(softc, PROBE_REPORT_LUNS);
 				periph->path->target->rpl_size = 16;
 				xpt_release_ccb(done_ccb);
 				xpt_schedule(periph, priority);
@@ -1307,11 +1338,13 @@ out:
 		xpt_release_ccb(done_ccb);
 		break;
 	}
+	case PROBE_REPORT_WLUNS:
 	case PROBE_REPORT_LUNS:
 	{
 		struct ccb_scsiio *csio;
 		struct scsi_report_luns_data *lp;
 		u_int nlun, maxlun;
+		bool is_wlun = softc->action == PROBE_REPORT_WLUNS;
 
 		csio = &done_ccb->csio;
 
@@ -1388,7 +1421,7 @@ out:
 			 * This function will also install the new list
 			 * in the target structure.
 			 */
-			probe_purge_old(path, lp, softc->flags);
+			probe_purge_old(path, lp, softc->flags, is_wlun);
 			lp = NULL;
 		}
 		/* The processing above should either exit via a `goto
@@ -1401,7 +1434,9 @@ out:
 		if (path->device->flags & CAM_DEV_INQUIRY_DATA_VALID &&
 		    (SID_QUAL(inq_buf) == SID_QUAL_LU_CONNECTED ||
 		    SID_QUAL(inq_buf) == SID_QUAL_LU_OFFLINE)) {
-			if (INQ_DATA_TQ_ENABLED(inq_buf))
+			if (is_wlun)
+				PROBE_SET_ACTION(softc, PROBE_REPORT_LUNS);
+			else if (INQ_DATA_TQ_ENABLED(inq_buf))
 				PROBE_SET_ACTION(softc, PROBE_MODE_SENSE);
 			else
 				PROBE_SET_ACTION(softc,
@@ -1423,9 +1458,9 @@ out:
 		mode_hdr = (struct scsi_mode_header_6 *)csio->data_ptr;
 		if (cam_ccb_status(done_ccb) == CAM_REQ_CMP) {
 			struct scsi_control_page *page;
-			u_int8_t *offset;
+			uint8_t *offset;
 
-			offset = ((u_int8_t *)&mode_hdr[1])
+			offset = ((uint8_t *)&mode_hdr[1])
 			    + mode_hdr->blk_desc_len;
 			page = (struct scsi_control_page *)offset;
 			path->device->queue_flags = page->queue_flags;
@@ -1581,7 +1616,7 @@ probe_device_check:
 	{
 		struct ccb_scsiio *csio;
 		struct scsi_vpd_unit_serial_number *serial_buf;
-		u_int32_t  priority;
+		uint32_t  priority;
 		int changed;
 		int have_serialnum;
 
@@ -1600,7 +1635,7 @@ probe_device_check:
 			&& (serial_buf->length > 0)) {
 			have_serialnum = 1;
 			path->device->serial_num =
-				(u_int8_t *)malloc((serial_buf->length + 1),
+				(uint8_t *)malloc((serial_buf->length + 1),
 						   M_CAMXPT, M_NOWAIT);
 			if (path->device->serial_num != NULL) {
 				int start, slen;
@@ -1642,7 +1677,7 @@ probe_device_check:
 		 */
 		if ((softc->flags & PROBE_INQUIRY_CKSUM) != 0) {
 			MD5_CTX context;
-			u_int8_t digest[16];
+			uint8_t digest[16];
 
 			MD5Init(&context);
 
@@ -1826,20 +1861,22 @@ probe_device_check:
 
 static void
 probe_purge_old(struct cam_path *path, struct scsi_report_luns_data *new,
-    probe_flags flags)
+    probe_flags flags, bool is_wlun)
 {
 	struct cam_path *tp;
-	struct scsi_report_luns_data *old;
+	struct scsi_report_luns_data **luns_data, *old;
 	u_int idx1, idx2, nlun_old, nlun_new;
 	lun_id_t this_lun;
-	u_int8_t *ol, *nl;
+	uint8_t *ol, *nl;
+
+	luns_data = is_wlun ? &path->target->wluns : &path->target->luns;
 
 	if (path->target == NULL) {
 		return;
 	}
 	mtx_lock(&path->target->luns_mtx);
-	old = path->target->luns;
-	path->target->luns = new;
+	old = *luns_data;
+	*luns_data = new;
 	mtx_unlock(&path->target->luns_mtx);
 	if (old == NULL)
 		return;
@@ -1920,11 +1957,25 @@ scsi_find_quirk(struct cam_ed *device)
 }
 
 typedef struct {
+	int lun;
+	int wlun;
+} lun_pair;
+
+typedef struct {
 	union	ccb *request_ccb;
 	struct 	ccb_pathinq *cpi;
 	int	counter;
-	int	lunindex[0];
+	lun_pair lunindex[0];
 } scsi_scan_bus_info;
+
+static void
+free_scan_info(scsi_scan_bus_info *scan_info)
+{
+	KASSERT(scan_info->cpi != NULL,
+	    ("scan_info (%p) missing its ccb_pathinq CCB\n", scan_info));
+	xpt_free_ccb((union ccb *)scan_info->cpi);
+	free(scan_info, M_CAMXPT);
+}
 
 /*
  * To start a scan, request_ccb is an XPT_SCAN_BUS ccb.
@@ -1956,10 +2007,7 @@ scsi_scan_bus(struct cam_periph *periph, union ccb *request_ccb)
 			xpt_done(request_ccb);
 			return;
 		}
-		xpt_setup_ccb(&work_ccb->ccb_h, request_ccb->ccb_h.path,
-			      request_ccb->ccb_h.pinfo.priority);
-		work_ccb->ccb_h.func_code = XPT_PATH_INQ;
-		xpt_action(work_ccb);
+		xpt_path_inq(&work_ccb->cpi, request_ccb->ccb_h.path);
 		if (work_ccb->ccb_h.status != CAM_REQ_CMP) {
 			request_ccb->ccb_h.status = work_ccb->ccb_h.status;
 			xpt_free_ccb(work_ccb);
@@ -2000,7 +2048,8 @@ scsi_scan_bus(struct cam_periph *periph, union ccb *request_ccb)
 
 		/* Save some state for use while we probe for devices */
 		scan_info = (scsi_scan_bus_info *) malloc(sizeof(scsi_scan_bus_info) +
-		    (work_ccb->cpi.max_target * sizeof (u_int)), M_CAMXPT, M_ZERO|M_NOWAIT);
+		    (work_ccb->cpi.max_target * sizeof(lun_pair)),
+				M_CAMXPT, M_ZERO|M_NOWAIT);
 		if (scan_info == NULL) {
 			request_ccb->ccb_h.status = CAM_RESRC_UNAVAIL;
 			xpt_free_ccb(work_ccb);
@@ -2045,19 +2094,17 @@ scsi_scan_bus(struct cam_periph *periph, union ccb *request_ccb)
 						 request_ccb->ccb_h.path_id,
 						 i, 0);
 			if (status != CAM_REQ_CMP) {
-				printf("scsi_scan_bus: xpt_create_path failed"
-				       " with status %#x, bus scan halted\n",
-				       status);
-				free(scan_info, M_CAMXPT);
+				printf(
+		"scsi_scan_bus: xpt_create_path failed with status %#x, bus scan halted\n",
+				    status);
+				free_scan_info(scan_info);
 				request_ccb->ccb_h.status = status;
-				xpt_free_ccb(work_ccb);
 				xpt_done(request_ccb);
 				break;
 			}
 			work_ccb = xpt_alloc_ccb_nowait();
 			if (work_ccb == NULL) {
-				xpt_free_ccb((union ccb *)scan_info->cpi);
-				free(scan_info, M_CAMXPT);
+				free_scan_info(scan_info);
 				xpt_free_path(path);
 				request_ccb->ccb_h.status = CAM_RESRC_UNAVAIL;
 				xpt_done(request_ccb);
@@ -2087,6 +2134,8 @@ scsi_scan_bus(struct cam_periph *periph, union ccb *request_ccb)
 		path_id_t path_id;
 		target_id_t target_id;
 		lun_id_t lun_id;
+		u_int nwluns;
+		bool need_wlun_scan = false;
 
 		oldpath = request_ccb->ccb_h.path;
 
@@ -2100,89 +2149,124 @@ scsi_scan_bus(struct cam_periph *periph, union ccb *request_ccb)
 
 		mtx = xpt_path_mtx(scan_info->request_ccb->ccb_h.path);
 		mtx_lock(mtx);
-		mtx_lock(&target->luns_mtx);
-		if (target->luns) {
-			lun_id_t first;
-			u_int nluns = scsi_4btoul(target->luns->length) / 8;
 
-			/*
-			 * Make sure we skip over lun 0 if it's the first member
-			 * of the list as we've actually just finished probing
-			 * it.
-			 */
-			CAM_GET_LUN(target->luns, 0, first);
-			if (first == 0 && scan_info->lunindex[target_id] == 0) {
-				scan_info->lunindex[target_id]++;
+		if (scan_info->cpi->hba_misc & PIM_WLUNS) {
+			/* Scan Well known logical units */
+			mtx_lock(&target->luns_mtx);
+
+			if (target->wluns) {
+				nwluns = scsi_4btoul(target->wluns->length) / 8;
+				if (scan_info->lunindex[target_id].wlun < nwluns)
+					need_wlun_scan = true;
 			}
 
-			/*
-			 * Skip any LUNs that the HBA can't deal with.
-			 */
-			while (scan_info->lunindex[target_id] < nluns) {
-				if (scan_info->cpi->hba_misc & PIM_EXTLUNS) {
-					CAM_GET_LUN(target->luns,
-					    scan_info->lunindex[target_id],
-					    lun_id);
-					break;
-				}
+			if (need_wlun_scan) {
+				/*
+				 * WLUN uses the Extended WLUN address format, so we can handle all of
+				 * them.
+				 */
+				CAM_GET_LUN(target->wluns, scan_info->lunindex[target_id].wlun, lun_id);
 
-				if (CAM_CAN_GET_SIMPLE_LUN(target->luns,
-				    scan_info->lunindex[target_id])) {
-					CAM_GET_SIMPLE_LUN(target->luns,
-					    scan_info->lunindex[target_id],
-					    lun_id);
-					break;
-				}
-					
-				scan_info->lunindex[target_id]++;
-			}
-
-			if (scan_info->lunindex[target_id] < nluns) {
 				mtx_unlock(&target->luns_mtx);
 				next_target = 0;
 				CAM_DEBUG(request_ccb->ccb_h.path,
-				    CAM_DEBUG_PROBE,
-				   ("next lun to try at index %u is %jx\n",
-				   scan_info->lunindex[target_id],
-				   (uintmax_t)lun_id));
-				scan_info->lunindex[target_id]++;
+						CAM_DEBUG_PROBE,
+					("next wlun to try at index %u is %jx\n",
+					scan_info->lunindex[target_id].wlun,
+					(uintmax_t)lun_id));
+				scan_info->lunindex[target_id].wlun++;
 			} else {
 				mtx_unlock(&target->luns_mtx);
-				/* We're done with scanning all luns. */
+				/* We're done with scanning all wluns. */
 			}
-		} else {
-			mtx_unlock(&target->luns_mtx);
-			device = request_ccb->ccb_h.path->device;
-			/* Continue sequential LUN scan if: */
-			/*  -- we have more LUNs that need recheck */
-			mtx_lock(&target->bus->eb_mtx);
-			nextdev = device;
-			while ((nextdev = TAILQ_NEXT(nextdev, links)) != NULL)
-				if ((nextdev->flags & CAM_DEV_UNCONFIGURED) == 0)
-					break;
-			mtx_unlock(&target->bus->eb_mtx);
-			if (nextdev != NULL) {
-				next_target = 0;
-			/*  -- stop if CAM_QUIRK_NOLUNS is set. */
-			} else if (SCSI_QUIRK(device)->quirks & CAM_QUIRK_NOLUNS) {
-				next_target = 1;
-			/*  -- this LUN is connected and its SCSI version
-			 *     allows more LUNs. */
-			} else if ((device->flags & CAM_DEV_UNCONFIGURED) == 0) {
-				if (lun_id < (CAM_SCSI2_MAXLUN-1) ||
-				    CAN_SRCH_HI_DENSE(device))
+		}
+
+		if (!need_wlun_scan) {
+			/* Scan logical units */
+			mtx_lock(&target->luns_mtx);
+			if (target->luns) {
+				lun_id_t first;
+				u_int nluns = scsi_4btoul(target->luns->length) / 8;
+
+				/*
+				* Make sure we skip over lun 0 if it's the first member
+				* of the list as we've actually just finished probing
+				* it.
+				*/
+				CAM_GET_LUN(target->luns, 0, first);
+				if (first == 0 && scan_info->lunindex[target_id].lun == 0) {
+					scan_info->lunindex[target_id].lun++;
+				}
+
+				/*
+				* Skip any LUNs that the HBA can't deal with.
+				*/
+				while (scan_info->lunindex[target_id].lun < nluns) {
+					if (scan_info->cpi->hba_misc & PIM_EXTLUNS) {
+						CAM_GET_LUN(target->luns,
+								scan_info->lunindex[target_id].lun,
+								lun_id);
+						break;
+					}
+
+					if (CAM_CAN_GET_SIMPLE_LUN(target->luns,
+							scan_info->lunindex[target_id].lun)) {
+						CAM_GET_SIMPLE_LUN(target->luns,
+								scan_info->lunindex[target_id].lun,
+								lun_id);
+						break;
+					}
+
+					scan_info->lunindex[target_id].lun++;
+				}
+
+				if (scan_info->lunindex[target_id].lun < nluns) {
+					mtx_unlock(&target->luns_mtx);
 					next_target = 0;
-			/*  -- this LUN is disconnected, its SCSI version
-			 *     allows more LUNs and we guess they may be. */
-			} else if ((device->flags & CAM_DEV_INQUIRY_DATA_VALID) != 0) {
-				if (lun_id < (CAM_SCSI2_MAXLUN-1) ||
-				    CAN_SRCH_HI_SPARSE(device))
+					CAM_DEBUG(request_ccb->ccb_h.path,
+							CAM_DEBUG_PROBE,
+						("next lun to try at index %u is %jx\n",
+						scan_info->lunindex[target_id].lun,
+						(uintmax_t)lun_id));
+					scan_info->lunindex[target_id].lun++;
+				} else {
+					mtx_unlock(&target->luns_mtx);
+					/* We're done with scanning all luns. */
+				}
+			} else {
+				mtx_unlock(&target->luns_mtx);
+				device = request_ccb->ccb_h.path->device;
+				/* Continue sequential LUN scan if: */
+				/*  -- we have more LUNs that need recheck */
+				mtx_lock(&target->bus->eb_mtx);
+				nextdev = device;
+				while ((nextdev = TAILQ_NEXT(nextdev, links)) != NULL)
+					if ((nextdev->flags & CAM_DEV_UNCONFIGURED) == 0)
+						break;
+				mtx_unlock(&target->bus->eb_mtx);
+				if (nextdev != NULL) {
 					next_target = 0;
-			}
-			if (next_target == 0) {
-				lun_id++;
-				if (lun_id > scan_info->cpi->max_lun)
+				/*  -- stop if CAM_QUIRK_NOLUNS is set. */
+				} else if (SCSI_QUIRK(device)->quirks & CAM_QUIRK_NOLUNS) {
 					next_target = 1;
+				/*  -- this LUN is connected and its SCSI version
+				 *     allows more LUNs. */
+				} else if ((device->flags & CAM_DEV_UNCONFIGURED) == 0) {
+					if (lun_id < (CAM_SCSI2_MAXLUN-1) ||
+					    CAN_SRCH_HI_DENSE(device))
+						next_target = 0;
+				/*  -- this LUN is disconnected, its SCSI version
+				 *     allows more LUNs and we guess they may be. */
+				} else if ((device->flags & CAM_DEV_INQUIRY_DATA_VALID) != 0) {
+					if (lun_id < (CAM_SCSI2_MAXLUN-1) ||
+					    CAN_SRCH_HI_SPARSE(device))
+						next_target = 0;
+				}
+				if (next_target == 0) {
+					lun_id++;
+					if (lun_id > scan_info->cpi->max_lun)
+						next_target = 1;
+				}
 			}
 		}
 
@@ -2190,16 +2274,16 @@ scsi_scan_bus(struct cam_periph *periph, union ccb *request_ccb)
 		 * Check to see if we scan any further luns.
 		 */
 		if (next_target) {
-			int done;
+			bool done;
 
 			/*
 			 * Free the current request path- we're done with it.
 			 */
 			xpt_free_path(oldpath);
  hop_again:
-			done = 0;
+			done = false;
 			if (scan_info->request_ccb->ccb_h.func_code == XPT_SCAN_TGT) {
-				done = 1;
+				done = true;
 			} else if (scan_info->cpi->hba_misc & PIM_SEQSCAN) {
 				scan_info->counter++;
 				if (scan_info->counter ==
@@ -2208,23 +2292,22 @@ scsi_scan_bus(struct cam_periph *periph, union ccb *request_ccb)
 				}
 				if (scan_info->counter >=
 				    scan_info->cpi->max_target+1) {
-					done = 1;
+					done = true;
 				}
 			} else {
 				scan_info->counter--;
 				if (scan_info->counter == 0) {
-					done = 1;
+					done = true;
 				}
 			}
 			if (done) {
 				mtx_unlock(mtx);
 				xpt_free_ccb(request_ccb);
-				xpt_free_ccb((union ccb *)scan_info->cpi);
 				request_ccb = scan_info->request_ccb;
 				CAM_DEBUG(request_ccb->ccb_h.path,
 				    CAM_DEBUG_TRACE,
 				   ("SCAN done for %p\n", scan_info));
-				free(scan_info, M_CAMXPT);
+				free_scan_info(scan_info);
 				request_ccb->ccb_h.status = CAM_REQ_CMP;
 				xpt_done(request_ccb);
 				break;
@@ -2240,13 +2323,12 @@ scsi_scan_bus(struct cam_periph *periph, union ccb *request_ccb)
 			    scan_info->counter, 0);
 			if (status != CAM_REQ_CMP) {
 				mtx_unlock(mtx);
-				printf("scsi_scan_bus: xpt_create_path failed"
-				    " with status %#x, bus scan halted\n",
+				printf(
+		"scsi_scan_bus: xpt_create_path failed with status %#x, bus scan halted\n",
 			       	    status);
 				xpt_free_ccb(request_ccb);
-				xpt_free_ccb((union ccb *)scan_info->cpi);
 				request_ccb = scan_info->request_ccb;
-				free(scan_info, M_CAMXPT);
+				free_scan_info(scan_info);
 				request_ccb->ccb_h.status = status;
 				xpt_done(request_ccb);
 				break;
@@ -2270,9 +2352,9 @@ scsi_scan_bus(struct cam_periph *periph, union ccb *request_ccb)
 			 */
 			xpt_free_path(oldpath);
 			if (status != CAM_REQ_CMP) {
-				printf("scsi_scan_bus: xpt_create_path failed "
-				       "with status %#x, halting LUN scan\n",
-			 	       status);
+				printf(
+		"scsi_scan_bus: xpt_create_path failed with status %#x, halting LUN scan\n",
+				    status);
 				goto hop_again;
 			}
 			xpt_setup_ccb(&request_ccb->ccb_h, path,
@@ -2305,10 +2387,7 @@ scsi_scan_lun(struct cam_periph *periph, struct cam_path *path,
 
 	CAM_DEBUG(path, CAM_DEBUG_TRACE, ("scsi_scan_lun\n"));
 
-	memset(&cpi, 0, sizeof(cpi));
-	xpt_setup_ccb(&cpi.ccb_h, path, CAM_PRIORITY_NONE);
-	cpi.ccb_h.func_code = XPT_PATH_INQ;
-	xpt_action((union ccb *)&cpi);
+	xpt_path_inq(&cpi, path);
 
 	if (cpi.ccb_h.status != CAM_REQ_CMP) {
 		if (request_ccb != NULL) {
@@ -2333,8 +2412,8 @@ scsi_scan_lun(struct cam_periph *periph, struct cam_path *path,
 	if (request_ccb == NULL) {
 		request_ccb = xpt_alloc_ccb_nowait();
 		if (request_ccb == NULL) {
-			xpt_print(path, "scsi_scan_lun: can't allocate CCB, "
-			    "can't continue\n");
+			xpt_print(path,
+			    "scsi_scan_lun: can't allocate CCB, can't continue\n");
 			return;
 		}
 		status = xpt_create_path(&new_path, NULL,
@@ -2342,8 +2421,8 @@ scsi_scan_lun(struct cam_periph *periph, struct cam_path *path,
 					  path->target->target_id,
 					  path->device->lun_id);
 		if (status != CAM_REQ_CMP) {
-			xpt_print(path, "scsi_scan_lun: can't create path, "
-			    "can't continue\n");
+			xpt_print(path,
+			    "scsi_scan_lun: can't create path, can't continue\n");
 			xpt_free_ccb(request_ccb);
 			return;
 		}
@@ -2376,8 +2455,8 @@ scsi_scan_lun(struct cam_periph *periph, struct cam_path *path,
 					  request_ccb);
 
 		if (status != CAM_REQ_CMP) {
-			xpt_print(path, "scsi_scan_lun: cam_alloc_periph "
-			    "returned an error, can't continue probe\n");
+			xpt_print(path,
+	    "scsi_scan_lun: cam_alloc_periph returned an error, can't continue probe\n");
 			request_ccb->ccb_h.status = status;
 			xpt_done(request_ccb);
 		}
@@ -2432,10 +2511,7 @@ scsi_devise_transport(struct cam_path *path)
 	struct scsi_inquiry_data *inq_buf;
 
 	/* Get transport information from the SIM */
-	memset(&cpi, 0, sizeof(cpi));
-	xpt_setup_ccb(&cpi.ccb_h, path, CAM_PRIORITY_NONE);
-	cpi.ccb_h.func_code = XPT_PATH_INQ;
-	xpt_action((union ccb *)&cpi);
+	xpt_path_inq(&cpi, path);
 
 	inq_buf = NULL;
 	if ((path->device->flags & CAM_DEV_INQUIRY_DATA_VALID) != 0)
@@ -2629,8 +2705,7 @@ scsi_action(union ccb *start_ccb)
 
 	if (start_ccb->ccb_h.func_code != XPT_SCSI_IO) {
 		KASSERT((start_ccb->ccb_h.alloc_flags & CAM_CCB_FROM_UMA) == 0,
-		    ("%s: ccb %p, func_code %#x should not be allocated "
-		    "from UMA zone\n",
+		    ("%s: ccb %p, func_code %#x should not be allocated from UMA zone\n",
 		    __func__, start_ccb, start_ccb->ccb_h.func_code));
 	}
 
@@ -2697,8 +2772,9 @@ scsi_set_transfer_settings(struct ccb_trans_settings *cts, struct cam_path *path
 
 	if (cts->protocol_version > device->protocol_version) {
 		if (bootverbose) {
-			xpt_print(path, "Down reving Protocol "
-			    "Version from %d to %d?\n", cts->protocol_version,
+			xpt_print(path,
+			    "Down reving Protocol Version from %d to %d?\n",
+			    cts->protocol_version,
 			    device->protocol_version);
 		}
 		cts->protocol_version = device->protocol_version;
@@ -2722,8 +2798,9 @@ scsi_set_transfer_settings(struct ccb_trans_settings *cts, struct cam_path *path
 
 	if (cts->transport_version > device->transport_version) {
 		if (bootverbose) {
-			xpt_print(path, "Down reving Transport "
-			    "Version from %d to %d?\n", cts->transport_version,
+			xpt_print(path,
+			    "Down reving Transport Version from %d to %d?\n",
+			    cts->transport_version,
 			    device->transport_version);
 		}
 		cts->transport_version = device->transport_version;
@@ -2742,10 +2819,7 @@ scsi_set_transfer_settings(struct ccb_trans_settings *cts, struct cam_path *path
 
 	inq_data = &device->inq_data;
 	scsi = &cts->proto_specific.scsi;
-	memset(&cpi, 0, sizeof(cpi));
-	xpt_setup_ccb(&cpi.ccb_h, path, CAM_PRIORITY_NONE);
-	cpi.ccb_h.func_code = XPT_PATH_INQ;
-	xpt_action((union ccb *)&cpi);
+	xpt_path_inq(&cpi, path);
 
 	/* SCSI specific sanity checking */
 	if ((cpi.hba_inquiry & PI_TAG_ABLE) == 0
@@ -2968,7 +3042,7 @@ scsi_toggle_tags(struct cam_path *path)
  * Handle any per-device event notifications that require action by the XPT.
  */
 static void
-scsi_dev_async(u_int32_t async_code, struct cam_eb *bus, struct cam_et *target,
+scsi_dev_async(uint32_t async_code, struct cam_eb *bus, struct cam_et *target,
 	      struct cam_ed *device, void *async_arg)
 {
 	cam_status status;
@@ -3056,10 +3130,7 @@ _scsi_announce_periph(struct cam_periph *periph, u_int *speed, u_int *freq, stru
 		return;
 
 	/* Ask the SIM for its base transfer speed */
-	memset(&cpi, 0, sizeof(cpi));
-	xpt_setup_ccb(&cpi.ccb_h, path, CAM_PRIORITY_NORMAL);
-	cpi.ccb_h.func_code = XPT_PATH_INQ;
-	xpt_action((union ccb *)&cpi);
+	xpt_path_inq(&cpi, path);
 
 	/* Report connection speed */
 	*speed = cpi.base_transfer_speed;
@@ -3127,13 +3198,13 @@ scsi_announce_periph_sbuf(struct cam_periph *periph, struct sbuf *sb)
 		if ((spi->valid & CTS_SPI_VALID_BUS_WIDTH) != 0
 		 && spi->bus_width > 0) {
 			if (freq != 0) {
-				sbuf_printf(sb, ", ");
+				sbuf_cat(sb, ", ");
 			} else {
-				sbuf_printf(sb, " (");
+				sbuf_cat(sb, " (");
 			}
 			sbuf_printf(sb, "%dbit)", 8 * (0x01 << spi->bus_width));
 		} else if (freq != 0) {
-			sbuf_printf(sb, ")");
+			sbuf_putc(sb, ')');
 		}
 	}
 	if (cts.ccb_h.status == CAM_REQ_CMP && cts.transport == XPORT_FC) {
@@ -3147,64 +3218,7 @@ scsi_announce_periph_sbuf(struct cam_periph *periph, struct sbuf *sb)
 		if (fc->valid & CTS_FC_VALID_PORT)
 			sbuf_printf(sb, " PortID 0x%x", fc->port);
 	}
-	sbuf_printf(sb, "\n");
-}
-
-static void
-scsi_announce_periph(struct cam_periph *periph)
-{
-	struct	ccb_trans_settings cts;
-	u_int speed, freq, mb;
-
-	memset(&cts, 0, sizeof(cts));
-	_scsi_announce_periph(periph, &speed, &freq, &cts);
-	if (cam_ccb_status((union ccb *)&cts) != CAM_REQ_CMP)
-		return;
-
-	mb = speed / 1000;
-	if (mb > 0)
-		printf("%s%d: %d.%03dMB/s transfers",
-		       periph->periph_name, periph->unit_number,
-		       mb, speed % 1000);
-	else
-		printf("%s%d: %dKB/s transfers", periph->periph_name,
-		       periph->unit_number, speed);
-	/* Report additional information about SPI connections */
-	if (cts.ccb_h.status == CAM_REQ_CMP && cts.transport == XPORT_SPI) {
-		struct	ccb_trans_settings_spi *spi;
-
-		spi = &cts.xport_specific.spi;
-		if (freq != 0) {
-			printf(" (%d.%03dMHz%s, offset %d", freq / 1000,
-			       freq % 1000,
-			       (spi->ppr_options & MSG_EXT_PPR_DT_REQ) != 0
-			     ? " DT" : "",
-			       spi->sync_offset);
-		}
-		if ((spi->valid & CTS_SPI_VALID_BUS_WIDTH) != 0
-		 && spi->bus_width > 0) {
-			if (freq != 0) {
-				printf(", ");
-			} else {
-				printf(" (");
-			}
-			printf("%dbit)", 8 * (0x01 << spi->bus_width));
-		} else if (freq != 0) {
-			printf(")");
-		}
-	}
-	if (cts.ccb_h.status == CAM_REQ_CMP && cts.transport == XPORT_FC) {
-		struct	ccb_trans_settings_fc *fc;
-
-		fc = &cts.xport_specific.fc;
-		if (fc->valid & CTS_FC_VALID_WWNN)
-			printf(" WWNN 0x%llx", (long long) fc->wwnn);
-		if (fc->valid & CTS_FC_VALID_WWPN)
-			printf(" WWPN 0x%llx", (long long) fc->wwpn);
-		if (fc->valid & CTS_FC_VALID_PORT)
-			printf(" PortID 0x%x", fc->port);
-	}
-	printf("\n");
+	sbuf_putc(sb, '\n');
 }
 
 static void
@@ -3214,21 +3228,9 @@ scsi_proto_announce_sbuf(struct cam_ed *device, struct sbuf *sb)
 }
 
 static void
-scsi_proto_announce(struct cam_ed *device)
-{
-	scsi_print_inquiry(&device->inq_data);
-}
-
-static void
 scsi_proto_denounce_sbuf(struct cam_ed *device, struct sbuf *sb)
 {
 	scsi_print_inquiry_short_sbuf(sb, &device->inq_data);
-}
-
-static void
-scsi_proto_denounce(struct cam_ed *device)
-{
-	scsi_print_inquiry_short(&device->inq_data);
 }
 
 static void

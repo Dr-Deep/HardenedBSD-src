@@ -1,14 +1,9 @@
-/* $FreeBSD$ */
 /*
  * sock.c (C) 1995-1998 Darren Reed
  *
  * See the IPFILTER.LICENCE file for details on licencing.
  *
  */
-#if !defined(lint)
-static const char sccsid[] = "@(#)sock.c	1.2 1/11/96 (C)1995 Darren Reed";
-static const char rcsid[] = "@(#)$Id$";
-#endif
 #include <sys/param.h>
 #include <sys/types.h>
 #include <sys/time.h>
@@ -63,7 +58,6 @@ typedef int     boolean_t;
 #include <netinet/ip_var.h>
 #define	_WANT_INPCB
 #include <netinet/in_pcb.h>
-#include <netinet/tcp_timer.h>
 #define	_WANT_TCPCB
 #include <netinet/tcp_var.h>
 #include <stdio.h>

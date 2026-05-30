@@ -1,3 +1,4 @@
+.\" SPDX-License-Identifier: CDDL-1.0
 .\"
 .\" CDDL HEADER START
 .\"
@@ -26,7 +27,7 @@
 .\" Copyright 2017 Nexenta Systems, Inc.
 .\" Copyright (c) 2017 Open-E, Inc. All Rights Reserved.
 .\"
-.Dd March 16, 2022
+.Dd July 11, 2022
 .Dt ZPOOL-EXPORT 8
 .Os
 .
@@ -61,7 +62,8 @@ the disks.
 .It Fl a
 Exports all pools imported on the system.
 .It Fl f
-Forcefully unmount all datasets, and allow export of pools with active shared spares.
+Forcefully unmount all datasets, and allow export of pools with active shared
+spares.
 .Pp
 This command will forcefully export the pool even if it has a shared spare that
 is currently being used.

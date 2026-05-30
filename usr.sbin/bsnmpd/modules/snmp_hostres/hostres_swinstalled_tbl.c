@@ -26,8 +26,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * $FreeBSD$
- *
  * Host Resources MIB implementation for SNMPd: instrumentation for
  * hrSWInstalledTable
  */
@@ -374,7 +372,7 @@ swins_get_packages(void)
 	}
 
 	if (errno != 0) {
-		syslog(LOG_ERR, "hrSWInstalledTable: readdir_r(\"%s\") failed:"
+		syslog(LOG_ERR, "hrSWInstalledTable: readdir(\"%s\") failed:"
 		    " %m", pkg_dir);
 		ret = -1;
 	} else {

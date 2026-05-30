@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright 2020 Thomas E. Dickey                                          *
+ * Copyright 2020-2021,2024 Thomas E. Dickey                                *
  * Copyright 1998-2006,2010 Free Software Foundation, Inc.                  *
  *                                                                          *
  * Permission is hereby granted, free of charge, to any person obtaining a  *
@@ -38,12 +38,12 @@
 
 #include "menu.priv.h"
 
-MODULE_ID("$Id: m_pattern.c,v 1.19 2020/12/12 00:38:14 tom Exp $")
+MODULE_ID("$Id: m_pattern.c,v 1.21 2024/12/07 23:00:37 tom Exp $")
 
 /*---------------------------------------------------------------------------
-|   Facility      :  libnmenu  
+|   Facility      :  libnmenu
 |   Function      :  char *menu_pattern(const MENU *menu)
-|   
+|
 |   Description   :  Return the value of the pattern buffer.
 |
 |   Return Values :  NULL          - if there is no pattern buffer allocated
@@ -57,13 +57,13 @@ menu_pattern(const MENU *menu)
   static char empty[] = "";
 
   T((T_CALLED("menu_pattern(%p)"), (const void *)menu));
-  returnPtr(menu ? (menu->pattern ? menu->pattern : empty) : 0);
+  returnPtr(menu ? (menu->pattern ? menu->pattern : empty) : NULL);
 }
 
 /*---------------------------------------------------------------------------
-|   Facility      :  libnmenu  
+|   Facility      :  libnmenu
 |   Function      :  int set_menu_pattern(MENU *menu, const char *p)
-|   
+|
 |   Description   :  Set the match pattern for a menu and position to the
 |                    first item that matches.
 |

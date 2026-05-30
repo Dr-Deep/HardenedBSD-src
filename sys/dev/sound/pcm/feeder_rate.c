@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2005-2009 Ariff Abdullah <ariff@FreeBSD.org>
  * All rights reserved.
@@ -60,8 +60,6 @@
 
 #define SND_USE_FXDIV
 #include "snd_fxdiv_gen.h"
-
-SND_DECLARE_FILE("$FreeBSD$");
 #endif
 
 #include "feeder_rate_gen.h"
@@ -90,21 +88,6 @@ SND_DECLARE_FILE("$FreeBSD$");
 #endif
 
 #define Z_RATE_DEFAULT		48000
-
-#define Z_RATE_MIN		FEEDRATE_RATEMIN
-#define Z_RATE_MAX		FEEDRATE_RATEMAX
-#define Z_ROUNDHZ		FEEDRATE_ROUNDHZ
-#define Z_ROUNDHZ_MIN		FEEDRATE_ROUNDHZ_MIN
-#define Z_ROUNDHZ_MAX		FEEDRATE_ROUNDHZ_MAX
-
-#define Z_RATE_SRC		FEEDRATE_SRC
-#define Z_RATE_DST		FEEDRATE_DST
-#define Z_RATE_QUALITY		FEEDRATE_QUALITY
-#define Z_RATE_CHANNELS		FEEDRATE_CHANNELS
-
-#define Z_PARANOID		1
-
-#define Z_MULTIFORMAT		1
 
 #ifdef _KERNEL
 #undef Z_USE_ALPHADRIFT
@@ -153,9 +136,9 @@ struct z_info {
 	z_resampler_t z_resample;
 };
 
-int feeder_rate_min = Z_RATE_MIN;
-int feeder_rate_max = Z_RATE_MAX;
-int feeder_rate_round = Z_ROUNDHZ;
+int feeder_rate_min = FEEDRATE_RATEMIN;
+int feeder_rate_max = FEEDRATE_RATEMAX;
+int feeder_rate_round = FEEDRATE_ROUNDHZ;
 int feeder_rate_quality = Z_QUALITY_DEFAULT;
 
 static int feeder_rate_polyphase_max = Z_POLYPHASE_MAX;
@@ -224,10 +207,10 @@ sysctl_hw_snd_feeder_rate_round(SYSCTL_HANDLER_ARGS)
 	if (err != 0 || req->newptr == NULL || val == feeder_rate_round)
 		return (err);
 
-	if (val < Z_ROUNDHZ_MIN || val > Z_ROUNDHZ_MAX)
+	if (val < FEEDRATE_ROUNDHZ_MIN || val > FEEDRATE_ROUNDHZ_MAX)
 		return (EINVAL);
 
-	feeder_rate_round = val - (val % Z_ROUNDHZ);
+	feeder_rate_round = val - (val % FEEDRATE_ROUNDHZ);
 
 	return (0);
 }
@@ -260,6 +243,7 @@ sysctl_hw_snd_feeder_rate_quality(SYSCTL_HANDLER_ARGS)
 	 * set resampler quality if and only if it is exist as
 	 * part of feeder chains and the channel is idle.
 	 */
+	bus_topo_lock();
 	for (i = 0; pcm_devclass != NULL &&
 	    i < devclass_get_maxunit(pcm_devclass); i++) {
 		d = devclass_get_softc(pcm_devclass, i);
@@ -270,7 +254,7 @@ sysctl_hw_snd_feeder_rate_quality(SYSCTL_HANDLER_ARGS)
 		PCM_ACQUIRE(d);
 		CHN_FOREACH(c, d, channels.pcm) {
 			CHN_LOCK(c);
-			f = chn_findfeeder(c, FEEDER_RATE);
+			f = feeder_find(c, FEEDER_RATE);
 			if (f == NULL || f->data == NULL || CHN_STARTED(c)) {
 				CHN_UNLOCK(c);
 				continue;
@@ -281,11 +265,12 @@ sysctl_hw_snd_feeder_rate_quality(SYSCTL_HANDLER_ARGS)
 		PCM_RELEASE(d);
 		PCM_UNLOCK(d);
 	}
+	bus_topo_unlock();
 
 	return (0);
 }
 SYSCTL_PROC(_hw_snd, OID_AUTO, feeder_rate_quality,
-    CTLTYPE_INT | CTLFLAG_RWTUN | CTLFLAG_NEEDGIANT, 0, sizeof(int),
+    CTLTYPE_INT | CTLFLAG_RWTUN | CTLFLAG_MPSAFE, 0, sizeof(int),
     sysctl_hw_snd_feeder_rate_quality, "I",
     "sample rate converter quality ("__XSTRING(Z_QUALITY_MIN)"=low .. "
     __XSTRING(Z_QUALITY_MAX)"=high)");
@@ -433,11 +418,6 @@ z_roundpow2(int32_t v)
 static void
 z_feed_zoh(struct z_info *info, uint8_t *dst)
 {
-#if 0
-	z_copy(info->z_delay +
-	    (info->z_start * info->channels * info->bps), dst,
-	    info->channels * info->bps);
-#else
 	uint32_t cnt;
 	uint8_t *src;
 
@@ -451,7 +431,6 @@ z_feed_zoh(struct z_info *info, uint8_t *dst)
 	do {
 		*dst++ = *src++;
 	} while (--cnt != 0);
-#endif
 }
 
 /*
@@ -479,10 +458,10 @@ z_feed_linear_##SIGN##BIT##ENDIAN(struct z_info *info, uint8_t *dst)		\
 	ch = info->channels;							\
 										\
 	do {									\
-		x = _PCM_READ_##SIGN##BIT##_##ENDIAN(sx);			\
-		y = _PCM_READ_##SIGN##BIT##_##ENDIAN(sy);			\
+		x = pcm_sample_read(sx, AFMT_##SIGN##BIT##_##ENDIAN);		\
+		y = pcm_sample_read(sy, AFMT_##SIGN##BIT##_##ENDIAN);		\
 		x = Z_LINEAR_INTERPOLATE_##BIT(z, x, y);			\
-		_PCM_WRITE_##SIGN##BIT##_##ENDIAN(dst, x);			\
+		pcm_sample_write(dst, x, AFMT_##SIGN##BIT##_##ENDIAN);		\
 		sx += PCM_##BIT##_BPS;						\
 		sy += PCM_##BIT##_BPS;						\
 		dst += PCM_##BIT##_BPS;						\
@@ -510,10 +489,6 @@ z_feed_linear_##SIGN##BIT##ENDIAN(struct z_info *info, uint8_t *dst)		\
 #define Z_CLIP_CHECK(...)
 #endif
 
-#define Z_CLAMP(v, BIT)							\
-	(((v) > PCM_S##BIT##_MAX) ? PCM_S##BIT##_MAX :			\
-	(((v) < PCM_S##BIT##_MIN) ? PCM_S##BIT##_MIN : (v)))
-
 /*
  * Sine Cardinal (SINC) Interpolation. Scaling is done in 64 bit, so
  * there's no point to hold the plate any longer. All samples will be
@@ -524,7 +499,7 @@ z_feed_linear_##SIGN##BIT##ENDIAN(struct z_info *info, uint8_t *dst)		\
 	c += z >> Z_SHIFT;						\
 	z &= Z_MASK;							\
 	coeff = Z_COEFF_INTERPOLATE(z, z_coeff[c], z_dcoeff[c]);	\
-	x = _PCM_READ_##SIGN##BIT##_##ENDIAN(p);			\
+	x = pcm_sample_read(p, AFMT_##SIGN##BIT##_##ENDIAN);		\
 	v += Z_NORM_##BIT((intpcm64_t)x * coeff);			\
 	z += info->z_dy;						\
 	p adv##= info->channels * PCM_##BIT##_BPS
@@ -582,7 +557,8 @@ z_feed_sinc_##SIGN##BIT##ENDIAN(struct z_info *info, uint8_t *dst)		\
 		else								\
 			v >>= Z_COEFF_SHIFT - Z_GUARD_BIT_##BIT;		\
 		Z_CLIP_CHECK(v, BIT);						\
-		_PCM_WRITE_##SIGN##BIT##_##ENDIAN(dst, Z_CLAMP(v, BIT));	\
+		pcm_sample_write(dst, pcm_clamp(v, AFMT_##SIGN##BIT##_##ENDIAN),\
+		    AFMT_##SIGN##BIT##_##ENDIAN);				\
 	} while (ch != 0);							\
 }
 
@@ -607,11 +583,11 @@ z_feed_sinc_polyphase_##SIGN##BIT##ENDIAN(struct z_info *info, uint8_t *dst)	\
 		z_pcoeff = info->z_pcoeff +					\
 		    ((info->z_alpha * info->z_size) << 1);			\
 		for (i = info->z_size; i != 0; i--) {				\
-			x = _PCM_READ_##SIGN##BIT##_##ENDIAN(p);		\
+			x = pcm_sample_read(p, AFMT_##SIGN##BIT##_##ENDIAN);	\
 			v += Z_NORM_##BIT((intpcm64_t)x * *z_pcoeff);		\
 			z_pcoeff++;						\
 			p += info->channels * PCM_##BIT##_BPS;			\
-			x = _PCM_READ_##SIGN##BIT##_##ENDIAN(p);		\
+			x = pcm_sample_read(p, AFMT_##SIGN##BIT##_##ENDIAN);	\
 			v += Z_NORM_##BIT((intpcm64_t)x * *z_pcoeff);		\
 			z_pcoeff++;						\
 			p += info->channels * PCM_##BIT##_BPS;			\
@@ -621,7 +597,8 @@ z_feed_sinc_polyphase_##SIGN##BIT##ENDIAN(struct z_info *info, uint8_t *dst)	\
 		else								\
 			v >>= Z_COEFF_SHIFT - Z_GUARD_BIT_##BIT;		\
 		Z_CLIP_CHECK(v, BIT);						\
-		_PCM_WRITE_##SIGN##BIT##_##ENDIAN(dst, Z_CLAMP(v, BIT));	\
+		pcm_sample_write(dst, pcm_clamp(v, AFMT_##SIGN##BIT##_##ENDIAN),\
+		    AFMT_##SIGN##BIT##_##ENDIAN);				\
 	} while (ch != 0);							\
 }
 
@@ -630,15 +607,10 @@ z_feed_sinc_polyphase_##SIGN##BIT##ENDIAN(struct z_info *info, uint8_t *dst)	\
 	Z_DECLARE_SINC(SIGN, BIT, ENDIAN)				\
 	Z_DECLARE_SINC_POLYPHASE(SIGN, BIT, ENDIAN)
 
-#if BYTE_ORDER == LITTLE_ENDIAN || defined(SND_FEEDER_MULTIFORMAT)
 Z_DECLARE(S, 16, LE)
 Z_DECLARE(S, 32, LE)
-#endif
-#if BYTE_ORDER == BIG_ENDIAN || defined(SND_FEEDER_MULTIFORMAT)
 Z_DECLARE(S, 16, BE)
 Z_DECLARE(S, 32, BE)
-#endif
-#ifdef SND_FEEDER_MULTIFORMAT
 Z_DECLARE(S,  8, NE)
 Z_DECLARE(S, 24, LE)
 Z_DECLARE(S, 24, BE)
@@ -649,7 +621,8 @@ Z_DECLARE(U, 32, LE)
 Z_DECLARE(U, 16, BE)
 Z_DECLARE(U, 24, BE)
 Z_DECLARE(U, 32, BE)
-#endif
+Z_DECLARE(F, 32, LE)
+Z_DECLARE(F, 32, BE)
 
 enum {
 	Z_RESAMPLER_ZOH,
@@ -678,15 +651,10 @@ static const struct {
 	uint32_t format;
 	z_resampler_t resampler[Z_RESAMPLER_LAST];
 } z_resampler_tab[] = {
-#if BYTE_ORDER == LITTLE_ENDIAN || defined(SND_FEEDER_MULTIFORMAT)
 	Z_RESAMPLER_ENTRY(S, 16, LE),
 	Z_RESAMPLER_ENTRY(S, 32, LE),
-#endif
-#if BYTE_ORDER == BIG_ENDIAN || defined(SND_FEEDER_MULTIFORMAT)
 	Z_RESAMPLER_ENTRY(S, 16, BE),
 	Z_RESAMPLER_ENTRY(S, 32, BE),
-#endif
-#ifdef SND_FEEDER_MULTIFORMAT
 	Z_RESAMPLER_ENTRY(S,  8, NE),
 	Z_RESAMPLER_ENTRY(S, 24, LE),
 	Z_RESAMPLER_ENTRY(S, 24, BE),
@@ -697,7 +665,8 @@ static const struct {
 	Z_RESAMPLER_ENTRY(U, 16, BE),
 	Z_RESAMPLER_ENTRY(U, 24, BE),
 	Z_RESAMPLER_ENTRY(U, 32, BE),
-#endif
+	Z_RESAMPLER_ENTRY(F, 32, LE),
+	Z_RESAMPLER_ENTRY(F, 32, BE),
 };
 
 #define Z_RESAMPLER_TAB_SIZE						\
@@ -718,10 +687,8 @@ z_resampler_reset(struct z_info *info)
 	info->z_size = 1;
 	info->z_coeff = NULL;
 	info->z_dcoeff = NULL;
-	if (info->z_pcoeff != NULL) {
-		free(info->z_pcoeff, M_DEVBUF);
-		info->z_pcoeff = NULL;
-	}
+	free(info->z_pcoeff, M_DEVBUF);
+	info->z_pcoeff = NULL;
 	info->z_scale = Z_ONE;
 	info->z_dx = Z_FULL_ONE;
 	info->z_dy = Z_FULL_ONE;
@@ -734,7 +701,6 @@ z_resampler_reset(struct z_info *info)
 		info->quality = Z_QUALITY_MAX;
 }
 
-#ifdef Z_PARANOID
 static int32_t
 z_resampler_sinc_len(struct z_info *info)
 {
@@ -772,9 +738,6 @@ z_resampler_sinc_len(struct z_info *info)
 
 	return (len);
 }
-#else
-#define z_resampler_sinc_len(i)		(Z_IS_SINC(i) ? Z_SINC_LEN(i) : 1)
-#endif
 
 #define Z_POLYPHASE_COEFF_SHIFT		0
 
@@ -1033,10 +996,8 @@ z_resampler_build_polyphase(struct z_info *info)
 	int32_t alpha, c, i, z, idx;
 
 	/* Let this be here first. */
-	if (info->z_pcoeff != NULL) {
-		free(info->z_pcoeff, M_DEVBUF);
-		info->z_pcoeff = NULL;
-	}
+	free(info->z_pcoeff, M_DEVBUF);
+	info->z_pcoeff = NULL;
 
 	if (feeder_rate_polyphase_max < 1)
 		return (ENOTSUP);
@@ -1113,7 +1074,7 @@ z_resampler_setup(struct pcm_feeder *f)
 	if (!(Z_FACTOR_SAFE(info->z_gx) && Z_FACTOR_SAFE(info->z_gy)))
 		return (EINVAL);
 
-	format = f->desc->in;
+	format = f->desc.in;
 	adaptive = 0;
 	z_scale = 0;
 
@@ -1158,10 +1119,8 @@ z_resampler_setup(struct pcm_feeder *f)
 		 * adaptive mode.
 		 */
 z_setup_adaptive_sinc:
-		if (info->z_pcoeff != NULL) {
-			free(info->z_pcoeff, M_DEVBUF);
-			info->z_pcoeff = NULL;
-		}
+		free(info->z_pcoeff, M_DEVBUF);
+		info->z_pcoeff = NULL;
 
 		if (adaptive == 0) {
 			info->z_dy = z_scale << Z_DRIFT_SHIFT;
@@ -1172,14 +1131,6 @@ z_setup_adaptive_sinc:
 			info->z_dy = Z_FULL_ONE;
 			info->z_scale = Z_ONE;
 		}
-
-#if 0
-#define Z_SCALE_DIV	10000
-#define Z_SCALE_LIMIT(s, v)						\
-	((((uint64_t)(s) * (v)) + (Z_SCALE_DIV >> 1)) / Z_SCALE_DIV)
-
-		info->z_scale = Z_SCALE_LIMIT(info->z_scale, 9780);
-#endif
 
 		/* Smallest drift increment. */
 		info->z_dx = info->z_dy / info->z_gy;
@@ -1345,8 +1296,7 @@ z_setup_adaptive_sinc:
 
 	if (info->z_delay == NULL || info->z_alloc < i ||
 	    i <= (info->z_alloc >> 1)) {
-		if (info->z_delay != NULL)
-			free(info->z_delay, M_DEVBUF);
+		free(info->z_delay, M_DEVBUF);
 		info->z_delay = malloc(i, M_DEVBUF, M_NOWAIT | M_ZERO);
 		if (info->z_delay == NULL)
 			return (ENOMEM);
@@ -1356,7 +1306,7 @@ z_setup_adaptive_sinc:
 	/*
 	 * Zero out head of buffer to avoid pops and clicks.
 	 */
-	memset(info->z_delay, sndbuf_zerodata(f->desc->out),
+	memset(info->z_delay, sndbuf_zerodata(f->desc.out),
 	    info->z_pos * align);
 
 #ifdef Z_DIAGNOSTIC
@@ -1441,21 +1391,21 @@ z_resampler_set(struct pcm_feeder *f, int what, int32_t value)
 	info = f->data;
 
 	switch (what) {
-	case Z_RATE_SRC:
+	case FEEDRATE_SRC:
 		if (value < feeder_rate_min || value > feeder_rate_max)
 			return (E2BIG);
 		if (value == info->rsrc)
 			return (0);
 		info->rsrc = value;
 		break;
-	case Z_RATE_DST:
+	case FEEDRATE_DST:
 		if (value < feeder_rate_min || value > feeder_rate_max)
 			return (E2BIG);
 		if (value == info->rdst)
 			return (0);
 		info->rdst = value;
 		break;
-	case Z_RATE_QUALITY:
+	case FEEDRATE_QUALITY:
 		if (value < Z_QUALITY_MIN || value > Z_QUALITY_MAX)
 			return (EINVAL);
 		if (value == info->quality)
@@ -1472,7 +1422,7 @@ z_resampler_set(struct pcm_feeder *f, int what, int32_t value)
 			return (0);
 		info->quality = oquality;
 		break;
-	case Z_RATE_CHANNELS:
+	case FEEDRATE_CHANNELS:
 		if (value < SND_CHN_MIN || value > SND_CHN_MAX)
 			return (EINVAL);
 		if (value == info->channels)
@@ -1481,7 +1431,6 @@ z_resampler_set(struct pcm_feeder *f, int what, int32_t value)
 		break;
 	default:
 		return (EINVAL);
-		break;
 	}
 
 	return (z_resampler_setup(f));
@@ -1495,20 +1444,14 @@ z_resampler_get(struct pcm_feeder *f, int what)
 	info = f->data;
 
 	switch (what) {
-	case Z_RATE_SRC:
+	case FEEDRATE_SRC:
 		return (info->rsrc);
-		break;
-	case Z_RATE_DST:
+	case FEEDRATE_DST:
 		return (info->rdst);
-		break;
-	case Z_RATE_QUALITY:
+	case FEEDRATE_QUALITY:
 		return (info->quality);
-		break;
-	case Z_RATE_CHANNELS:
+	case FEEDRATE_CHANNELS:
 		return (info->channels);
-		break;
-	default:
-		break;
 	}
 
 	return (-1);
@@ -1520,7 +1463,7 @@ z_resampler_init(struct pcm_feeder *f)
 	struct z_info *info;
 	int ret;
 
-	if (f->desc->in != f->desc->out)
+	if (f->desc.in != f->desc.out)
 		return (EINVAL);
 
 	info = malloc(sizeof(*info), M_DEVBUF, M_NOWAIT | M_ZERO);
@@ -1530,16 +1473,14 @@ z_resampler_init(struct pcm_feeder *f)
 	info->rsrc = Z_RATE_DEFAULT;
 	info->rdst = Z_RATE_DEFAULT;
 	info->quality = feeder_rate_quality;
-	info->channels = AFMT_CHANNEL(f->desc->in);
+	info->channels = AFMT_CHANNEL(f->desc.in);
 
 	f->data = info;
 
 	ret = z_resampler_setup(f);
 	if (ret != 0) {
-		if (info->z_pcoeff != NULL)
-			free(info->z_pcoeff, M_DEVBUF);
-		if (info->z_delay != NULL)
-			free(info->z_delay, M_DEVBUF);
+		free(info->z_pcoeff, M_DEVBUF);
+		free(info->z_delay, M_DEVBUF);
 		free(info, M_DEVBUF);
 		f->data = NULL;
 	}
@@ -1553,13 +1494,9 @@ z_resampler_free(struct pcm_feeder *f)
 	struct z_info *info;
 
 	info = f->data;
-	if (info != NULL) {
-		if (info->z_pcoeff != NULL)
-			free(info->z_pcoeff, M_DEVBUF);
-		if (info->z_delay != NULL)
-			free(info->z_delay, M_DEVBUF);
-		free(info, M_DEVBUF);
-	}
+	free(info->z_pcoeff, M_DEVBUF);
+	free(info->z_delay, M_DEVBUF);
+	free(info, M_DEVBUF);
 
 	f->data = NULL;
 
@@ -1674,12 +1611,6 @@ z_resampler_feed_internal(struct pcm_feeder *f, struct pcm_channel *c,
 			 */
 			do {
 				info->z_resample(info, dst);
-#if 0
-				startdrift = z_gy2gx(info, 1);
-				alphadrift = z_drift(info, startdrift, 1);
-				info->z_start += startdrift;
-				info->z_alpha += alphadrift;
-#else
 				info->z_alpha += alphadrift;
 				if (info->z_alpha < info->z_gy)
 					info->z_start += startdrift;
@@ -1687,7 +1618,6 @@ z_resampler_feed_internal(struct pcm_feeder *f, struct pcm_channel *c,
 					info->z_start += startdrift - 1;
 					info->z_alpha -= info->z_gy;
 				}
-#endif
 				dst += align;
 #ifdef Z_DIAGNOSTIC
 				info->z_cycle++;
@@ -1724,11 +1654,6 @@ z_resampler_feed(struct pcm_feeder *f, struct pcm_channel *c, uint8_t *b,
 	return (count - left);
 }
 
-static struct pcm_feederdesc feeder_rate_desc[] = {
-	{ FEEDER_RATE, 0, 0, 0, 0 },
-	{ 0, 0, 0, 0, 0 },
-};
-
 static kobj_method_t feeder_rate_methods[] = {
 	KOBJMETHOD(feeder_init,		z_resampler_init),
 	KOBJMETHOD(feeder_free,		z_resampler_free),
@@ -1738,4 +1663,4 @@ static kobj_method_t feeder_rate_methods[] = {
 	KOBJMETHOD_END
 };
 
-FEEDER_DECLARE(feeder_rate, NULL);
+FEEDER_DECLARE(feeder_rate, FEEDER_RATE);

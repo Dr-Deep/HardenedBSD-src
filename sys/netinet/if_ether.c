@@ -27,8 +27,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)if_ether.c	8.1 (Berkeley) 6/10/93
  */
 
 /*
@@ -36,9 +34,6 @@
  * TODO:
  *	add "inuse/lock" bit (or ref. count) along with valid bit
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include "opt_inet.h"
 
@@ -58,7 +53,9 @@ __FBSDID("$FreeBSD$");
 #include <net/if.h>
 #include <net/if_var.h>
 #include <net/if_dl.h>
+#include <net/if_private.h>
 #include <net/if_types.h>
+#include <net/if_bridgevar.h>
 #include <net/netisr.h>
 #include <net/ethernet.h>
 #include <net/route.h>
@@ -158,11 +155,12 @@ SYSCTL_INT(_net_link_ether_inet, OID_AUTO, max_log_per_second,
  */
 #define MAX_GARP_RETRANSMITS 16
 static int sysctl_garp_rexmit(SYSCTL_HANDLER_ARGS);
-static int garp_rexmit_count = 0; /* GARP retransmission setting. */
+VNET_DEFINE_STATIC(int, garp_rexmit_count) = 0; /* GARP retransmission setting. */
+#define	V_garp_rexmit_count	VNET(garp_rexmit_count)
 
 SYSCTL_PROC(_net_link_ether_inet, OID_AUTO, garp_rexmit_count,
-    CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_MPSAFE,
-    &garp_rexmit_count, 0, sysctl_garp_rexmit, "I",
+    CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_MPSAFE|CTLFLAG_VNET,
+    &VNET_NAME(garp_rexmit_count), 0, sysctl_garp_rexmit, "I",
     "Number of times to retransmit GARP packets;"
     " 0 to disable, maximum of 16");
 
@@ -290,7 +288,7 @@ arptimer(void *arg)
 
 	/* XXX: LOR avoidance. We still have ref on lle. */
 	LLE_WUNLOCK(lle);
-	IF_AFDATA_LOCK(ifp);
+	LLTABLE_LOCK(LLTABLE(ifp));
 	LLE_WLOCK(lle);
 
 	/* Guard against race with other llentry_free(). */
@@ -298,7 +296,7 @@ arptimer(void *arg)
 		LLE_REMREF(lle);
 		lltable_unlink_entry(lle->lle_tbl, lle);
 	}
-	IF_AFDATA_UNLOCK(ifp);
+	LLTABLE_UNLOCK(LLTABLE(ifp));
 
 	size_t pkts_dropped = llentry_free(lle);
 
@@ -490,13 +488,13 @@ arpresolve_full(struct ifnet *ifp, int is_gw, int flags, struct mbuf *m,
 			return (EINVAL);
 		}
 
-		IF_AFDATA_WLOCK(ifp);
+		LLTABLE_LOCK(LLTABLE(ifp));
 		LLE_WLOCK(la);
 		la_tmp = lla_lookup(LLTABLE(ifp), LLE_EXCLUSIVE, dst);
 		/* Prefer ANY existing lle over newly-created one */
 		if (la_tmp == NULL)
 			lltable_link_entry(LLTABLE(ifp), la);
-		IF_AFDATA_WUNLOCK(ifp);
+		LLTABLE_UNLOCK(LLTABLE(ifp));
 		if (la_tmp != NULL) {
 			lltable_free_entry(LLTABLE(ifp), la);
 			la = la_tmp;
@@ -685,6 +683,10 @@ arpintr(struct mbuf *m)
 		hlen = ETHER_ADDR_LEN; /* RFC 826 */
 		layer = "ethernet";
 		break;
+	case ARPHRD_IEEE802:
+		hlen = ETHER_ADDR_LEN;
+		layer = "ieee802";
+		break;
 	case ARPHRD_INFINIBAND:
 		hlen = 20;	/* RFC 4391, INFINIBAND_ALEN */
 		layer = "infiniband";
@@ -830,7 +832,7 @@ in_arpinput(struct mbuf *m)
 	 * when we have clusters of interfaces).
 	 */
 	CK_LIST_FOREACH(ia, INADDR_HASH(itaddr.s_addr), ia_hash) {
-		if (((bridged && ia->ia_ifp->if_bridge == ifp->if_bridge) ||
+		if (((bridged && bridge_same_p(ia->ia_ifp->if_bridge, ifp->if_bridge)) ||
 		    ia->ia_ifp == ifp) &&
 		    itaddr.s_addr == ia->ia_addr.sin_addr.s_addr &&
 		    (ia->ia_ifa.ifa_carp == NULL ||
@@ -840,7 +842,7 @@ in_arpinput(struct mbuf *m)
 		}
 	}
 	CK_LIST_FOREACH(ia, INADDR_HASH(isaddr.s_addr), ia_hash)
-		if (((bridged && ia->ia_ifp->if_bridge == ifp->if_bridge) ||
+		if (((bridged && bridge_same_p(ia->ia_ifp->if_bridge, ifp->if_bridge)) ||
 		    ia->ia_ifp == ifp) &&
 		    isaddr.s_addr == ia->ia_addr.sin_addr.s_addr) {
 			ifa_ref(&ia->ia_ifa);
@@ -848,7 +850,7 @@ in_arpinput(struct mbuf *m)
 		}
 
 #define BDG_MEMBER_MATCHES_ARP(addr, ifp, ia)				\
-  (ia->ia_ifp->if_bridge == ifp->if_softc &&				\
+  (bridge_get_softc_p(ia->ia_ifp) == ifp->if_softc &&			\
   !bcmp(IF_LLADDR(ia->ia_ifp), IF_LLADDR(ifp), ifp->if_addrlen) &&	\
   addr == ia->ia_addr.sin_addr.s_addr)
 	/*
@@ -959,7 +961,7 @@ match:
 		lltable_set_entry_addr(ifp, la, linkhdr, linkhdrsize,
 		    lladdr_off);
 
-		IF_AFDATA_WLOCK(ifp);
+		LLTABLE_LOCK(LLTABLE(ifp));
 		LLE_WLOCK(la);
 		la_tmp = lla_lookup(LLTABLE(ifp), LLE_EXCLUSIVE, dst);
 
@@ -981,7 +983,7 @@ match:
 		 */
 		if (la_tmp == NULL)
 			lltable_link_entry(LLTABLE(ifp), la);
-		IF_AFDATA_WUNLOCK(ifp);
+		LLTABLE_UNLOCK(LLTABLE(ifp));
 
 		if (la_tmp == NULL) {
 			arp_mark_lle_reachable(la, ifp);
@@ -1299,7 +1301,7 @@ arp_add_ifa_lle(struct ifnet *ifp, const struct sockaddr *dst)
 		return;
 	}
 
-	IF_AFDATA_WLOCK(ifp);
+	LLTABLE_LOCK(LLTABLE(ifp));
 	LLE_WLOCK(lle);
 	/* Unlink any entry if exists */
 	lle_tmp = lla_lookup(LLTABLE(ifp), LLE_EXCLUSIVE, dst);
@@ -1307,7 +1309,7 @@ arp_add_ifa_lle(struct ifnet *ifp, const struct sockaddr *dst)
 		lltable_unlink_entry(LLTABLE(ifp), lle_tmp);
 
 	lltable_link_entry(LLTABLE(ifp), lle);
-	IF_AFDATA_WUNLOCK(ifp);
+	LLTABLE_UNLOCK(LLTABLE(ifp));
 
 	if (lle_tmp != NULL)
 		EVENTHANDLER_INVOKE(lle_event, lle_tmp, LLENTRY_EXPIRED);
@@ -1351,6 +1353,7 @@ sysctl_garp_rexmit(SYSCTL_HANDLER_ARGS)
 static void
 garp_rexmit(void *arg)
 {
+	struct epoch_tracker et;
 	struct in_ifaddr *ia = arg;
 
 	if (callout_pending(&ia->ia_garp_timer) ||
@@ -1360,6 +1363,7 @@ garp_rexmit(void *arg)
 		return;
 	}
 
+	NET_EPOCH_ENTER(et);
 	CURVNET_SET(ia->ia_ifa.ifa_ifp->if_vnet);
 
 	/*
@@ -1376,7 +1380,7 @@ garp_rexmit(void *arg)
 	 * the callout to retransmit another GARP packet.
 	 */
 	++ia->ia_garp_count;
-	if (ia->ia_garp_count >= garp_rexmit_count) {
+	if (ia->ia_garp_count >= V_garp_rexmit_count) {
 		ifa_free(&ia->ia_ifa);
 	} else {
 		int rescheduled;
@@ -1391,6 +1395,7 @@ garp_rexmit(void *arg)
 	}
 
 	CURVNET_RESTORE();
+	NET_EPOCH_EXIT(et);
 }
 
 /*
@@ -1443,7 +1448,7 @@ arp_ifinit(struct ifnet *ifp, struct ifaddr *ifa)
 	NET_EPOCH_ENTER(et);
 	arp_announce_ifaddr(ifp, dst_in->sin_addr, IF_LLADDR(ifp));
 	NET_EPOCH_EXIT(et);
-	if (garp_rexmit_count > 0) {
+	if (V_garp_rexmit_count > 0) {
 		garp_timer_start(ifa);
 	}
 
@@ -1480,8 +1485,8 @@ static void
 arp_iflladdr(void *arg __unused, struct ifnet *ifp)
 {
 	/* if_bridge can update its lladdr during if_vmove(), after we've done
-	 * if_detach_internal()/dom_ifdetach(). */
-	if (ifp->if_afdata[AF_INET] == NULL)
+	 * with in_ifdetach(). XXXGL: needs to be fixed. */
+	if (ifp->if_inet == NULL)
 		return;
 
 	lltable_update_ifaddr(LLTABLE(ifp));
@@ -1505,7 +1510,7 @@ vnet_arp_init(void)
 #endif
 }
 VNET_SYSINIT(vnet_arp_init, SI_SUB_PROTO_DOMAIN, SI_ORDER_SECOND,
-    vnet_arp_init, 0);
+    vnet_arp_init, NULL);
 
 #ifdef VIMAGE
 /*

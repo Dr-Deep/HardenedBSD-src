@@ -19,8 +19,6 @@
  *
  * CDDL HEADER END
  *
- * $FreeBSD$
- *
  */
 /*
  * Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
@@ -33,14 +31,15 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/types.h>
 #include <sys/cpuset.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/kmem.h>
+#include <sys/proc.h>
 #include <sys/smp.h>
 #include <sys/dtrace_impl.h>
 #include <sys/dtrace_bsd.h>
+#include <cddl/dev/dtrace/dtrace_cddl.h>
 #include <machine/clock.h>
 #include <machine/cpufunc.h>
 #include <machine/frame.h>
@@ -68,14 +67,18 @@ dtrace_invop_hdlr_t *dtrace_invop_hdlr;
 int
 dtrace_invop(uintptr_t addr, struct trapframe *frame, uintptr_t eax)
 {
+	struct thread *td;
 	dtrace_invop_hdlr_t *hdlr;
 	int rval;
 
+	rval = 0;
+	td = curthread;
+	td->t_dtrace_trapframe = frame;
 	for (hdlr = dtrace_invop_hdlr; hdlr != NULL; hdlr = hdlr->dtih_next)
 		if ((rval = hdlr->dtih_func(addr, frame, eax)) != 0)
-			return (rval);
-
-	return (0);
+			break;
+	td->t_dtrace_trapframe = NULL;
+	return (rval);
 }
 
 void
@@ -134,31 +137,6 @@ void
 dtrace_toxic_ranges(void (*func)(uintptr_t base, uintptr_t limit))
 {
 	(*func)(0, kernelbase);
-}
-
-void
-dtrace_xcall(processorid_t cpu, dtrace_xcall_t func, void *arg)
-{
-	cpuset_t cpus;
-
-	if (cpu == DTRACE_CPUALL)
-		cpus = all_cpus;
-	else
-		CPU_SETOF(cpu, &cpus);
-
-	smp_rendezvous_cpus(cpus, smp_no_rendezvous_barrier, func,
-	    smp_no_rendezvous_barrier, arg);
-}
-
-static void
-dtrace_sync_func(void)
-{
-}
-
-void
-dtrace_sync(void)
-{
-        dtrace_xcall(DTRACE_CPUALL, (dtrace_xcall_t)dtrace_sync_func, NULL);
 }
 
 #ifdef notyet
@@ -280,7 +258,6 @@ dtrace_gethrtime_init_cpu(void *arg)
 		hst_cpu_tsc = rdtsc();
 }
 
-#ifdef EARLY_AP_STARTUP
 static void
 dtrace_gethrtime_init(void *arg)
 {
@@ -288,16 +265,6 @@ dtrace_gethrtime_init(void *arg)
 	uint64_t tsc_f;
 	cpuset_t map;
 	int i;
-#else
-/*
- * Get the frequency and scale factor as early as possible so that they can be
- * used for boot-time tracing.
- */
-static void
-dtrace_gethrtime_init_early(void *arg)
-{
-	uint64_t tsc_f;
-#endif
 
 	/*
 	 * Get TSC frequency known at this moment.
@@ -326,18 +293,6 @@ dtrace_gethrtime_init_early(void *arg)
 	 *   (terahertz) values;
 	 */
 	nsec_scale = ((uint64_t)NANOSEC << SCALE_SHIFT) / tsc_f;
-#ifndef EARLY_AP_STARTUP
-}
-SYSINIT(dtrace_gethrtime_init_early, SI_SUB_CPU, SI_ORDER_ANY,
-    dtrace_gethrtime_init_early, NULL);
-
-static void
-dtrace_gethrtime_init(void *arg)
-{
-	cpuset_t map;
-	struct pcpu *pc;
-	int i;
-#endif
 
 	if (vm_guest != VM_GUEST_NO)
 		return;
@@ -361,13 +316,8 @@ dtrace_gethrtime_init(void *arg)
 	}
 	sched_unpin();
 }
-#ifdef EARLY_AP_STARTUP
 SYSINIT(dtrace_gethrtime_init, SI_SUB_DTRACE, SI_ORDER_ANY,
     dtrace_gethrtime_init, NULL);
-#else
-SYSINIT(dtrace_gethrtime_init, SI_SUB_SMP, SI_ORDER_ANY, dtrace_gethrtime_init,
-    NULL);
-#endif
 
 /*
  * DTrace needs a high resolution time function which can
@@ -444,7 +394,7 @@ dtrace_trap(struct trapframe *frame, u_int type)
 			 * Offset the instruction pointer to the instruction
 			 * following the one causing the fault.
 			 */
-			frame->tf_eip += dtrace_instr_size((u_char *) frame->tf_eip);
+			frame->tf_eip += dtrace_instr_size((uint8_t *) frame->tf_eip);
 			return (1);
 		/* Page fault. */
 		case T_PAGEFLT:
@@ -456,7 +406,7 @@ dtrace_trap(struct trapframe *frame, u_int type)
 			 * Offset the instruction pointer to the instruction
 			 * following the one causing the fault.
 			 */
-			frame->tf_eip += dtrace_instr_size((u_char *) frame->tf_eip);
+			frame->tf_eip += dtrace_instr_size((uint8_t *) frame->tf_eip);
 			return (1);
 		default:
 			/* Handle all other traps in the usual way. */

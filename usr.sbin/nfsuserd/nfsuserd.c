@@ -25,9 +25,6 @@
  *
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/errno.h>
 #include <sys/linker.h>
@@ -35,6 +32,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/mount.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
+#include <sys/sysctl.h>
 #include <sys/time.h>
 #include <sys/ucred.h>
 #include <sys/vnode.h>
@@ -52,6 +50,7 @@ __FBSDID("$FreeBSD$");
 #include <fs/nfs/nfsproto.h>
 #include <fs/nfs/nfskpiport.h>
 #include <fs/nfs/nfs.h>
+#include <fs/nfs/nfsid.h>
 
 #include <ctype.h>
 #include <err.h>
@@ -96,9 +95,9 @@ u_char *defaultuser = "nobody";
 uid_t defaultuid = 65534;
 u_char *defaultgroup = "nogroup";
 gid_t defaultgid = 65533;
-int verbose = 0, im_a_slave = 0, nfsuserdcnt = -1, forcestart = 0;
+int verbose = 0, im_a_server = 0, nfsuserdcnt = -1, forcestart = 0;
 int defusertimeout = DEFUSERTIMEOUT, manage_gids = 0;
-pid_t slaves[MAXNFSUSERD];
+pid_t servers[MAXNFSUSERD];
 static struct sockaddr_storage fromip;
 #ifdef INET6
 static struct in6_addr in6loopback = IN6ADDR_LOOPBACK_INIT;
@@ -127,7 +126,8 @@ main(int argc, char *argv[])
 #ifdef INET6
 	struct sockaddr_in6 *sin6;
 #endif
-	int s;
+	int jailed, s;
+	size_t jailed_size;
 
 	if (modfind("nfscommon") < 0) {
 		/* Not present in kernel, try loading it */
@@ -290,7 +290,7 @@ main(int argc, char *argv[])
 		    dnsname, nid.nid_usermax, nid.nid_usertimeout);
 
 	for (i = 0; i < nfsuserdcnt; i++)
-		slaves[i] = (pid_t)-1;
+		servers[i] = (pid_t)-1;
 
 	nargs.nuserd_family = fromip.ss_family;
 	/*
@@ -326,10 +326,19 @@ main(int argc, char *argv[])
 #else
 	if (nfssvc(NFSSVC_NFSUSERDPORT | NFSSVC_NEWSTRUCT, &nargs) < 0) {
 		if (errno == EPERM) {
-			fprintf(stderr,
-			    "Can't start nfsuserd when already running");
-			fprintf(stderr,
-			    " If not running, use the -force option.\n");
+			jailed = 0;
+			jailed_size = sizeof(jailed);
+			sysctlbyname("security.jail.jailed", &jailed,
+			    &jailed_size, NULL, 0);
+			if (jailed != 0) {
+				fprintf(stderr, "Cannot start nfsuserd. "
+				    "allow.nfsd might not be configured\n");
+			} else {
+				fprintf(stderr, "Cannot start nfsuserd "
+				    "when already running.");
+				fprintf(stderr, " If not running, "
+				    "use the -force option.\n");
+			}
 		} else {
 			fprintf(stderr, "Can't do nfssvc() to add port\n");
 		}
@@ -413,8 +422,12 @@ main(int argc, char *argv[])
 			/* Get the group list for this user. */
 			ngroup = NGROUPS;
 			if (getgrouplist(pwd->pw_name, pwd->pw_gid, grps,
-			    &ngroup) < 0)
-				syslog(LOG_ERR, "Group list too small");
+			    &ngroup) < 0) {
+				syslog(LOG_ERR,
+				    "Group list of user '%s' too big",
+				    pwd->pw_name);
+				ngroup = NGROUPS;
+			}
 			nid.nid_ngroup = ngroup;
 			nid.nid_grps = grps;
 		} else {
@@ -444,7 +457,7 @@ main(int argc, char *argv[])
 	exit(0);
 #endif
 	/*
-	 * Temporarily block SIGUSR1 and SIGCHLD, so slaves[] can't
+	 * Temporarily block SIGUSR1 and SIGCHLD, so servers[] can't
 	 * end up bogus.
 	 */
 	sigemptyset(&signew);
@@ -463,14 +476,14 @@ main(int argc, char *argv[])
 	openlog("nfsuserd:", LOG_PID, LOG_DAEMON);
 
 	/*
-	 * Fork off the slave daemons that do the work. All the master
-	 * does is kill them off and cleanup.
+	 * Fork off the server daemons that do the work. All the master
+	 * does is terminate them and cleanup.
 	 */
 	for (i = 0; i < nfsuserdcnt; i++) {
-		slaves[i] = fork();
-		if (slaves[i] == 0) {
-			im_a_slave = 1;
-			setproctitle("slave");
+		servers[i] = fork();
+		if (servers[i] == 0) {
+			im_a_server = 1;
+			setproctitle("server");
 			sigemptyset(&signew);
 			sigaddset(&signew, SIGUSR1);
 			sigprocmask(SIG_UNBLOCK, &signew, NULL);
@@ -481,7 +494,7 @@ main(int argc, char *argv[])
 			svc_run();
 			syslog(LOG_ERR, "nfsuserd died: %m");
 			exit(1);
-		} else if (slaves[i] < 0) {
+		} else if (servers[i] < 0) {
 			syslog(LOG_ERR, "fork: %m");
 		}
 	}
@@ -613,8 +626,12 @@ nfsuserdsrv(struct svc_req *rqstp, SVCXPRT *transp)
 				/* Get the group list for this user. */
 				ngroup = NGROUPS;
 				if (getgrouplist(pwd->pw_name, pwd->pw_gid,
-				    grps, &ngroup) < 0)
-					syslog(LOG_ERR, "Group list too small");
+				    grps, &ngroup) < 0) {
+					syslog(LOG_ERR,
+					    "Group list of user '%s' too big",
+					    pwd->pw_name);
+					ngroup = NGROUPS;
+				}
 				nid.nid_ngroup = ngroup;
 				nid.nid_grps = grps;
 			} else {
@@ -800,7 +817,7 @@ cleanup_term(int signo __unused)
 {
 	int i, cnt;
 
-	if (im_a_slave)
+	if (im_a_server)
 		exit(0);
 
 	/*
@@ -809,9 +826,9 @@ cleanup_term(int signo __unused)
 	 */
 	cnt = 0;
 	for (i = 0; i < nfsuserdcnt; i++) {
-		if (slaves[i] != (pid_t)-1) {
+		if (servers[i] != (pid_t)-1) {
 			cnt++;
-			kill(slaves[i], SIGUSR1);
+			kill(servers[i], SIGUSR1);
 		}
 	}
 

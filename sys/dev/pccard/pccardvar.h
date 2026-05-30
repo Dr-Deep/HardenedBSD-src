@@ -1,5 +1,4 @@
 /*	$NetBSD: pcmciavar.h,v 1.12 2000/02/08 12:51:31 enami Exp $	*/
-/* $FreeBSD$ */
 
 /*-
  * SPDX-License-Identifier: BSD-4-Clause
@@ -192,7 +191,7 @@ int pccard_select_cfe(device_t dev, int entry);
 
 /* ivar interface */
 enum {
-	PCCARD_IVAR_ETHADDR,	/* read ethernet address from CIS tupple */
+	PCCARD_IVAR_ETHADDR = BUS_IVARS_PRIVATE, /* read ethernet address from CIS tupple */
 	PCCARD_IVAR_VENDOR,
 	PCCARD_IVAR_PRODUCT,
 	PCCARD_IVAR_PRODEXT,

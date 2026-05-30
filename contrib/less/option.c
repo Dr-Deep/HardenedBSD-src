@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1984-2021  Mark Nudelman
+ * Copyright (C) 1984-2026  Mark Nudelman
  *
  * You may distribute under the terms of either the GNU General Public
  * License or the Less License, as specified in the README file.
@@ -21,23 +21,21 @@
 #include "option.h"
 
 static struct loption *pendopt;
-public int plusoption = FALSE;
+public lbool plusoption = FALSE;
 
-static char *optstring LESSPARAMS((char *s, char **p_str, char *printopt, char *validchars));
-static int flip_triple LESSPARAMS((int val, int lc));
+static constant char *optstring(constant char *s, char **p_str, constant char *printopt, constant char *validchars);
+static int flip_triple(int val, lbool lc);
 
-extern int screen_trashed;
 extern int less_is_more;
 extern int quit_at_eof;
 extern char *every_first_cmd;
 extern int opt_use_backslash;
+extern int ctldisp;
 
 /*
  * Return a printable description of an option.
  */
-	static char *
-opt_desc(o)
-	struct loption *o;
+static constant char * opt_desc(struct loption *o)
 {
 	static char buf[OPTNAME_MAX + 10];
 	if (o->oletter == OLETTER_NONE)
@@ -51,13 +49,11 @@ opt_desc(o)
  * Return a string suitable for printing as the "name" of an option.
  * For example, if the option letter is 'x', just return "-x".
  */
-	public char *
-propt(c)
-	int c;
+public constant char * propt(char c)
 {
-	static char buf[8];
+	static char buf[MAX_PRCHAR_LEN+2];
 
-	sprintf(buf, "-%s", prchar(c));
+	sprintf(buf, "-%s", prchar((LWCHAR) c));
 	return (buf);
 }
 
@@ -65,18 +61,15 @@ propt(c)
  * Scan an argument (either from the command line or from the 
  * LESS environment variable) and process it.
  */
-	public void
-scan_option(s)
-	char *s;
+public void scan_option(constant char *s, lbool is_env)
 {
 	struct loption *o;
-	int optc;
-	char *optname;
-	char *printopt;
+	char optc;
+	constant char *optname;
+	constant char *printopt;
 	char *str;
-	int set_default;
-	int lc;
-	int err;
+	lbool set_default;
+	lbool lc;
 	PARG parg;
 
 	if (s == NULL)
@@ -91,15 +84,18 @@ scan_option(s)
 	 */
 	if (pendopt != NULL)
 	{
-		switch (pendopt->otype & OTYPE)
+		if (!(pendopt->otype & O_UNSUPPORTED))
 		{
-		case STRING:
-			(*pendopt->ofunc)(INIT, s);
-			break;
-		case NUMBER:
-			printopt = opt_desc(pendopt);
-			*(pendopt->ovar) = getnum(&s, printopt, (int*)NULL);
-			break;
+			switch (pendopt->otype & OTYPE)
+			{
+			case O_STRING:
+				(*pendopt->ofunc)(INIT, s);
+				break;
+			case O_NUMBER:
+				printopt = opt_desc(pendopt);
+				getnumc(&s, printopt, (pendopt->otype & O_NEGOK) != 0, pendopt->ovar);
+				break;
+			}
 		}
 		pendopt = NULL;
 		return;
@@ -124,18 +120,19 @@ scan_option(s)
 			 * "--" indicates an option name instead of a letter.
 			 */
 			if (*s == '-')
-			{
 				optname = ++s;
-				break;
-			}
 			/*
-			 * "-+" means set these options back to their defaults.
-			 * (They may have been set otherwise by previous 
-			 * options.)
+			 * "-+" or "--+" means set these options back to their defaults.
+			 * (They may have been set otherwise by previous options.)
 			 */
 			set_default = (*s == '+');
 			if (set_default)
 				s++;
+			if (optname != NULL)
+			{
+				optname = s;
+				break;
+			}
 			continue;
 		case '+':
 			/*
@@ -157,7 +154,7 @@ scan_option(s)
 			} else
 			{
 				ungetsc(str);
-				ungetcc_back(CHAR_END_COMMAND);
+				ungetcc_end_command();
 			}
 			free(str);
 			continue;
@@ -181,17 +178,23 @@ scan_option(s)
 		 * Not a special case.
 		 * Look up the option letter in the option table.
 		 */
-		err = 0;
 		if (optname == NULL)
 		{
 			printopt = propt(optc);
 			lc = ASCII_IS_LOWER(optc);
 			o = findopt(optc);
+			if (o == NULL)
+			{
+				parg.p_string = printopt;
+				error("There is no %s option (\"less --help\" for help)", &parg);
+				return;
+			}
 		} else
 		{
+			lbool ambig = FALSE;
 			printopt = optname;
 			lc = ASCII_IS_LOWER(optname[0]);
-			o = findopt_name(&optname, NULL, &err);
+			o = findopt_name(&optname, NULL, &ambig);
 			s = optname;
 			optname = NULL;
 			if (*s == '\0' || *s == ' ')
@@ -206,11 +209,11 @@ scan_option(s)
 				 * The option name is followed by "=value".
 				 */
 				if (o != NULL &&
-				    (o->otype & OTYPE) != STRING &&
-				    (o->otype & OTYPE) != NUMBER)
+				    (o->otype & OTYPE) != O_STRING &&
+				    (o->otype & OTYPE) != O_NUMBER)
 				{
 					parg.p_string = printopt;
-					error("The %s option should not be followed by =",
+					error("The --%s option should not be followed by =",
 						&parg);
 					return;
 				}
@@ -223,35 +226,46 @@ scan_option(s)
 				 */
 				o = NULL;
 			}
-		}
-		if (o == NULL)
-		{
-			parg.p_string = printopt;
-			if (err == OPT_AMBIG)
-				error("%s is an ambiguous abbreviation (\"less --help\" for help)",
-					&parg);
-			else
-				error("There is no %s option (\"less --help\" for help)",
-					&parg);
-			return;
+			if (o == NULL)
+			{
+				parg.p_string = printopt;
+				if (ambig)
+					error("--%s is an ambiguous abbreviation (\"less --help\" for help)", &parg);
+				else
+					error("There is no --%s option (\"less --help\" for help)", &parg);
+				return;
+			}
 		}
 
 		str = NULL;
 		switch (o->otype & OTYPE)
 		{
-		case BOOL:
-			if (set_default)
-				*(o->ovar) = o->odefault;
-			else
-				*(o->ovar) = ! o->odefault;
+		case O_BOOL:
+			if (o->otype & O_UNSUPPORTED)
+				break;
+			if (o->ovar != NULL)
+			{
+				if (set_default)
+					*(o->ovar) = o->odefault;
+				else
+					*(o->ovar) = ! o->odefault;
+			}
 			break;
-		case TRIPLE:
-			if (set_default)
-				*(o->ovar) = o->odefault;
-			else
-				*(o->ovar) = flip_triple(o->odefault, lc);
+		case O_TRIPLE:
+			if (o->otype & O_UNSUPPORTED)
+				break;
+			if (o->ovar != NULL)
+			{
+				if (set_default)
+					*(o->ovar) = o->odefault;
+				else if (is_env && o->ovar == &ctldisp)
+					/* If -r appears in an env var, treat it as -R. */
+					*(o->ovar) = OPT_ONPLUS;
+				else
+					*(o->ovar) = flip_triple(o->odefault, lc);
+			}
 			break;
-		case STRING:
+		case O_STRING:
 			if (*s == '\0')
 			{
 				/*
@@ -273,19 +287,21 @@ scan_option(s)
 			if (s == NULL)
 				return;
 			break;
-		case NUMBER:
+		case O_NUMBER:
 			if (*s == '\0')
 			{
 				pendopt = o;
 				return;
 			}
-			*(o->ovar) = getnum(&s, printopt, (int*)NULL);
+			if (o->otype & O_UNSUPPORTED)
+				break;
+			getnumc(&s, printopt, (o->otype & O_NEGOK) != 0, o->ovar);
 			break;
 		}
 		/*
 		 * If the option has a handling function, call it.
 		 */
-		if (o->ofunc != NULL)
+		if (o->ofunc != NULL && !(o->otype & O_UNSUPPORTED))
 			(*o->ofunc)(INIT, str);
 		if (str != NULL)
 			free(str);
@@ -301,16 +317,9 @@ scan_option(s)
  *      OPT_UNSET       set to the default value
  *      OPT_SET         set to the inverse of the default value
  */
-	public void
-toggle_option(o, lower, s, how_toggle)
-	struct loption *o;
-	int lower;
-	char *s;
-	int how_toggle;
+public lbool toggle_option(struct loption *o, lbool lower, constant char *s, int how_toggle)
 {
-	int num;
 	int no_prompt;
-	int err;
 	PARG parg;
 
 	no_prompt = (how_toggle & OPT_NO_PROMPT);
@@ -319,21 +328,21 @@ toggle_option(o, lower, s, how_toggle)
 	if (o == NULL)
 	{
 		error("No such option", NULL_PARG);
-		return;
+		return FALSE;
 	}
 
-	if (how_toggle == OPT_TOGGLE && (o->otype & NO_TOGGLE))
+	if (how_toggle == OPT_TOGGLE && (o->otype & O_NO_TOGGLE))
 	{
 		parg.p_string = opt_desc(o);
 		error("Cannot change the %s option", &parg);
-		return;
+		return FALSE;
 	}
 
-	if (how_toggle == OPT_NO_TOGGLE && (o->otype & NO_QUERY))
+	if (how_toggle == OPT_NO_TOGGLE && (o->otype & O_NO_QUERY))
 	{
 		parg.p_string = opt_desc(o);
 		error("Cannot query the %s option", &parg);
-		return;
+		return FALSE;
 	} 
 
 	/*
@@ -344,16 +353,16 @@ toggle_option(o, lower, s, how_toggle)
 	 */
 	switch (o->otype & OTYPE)
 	{
-	case STRING:
-	case NUMBER:
+	case O_STRING:
+	case O_NUMBER:
 		if (how_toggle == OPT_TOGGLE && *s == '\0')
 			how_toggle = OPT_NO_TOGGLE;
 		break;
 	}
 
 #if HILITE_SEARCH
-	if (how_toggle != OPT_NO_TOGGLE && (o->otype & HL_REPAINT))
-		repaint_hilite(0);
+	if (how_toggle != OPT_NO_TOGGLE && (o->otype & O_HL_REPAINT))
+		repaint_hilite(FALSE);
 #endif
 
 	/*
@@ -363,24 +372,27 @@ toggle_option(o, lower, s, how_toggle)
 	{
 		switch (o->otype & OTYPE)
 		{
-		case BOOL:
+		case O_BOOL:
 			/*
 			 * Boolean.
 			 */
-			switch (how_toggle)
+			if (o->ovar != NULL)
 			{
-			case OPT_TOGGLE:
-				*(o->ovar) = ! *(o->ovar);
-				break;
-			case OPT_UNSET:
-				*(o->ovar) = o->odefault;
-				break;
-			case OPT_SET:
-				*(o->ovar) = ! o->odefault;
-				break;
+				switch (how_toggle)
+				{
+				case OPT_TOGGLE:
+					*(o->ovar) = ! *(o->ovar);
+					break;
+				case OPT_UNSET:
+					*(o->ovar) = o->odefault;
+					break;
+				case OPT_SET:
+					*(o->ovar) = ! o->odefault;
+					break;
+				}
 			}
 			break;
-		case TRIPLE:
+		case O_TRIPLE:
 			/*
 			 * Triple:
 			 *      If user gave the lower case letter, then switch 
@@ -388,20 +400,23 @@ toggle_option(o, lower, s, how_toggle)
 			 *      If user gave the upper case letter, then switch
 			 *      to 2 unless already 2, in which case make it 0.
 			 */
-			switch (how_toggle)
+			if (o->ovar != NULL)
 			{
-			case OPT_TOGGLE:
-				*(o->ovar) = flip_triple(*(o->ovar), lower);
-				break;
-			case OPT_UNSET:
-				*(o->ovar) = o->odefault;
-				break;
-			case OPT_SET:
-				*(o->ovar) = flip_triple(o->odefault, lower);
-				break;
+				switch (how_toggle)
+				{
+				case OPT_TOGGLE:
+					*(o->ovar) = flip_triple(*(o->ovar), lower);
+					break;
+				case OPT_UNSET:
+					*(o->ovar) = o->odefault;
+					break;
+				case OPT_SET:
+					*(o->ovar) = flip_triple(o->odefault, lower);
+					break;
+				}
 			}
 			break;
-		case STRING:
+		case O_STRING:
 			/*
 			 * String: don't do anything here.
 			 *      The handling function will do everything.
@@ -410,21 +425,20 @@ toggle_option(o, lower, s, how_toggle)
 			{
 			case OPT_SET:
 			case OPT_UNSET:
-				error("Cannot use \"-+\" or \"--\" for a string option",
+				error("Cannot use \"-+\" or \"-!\" for a string option",
 					NULL_PARG);
-				return;
+				return FALSE;
 			}
 			break;
-		case NUMBER:
+		case O_NUMBER:
 			/*
 			 * Number: set the variable to the given number.
 			 */
 			switch (how_toggle)
 			{
 			case OPT_TOGGLE:
-				num = getnum(&s, NULL, &err);
-				if (!err)
-					*(o->ovar) = num;
+				if (!getnumc(&s, opt_desc(o), (o->otype & O_NEGOK) != 0, o->ovar))
+					return FALSE;
 				break;
 			case OPT_UNSET:
 				*(o->ovar) = o->odefault;
@@ -432,7 +446,7 @@ toggle_option(o, lower, s, how_toggle)
 			case OPT_SET:
 				error("Can't use \"-!\" for a numeric option",
 					NULL_PARG);
-				return;
+				return FALSE;
 			}
 			break;
 		}
@@ -446,7 +460,7 @@ toggle_option(o, lower, s, how_toggle)
 		(*o->ofunc)((how_toggle==OPT_NO_TOGGLE) ? QUERY : TOGGLE, s);
 
 #if HILITE_SEARCH
-	if (how_toggle != OPT_NO_TOGGLE && (o->otype & HL_REPAINT))
+	if (how_toggle != OPT_NO_TOGGLE && (o->otype & O_HL_REPAINT))
 		chg_hilite();
 #endif
 
@@ -457,14 +471,15 @@ toggle_option(o, lower, s, how_toggle)
 		 */
 		switch (o->otype & OTYPE)
 		{
-		case BOOL:
-		case TRIPLE:
+		case O_BOOL:
+		case O_TRIPLE:
 			/*
 			 * Print the odesc message.
 			 */
-			error(o->odesc[*(o->ovar)], NULL_PARG);
+			if (o->ovar != NULL)
+				error(o->odesc[*(o->ovar)], NULL_PARG);
 			break;
-		case NUMBER:
+		case O_NUMBER:
 			/*
 			 * The message is in odesc[1] and has a %d for 
 			 * the value of the variable.
@@ -472,25 +487,22 @@ toggle_option(o, lower, s, how_toggle)
 			parg.p_int = *(o->ovar);
 			error(o->odesc[1], &parg);
 			break;
-		case STRING:
-			/*
-			 * Message was already printed by the handling function.
-			 */
+		case O_STRING:
+			if (how_toggle != OPT_NO_TOGGLE && o->ofunc != NULL)
+				(*o->ofunc)(QUERY, NULL);
 			break;
 		}
 	}
 
-	if (how_toggle != OPT_NO_TOGGLE && (o->otype & REPAINT))
-		screen_trashed = TRUE;
+	if (how_toggle != OPT_NO_TOGGLE && (o->otype & O_REPAINT))
+		screen_trashed();
+	return TRUE;
 }
 
 /*
  * "Toggle" a triple-valued option.
  */
-	static int
-flip_triple(val, lc)
-	int val;
-	int lc;
+static int flip_triple(int val, lbool lc)
 {
 	if (lc)
 		return ((val == OPT_ON) ? OPT_OFF : OPT_ON);
@@ -501,26 +513,22 @@ flip_triple(val, lc)
 /*
  * Determine if an option takes a parameter.
  */
-	public int
-opt_has_param(o)
-	struct loption *o;
+public lbool opt_has_param(constant struct loption *o)
 {
 	if (o == NULL)
-		return (0);
-	if (o->otype & (BOOL|TRIPLE|NOVAR|NO_TOGGLE))
-		return (0);
-	return (1);
+		return FALSE;
+	if (o->otype & (O_BOOL|O_TRIPLE|O_NOVAR|O_NO_TOGGLE))
+		return FALSE;
+	return TRUE;
 }
 
 /*
  * Return the prompt to be used for a given option letter.
  * Only string and number valued options have prompts.
  */
-	public char *
-opt_prompt(o)
-	struct loption *o;
+public constant char * opt_prompt(constant struct loption *o)
 {
-	if (o == NULL || (o->otype & (STRING|NUMBER)) == 0)
+	if (o == NULL || (o->otype & (O_STRING|O_NUMBER)) == 0)
 		return ("?");
 	return (o->odesc[0]);
 }
@@ -529,9 +537,7 @@ opt_prompt(o)
  * If the specified option can be toggled, return NULL.
  * Otherwise return an appropriate error message.
  */
-	public char *
-opt_toggle_disallowed(c)
-	int c;
+public constant char * opt_toggle_disallowed(int c)
 {
 	switch (c)
 	{
@@ -550,8 +556,7 @@ opt_toggle_disallowed(c)
  * In that case, the current option is taken to be the string for
  * the previous option.
  */
-	public int
-isoptpending(VOID_PARAM)
+public lbool isoptpending(void)
 {
 	return (pendopt != NULL);
 }
@@ -559,9 +564,7 @@ isoptpending(VOID_PARAM)
 /*
  * Print error message about missing string.
  */
-	static void
-nostring(printopt)
-	char *printopt;
+static void nostring(constant char *printopt)
 {
 	PARG parg;
 	parg.p_string = printopt;
@@ -571,8 +574,7 @@ nostring(printopt)
 /*
  * Print error message if a STRING type option is not followed by a string.
  */
-	public void
-nopendopt(VOID_PARAM)
+public void nopendopt(void)
 {
 	nostring(opt_desc(pendopt));
 }
@@ -581,15 +583,16 @@ nopendopt(VOID_PARAM)
  * Scan to end of string or to an END_OPTION_STRING character.
  * In the latter case, replace the char with a null char.
  * Return a pointer to the remainder of the string, if any.
+ * validchars is of the form "[-][.]d[,]".
+ *   "-" means an optional leading "-" is allowed
+ *   "." means an optional leading "." is allowed (after any "-")
+ *   "d" indicates a string of one or more digits (0-9)
+ *   "," indicates a comma-separated list of digit strings is allowed
+ *   "s" means a space char terminates the argument
  */
-	static char *
-optstring(s, p_str, printopt, validchars)
-	char *s;
-	char **p_str;
-	char *printopt;
-	char *validchars;
+static constant char * optstring(constant char *s, char **p_str, constant char *printopt, constant char *validchars)
 {
-	char *p;
+	constant char *p;
 	char *out;
 
 	if (*s == '\0')
@@ -609,8 +612,38 @@ optstring(s, p_str, printopt, validchars)
 			++p;
 		} else 
 		{
-			if (*p == END_OPTION_STRING || 
-			    (validchars != NULL && strchr(validchars, *p) == NULL))
+			if (validchars != NULL)
+			{
+				if (validchars[0] == 's')
+				{
+					if (*p == ' ')
+						break;
+				} else if (*p == '-')
+				{
+					if (validchars[0] != '-')
+						break;
+					++validchars;
+				} else if (*p == '.')
+				{
+					if (validchars[0] == '-')
+						++validchars;
+					if (validchars[0] != '.')
+						break;
+					++validchars;
+				} else if (*p == ',')
+				{
+					if (validchars[0] == '\0' || validchars[1] != ',')
+						break;
+				} else if (*p >= '0' && *p <= '9')
+				{
+					while (validchars[0] == '-' || validchars[0] == '.')
+						++validchars;
+					if (validchars[0] != 'd')
+						break;
+				} else
+					break;
+			}
+			if (*p == END_OPTION_STRING)
 				/* End of option string. */
 				break;
 		}
@@ -620,26 +653,29 @@ optstring(s, p_str, printopt, validchars)
 	return (p);
 }
 
-/*
- */
-	static int
-num_error(printopt, errp)
-	char *printopt;
-	int *errp;
-{
-	PARG parg;
+typedef enum {
+	NUM_ERR_NONE, NUM_ERR_OVERFLOW, NUM_ERR_NEG, NUM_ERR_MISSING
+} num_error_type;
 
-	if (errp != NULL)
-	{
-		*errp = TRUE;
-		return (-1);
-	}
+/*
+ * Display error message for invalid number.
+ */
+static lbool num_error(constant char *printopt, num_error_type error_type)
+{
 	if (printopt != NULL)
 	{
+		constant char *msg;
+		PARG parg;
+		switch (error_type)
+		{
+		case NUM_ERR_OVERFLOW: msg = "Number too large in %s"; break;
+		case NUM_ERR_NEG:      msg = "Negative number not allowed in %s"; break;
+		default:               msg = "Number is required after %s"; break;
+		}
 		parg.p_string = printopt;
-		error("Number is required after %s", &parg);
+		error(msg, &parg);
 	}
-	return (-1);
+	return FALSE;
 }
 
 /*
@@ -647,35 +683,38 @@ num_error(printopt, errp)
  * Like atoi(), but takes a pointer to a char *, and updates
  * the char * to point after the translated number.
  */
-	public int
-getnum(sp, printopt, errp)
-	char **sp;
-	char *printopt;
-	int *errp;
+public lbool getnumc(constant char **sp, constant char *printopt, lbool neg_ok, mutable int *p_num)
 {
-	char *s;
+	constant char *s = *sp;
 	int n;
-	int neg;
+	lbool neg = FALSE;
 
-	s = skipsp(*sp);
-	neg = FALSE;
+	s = skipspc(s);
 	if (*s == '-')
 	{
+		if (!neg_ok)
+			return num_error(printopt, NUM_ERR_NEG);
 		neg = TRUE;
 		s++;
 	}
 	if (*s < '0' || *s > '9')
-		return (num_error(printopt, errp));
-
-	n = 0;
-	while (*s >= '0' && *s <= '9')
-		n = 10 * n + *s++ - '0';
-	*sp = s;
-	if (errp != NULL)
-		*errp = FALSE;
+		return num_error(printopt, NUM_ERR_MISSING);
+	n = lstrtoic(s, sp, 10);
+	if (n < 0)
+		return num_error(printopt, NUM_ERR_OVERFLOW);
 	if (neg)
 		n = -n;
-	return (n);
+	*p_num = n;
+	return TRUE;
+}
+
+public lbool getnum(char **sp, constant char *printopt, lbool neg_ok, mutable int *p_num)
+{
+	constant char *cs = *sp;
+	if (!getnumc(&cs, printopt, neg_ok, p_num))
+		return FALSE;
+	*sp = (char *) cs;
+	return TRUE;
 }
 
 /*
@@ -684,43 +723,63 @@ getnum(sp, printopt, errp)
  * The value of the fraction is returned as parts per NUM_FRAC_DENOM.
  * That is, if "n" is returned, the fraction intended is n/NUM_FRAC_DENOM.
  */
-	public long
-getfraction(sp, printopt, errp)
-	char **sp;
-	char *printopt;
-	int *errp;
+public lbool getfraction(constant char **sp, mutable long *p_frac)
 {
-	char *s;
+	constant char *s;
 	long frac = 0;
 	int fraclen = 0;
 
-	s = skipsp(*sp);
+	s = skipspc(*sp);
 	if (*s < '0' || *s > '9')
-		return (num_error(printopt, errp));
+		return FALSE;
 
 	for ( ;  *s >= '0' && *s <= '9';  s++)
 	{
+		if (NUM_LOG_FRAC_DENOM <= fraclen)
+			continue;
 		frac = (frac * 10) + (*s - '0');
 		fraclen++;
 	}
-	if (fraclen > NUM_LOG_FRAC_DENOM)
-		while (fraclen-- > NUM_LOG_FRAC_DENOM)
-			frac /= 10;
-	else
-		while (fraclen++ < NUM_LOG_FRAC_DENOM)
-			frac *= 10;
+	while (fraclen++ < NUM_LOG_FRAC_DENOM)
+		frac *= 10;
 	*sp = s;
-	if (errp != NULL)
-		*errp = FALSE;
-	return (frac);
+	*p_frac = frac;
+	return TRUE;
 }
 
+/*
+ * Set the UNSUPPORTED bit in every option listed
+ * in the LESS_UNSUPPORT environment variable.
+ */
+public void init_unsupport(void)
+{
+	constant char *s = lgetenv("LESS_UNSUPPORT");
+	if (isnullenv(s))
+		return;
+	for (;;)
+	{
+		struct loption *opt;
+		s = skipspc(s);
+		if (*s == '\0') break;
+		if (*s == '-' && *++s == '\0') break;
+		if (*s == '-') /* long option name */
+		{
+			++s;
+			opt = findopt_name(&s, NULL, NULL);
+		} else /* short (single-char) option */
+		{
+			opt = findopt(*s);
+			if (opt != NULL) ++s;
+		}
+		if (opt != NULL)
+			opt->otype |= O_UNSUPPORTED;
+	}
+}
 
 /*
  * Get the value of the -e flag.
  */
-	public int
-get_quit_at_eof(VOID_PARAM)
+public int get_quit_at_eof(void)
 {
 	if (!less_is_more)
 		return quit_at_eof;

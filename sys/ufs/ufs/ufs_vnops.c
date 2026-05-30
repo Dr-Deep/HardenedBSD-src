@@ -32,13 +32,9 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)ufs_vnops.c	8.27 (Berkeley) 5/27/95
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_quota.h"
 #include "opt_suiddir.h"
 #include "opt_ufs.h"
@@ -103,7 +99,7 @@ VFS_SMR_DECLARE;
 #include <ufs/ffs/ffs_extern.h>
 
 static vop_accessx_t	ufs_accessx;
-static vop_fplookup_vexec_t ufs_fplookup_vexec;
+vop_fplookup_vexec_t ufs_fplookup_vexec;
 static int ufs_chmod(struct vnode *, int, struct ucred *, struct thread *);
 static int ufs_chown(struct vnode *, uid_t, gid_t, struct ucred *,
     struct thread *);
@@ -160,36 +156,41 @@ ufs_itimes_locked(struct vnode *vp)
 	if ((ip->i_flag & (IN_ACCESS | IN_CHANGE | IN_UPDATE)) == 0)
 		return;
 
-	if ((vp->v_type == VBLK || vp->v_type == VCHR) && !DOINGSOFTDEP(vp))
+	if (VN_ISDEV(vp) && !DOINGSOFTDEP(vp))
 		UFS_INODE_SET_FLAG(ip, IN_LAZYMOD);
 	else if (((vp->v_mount->mnt_kern_flag &
-		    (MNTK_SUSPENDED | MNTK_SUSPEND)) == 0) ||
-		    (ip->i_flag & (IN_CHANGE | IN_UPDATE)))
+	    (MNTK_SUSPENDED | MNTK_SUSPEND)) == 0) ||
+	    (ip->i_flag & (IN_CHANGE | IN_UPDATE)) != 0)
 		UFS_INODE_SET_FLAG(ip, IN_MODIFIED);
-	else if (ip->i_flag & IN_ACCESS)
+	else if ((ip->i_flag & IN_ACCESS) != 0)
 		UFS_INODE_SET_FLAG(ip, IN_LAZYACCESS);
 	vfs_timestamp(&ts);
-	if (ip->i_flag & IN_ACCESS) {
+	if ((ip->i_flag & IN_ACCESS) != 0) {
 		DIP_SET(ip, i_atime, ts.tv_sec);
 		DIP_SET(ip, i_atimensec, ts.tv_nsec);
 	}
-	if (ip->i_flag & IN_UPDATE) {
+	if ((ip->i_flag & IN_UPDATE) != 0) {
 		DIP_SET(ip, i_mtime, ts.tv_sec);
 		DIP_SET(ip, i_mtimensec, ts.tv_nsec);
 	}
-	if (ip->i_flag & IN_CHANGE) {
+	if ((ip->i_flag & IN_CHANGE) != 0) {
 		DIP_SET(ip, i_ctime, ts.tv_sec);
 		DIP_SET(ip, i_ctimensec, ts.tv_nsec);
 		DIP_SET(ip, i_modrev, DIP(ip, i_modrev) + 1);
 	}
 
- out:
+out:
 	ip->i_flag &= ~(IN_ACCESS | IN_CHANGE | IN_UPDATE);
 }
 
 void
 ufs_itimes(struct vnode *vp)
 {
+	struct inode *ip;
+
+	ip = VTOI(vp);
+	if ((ip->i_flag & (IN_ACCESS | IN_CHANGE | IN_UPDATE)) == 0)
+		return;
 
 	VI_LOCK(vp);
 	ufs_itimes_locked(vp);
@@ -230,7 +231,7 @@ ufs_sync_nlink(struct vnode *vp, struct vnode *vp1)
 	if (vp1 != NULL)
 		VOP_UNLOCK(vp1);
 	error = ufs_sync_nlink1(mp);
-	vn_lock_pair(vp, false, vp1, false);
+	vn_lock_pair(vp, false, LK_EXCLUSIVE, vp1, false, LK_EXCLUSIVE);
 	return (error);
 }
 
@@ -318,7 +319,7 @@ ufs_open(struct vop_open_args *ap)
 	struct vnode *vp = ap->a_vp;
 	struct inode *ip;
 
-	if (vp->v_type == VCHR || vp->v_type == VBLK)
+	if (VN_ISDEV(vp))
 		return (EOPNOTSUPP);
 
 	ip = VTOI(vp);
@@ -354,13 +355,8 @@ ufs_close(
 	} */ *ap)
 {
 	struct vnode *vp = ap->a_vp;
-	int usecount;
 
-	VI_LOCK(vp);
-	usecount = vp->v_usecount;
-	if (usecount > 1)
-		ufs_itimes_locked(vp);
-	VI_UNLOCK(vp);
+	ufs_itimes(vp);
 	return (0);
 }
 
@@ -477,7 +473,7 @@ ufs_accessx(
  * VOP_FPLOOKUP_VEXEC routines are subject to special circumstances, see
  * the comment above cache_fplookup for details.
  */
-static int
+int
 ufs_fplookup_vexec(
 	struct vop_fplookup_vexec_args /* {
 		struct vnode *a_vp;
@@ -544,7 +540,7 @@ ufs_stat(struct vop_stat_args *ap)
 	sb->st_uid = ip->i_uid;
 	sb->st_gid = ip->i_gid;
 	if (I_IS_UFS1(ip)) {
-		sb->st_rdev = ip->i_din1->di_rdev;
+		sb->st_rdev = VN_ISDEV(vp) ? ip->i_din1->di_rdev : NODEV;
 		sb->st_size = ip->i_din1->di_size;
 		sb->st_mtim.tv_sec = ip->i_din1->di_mtime;
 		sb->st_mtim.tv_nsec = ip->i_din1->di_mtimensec;
@@ -552,9 +548,10 @@ ufs_stat(struct vop_stat_args *ap)
 		sb->st_ctim.tv_nsec = ip->i_din1->di_ctimensec;
 		sb->st_birthtim.tv_sec = -1;
 		sb->st_birthtim.tv_nsec = 0;
-		sb->st_blocks = dbtob((u_quad_t)ip->i_din1->di_blocks) / S_BLKSIZE;
+		sb->st_blocks = dbtob((uint64_t)ip->i_din1->di_blocks) / S_BLKSIZE;
+		sb->st_filerev = ip->i_din1->di_modrev;
 	} else {
-		sb->st_rdev = ip->i_din2->di_rdev;
+		sb->st_rdev = VN_ISDEV(vp) ? ip->i_din2->di_rdev : NODEV;
 		sb->st_size = ip->i_din2->di_size;
 		sb->st_mtim.tv_sec = ip->i_din2->di_mtime;
 		sb->st_mtim.tv_nsec = ip->i_din2->di_mtimensec;
@@ -562,7 +559,8 @@ ufs_stat(struct vop_stat_args *ap)
 		sb->st_ctim.tv_nsec = ip->i_din2->di_ctimensec;
 		sb->st_birthtim.tv_sec = ip->i_din2->di_birthtime;
 		sb->st_birthtim.tv_nsec = ip->i_din2->di_birthnsec;
-		sb->st_blocks = dbtob((u_quad_t)ip->i_din2->di_blocks) / S_BLKSIZE;
+		sb->st_blocks = dbtob((uint64_t)ip->i_din2->di_blocks) / S_BLKSIZE;
+		sb->st_filerev = ip->i_din2->di_modrev;
 	}
 
 	sb->st_blksize = max(PAGE_SIZE, vp->v_mount->mnt_stat.f_iosize);
@@ -605,16 +603,16 @@ ufs_getattr(
 	vap->va_uid = ip->i_uid;
 	vap->va_gid = ip->i_gid;
 	if (I_IS_UFS1(ip)) {
-		vap->va_rdev = ip->i_din1->di_rdev;
+		vap->va_rdev = VN_ISDEV(vp) ? ip->i_din1->di_rdev : NODEV;
 		vap->va_size = ip->i_din1->di_size;
 		vap->va_mtime.tv_sec = ip->i_din1->di_mtime;
 		vap->va_mtime.tv_nsec = ip->i_din1->di_mtimensec;
 		vap->va_ctime.tv_sec = ip->i_din1->di_ctime;
 		vap->va_ctime.tv_nsec = ip->i_din1->di_ctimensec;
-		vap->va_bytes = dbtob((u_quad_t)ip->i_din1->di_blocks);
+		vap->va_bytes = dbtob((uint64_t)ip->i_din1->di_blocks);
 		vap->va_filerev = ip->i_din1->di_modrev;
 	} else {
-		vap->va_rdev = ip->i_din2->di_rdev;
+		vap->va_rdev = VN_ISDEV(vp) ? ip->i_din2->di_rdev : NODEV;
 		vap->va_size = ip->i_din2->di_size;
 		vap->va_mtime.tv_sec = ip->i_din2->di_mtime;
 		vap->va_mtime.tv_nsec = ip->i_din2->di_mtimensec;
@@ -622,7 +620,7 @@ ufs_getattr(
 		vap->va_ctime.tv_nsec = ip->i_din2->di_ctimensec;
 		vap->va_birthtime.tv_sec = ip->i_din2->di_birthtime;
 		vap->va_birthtime.tv_nsec = ip->i_din2->di_birthnsec;
-		vap->va_bytes = dbtob((u_quad_t)ip->i_din2->di_blocks);
+		vap->va_bytes = dbtob((uint64_t)ip->i_din2->di_blocks);
 		vap->va_filerev = ip->i_din2->di_modrev;
 	}
 	vap->va_flags = ip->i_flags;
@@ -755,6 +753,9 @@ ufs_setattr(
 			 */
 			return (0);
 		}
+		error = vn_rlimit_trunc(vap->va_size, td);
+		if (error != 0)
+			return (error);
 		if ((error = UFS_TRUNCATE(vp, vap->va_size, IO_NORMAL |
 		    ((vap->va_vaflags & VA_SYNC) != 0 ? IO_SYNC : 0),
 		    cred)) != 0)
@@ -1050,7 +1051,7 @@ ufs_remove(
 #ifdef UFS_GJOURNAL
 	ufs_gjournal_orphan(vp);
 #endif
-	error = ufs_dirremove(dvp, ip, ap->a_cnp->cn_flags, 0);
+	error = ufs_dirremove(dvp, ip, ap->a_cnp->cn_flags, false);
 	if (ip->i_nlink <= 0)
 		vp->v_vflag |= VV_NOSYNC;
 	if (IS_SNAPSHOT(ip)) {
@@ -1099,11 +1100,6 @@ ufs_link(
 	struct direct newdir;
 	int error;
 
-#ifdef INVARIANTS
-	if ((cnp->cn_flags & HASBUF) == 0)
-		panic("ufs_link: no name");
-#endif
-
 	if (DOINGSUJ(tdvp)) {
 		error = softdep_prelink(tdvp, vp, cnp);
 		if (error != 0) {
@@ -1137,7 +1133,7 @@ ufs_link(
 
 	ip->i_effnlink++;
 	ip->i_nlink++;
-	DIP_SET(ip, i_nlink, ip->i_nlink);
+	DIP_SET_NLINK(ip, ip->i_nlink);
 	UFS_INODE_SET_FLAG(ip, IN_CHANGE);
 	if (DOINGSOFTDEP(vp))
 		softdep_setup_link(VTOI(tdvp), ip);
@@ -1150,7 +1146,7 @@ ufs_link(
 	if (error) {
 		ip->i_effnlink--;
 		ip->i_nlink--;
-		DIP_SET(ip, i_nlink, ip->i_nlink);
+		DIP_SET_NLINK(ip, ip->i_nlink);
 		UFS_INODE_SET_FLAG(ip, IN_CHANGE);
 		if (DOINGSOFTDEP(vp))
 			softdep_revert_link(VTOI(tdvp), ip);
@@ -1194,8 +1190,6 @@ ufs_whiteout(
 	case CREATE:
 		/* create a new directory whiteout */
 #ifdef INVARIANTS
-		if ((cnp->cn_flags & SAVENAME) == 0)
-			panic("ufs_whiteout: missing name");
 		if (OFSFMT(dvp))
 			panic("ufs_whiteout: old format filesystem");
 #endif
@@ -1215,7 +1209,7 @@ ufs_whiteout(
 #endif
 
 		cnp->cn_flags &= ~DOWHITEOUT;
-		error = ufs_dirremove(dvp, NULL, cnp->cn_flags, 0);
+		error = ufs_dirremove(dvp, NULL, cnp->cn_flags, false);
 		break;
 	default:
 		panic("ufs_whiteout: unknown op");
@@ -1261,6 +1255,7 @@ ufs_rename(
 		struct vnode *a_tdvp;
 		struct vnode *a_tvp;
 		struct componentname *a_tcnp;
+		u_int a_flags;
 	} */ *ap)
 {
 	struct vnode *tvp = ap->a_tvp;
@@ -1274,20 +1269,16 @@ ufs_rename(
 	struct inode *fip, *tip, *tdp, *fdp;
 	struct direct newdir;
 	off_t endoff;
-	int doingdirectory, newparent;
+	int doingdirectory;
+	u_int newparent;
 	int error = 0;
 	struct mount *mp;
 	ino_t ino;
 	seqc_t fdvp_s, fvp_s, tdvp_s, tvp_s;
-	bool checkpath_locked, want_seqc_end;
+	bool want_seqc_end;
 
-	checkpath_locked = want_seqc_end = false;
+	want_seqc_end = false;
 
-#ifdef INVARIANTS
-	if ((tcnp->cn_flags & HASBUF) == 0 ||
-	    (fcnp->cn_flags & HASBUF) == 0)
-		panic("ufs_rename: no name");
-#endif
 	endoff = 0;
 	mp = tdvp->v_mount;
 	VOP_UNLOCK(tdvp);
@@ -1299,6 +1290,12 @@ ufs_rename(
 	if ((fvp->v_mount != tdvp->v_mount) ||
 	    (tvp && (fvp->v_mount != tvp->v_mount))) {
 		error = EXDEV;
+		mp = NULL;
+		goto releout;
+	}
+
+	if ((ap->a_flags & ~(AT_RENAME_NOREPLACE)) != 0) {
+		error = EOPNOTSUPP;
 		mp = NULL;
 		goto releout;
 	}
@@ -1397,6 +1394,11 @@ relock:
 		}
 	}
 
+	if (tvp != NULL && (ap->a_flags & AT_RENAME_NOREPLACE) != 0) {
+		error = EEXIST;
+		goto unlockout;
+	}
+
 	if (DOINGSUJ(fdvp) &&
 	    (seqc_in_modify(fdvp_s) || !vn_seqc_consistent(fdvp, fdvp_s) ||
 	     seqc_in_modify(fvp_s) || !vn_seqc_consistent(fvp, fvp_s) ||
@@ -1438,10 +1440,6 @@ relock:
 		}
 		vfs_ref(mp);
 		MPASS(!want_seqc_end);
-		if (checkpath_locked) {
-			sx_xunlock(&VFSTOUFS(mp)->um_checkpath_lock);
-			checkpath_locked = false;
-		}
 		VOP_UNLOCK(fdvp);
 		VOP_UNLOCK(fvp);
 		vref(tdvp);
@@ -1490,13 +1488,11 @@ relock:
 	 * the user must have write permission in the source so
 	 * as to be able to change "..".
 	 */
-	if (doingdirectory && newparent) {
+	if (doingdirectory && newparent != 0) {
 		error = VOP_ACCESS(fvp, VWRITE, tcnp->cn_cred, curthread);
 		if (error)
 			goto unlockout;
 
-		sx_xlock(&VFSTOUFS(mp)->um_checkpath_lock);
-		checkpath_locked = true;
 		error = ufs_checkpath(ino, fdp->i_number, tdp, tcnp->cn_cred,
 		    &ino);
 		/*
@@ -1504,8 +1500,6 @@ relock:
 		 * everything else and VGET before restarting.
 		 */
 		if (ino) {
-			sx_xunlock(&VFSTOUFS(mp)->um_checkpath_lock);
-			checkpath_locked = false;
 			VOP_UNLOCK(fdvp);
 			VOP_UNLOCK(fvp);
 			VOP_UNLOCK(tdvp);
@@ -1519,8 +1513,6 @@ relock:
 		}
 		if (error)
 			goto unlockout;
-		if ((tcnp->cn_flags & SAVESTART) == 0)
-			panic("ufs_rename: lost to startdir");
 	}
 	if (fip->i_effnlink == 0 || fdp->i_effnlink == 0 ||
 	    tdp->i_effnlink == 0)
@@ -1541,7 +1533,7 @@ relock:
 	 */
 	fip->i_effnlink++;
 	fip->i_nlink++;
-	DIP_SET(fip, i_nlink, fip->i_nlink);
+	DIP_SET_NLINK(fip, fip->i_nlink);
 	UFS_INODE_SET_FLAG(fip, IN_CHANGE);
 	if (DOINGSOFTDEP(fvp))
 		softdep_setup_link(tdp, fip);
@@ -1559,7 +1551,7 @@ relock:
 	if (tip == NULL) {
 		if (ITODEV(tdp) != ITODEV(fip))
 			panic("ufs_rename: EXDEV");
-		if (doingdirectory && newparent) {
+		if (doingdirectory && newparent != 0) {
 			/*
 			 * Account for ".." in new directory.
 			 * When source and destination have the same
@@ -1570,7 +1562,7 @@ relock:
 			if (tdp->i_nlink >= UFS_LINK_MAX) {
 				fip->i_effnlink--;
 				fip->i_nlink--;
-				DIP_SET(fip, i_nlink, fip->i_nlink);
+				DIP_SET_NLINK(fip, fip->i_nlink);
 				UFS_INODE_SET_FLAG(fip, IN_CHANGE);
 				if (DOINGSOFTDEP(fvp))
 					softdep_revert_link(tdp, fip);
@@ -1587,9 +1579,6 @@ relock:
 				vn_seqc_write_end(fdvp);
 				want_seqc_end = false;
 				vfs_ref(mp);
-				MPASS(checkpath_locked);
-				sx_xunlock(&VFSTOUFS(mp)->um_checkpath_lock);
-				checkpath_locked = false;
 				VOP_UNLOCK(fdvp);
 				VOP_UNLOCK(fvp);
 				vref(tdvp);
@@ -1640,7 +1629,8 @@ relock:
 		 */
 		if ((tip->i_mode & IFMT) == IFDIR) {
 			if ((tip->i_effnlink > 2) ||
-			    !ufs_dirempty(tip, tdp->i_number, tcnp->cn_cred)) {
+			    !ufs_dirempty(tip, tdp->i_number, tcnp->cn_cred,
+			    (tcnp->cn_flags & IGNOREWHITEOUT) != 0)) {
 				error = ENOTEMPTY;
 				goto bad;
 			}
@@ -1654,7 +1644,7 @@ relock:
 			goto bad;
 		}
 		if (doingdirectory) {
-			if (!newparent) {
+			if (newparent == 0) {
 				tdp->i_effnlink--;
 				if (DOINGSOFTDEP(tdvp))
 					softdep_change_linkcnt(tdp);
@@ -1664,11 +1654,11 @@ relock:
 				softdep_change_linkcnt(tip);
 		}
 		error = ufs_dirrewrite(tdp, tip, fip->i_number,
-		    IFTODT(fip->i_mode),
-		    (doingdirectory && newparent) ? newparent : doingdirectory);
+		    IFTODT(fip->i_mode), (doingdirectory && newparent != 0) ?
+		    newparent : doingdirectory);
 		if (error) {
 			if (doingdirectory) {
-				if (!newparent) {
+				if (newparent == 0) {
 					tdp->i_effnlink++;
 					if (DOINGSOFTDEP(tdvp))
 						softdep_change_linkcnt(tdp);
@@ -1691,13 +1681,13 @@ relock:
 			 * disk, so when running with that code we avoid doing
 			 * them now.
 			 */
-			if (!newparent) {
+			if (newparent == 0) {
 				tdp->i_nlink--;
-				DIP_SET(tdp, i_nlink, tdp->i_nlink);
+				DIP_SET_NLINK(tdp, tdp->i_nlink);
 				UFS_INODE_SET_FLAG(tdp, IN_CHANGE);
 			}
 			tip->i_nlink--;
-			DIP_SET(tip, i_nlink, tip->i_nlink);
+			DIP_SET_NLINK(tip, tip->i_nlink);
 			UFS_INODE_SET_FLAG(tip, IN_CHANGE);
 		}
 	}
@@ -1720,7 +1710,11 @@ relock:
 	 * parent directory must be decremented
 	 * and ".." set to point to the new parent.
 	 */
-	if (doingdirectory && newparent) {
+	if (doingdirectory && newparent != 0) {
+		/*
+		 * Set the directory depth based on its new parent.
+		 */
+		DIP_SET(fip, i_dirdepth, DIP(tdp, i_dirdepth) + 1);
 		/*
 		 * If tip exists we simply use its link, otherwise we must
 		 * add a new one.
@@ -1728,7 +1722,7 @@ relock:
 		if (tip == NULL) {
 			tdp->i_effnlink++;
 			tdp->i_nlink++;
-			DIP_SET(tdp, i_nlink, tdp->i_nlink);
+			DIP_SET_NLINK(tdp, tdp->i_nlink);
 			UFS_INODE_SET_FLAG(tdp, IN_CHANGE);
 			if (DOINGSOFTDEP(tdvp))
 				softdep_setup_dotdot_link(tdp, fip);
@@ -1741,10 +1735,12 @@ relock:
 			/* Journal must account for each new link. */
 			softdep_setup_dotdot_link(tdp, fip);
 		SET_I_OFFSET(fip, mastertemplate.dot_reclen);
-		ufs_dirrewrite(fip, fdp, newparent, DT_DIR, 0);
+		if (ufs_dirrewrite(fip, fdp, newparent, DT_DIR, 0) != 0)
+			ufs_dirbad(fip, mastertemplate.dot_reclen,
+			    "rename: missing .. entry");
 		cache_purge(fdvp);
 	}
-	error = ufs_dirremove(fdvp, fip, fcnp->cn_flags, 0);
+	error = ufs_dirremove(fdvp, fip, fcnp->cn_flags, false);
 	/*
 	 * The kern_renameat() looks up the fvp using the DELETE flag, which
 	 * causes the removal of the name cache entry for fvp.
@@ -1769,9 +1765,6 @@ unlockout:
 		vn_seqc_write_end(fdvp);
 	}
 
-	if (checkpath_locked)
-		sx_xunlock(&VFSTOUFS(mp)->um_checkpath_lock);
-
 	vput(fdvp);
 	vput(fvp);
 
@@ -1789,7 +1782,7 @@ unlockout:
 bad:
 	fip->i_effnlink--;
 	fip->i_nlink--;
-	DIP_SET(fip, i_nlink, fip->i_nlink);
+	DIP_SET_NLINK(fip, fip->i_nlink);
 	UFS_INODE_SET_FLAG(fip, IN_CHANGE);
 	if (DOINGSOFTDEP(fvp))
 		softdep_revert_link(tdp, fip);
@@ -2020,10 +2013,6 @@ ufs_mkdir(
 	int error, dmode;
 	long blkoff;
 
-#ifdef INVARIANTS
-	if ((cnp->cn_flags & HASBUF) == 0)
-		panic("ufs_mkdir: no name");
-#endif
 	dp = VTOI(dvp);
 	error = ufs_sync_nlink(dvp, NULL);
 	if (error != 0)
@@ -2061,7 +2050,6 @@ ufs_mkdir(
 	{
 #ifdef QUOTA
 		struct ucred ucred, *ucp;
-		gid_t ucred_group;
 		ucp = cnp->cn_cred;
 #endif
 		/*
@@ -2086,11 +2074,10 @@ ufs_mkdir(
 				 * XXX This seems to never be accessed out of
 				 * our context so a stack variable is ok.
 				 */
-				refcount_init(&ucred.cr_ref, 1);
+				ucred.cr_ref = 1;
 				ucred.cr_uid = ip->i_uid;
-				ucred.cr_ngroups = 1;
-				ucred.cr_groups = &ucred_group;
-				ucred.cr_groups[0] = dp->i_gid;
+				ucred.cr_gid = dp->i_gid;
+				ucred.cr_ngroups = 0;
 				ucp = &ucred;
 			}
 #endif
@@ -2133,7 +2120,8 @@ ufs_mkdir(
 	tvp->v_type = VDIR;	/* Rest init'd in getnewvnode(). */
 	ip->i_effnlink = 2;
 	ip->i_nlink = 2;
-	DIP_SET(ip, i_nlink, 2);
+	DIP_SET_NLINK(ip, 2);
+	DIP_SET(ip, i_dirdepth, DIP(dp,i_dirdepth) + 1);
 
 	if (cnp->cn_flags & ISWHITEOUT) {
 		ip->i_flags |= UF_OPAQUE;
@@ -2147,7 +2135,7 @@ ufs_mkdir(
 	 */
 	dp->i_effnlink++;
 	dp->i_nlink++;
-	DIP_SET(dp, i_nlink, dp->i_nlink);
+	DIP_SET_NLINK(dp, dp->i_nlink);
 	UFS_INODE_SET_FLAG(dp, IN_CHANGE);
 	if (DOINGSOFTDEP(dvp))
 		softdep_setup_mkdir(dp, ip);
@@ -2238,7 +2226,7 @@ bad:
 	} else {
 		dp->i_effnlink--;
 		dp->i_nlink--;
-		DIP_SET(dp, i_nlink, dp->i_nlink);
+		DIP_SET_NLINK(dp, dp->i_nlink);
 		UFS_INODE_SET_FLAG(dp, IN_CHANGE);
 		/*
 		 * No need to do an explicit VOP_TRUNCATE here, vrele will
@@ -2246,7 +2234,7 @@ bad:
 		 */
 		ip->i_effnlink = 0;
 		ip->i_nlink = 0;
-		DIP_SET(ip, i_nlink, 0);
+		DIP_SET_NLINK(ip, 0);
 		UFS_INODE_SET_FLAG(ip, IN_CHANGE);
 		if (DOINGSOFTDEP(tvp))
 			softdep_revert_mkdir(dp, ip);
@@ -2293,7 +2281,8 @@ ufs_rmdir(
 		error = EINVAL;
 		goto out;
 	}
-	if (!ufs_dirempty(ip, dp->i_number, cnp->cn_cred)) {
+	if (!ufs_dirempty(ip, dp->i_number, cnp->cn_cred,
+	    (cnp->cn_flags & IGNOREWHITEOUT) != 0)) {
 		error = ENOTEMPTY;
 		goto out;
 	}
@@ -2326,7 +2315,7 @@ ufs_rmdir(
 	ip->i_effnlink--;
 	if (DOINGSOFTDEP(vp))
 		softdep_setup_rmdir(dp, ip);
-	error = ufs_dirremove(dvp, ip, cnp->cn_flags, 1);
+	error = ufs_dirremove(dvp, ip, cnp->cn_flags, true);
 	if (error) {
 		dp->i_effnlink++;
 		ip->i_effnlink++;
@@ -2343,11 +2332,11 @@ ufs_rmdir(
 	 */
 	if (!DOINGSOFTDEP(vp)) {
 		dp->i_nlink--;
-		DIP_SET(dp, i_nlink, dp->i_nlink);
+		DIP_SET_NLINK(dp, dp->i_nlink);
 		UFS_INODE_SET_FLAG(dp, IN_CHANGE);
 		error = UFS_UPDATE(dvp, 0);
 		ip->i_nlink--;
-		DIP_SET(ip, i_nlink, ip->i_nlink);
+		DIP_SET_NLINK(ip, ip->i_nlink);
 		UFS_INODE_SET_FLAG(ip, IN_CHANGE);
 	}
 	cache_vop_rmdir(dvp, vp);
@@ -2423,14 +2412,16 @@ ufs_readdir(
 	off_t offset, startoffset;
 	size_t readcnt, skipcnt;
 	ssize_t startresid;
-	u_int ncookies;
+	uint64_t ncookies;
 	int error;
 
 	if (uio->uio_offset < 0)
 		return (EINVAL);
 	ip = VTOI(vp);
-	if (ip->i_effnlink == 0)
+	if (ip->i_effnlink == 0) {
+		*ap->a_eofflag = 1;
 		return (0);
+	}
 	if (ap->a_ncookies != NULL) {
 		if (uio->uio_resid < 0)
 			ncookies = 0;
@@ -2526,7 +2517,7 @@ nextentry:
 		error = 0;
 	if (ap->a_ncookies != NULL) {
 		if (error == 0) {
-			ap->a_ncookies -= ncookies;
+			*ap->a_ncookies -= ncookies;
 		} else {
 			free(*ap->a_cookies, M_TEMP);
 			*ap->a_ncookies = 0;
@@ -2613,12 +2604,16 @@ ufs_print(
 
 	printf("\tnlink=%d, effnlink=%d, size=%jd", ip->i_nlink,
 	    ip->i_effnlink, (intmax_t)ip->i_size);
-	if (I_IS_UFS2(ip))
-		printf(", extsize %d", ip->i_din2->di_extsize);
+	if (I_IS_UFS2(ip)) {
+		if (ip->i_din2 == NULL)
+			printf(", dinode=NULL (fields omitted)");
+		else
+			printf(", extsize=%d", ip->i_din2->di_extsize);
+	}
 	printf("\n\tgeneration=%jx, uid=%d, gid=%d, flags=0x%b\n",
 	    (uintmax_t)ip->i_gen, ip->i_uid, ip->i_gid,
-	    (u_int)ip->i_flags, PRINT_INODE_FLAGS);
-	printf("\tino %lu, on dev %s", (u_long)ip->i_number,
+	    (uint32_t)ip->i_flags, PRINT_INODE_FLAGS);
+	printf("\tino %ju, on dev %s", (intmax_t)ip->i_number,
 	    devtoname(ITODEV(ip)));
 	if (vp->v_type == VFIFO)
 		fifo_printinfo(vp);
@@ -2640,14 +2635,8 @@ ufsfifo_close(
 		struct thread *a_td;
 	} */ *ap)
 {
-	struct vnode *vp = ap->a_vp;
-	int usecount;
 
-	VI_LOCK(vp);
-	usecount = vp->v_usecount;
-	if (usecount > 1)
-		ufs_itimes_locked(vp);
-	VI_UNLOCK(vp);
+	ufs_close(ap);
 	return (fifo_specops.vop_close(ap));
 }
 
@@ -2746,6 +2735,9 @@ ufs_pathconf(
 	case _PC_SYMLINK_MAX:
 		*ap->a_retval = MAXPATHLEN;
 		break;
+	case _PC_HAS_HIDDENSYSTEM:
+		*ap->a_retval = 1;
+		break;
 
 	default:
 		error = vop_stdpathconf(ap);
@@ -2795,10 +2787,6 @@ ufs_makeinode(int mode, struct vnode *dvp, struct vnode **vpp,
 	int error;
 
 	pdir = VTOI(dvp);
-#ifdef INVARIANTS
-	if ((cnp->cn_flags & HASBUF) == 0)
-		panic("%s: no name", callfunc);
-#endif
 	*vpp = NULL;
 	if ((mode & IFMT) == 0)
 		mode |= IFREG;
@@ -2824,7 +2812,6 @@ ufs_makeinode(int mode, struct vnode *dvp, struct vnode **vpp,
 	{
 #ifdef QUOTA
 		struct ucred ucred, *ucp;
-		gid_t ucred_group;
 		ucp = cnp->cn_cred;
 #endif
 		/*
@@ -2848,11 +2835,10 @@ ufs_makeinode(int mode, struct vnode *dvp, struct vnode **vpp,
 			 * XXX This seems to never be accessed out of our
 			 * context so a stack variable is ok.
 			 */
-			refcount_init(&ucred.cr_ref, 1);
+			ucred.cr_ref = 1;
 			ucred.cr_uid = ip->i_uid;
-			ucred.cr_ngroups = 1;
-			ucred.cr_groups = &ucred_group;
-			ucred.cr_groups[0] = pdir->i_gid;
+			ucred.cr_gid = pdir->i_gid;
+			ucred.cr_ngroups = 0;
 			ucp = &ucred;
 #endif
 		} else {
@@ -2894,7 +2880,7 @@ ufs_makeinode(int mode, struct vnode *dvp, struct vnode **vpp,
 	tvp->v_type = IFTOVT(mode);	/* Rest init'd in getnewvnode(). */
 	ip->i_effnlink = 1;
 	ip->i_nlink = 1;
-	DIP_SET(ip, i_nlink, 1);
+	DIP_SET_NLINK(ip, 1);
 	if (DOINGSOFTDEP(tvp))
 		softdep_setup_create(VTOI(dvp), ip);
 	if ((ip->i_mode & ISGID) && !groupmember(ip->i_gid, cnp->cn_cred) &&
@@ -2950,7 +2936,7 @@ bad:
 	 */
 	ip->i_effnlink = 0;
 	ip->i_nlink = 0;
-	DIP_SET(ip, i_nlink, 0);
+	DIP_SET_NLINK(ip, 0);
 	UFS_INODE_SET_FLAG(ip, IN_CHANGE);
 	if (DOINGSOFTDEP(tvp))
 		softdep_revert_create(VTOI(dvp), ip);
@@ -2969,7 +2955,7 @@ ufs_ioctl(struct vop_ioctl_args *ap)
 	vp = ap->a_vp;
 	switch (ap->a_command) {
 	case FIOSEEKDATA:
-		error = vn_lock(vp, LK_SHARED);
+		error = vn_lock(vp, LK_EXCLUSIVE);
 		if (error == 0) {
 			error = ufs_bmap_seekdata(vp, (off_t *)ap->a_data);
 			VOP_UNLOCK(vp);
@@ -3081,5 +3067,7 @@ struct vop_vector ufs_fifoops = {
 	.vop_setacl =		ufs_setacl,
 	.vop_aclcheck =		ufs_aclcheck,
 #endif
+	.vop_fplookup_vexec =	VOP_EAGAIN,
+	.vop_fplookup_symlink =	VOP_EAGAIN,
 };
 VFS_VOP_VECTOR_REGISTER(ufs_fifoops);

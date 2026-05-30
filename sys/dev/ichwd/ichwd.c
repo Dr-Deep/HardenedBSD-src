@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2004 Texas A&M University
  * All rights reserved.
@@ -58,9 +58,6 @@
  * SoC PMC support by Denir Li <denir.li@cas-well.com>
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/eventhandler.h>
 #include <sys/kernel.h>
@@ -93,7 +90,7 @@ static struct ichwd_device ichwd_devices[] = {
 	{ DEVICEID_82801E,   "Intel 82801E watchdog timer",	5, 1 },
 	{ DEVICEID_82801EB,  "Intel 82801EB watchdog timer",	5, 1 },
 	{ DEVICEID_82801EBR, "Intel 82801EB/ER watchdog timer",	5, 1 },
-	{ DEVICEID_6300ESB,  "Intel 6300ESB watchdog timer",	5, 1 },
+	{ DEVICEID_6300ESB_1,  "Intel 6300ESB watchdog timer",	5, 1 },
 	{ DEVICEID_82801FBR, "Intel 82801FB/FR watchdog timer",	6, 2 },
 	{ DEVICEID_ICH6M,    "Intel ICH6M watchdog timer",	6, 2 },
 	{ DEVICEID_ICH6W,    "Intel ICH6W watchdog timer",	6, 2 },
@@ -564,13 +561,12 @@ static device_t
 ichwd_find_ich_lpc_bridge(device_t isa, struct ichwd_device **id_p)
 {
 	struct ichwd_device *id;
-	device_t isab, pci;
+	device_t isab;
 	uint16_t devid;
 
 	/* Check whether parent ISA bridge looks familiar. */
 	isab = device_get_parent(isa);
-	pci = device_get_parent(isab);
-	if (pci == NULL || device_get_devclass(pci) != devclass_find("pci"))
+	if (!is_pci_device(isab))
 		return (NULL);
 	if (pci_get_vendor(isab) != VENDORID_INTEL)
 		return (NULL);
@@ -701,12 +697,12 @@ ichwd_identify(driver_t *driver, device_t parent)
 		 * Space via the bridge's BAR.
 		 * Then hide back the bridge.
 		 */
-		pci_cfgregwrite(0, 31, 1, 0xe1, 0, 1);
-		base_address64 = pci_cfgregread(0, 31, 1, SBREG_BAR + 4, 4);
+		pci_cfgregwrite(0, 0, 31, 1, 0xe1, 0, 1);
+		base_address64 = pci_cfgregread(0, 0, 31, 1, SBREG_BAR + 4, 4);
 		base_address64 <<= 32;
-		base_address64 |= pci_cfgregread(0, 31, 1, SBREG_BAR, 4);
+		base_address64 |= pci_cfgregread(0, 0, 31, 1, SBREG_BAR, 4);
 		base_address64 &= ~0xfull;
-		pci_cfgregwrite(0, 31, 1, 0xe1, 1, 1);
+		pci_cfgregwrite(0, 0, 31, 1, 0xe1, 1, 1);
 
 		/*
 		 * No Reboot bit is in General Control register, offset 0xc,

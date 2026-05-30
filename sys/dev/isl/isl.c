@@ -25,8 +25,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Driver for intersil I2C ISL29018 Digital Ambient Light Sensor and Proximity
  * Sensor with Interrupt Function, only tested connected over SMBus (ig4iic).
@@ -151,7 +149,7 @@ static void
 isl_identify(driver_t *driver, device_t parent)
 {
 
-	if (device_find_child(parent, "asl", -1)) {
+	if (device_find_child(parent, "asl", DEVICE_UNIT_ANY)) {
 		if (bootverbose)
 			printf("asl: device(s) already created\n");
 		return;
@@ -159,7 +157,7 @@ isl_identify(driver_t *driver, device_t parent)
 
 	/* Check if we can communicate to our slave. */
 	if (init_device(dev, 0x88, 1) == 0)
-		BUS_ADD_CHILD(parent, ISA_ORDER_SPECULATIVE, "isl", -1);
+		BUS_ADD_CHILD(parent, ISA_ORDER_SPECULATIVE, "isl", DEVICE_UNIT_ANY);
 }
 #endif
 
@@ -204,7 +202,7 @@ isl_attach(device_t dev)
 	if (use_als) {
 		SYSCTL_ADD_PROC(sysctl_ctx,
 		    SYSCTL_CHILDREN(sysctl_tree), OID_AUTO, "als",
-		    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_NEEDGIANT, sc,
+		    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE, sc,
 		    ISL_METHOD_ALS, isl_sysctl, "I",
 		    "Current ALS sensor read-out");
 	}
@@ -212,7 +210,7 @@ isl_attach(device_t dev)
 	if (use_ir) {
 		SYSCTL_ADD_PROC(sysctl_ctx,
 		    SYSCTL_CHILDREN(sysctl_tree), OID_AUTO, "ir",
-		    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_NEEDGIANT, sc,
+		    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE, sc,
 		    ISL_METHOD_IR, isl_sysctl, "I",
 		    "Current IR sensor read-out");
 	}
@@ -220,20 +218,20 @@ isl_attach(device_t dev)
 	if (use_prox) {
 		SYSCTL_ADD_PROC(sysctl_ctx,
 		    SYSCTL_CHILDREN(sysctl_tree), OID_AUTO, "prox",
-		    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_NEEDGIANT, sc,
+		    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE, sc,
 		    ISL_METHOD_PROX, isl_sysctl, "I",
 		    "Current proximity sensor read-out");
 	}
 
 	SYSCTL_ADD_PROC(sysctl_ctx,
 	    SYSCTL_CHILDREN(sysctl_tree), OID_AUTO, "resolution",
-	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_NEEDGIANT, sc,
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE, sc,
 	    ISL_METHOD_RESOLUTION, isl_sysctl, "I",
 	    "Current proximity sensor resolution");
 
 	SYSCTL_ADD_PROC(sysctl_ctx,
 	    SYSCTL_CHILDREN(sysctl_tree), OID_AUTO, "range",
-	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_NEEDGIANT, sc,
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE, sc,
 	    ISL_METHOD_RANGE, isl_sysctl, "I",
 	    "Current proximity sensor range");
 

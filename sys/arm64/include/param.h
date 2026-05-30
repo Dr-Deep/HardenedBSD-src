@@ -25,10 +25,11 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	from: @(#)param.h	5.8 (Berkeley) 6/28/91
- * $FreeBSD$
  */
+
+#ifdef __arm__
+#include <arm/param.h>
+#else /* !__arm__ */
 
 #ifndef _MACHINE_PARAM_H_
 #define	_MACHINE_PARAM_H_
@@ -37,12 +38,9 @@
  * Machine dependent constants for arm64.
  */
 
-#include <machine/_align.h>
+#include <sys/_align.h>
 
 #define	STACKALIGNBYTES	(16 - 1)
-#define	STACKALIGN(p)	((uint64_t)(p) & ~STACKALIGNBYTES)
-
-#define	__PCI_REROUTE_INTERRUPT
 
 #ifndef MACHINE
 #define	MACHINE		"arm64"
@@ -56,7 +54,7 @@
 
 #ifdef SMP
 #ifndef MAXCPU
-#define	MAXCPU		256
+#define	MAXCPU		1024
 #endif
 #else
 #define	MAXCPU		1
@@ -96,27 +94,31 @@
 #define	PAGE_SIZE	(1 << PAGE_SHIFT)
 #define	PAGE_MASK	(PAGE_SIZE - 1)
 
-#define	MAXPAGESIZES	3		/* maximum number of supported page sizes */
+#define	MAXPAGESIZES	4		/* maximum number of supported page sizes */
 
 #ifndef KSTACK_PAGES
+#if defined(KASAN) || defined(KMSAN)
+#define	KSTACK_PAGES	6
+#else
 #define	KSTACK_PAGES	4	/* pages of kernel stack (with pcb) */
+#endif
 #endif
 
 #define	KSTACK_GUARD_PAGES	1	/* pages of kstack guard; 0 disables */
 #define	PCPU_PAGES		1
 
+#ifdef PERTHREAD_SSP
+#define	NO_PERTHREAD_SSP	__nostackprotector
+#else
+#define	NO_PERTHREAD_SSP
+#endif
+
 /*
  * Mach derived conversion macros
  */
-#define	round_page(x)		(((unsigned long)(x) + PAGE_MASK) & ~PAGE_MASK)
-#define	trunc_page(x)		((unsigned long)(x) & ~PAGE_MASK)
-
-#define	atop(x)			((unsigned long)(x) >> PAGE_SHIFT)
-#define	ptoa(x)			((unsigned long)(x) << PAGE_SHIFT)
-
 #define	arm64_btop(x)		((unsigned long)(x) >> PAGE_SHIFT)
 #define	arm64_ptob(x)		((unsigned long)(x) << PAGE_SHIFT)
 
-#define	pgtok(x)		((unsigned long)(x) * (PAGE_SIZE / 1024))
-
 #endif /* !_MACHINE_PARAM_H_ */
+
+#endif /* !__arm__ */

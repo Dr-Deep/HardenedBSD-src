@@ -13,9 +13,10 @@
 #ifndef LLVM_REMARKS_REMARKSERIALIZER_H
 #define LLVM_REMARKS_REMARKSERIALIZER_H
 
-#include "llvm/Remarks/Remark.h"
 #include "llvm/Remarks/RemarkFormat.h"
 #include "llvm/Remarks/RemarkStringTable.h"
+#include "llvm/Support/Compiler.h"
+#include <optional>
 
 namespace llvm {
 
@@ -48,7 +49,7 @@ struct RemarkSerializer {
   SerializerMode Mode;
   /// The string table containing all the unique strings used in the output.
   /// The table can be serialized to be consumed after the compilation.
-  Optional<StringTable> StrTab;
+  std::optional<StringTable> StrTab;
 
   RemarkSerializer(Format SerializerFormat, raw_ostream &OS,
                    SerializerMode Mode)
@@ -61,7 +62,7 @@ struct RemarkSerializer {
   /// Return the corresponding metadata serializer.
   virtual std::unique_ptr<MetaSerializer>
   metaSerializer(raw_ostream &OS,
-                 Optional<StringRef> ExternalFilename = None) = 0;
+                 std::optional<StringRef> ExternalFilename = std::nullopt) = 0;
 };
 
 /// This is the base class for a remark metadata serializer.
@@ -77,12 +78,12 @@ struct MetaSerializer {
 };
 
 /// Create a remark serializer.
-Expected<std::unique_ptr<RemarkSerializer>>
+LLVM_ABI Expected<std::unique_ptr<RemarkSerializer>>
 createRemarkSerializer(Format RemarksFormat, SerializerMode Mode,
                        raw_ostream &OS);
 
 /// Create a remark serializer that uses a pre-filled string table.
-Expected<std::unique_ptr<RemarkSerializer>>
+LLVM_ABI Expected<std::unique_ptr<RemarkSerializer>>
 createRemarkSerializer(Format RemarksFormat, SerializerMode Mode,
                        raw_ostream &OS, remarks::StringTable StrTab);
 

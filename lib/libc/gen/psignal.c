@@ -29,10 +29,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__SCCSID("@(#)psignal.c	8.1 (Berkeley) 6/4/93");
-__FBSDID("$FreeBSD$");
-
 /*
  * Print the name of the signal indicated
  * along with the supplied message.
@@ -58,4 +54,10 @@ psignal(int sig, const char *s)
 	}
 	(void)_write(STDERR_FILENO, c, strlen(c));
 	(void)_write(STDERR_FILENO, "\n", 1);
+}
+
+void
+psiginfo(const siginfo_t *si, const char *s)
+{
+	psignal(si->si_signo, s);
 }

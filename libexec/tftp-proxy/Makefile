@@ -1,7 +1,6 @@
-#	$FreeBSD$
-
 .PATH:	${SRCTOP}/contrib/pf/tftp-proxy
 
+PACKAGE= pf
 PROG=	tftp-proxy
 SRCS=	tftp-proxy.c filter.c
 MAN=	tftp-proxy.8

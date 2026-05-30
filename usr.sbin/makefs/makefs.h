@@ -35,12 +35,16 @@
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef	_MAKEFS_H
 #define	_MAKEFS_H
+
+#if HAVE_NBTOOL_CONFIG_H
+#include "nbtool_config.h"
+#else
+#define	HAVE_STRUCT_STAT_ST_FLAGS	1
+#endif
 
 #include <sys/stat.h>
 #include <err.h>
@@ -58,7 +62,7 @@
  *
  *	name	"."		"bin"		"netbsd"
  *	type	S_IFDIR		S_IFDIR		S_IFREG
- *	next 	  >		  >		NULL
+ *	next	  >		  >		NULL
  *	parent	NULL		NULL		NULL
  *	child	NULL		  v
  *
@@ -87,7 +91,16 @@ typedef struct {
 	enum fi_flags	 flags;		/* flags used by fs specific code */
 	void		*param;		/* for use by individual fs impls */
 	struct stat	 st;		/* stat entry */
+#if !HAVE_STRUCT_STAT_ST_FLAGS
+	uint32_t	 st_flags;	/* stand-in for st.st_flags */
+#endif
 } fsinode;
+
+#if HAVE_STRUCT_STAT_ST_FLAGS
+#define	FSINODE_ST_FLAGS(inode)	(inode).st.st_flags
+#else
+#define	FSINODE_ST_FLAGS(inode)	(inode).st_flags
+#endif
 
 typedef struct _fsnode {
 	struct _fsnode	*parent;	/* parent (NULL if root) */
@@ -175,6 +188,7 @@ fsnode *	read_mtree(const char *, fsnode *);
 int		set_option(const option_t *, const char *, char *, size_t);
 int		set_option_var(const option_t *, const char *, const char *,
     char *, size_t);
+void		set_tstamp(fsnode *);
 fsnode *	walk_dir(const char *, const char *, fsnode *, fsnode *);
 void		free_fsnodes(fsnode *);
 option_t *	copy_opts(const option_t *);

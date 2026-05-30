@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/*  Copyright (c) 2021, Intel Corporation
+/*  Copyright (c) 2024, Intel Corporation
  *  All rights reserved.
  *
  *  Redistribution and use in source and binary forms, with or without
@@ -28,7 +28,6 @@
  *  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  *  POSSIBILITY OF SUCH DAMAGE.
  */
-/*$FreeBSD$*/
 
 /**
  * @file ice_lib.c
@@ -43,6 +42,9 @@
 
 #include "ice_lib.h"
 #include "ice_iflib.h"
+#ifdef PCI_IOV
+#include "ice_iov.h"
+#endif
 #include <dev/pci/pcivar.h>
 #include <dev/pci/pcireg.h>
 #include <machine/resource.h>
@@ -80,6 +82,7 @@ static void ice_process_link_event(struct ice_softc *sc, struct ice_rq_event_inf
 static void ice_process_ctrlq_event(struct ice_softc *sc, const char *qname,
 				    struct ice_rq_event_info *event);
 static void ice_nvm_version_str(struct ice_hw *hw, struct sbuf *buf);
+static void ice_update_port_oversize(struct ice_softc *sc, u64 rx_errors);
 static void ice_active_pkg_version_str(struct ice_hw *hw, struct sbuf *buf);
 static void ice_os_pkg_version_str(struct ice_hw *hw, struct sbuf *buf);
 static bool ice_filter_is_mcast(struct ice_vsi *vsi, struct ice_fltr_info *info);
@@ -87,7 +90,6 @@ static u_int ice_sync_one_mcast_filter(void *p, struct sockaddr_dl *sdl, u_int e
 static void ice_add_debug_tunables(struct ice_softc *sc);
 static void ice_add_debug_sysctls(struct ice_softc *sc);
 static void ice_vsi_set_rss_params(struct ice_vsi *vsi);
-static void ice_get_default_rss_key(u8 *seed);
 static int  ice_set_rss_key(struct ice_vsi *vsi);
 static int  ice_set_rss_lut(struct ice_vsi *vsi);
 static void ice_set_rss_flow_flds(struct ice_vsi *vsi);
@@ -127,7 +129,6 @@ static int ice_add_ethertype_to_list(struct ice_vsi *vsi,
 				     struct ice_list_head *list,
 				     u16 ethertype, u16 direction,
 				     enum ice_sw_fwd_act_type action);
-static void ice_add_rx_lldp_filter(struct ice_softc *sc);
 static void ice_del_rx_lldp_filter(struct ice_softc *sc);
 static u16 ice_aq_phy_types_to_link_speeds(u64 phy_type_low,
 					   u64 phy_type_high);
@@ -161,20 +162,44 @@ static void
 ice_debug_print_mib_change_event(struct ice_softc *sc,
 				 struct ice_rq_event_info *event);
 static bool ice_check_ets_bw(u8 *table);
+static u8 ice_dcb_get_num_tc(struct ice_dcbx_cfg *dcbcfg);
 static bool
 ice_dcb_needs_reconfig(struct ice_softc *sc, struct ice_dcbx_cfg *old_cfg,
 		       struct ice_dcbx_cfg *new_cfg);
 static void ice_dcb_recfg(struct ice_softc *sc);
-static u8 ice_dcb_num_tc(u8 tc_map);
+static u8 ice_dcb_tc_contig(u8 tc_map);
 static int ice_ets_str_to_tbl(const char *str, u8 *table, u8 limit);
 static int ice_pf_vsi_cfg_tc(struct ice_softc *sc, u8 tc_map);
 static void ice_sbuf_print_ets_cfg(struct sbuf *sbuf, const char *name,
 				   struct ice_dcb_ets_cfg *ets);
 static void ice_stop_pf_vsi(struct ice_softc *sc);
 static void ice_vsi_setup_q_map(struct ice_vsi *vsi, struct ice_vsi_ctx *ctxt);
-static void ice_do_dcb_reconfig(struct ice_softc *sc);
 static int ice_config_pfc(struct ice_softc *sc, u8 new_mode);
-static u8 ice_dcb_get_tc_map(const struct ice_dcbx_cfg *dcbcfg);
+void
+ice_add_dscp2tc_map_sysctls(struct ice_softc *sc,
+			    struct sysctl_ctx_list *ctx,
+			    struct sysctl_oid_list *ctx_list);
+static void ice_set_default_local_mib_settings(struct ice_softc *sc);
+static bool ice_dscp_is_mapped(struct ice_dcbx_cfg *dcbcfg);
+static void ice_start_dcbx_agent(struct ice_softc *sc);
+static u16 ice_fw_debug_dump_print_cluster(struct ice_softc *sc,
+					   struct sbuf *sbuf, u16 cluster_id);
+static void ice_fw_debug_dump_print_clusters(struct ice_softc *sc,
+					     struct sbuf *sbuf);
+static void ice_remove_vsi_mirroring(struct ice_vsi *vsi);
+static int ice_get_tx_rx_equalizations(struct ice_hw *hw, u8 serdes_num,
+				       struct ice_serdes_equalization *ptr);
+static int ice_fec_counter_read(struct ice_hw *hw, u32 receiver_id,
+				u32 reg_offset, u16 *output);
+static int ice_get_port_fec_stats(struct ice_hw *hw, u16 pcs_quad, u16 pcs_port,
+				  struct ice_fec_stats_to_sysctl *fec_stats);
+static bool ice_is_serdes_muxed(struct ice_hw *hw);
+static int ice_get_maxspeed(struct ice_hw *hw, u8 lport, u8 *max_speed);
+static int ice_update_port_topology(u8 lport,
+				    struct ice_port_topology *port_topology,
+				    bool is_muxed);
+static int ice_get_port_topology(struct ice_hw *hw, u8 lport,
+				 struct ice_port_topology *port_topology);
 
 static int ice_module_init(void);
 static int ice_module_exit(void);
@@ -224,10 +249,21 @@ static int ice_sysctl_pba_number(SYSCTL_HANDLER_ARGS);
 static int ice_sysctl_rx_errors_stat(SYSCTL_HANDLER_ARGS);
 static int ice_sysctl_dump_dcbx_cfg(SYSCTL_HANDLER_ARGS);
 static int ice_sysctl_dump_vsi_cfg(SYSCTL_HANDLER_ARGS);
+static int ice_sysctl_dump_phy_stats(SYSCTL_HANDLER_ARGS);
 static int ice_sysctl_ets_min_rate(SYSCTL_HANDLER_ARGS);
 static int ice_sysctl_up2tc_map(SYSCTL_HANDLER_ARGS);
 static int ice_sysctl_pfc_config(SYSCTL_HANDLER_ARGS);
 static int ice_sysctl_query_port_ets(SYSCTL_HANDLER_ARGS);
+static int ice_sysctl_dscp2tc_map(SYSCTL_HANDLER_ARGS);
+static int ice_sysctl_pfc_mode(SYSCTL_HANDLER_ARGS);
+static int ice_sysctl_fw_debug_dump_cluster_setting(SYSCTL_HANDLER_ARGS);
+static int ice_sysctl_fw_debug_dump_do_dump(SYSCTL_HANDLER_ARGS);
+static int ice_sysctl_allow_no_fec_mod_in_auto(SYSCTL_HANDLER_ARGS);
+static int ice_sysctl_set_link_active(SYSCTL_HANDLER_ARGS);
+static int ice_sysctl_debug_set_link(SYSCTL_HANDLER_ARGS);
+static int ice_sysctl_temperature(SYSCTL_HANDLER_ARGS);
+static int ice_sysctl_create_mirror_interface(SYSCTL_HANDLER_ARGS);
+static int ice_sysctl_destroy_mirror_interface(SYSCTL_HANDLER_ARGS);
 
 /**
  * ice_map_bar - Map PCIe BAR memory
@@ -296,6 +332,10 @@ ice_set_ctrlq_len(struct ice_hw *hw)
 	hw->mailboxq.rq_buf_size = ICE_MBXQ_MAX_BUF_LEN;
 	hw->mailboxq.sq_buf_size = ICE_MBXQ_MAX_BUF_LEN;
 
+	hw->sbq.num_rq_entries = ICE_SBQ_LEN;
+	hw->sbq.num_sq_entries = ICE_SBQ_LEN;
+	hw->sbq.rq_buf_size = ICE_SBQ_MAX_BUF_LEN;
+	hw->sbq.sq_buf_size = ICE_SBQ_MAX_BUF_LEN;
 }
 
 /**
@@ -341,6 +381,10 @@ ice_setup_vsi_common(struct ice_softc *sc, struct ice_vsi *vsi,
 	sc->all_vsi[idx] = vsi;
 	vsi->dynamic = dynamic;
 
+	/* Set default mirroring rule information */
+	vsi->rule_mir_ingress = ICE_INVAL_MIRROR_RULE_ID;
+	vsi->rule_mir_egress = ICE_INVAL_MIRROR_RULE_ID;
+
 	/* Setup the VSI tunables now */
 	ice_add_vsi_tunables(vsi, sc->vsi_sysctls);
 }
@@ -368,7 +412,7 @@ ice_alloc_vsi(struct ice_softc *sc, enum ice_vsi_type type)
 		return NULL;
 	}
 
-	vsi = (struct ice_vsi *)malloc(sizeof(*vsi), M_ICE, M_WAITOK|M_ZERO);
+	vsi = (struct ice_vsi *)malloc(sizeof(*vsi), M_ICE, M_NOWAIT | M_ZERO);
 	if (!vsi) {
 		device_printf(sc->dev, "Unable to allocate VSI memory\n");
 		return NULL;
@@ -405,31 +449,21 @@ ice_setup_pf_vsi(struct ice_softc *sc)
  * all queues for this VSI are not yet assigned an index and thus,
  * not ready for use.
  *
- * Returns an error code on failure.
  */
-int
+void
 ice_alloc_vsi_qmap(struct ice_vsi *vsi, const int max_tx_queues,
 		   const int max_rx_queues)
 {
-	struct ice_softc *sc = vsi->sc;
 	int i;
 
 	MPASS(max_tx_queues > 0);
 	MPASS(max_rx_queues > 0);
 
 	/* Allocate Tx queue mapping memory */
-	if (!(vsi->tx_qmap =
-	      (u16 *) malloc(sizeof(u16) * max_tx_queues, M_ICE, M_WAITOK))) {
-		device_printf(sc->dev, "Unable to allocate Tx qmap memory\n");
-		return (ENOMEM);
-	}
+	vsi->tx_qmap = malloc(sizeof(u16) * max_tx_queues, M_ICE, M_WAITOK);
 
 	/* Allocate Rx queue mapping memory */
-	if (!(vsi->rx_qmap =
-	      (u16 *) malloc(sizeof(u16) * max_rx_queues, M_ICE, M_WAITOK))) {
-		device_printf(sc->dev, "Unable to allocate Rx qmap memory\n");
-		goto free_tx_qmap;
-	}
+	vsi->rx_qmap = malloc(sizeof(u16) * max_rx_queues, M_ICE, M_WAITOK);
 
 	/* Mark every queue map as invalid to start with */
 	for (i = 0; i < max_tx_queues; i++) {
@@ -438,14 +472,6 @@ ice_alloc_vsi_qmap(struct ice_vsi *vsi, const int max_tx_queues,
 	for (i = 0; i < max_rx_queues; i++) {
 		vsi->rx_qmap[i] = ICE_INVALID_RES_IDX;
 	}
-
-	return 0;
-
-free_tx_qmap:
-	free(vsi->tx_qmap, M_ICE);
-	vsi->tx_qmap = NULL;
-
-	return (ENOMEM);
 }
 
 /**
@@ -536,6 +562,7 @@ ice_set_rss_vsi_ctx(struct ice_vsi_ctx *ctx, enum ice_vsi_type type)
 		hash_type = ICE_AQ_VSI_Q_OPT_RSS_TPLZ;
 		break;
 	case ICE_VSI_VF:
+	case ICE_VSI_VMDQ2:
 		lut_type = ICE_AQ_VSI_Q_OPT_RSS_LUT_VSI;
 		hash_type = ICE_AQ_VSI_Q_OPT_RSS_TPLZ;
 		break;
@@ -557,6 +584,8 @@ ice_set_rss_vsi_ctx(struct ice_vsi_ctx *ctx, enum ice_vsi_type type)
  *
  * Configures the context for the given VSI, setting up how the firmware
  * should map the queues for this VSI.
+ *
+ * @pre vsi->qmap_type is set to a valid type
  */
 static int
 ice_setup_vsi_qmap(struct ice_vsi *vsi, struct ice_vsi_ctx *ctx)
@@ -566,18 +595,23 @@ ice_setup_vsi_qmap(struct ice_vsi *vsi, struct ice_vsi_ctx *ctx)
 
 	MPASS(vsi->rx_qmap != NULL);
 
-	/* TODO:
-	 * Handle multiple Traffic Classes
-	 * Handle scattered queues (for VFs)
-	 */
-	if (vsi->qmap_type != ICE_RESMGR_ALLOC_CONTIGUOUS)
+	switch (vsi->qmap_type) {
+	case ICE_RESMGR_ALLOC_CONTIGUOUS:
+		ctx->info.mapping_flags |= CPU_TO_LE16(ICE_AQ_VSI_Q_MAP_CONTIG);
+
+		ctx->info.q_mapping[0] = CPU_TO_LE16(vsi->rx_qmap[0]);
+		ctx->info.q_mapping[1] = CPU_TO_LE16(vsi->num_rx_queues);
+
+		break;
+	case ICE_RESMGR_ALLOC_SCATTERED:
+		ctx->info.mapping_flags |= CPU_TO_LE16(ICE_AQ_VSI_Q_MAP_NONCONTIG);
+
+		for (int i = 0; i < vsi->num_rx_queues; i++)
+			ctx->info.q_mapping[i] = CPU_TO_LE16(vsi->rx_qmap[i]);
+		break;
+	default:
 		return (EOPNOTSUPP);
-
-	ctx->info.mapping_flags |= CPU_TO_LE16(ICE_AQ_VSI_Q_MAP_CONTIG);
-
-	ctx->info.q_mapping[0] = CPU_TO_LE16(vsi->rx_qmap[0]);
-	ctx->info.q_mapping[1] = CPU_TO_LE16(vsi->num_rx_queues);
-
+	}
 
 	/* Calculate the next power-of-2 of number of queues */
 	if (vsi->num_rx_queues)
@@ -587,7 +621,100 @@ ice_setup_vsi_qmap(struct ice_vsi *vsi, struct ice_vsi_ctx *ctx)
 	qmap = (pow << ICE_AQ_VSI_TC_Q_NUM_S) & ICE_AQ_VSI_TC_Q_NUM_M;
 	ctx->info.tc_mapping[0] = CPU_TO_LE16(qmap);
 
+	/* Fill out default driver TC queue info for VSI */
+	vsi->tc_info[0].qoffset = 0;
+	vsi->tc_info[0].qcount_rx = vsi->num_rx_queues;
+	vsi->tc_info[0].qcount_tx = vsi->num_tx_queues;
+	for (int i = 1; i < ICE_MAX_TRAFFIC_CLASS; i++) {
+		vsi->tc_info[i].qoffset = 0;
+		vsi->tc_info[i].qcount_rx = 1;
+		vsi->tc_info[i].qcount_tx = 1;
+	}
+	vsi->tc_map = 0x1;
+
 	return 0;
+}
+
+/**
+ * ice_setup_vsi_mirroring -- Setup a VSI for mirroring PF VSI traffic
+ * @vsi: VSI to setup
+ *
+ * @pre vsi->mirror_src_vsi is set to the SW VSI num that traffic is to be
+ * mirrored from
+ *
+ * Returns 0 on success, EINVAL on failure.
+ */
+int
+ice_setup_vsi_mirroring(struct ice_vsi *vsi)
+{
+	struct ice_mir_rule_buf rule = { };
+	struct ice_softc *sc = vsi->sc;
+	struct ice_hw *hw = &sc->hw;
+	device_t dev = sc->dev;
+	int status;
+	u16 rule_id, dest_vsi;
+	u16 count = 1;
+
+	rule.vsi_idx = ice_get_hw_vsi_num(hw, vsi->mirror_src_vsi);
+	rule.add = true;
+
+	dest_vsi = ice_get_hw_vsi_num(hw, vsi->idx);
+	rule_id = ICE_INVAL_MIRROR_RULE_ID;
+	status = ice_aq_add_update_mir_rule(hw, ICE_AQC_RULE_TYPE_VPORT_INGRESS,
+					    dest_vsi, count, &rule, NULL,
+					    &rule_id);
+	if (status) {
+		device_printf(dev,
+		    "Could not add INGRESS rule for mirror vsi %d to vsi %d, err %s aq_err %s\n",
+		    rule.vsi_idx, dest_vsi, ice_status_str(status),
+		    ice_aq_str(hw->adminq.sq_last_status));
+		return (EINVAL);
+	}
+
+	vsi->rule_mir_ingress = rule_id;
+
+	rule_id = ICE_INVAL_MIRROR_RULE_ID;
+	status = ice_aq_add_update_mir_rule(hw, ICE_AQC_RULE_TYPE_VPORT_EGRESS,
+					    dest_vsi, count, &rule, NULL, &rule_id);
+	if (status) {
+		device_printf(dev,
+		    "Could not add EGRESS rule for mirror vsi %d to vsi %d, err %s aq_err %s\n",
+		    rule.vsi_idx, dest_vsi, ice_status_str(status),
+		    ice_aq_str(hw->adminq.sq_last_status));
+		return (EINVAL);
+	}
+
+	vsi->rule_mir_egress = rule_id;
+
+	return (0);
+}
+
+/**
+ * ice_remove_vsi_mirroring -- Teardown any VSI mirroring rules
+ * @vsi: VSI to remove mirror rules from
+ */
+static void
+ice_remove_vsi_mirroring(struct ice_vsi *vsi)
+{
+	struct ice_hw *hw = &vsi->sc->hw;
+	int status = 0;
+	bool keep_alloc = false;
+
+	if (vsi->rule_mir_ingress != ICE_INVAL_MIRROR_RULE_ID)
+		status = ice_aq_delete_mir_rule(hw, vsi->rule_mir_ingress, keep_alloc, NULL);
+
+	if (status)
+		device_printf(vsi->sc->dev, "Could not remove mirror VSI ingress rule, err %s aq_err %s\n",
+			      ice_status_str(status), ice_aq_str(hw->adminq.sq_last_status));
+
+	status = 0;
+
+	if (vsi->rule_mir_egress != ICE_INVAL_MIRROR_RULE_ID)
+		status = ice_aq_delete_mir_rule(hw, vsi->rule_mir_egress, keep_alloc, NULL);
+
+	if (status)
+		device_printf(vsi->sc->dev, "Could not remove mirror VSI egress rule, err %s aq_err %s\n",
+			      ice_status_str(status), ice_aq_str(hw->adminq.sq_last_status));
 }
 
 /**
@@ -595,6 +722,9 @@ ice_setup_vsi_qmap(struct ice_vsi *vsi, struct ice_vsi_ctx *ctx)
  * @vsi: the vsi to initialize
  *
  * Initialize a VSI over the adminq and prepare it for operation.
+ *
+ * @pre vsi->num_tx_queues is set
+ * @pre vsi->num_rx_queues is set
  */
 int
 ice_initialize_vsi(struct ice_vsi *vsi)
@@ -602,7 +732,7 @@ ice_initialize_vsi(struct ice_vsi *vsi)
 	struct ice_vsi_ctx ctx = { 0 };
 	struct ice_hw *hw = &vsi->sc->hw;
 	u16 max_txqs[ICE_MAX_TRAFFIC_CLASS] = { 0 };
-	enum ice_status status;
+	int status;
 	int err;
 
 	/* For now, we only have code supporting PF VSIs */
@@ -610,6 +740,15 @@ ice_initialize_vsi(struct ice_vsi *vsi)
 	case ICE_VSI_PF:
 		ctx.flags = ICE_AQ_VSI_TYPE_PF;
 		break;
+	case ICE_VSI_VMDQ2:
+		ctx.flags = ICE_AQ_VSI_TYPE_VMDQ2;
+		break;
+#ifdef PCI_IOV
+	case ICE_VSI_VF:
+		ctx.flags = ICE_AQ_VSI_TYPE_VF;
+		ctx.vf_num = vsi->vf_num;
+		break;
+#endif
 	default:
 		return (ENODEV);
 	}
@@ -673,7 +812,7 @@ ice_deinit_vsi(struct ice_vsi *vsi)
 	struct ice_vsi_ctx ctx = { 0 };
 	struct ice_softc *sc = vsi->sc;
 	struct ice_hw *hw = &sc->hw;
-	enum ice_status status;
+	int status;
 
 	/* Assert that the VSI pointer matches in the list */
 	MPASS(vsi == sc->all_vsi[vsi->idx]);
@@ -724,6 +863,9 @@ ice_release_vsi(struct ice_vsi *vsi)
 
 	ice_del_vsi_sysctl_ctx(vsi);
 
+	/* Remove the configured mirror rule, if it exists */
+	ice_remove_vsi_mirroring(vsi);
+
 	/*
 	 * If we unload the driver after a reset fails, we do not need to do
 	 * this step.
@@ -750,6 +892,8 @@ uint64_t
 ice_aq_speed_to_rate(struct ice_port_info *pi)
 {
 	switch (pi->phy.link_info.link_speed) {
+	case ICE_AQ_LINK_SPEED_200GB:
+		return IF_Gbps(200);
 	case ICE_AQ_LINK_SPEED_100GB:
 		return IF_Gbps(100);
 	case ICE_AQ_LINK_SPEED_50GB:
@@ -788,6 +932,8 @@ static const char *
 ice_aq_speed_to_str(struct ice_port_info *pi)
 {
 	switch (pi->phy.link_info.link_speed) {
+	case ICE_AQ_LINK_SPEED_200GB:
+		return "200 Gbps";
 	case ICE_AQ_LINK_SPEED_100GB:
 		return "100 Gbps";
 	case ICE_AQ_LINK_SPEED_50GB:
@@ -985,6 +1131,26 @@ ice_get_phy_type_high(uint64_t phy_type_high)
 		return IFM_100G_AUI2_AC;
 	case ICE_PHY_TYPE_HIGH_100G_AUI2:
 		return IFM_100G_AUI2;
+	case ICE_PHY_TYPE_HIGH_200G_CR4_PAM4:
+		return IFM_200G_CR4_PAM4;
+	case ICE_PHY_TYPE_HIGH_200G_SR4:
+		return IFM_200G_SR4;
+	case ICE_PHY_TYPE_HIGH_200G_FR4:
+		return IFM_200G_FR4;
+	case ICE_PHY_TYPE_HIGH_200G_LR4:
+		return IFM_200G_LR4;
+	case ICE_PHY_TYPE_HIGH_200G_DR4:
+		return IFM_200G_DR4;
+	case ICE_PHY_TYPE_HIGH_200G_KR4_PAM4:
+		return IFM_200G_KR4_PAM4;
+	case ICE_PHY_TYPE_HIGH_200G_AUI4_AOC_ACC:
+		return IFM_200G_AUI4_AC;
+	case ICE_PHY_TYPE_HIGH_200G_AUI4:
+		return IFM_200G_AUI4;
+	case ICE_PHY_TYPE_HIGH_200G_AUI8_AOC_ACC:
+		return IFM_200G_AUI8_AC;
+	case ICE_PHY_TYPE_HIGH_200G_AUI8:
+		return IFM_200G_AUI8;
 	default:
 		return IFM_UNKNOWN;
 	}
@@ -1079,7 +1245,17 @@ ice_phy_types_to_max_rate(struct ice_port_info *pi)
 	    IF_Gbps(100ULL),
 	    IF_Gbps(100ULL),
 	    IF_Gbps(100ULL),
-	    IF_Gbps(100ULL)
+	    IF_Gbps(100ULL),
+	    IF_Gbps(200ULL),
+	    IF_Gbps(200ULL),
+	    IF_Gbps(200ULL),
+	    IF_Gbps(200ULL),
+	    IF_Gbps(200ULL),
+	    IF_Gbps(200ULL),
+	    IF_Gbps(200ULL),
+	    IF_Gbps(200ULL),
+	    IF_Gbps(200ULL),
+	    IF_Gbps(200ULL),
 	};
 
 	/* coverity[address_of] */
@@ -1113,12 +1289,12 @@ ice_phy_types_to_max_rate(struct ice_port_info *pi)
  * @pre this function must be protected from being called while another thread
  * is accessing the ifmedia types.
  */
-enum ice_status
+int
 ice_add_media_types(struct ice_softc *sc, struct ifmedia *media)
 {
 	struct ice_aqc_get_phy_caps_data pcaps = { 0 };
 	struct ice_port_info *pi = sc->hw.port_info;
-	enum ice_status status;
+	int status;
 	uint64_t phy_low, phy_high;
 	int bit;
 
@@ -1135,7 +1311,7 @@ ice_add_media_types(struct ice_softc *sc, struct ifmedia *media)
 
 	status = ice_aq_get_phy_caps(pi, false, ICE_AQC_REPORT_ACTIVE_CFG,
 				     &pcaps, NULL);
-	if (status != ICE_SUCCESS) {
+	if (status) {
 		device_printf(sc->dev,
 		    "%s: ice_aq_get_phy_caps (ACTIVE) failed; status %s, aq_err %s\n",
 		    __func__, ice_status_str(status),
@@ -1192,54 +1368,96 @@ ice_add_media_types(struct ice_softc *sc, struct ifmedia *media)
 	ifmedia_add(media, IFM_ETHER | IFM_AUTO, 0, NULL);
 	ifmedia_set(media, IFM_ETHER | IFM_AUTO);
 
-	return (ICE_SUCCESS);
+	return (0);
 }
 
 /**
- * ice_configure_rxq_interrupts - Configure HW Rx queues for MSI-X interrupts
+ * ice_configure_rxq_interrupt - Configure HW Rx queue for an MSI-X interrupt
+ * @hw: ice hw structure
+ * @rxqid: Rx queue index in PF space
+ * @vector: MSI-X vector index in PF/VF space
+ * @itr_idx: ITR index to use for interrupt
+ *
+ * @remark ice_flush() may need to be called after this
+ */
+void
+ice_configure_rxq_interrupt(struct ice_hw *hw, u16 rxqid, u16 vector, u8 itr_idx)
+{
+	u32 val;
+
+	MPASS(itr_idx <= ICE_ITR_NONE);
+
+	val = (QINT_RQCTL_CAUSE_ENA_M |
+	       (itr_idx << QINT_RQCTL_ITR_INDX_S) |
+	       (vector << QINT_RQCTL_MSIX_INDX_S));
+	wr32(hw, QINT_RQCTL(rxqid), val);
+}
+
+/**
+ * ice_configure_all_rxq_interrupts - Configure HW Rx queues for MSI-X interrupts
  * @vsi: the VSI to configure
  *
  * Called when setting up MSI-X interrupts to configure the Rx hardware queues.
  */
 void
-ice_configure_rxq_interrupts(struct ice_vsi *vsi)
+ice_configure_all_rxq_interrupts(struct ice_vsi *vsi)
 {
 	struct ice_hw *hw = &vsi->sc->hw;
 	int i;
 
 	for (i = 0; i < vsi->num_rx_queues; i++) {
 		struct ice_rx_queue *rxq = &vsi->rx_queues[i];
-		u32 val;
 
-		val = (QINT_RQCTL_CAUSE_ENA_M |
-		       (ICE_RX_ITR << QINT_RQCTL_ITR_INDX_S) |
-		       (rxq->irqv->me << QINT_RQCTL_MSIX_INDX_S));
-		wr32(hw, QINT_RQCTL(vsi->rx_qmap[rxq->me]), val);
+		ice_configure_rxq_interrupt(hw, vsi->rx_qmap[rxq->me],
+					    rxq->irqv->me, ICE_RX_ITR);
+
+		ice_debug(hw, ICE_DBG_INIT,
+		    "RXQ(%d) intr enable: me %d rxqid %d vector %d\n",
+		    i, rxq->me, vsi->rx_qmap[rxq->me], rxq->irqv->me);
 	}
 
 	ice_flush(hw);
 }
 
 /**
- * ice_configure_txq_interrupts - Configure HW Tx queues for MSI-X interrupts
+ * ice_configure_txq_interrupt - Configure HW Tx queue for an MSI-X interrupt
+ * @hw: ice hw structure
+ * @txqid: Tx queue index in PF space
+ * @vector: MSI-X vector index in PF/VF space
+ * @itr_idx: ITR index to use for interrupt
+ *
+ * @remark ice_flush() may need to be called after this
+ */
+void
+ice_configure_txq_interrupt(struct ice_hw *hw, u16 txqid, u16 vector, u8 itr_idx)
+{
+	u32 val;
+
+	MPASS(itr_idx <= ICE_ITR_NONE);
+
+	val = (QINT_TQCTL_CAUSE_ENA_M |
+	       (itr_idx << QINT_TQCTL_ITR_INDX_S) |
+	       (vector << QINT_TQCTL_MSIX_INDX_S));
+	wr32(hw, QINT_TQCTL(txqid), val);
+}
+
+/**
+ * ice_configure_all_txq_interrupts - Configure HW Tx queues for MSI-X interrupts
  * @vsi: the VSI to configure
  *
  * Called when setting up MSI-X interrupts to configure the Tx hardware queues.
  */
 void
-ice_configure_txq_interrupts(struct ice_vsi *vsi)
+ice_configure_all_txq_interrupts(struct ice_vsi *vsi)
 {
 	struct ice_hw *hw = &vsi->sc->hw;
 	int i;
 
 	for (i = 0; i < vsi->num_tx_queues; i++) {
 		struct ice_tx_queue *txq = &vsi->tx_queues[i];
-		u32 val;
 
-		val = (QINT_TQCTL_CAUSE_ENA_M |
-		       (ICE_TX_ITR << QINT_TQCTL_ITR_INDX_S) |
-		       (txq->irqv->me << QINT_TQCTL_MSIX_INDX_S));
-		wr32(hw, QINT_TQCTL(vsi->tx_qmap[txq->me]), val);
+		ice_configure_txq_interrupt(hw, vsi->tx_qmap[txq->me],
+					    txq->irqv->me, ICE_TX_ITR);
 	}
 
 	ice_flush(hw);
@@ -1254,7 +1472,7 @@ ice_configure_txq_interrupts(struct ice_vsi *vsi)
  * queue disable logic to dissociate the Rx queue from the interrupt.
  *
  * Note: this function must be called prior to disabling Rx queues with
- * ice_control_rx_queues, otherwise the Rx queue may not be disabled properly.
+ * ice_control_all_rx_queues, otherwise the Rx queue may not be disabled properly.
  */
 void
 ice_flush_rxq_interrupts(struct ice_vsi *vsi)
@@ -1390,11 +1608,19 @@ ice_setup_tx_ctx(struct ice_tx_queue *txq, struct ice_tlan_ctx *tlan_ctx, u16 pf
 
 	tlan_ctx->pf_num = hw->pf_id;
 
-	/* For now, we only have code supporting PF VSIs */
 	switch (vsi->type) {
 	case ICE_VSI_PF:
 		tlan_ctx->vmvf_type = ICE_TLAN_CTX_VMVF_TYPE_PF;
 		break;
+	case ICE_VSI_VMDQ2:
+		tlan_ctx->vmvf_type = ICE_TLAN_CTX_VMVF_TYPE_VMQ;
+		break;
+#ifdef PCI_IOV
+	case ICE_VSI_VF:
+		tlan_ctx->vmvf_type = ICE_TLAN_CTX_VMVF_TYPE_VF;
+		tlan_ctx->vmvf_num = hw->func_caps.vf_base_id + vsi->vf_num;
+		break;
+#endif
 	default:
 		return (ENODEV);
 	}
@@ -1432,7 +1658,7 @@ ice_cfg_vsi_for_tx(struct ice_vsi *vsi)
 	struct ice_aqc_add_tx_qgrp *qg;
 	struct ice_hw *hw = &vsi->sc->hw;
 	device_t dev = vsi->sc->dev;
-	enum ice_status status;
+	int status;
 	int i;
 	int err = 0;
 	u16 qg_size, pf_q;
@@ -1447,6 +1673,10 @@ ice_cfg_vsi_for_tx(struct ice_vsi *vsi)
 	for (i = 0; i < vsi->num_tx_queues; i++) {
 		struct ice_tlan_ctx tlan_ctx = { 0 };
 		struct ice_tx_queue *txq = &vsi->tx_queues[i];
+
+		/* Last configured queue */
+		if (txq->desc_count == 0)
+			break;
 
 		pf_q = vsi->tx_qmap[txq->me];
 		qg->txqs[0].txq_id = htole16(pf_q);
@@ -1497,7 +1727,7 @@ ice_setup_rx_ctx(struct ice_rx_queue *rxq)
 	struct ice_vsi *vsi = rxq->vsi;
 	struct ice_softc *sc = vsi->sc;
 	struct ice_hw *hw = &sc->hw;
-	enum ice_status status;
+	int status;
 	u32 rxdid = ICE_RXDID_FLEX_NIC;
 	u32 regval;
 	u16 pf_q;
@@ -1576,6 +1806,10 @@ ice_cfg_vsi_for_rx(struct ice_vsi *vsi)
 
 	for (i = 0; i < vsi->num_rx_queues; i++) {
 		MPASS(vsi->mbuf_sz > 0);
+		/* Last configured queue */
+		if (vsi->rx_queues[i].desc_count == 0)
+			break;
+
 		err = ice_setup_rx_ctx(&vsi->rx_queues[i]);
 		if (err)
 			return err;
@@ -1625,7 +1859,66 @@ ice_is_rxq_ready(struct ice_hw *hw, int pf_q, u32 *reg)
 }
 
 /**
- * ice_control_rx_queues - Configure hardware to start or stop the Rx queues
+ * ice_control_rx_queue - Configure hardware to start or stop an Rx queue
+ * @vsi: VSI containing queue to enable/disable
+ * @qidx: Queue index in VSI space
+ * @enable: true to enable queue, false to disable
+ *
+ * Control the Rx queue through the QRX_CTRL register, enabling or disabling
+ * it. Wait for the appropriate time to ensure that the queue has actually
+ * reached the expected state.
+ */
+int
+ice_control_rx_queue(struct ice_vsi *vsi, u16 qidx, bool enable)
+{
+	struct ice_hw *hw = &vsi->sc->hw;
+	device_t dev = vsi->sc->dev;
+	u32 qrx_ctrl = 0;
+	int err;
+
+	struct ice_rx_queue *rxq = &vsi->rx_queues[qidx];
+	int pf_q = vsi->rx_qmap[rxq->me];
+
+	err = ice_is_rxq_ready(hw, pf_q, &qrx_ctrl);
+	if (err) {
+		device_printf(dev,
+			      "Rx queue %d is not ready\n",
+			      pf_q);
+		return err;
+	}
+
+	/* Skip if the queue is already in correct state */
+	if (enable == !!(qrx_ctrl & QRX_CTRL_QENA_STAT_M))
+		return (0);
+
+	if (enable)
+		qrx_ctrl |= QRX_CTRL_QENA_REQ_M;
+	else
+		qrx_ctrl &= ~QRX_CTRL_QENA_REQ_M;
+	wr32(hw, QRX_CTRL(pf_q), qrx_ctrl);
+
+	/* wait for the queue to finalize the request */
+	err = ice_is_rxq_ready(hw, pf_q, &qrx_ctrl);
+	if (err) {
+		device_printf(dev,
+			      "Rx queue %d %sable timeout\n",
+			      pf_q, (enable ? "en" : "dis"));
+		return err;
+	}
+
+	/* this should never happen */
+	if (enable != !!(qrx_ctrl & QRX_CTRL_QENA_STAT_M)) {
+		device_printf(dev,
+			      "Rx queue %d invalid state\n",
+			      pf_q);
+		return (EDOOFUS);
+	}
+
+	return (0);
+}
+
+/**
+ * ice_control_all_rx_queues - Configure hardware to start or stop the Rx queues
  * @vsi: VSI to enable/disable queues
  * @enable: true to enable queues, false to disable
  *
@@ -1634,11 +1927,8 @@ ice_is_rxq_ready(struct ice_hw *hw, int pf_q, u32 *reg)
  * reached the expected state.
  */
 int
-ice_control_rx_queues(struct ice_vsi *vsi, bool enable)
+ice_control_all_rx_queues(struct ice_vsi *vsi, bool enable)
 {
-	struct ice_hw *hw = &vsi->sc->hw;
-	device_t dev = vsi->sc->dev;
-	u32 qrx_ctrl = 0;
 	int i, err;
 
 	/* TODO: amortize waits by changing all queues up front and then
@@ -1646,43 +1936,9 @@ ice_control_rx_queues(struct ice_vsi *vsi, bool enable)
 	 * when we have a large number of queues.
 	 */
 	for (i = 0; i < vsi->num_rx_queues; i++) {
-		struct ice_rx_queue *rxq = &vsi->rx_queues[i];
-		int pf_q = vsi->rx_qmap[rxq->me];
-
-		err = ice_is_rxq_ready(hw, pf_q, &qrx_ctrl);
-		if (err) {
-			device_printf(dev,
-				      "Rx queue %d is not ready\n",
-				      pf_q);
-			return err;
-		}
-
-		/* Skip if the queue is already in correct state */
-		if (enable == !!(qrx_ctrl & QRX_CTRL_QENA_STAT_M))
-			continue;
-
-		if (enable)
-			qrx_ctrl |= QRX_CTRL_QENA_REQ_M;
-		else
-			qrx_ctrl &= ~QRX_CTRL_QENA_REQ_M;
-		wr32(hw, QRX_CTRL(pf_q), qrx_ctrl);
-
-		/* wait for the queue to finalize the request */
-		err = ice_is_rxq_ready(hw, pf_q, &qrx_ctrl);
-		if (err) {
-			device_printf(dev,
-				      "Rx queue %d %sable timeout\n",
-				      pf_q, (enable ? "en" : "dis"));
-			return err;
-		}
-
-		/* this should never happen */
-		if (enable != !!(qrx_ctrl & QRX_CTRL_QENA_STAT_M)) {
-			device_printf(dev,
-				      "Rx queue %d invalid state\n",
-				      pf_q);
-			return (EDOOFUS);
-		}
+		err = ice_control_rx_queue(vsi, i, enable);
+		if (err)
+			break;
 	}
 
 	return (0);
@@ -1748,7 +2004,7 @@ ice_free_fltr_list(struct ice_list_head *list)
  * Add a MAC address filter for a given VSI. This is a wrapper around
  * ice_add_mac to simplify the interface. First, it only accepts a single
  * address, so we don't have to mess around with the list setup in other
- * functions. Second, it ignores the ICE_ERR_ALREADY_EXIST error, so that
+ * functions. Second, it ignores the ICE_ERR_ALREADY_EXISTS error, so that
  * callers don't need to worry about attempting to add the same filter twice.
  */
 int
@@ -1757,7 +2013,7 @@ ice_add_vsi_mac_filter(struct ice_vsi *vsi, const u8 *addr)
 	struct ice_list_head mac_addr_list;
 	struct ice_hw *hw = &vsi->sc->hw;
 	device_t dev = vsi->sc->dev;
-	enum ice_status status;
+	int status;
 	int err = 0;
 
 	INIT_LIST_HEAD(&mac_addr_list);
@@ -1827,7 +2083,7 @@ ice_remove_vsi_mac_filter(struct ice_vsi *vsi, const u8 *addr)
 	struct ice_list_head mac_addr_list;
 	struct ice_hw *hw = &vsi->sc->hw;
 	device_t dev = vsi->sc->dev;
-	enum ice_status status;
+	int status;
 	int err = 0;
 
 	INIT_LIST_HEAD(&mac_addr_list);
@@ -1953,10 +2209,10 @@ ice_process_link_event(struct ice_softc *sc,
 	struct ice_port_info *pi = sc->hw.port_info;
 	struct ice_hw *hw = &sc->hw;
 	device_t dev = sc->dev;
-	enum ice_status status;
+	int status;
 
-	/* Sanity check that the data length matches */
-	MPASS(le16toh(e->desc.datalen) == sizeof(struct ice_aqc_get_link_status_data));
+	/* Sanity check that the data length isn't too small */
+	MPASS(le16toh(e->desc.datalen) >= ICE_GET_LINK_STATUS_DATALEN_V1);
 
 	/*
 	 * Even though the adapter gets link status information inside the
@@ -1988,7 +2244,7 @@ ice_process_link_event(struct ice_softc *sc,
 	if (!(pi->phy.link_info.link_info & ICE_AQ_MEDIA_AVAILABLE)) {
 		if (!ice_testandset_state(&sc->state, ICE_STATE_NO_MEDIA)) {
 			status = ice_aq_set_link_restart_an(pi, false, NULL);
-			if (status != ICE_SUCCESS)
+			if (status && hw->adminq.sq_last_status != ICE_AQ_RC_EMODE)
 				device_printf(dev,
 				    "%s: ice_aq_set_link_restart_an: status %s, aq_err %s\n",
 				    __func__, ice_status_str(status),
@@ -2023,9 +2279,11 @@ ice_process_ctrlq_event(struct ice_softc *sc, const char *qname,
 	case ice_aqc_opc_get_link_status:
 		ice_process_link_event(sc, event);
 		break;
+#ifdef PCI_IOV
 	case ice_mbx_opc_send_msg_to_pf:
-		/* TODO: handle IOV event */
+		ice_vc_handle_vf_msg(sc, event);
 		break;
+#endif
 	case ice_aqc_opc_fw_logs_event:
 		ice_handle_fw_log_event(sc, &event->desc, event->msg_buf);
 		break;
@@ -2061,7 +2319,7 @@ ice_process_ctrlq(struct ice_softc *sc, enum ice_ctl_q q_type, u16 *pending)
 	struct ice_rq_event_info event = { { 0 } };
 	struct ice_hw *hw = &sc->hw;
 	struct ice_ctl_q_info *cq;
-	enum ice_status status;
+	int status;
 	const char *qname;
 	int loop = 0;
 
@@ -2069,6 +2327,10 @@ ice_process_ctrlq(struct ice_softc *sc, enum ice_ctl_q q_type, u16 *pending)
 	case ICE_CTL_Q_ADMIN:
 		cq = &hw->adminq;
 		qname = "Admin";
+		break;
+	case ICE_CTL_Q_SB:
+		cq = &hw->sbq;
+		qname = "Sideband";
 		break;
 	case ICE_CTL_Q_MAILBOX:
 		cq = &hw->mailboxq;
@@ -2101,14 +2363,9 @@ ice_process_ctrlq(struct ice_softc *sc, enum ice_ctl_q q_type, u16 *pending)
 		if (status == ICE_ERR_AQ_NO_WORK)
 			break;
 		if (status) {
-			if (q_type == ICE_CTL_Q_ADMIN)
-				device_printf(sc->dev,
-					      "%s Receive Queue event error %s\n",
-					      qname, ice_status_str(status));
-			else
-				device_printf(sc->dev,
-					      "%s Receive Queue event error %s\n",
-					      qname, ice_status_str(status));
+			device_printf(sc->dev,
+				      "%s Receive Queue event error %s\n",
+				      qname, ice_status_str(status));
 			free(event.msg_buf, M_ICE);
 			return (EIO);
 		}
@@ -2303,6 +2560,22 @@ ice_print_nvm_version(struct ice_softc *sc)
 }
 
 /**
+ * ice_update_port_oversize - Update port oversize stats
+ * @sc: device private structure
+ * @rx_errors: VSI error drops
+ *
+ * Add ERROR_CNT from GLV_REPC VSI register and rx_oversize stats counter
+ */
+static void
+ice_update_port_oversize(struct ice_softc *sc, u64 rx_errors)
+{
+	struct ice_hw_port_stats *cur_ps;
+	cur_ps = &sc->stats.cur;
+
+	sc->soft_stats.rx_roc_error = rx_errors + cur_ps->rx_oversize;
+}
+
+/**
  * ice_update_vsi_hw_stats - Update VSI-specific ethernet statistics counters
  * @vsi: the VSI to be updated
  *
@@ -2346,7 +2619,7 @@ ice_update_vsi_hw_stats(struct ice_vsi *vsi)
 
 	ice_stat_update_repc(hw, vsi->idx, vsi->hw_stats.offsets_loaded,
 			     cur_es);
-
+	ice_update_port_oversize(vsi->sc, cur_es->rx_errors);
 #undef ICE_VSI_STAT40
 #undef ICE_VSI_STAT32
 
@@ -2528,7 +2801,7 @@ ice_sysctl_pba_number(SYSCTL_HANDLER_ARGS)
 	struct ice_hw *hw = &sc->hw;
 	device_t dev = sc->dev;
 	u8 pba_string[32] = "";
-	enum ice_status status;
+	int status;
 
 	UNREFERENCED_PARAMETER(arg2);
 
@@ -2720,7 +2993,17 @@ static const uint16_t phy_link_speeds[] = {
     ICE_AQ_LINK_SPEED_100GB,
     ICE_AQ_LINK_SPEED_100GB,
     ICE_AQ_LINK_SPEED_100GB,
-    ICE_AQ_LINK_SPEED_100GB
+    ICE_AQ_LINK_SPEED_100GB,
+    ICE_AQ_LINK_SPEED_200GB,
+    ICE_AQ_LINK_SPEED_200GB,
+    ICE_AQ_LINK_SPEED_200GB,
+    ICE_AQ_LINK_SPEED_200GB,
+    ICE_AQ_LINK_SPEED_200GB,
+    ICE_AQ_LINK_SPEED_200GB,
+    ICE_AQ_LINK_SPEED_200GB,
+    ICE_AQ_LINK_SPEED_200GB,
+    ICE_AQ_LINK_SPEED_200GB,
+    ICE_AQ_LINK_SPEED_200GB,
 };
 
 #define ICE_SYSCTL_HELP_ADVERTISE_SPEED		\
@@ -2738,6 +3021,7 @@ static const uint16_t phy_link_speeds[] = {
 "\n\t 0x100 - 40G"				\
 "\n\t 0x200 - 50G"				\
 "\n\t 0x400 - 100G"				\
+"\n\t 0x800 - 200G"				\
 "\n\t0x8000 - Unknown"				\
 "\n\t"						\
 "\nUse \"sysctl -x\" to view flags properly."
@@ -2821,6 +3105,17 @@ static const uint16_t phy_link_speeds[] = {
      ICE_PHY_TYPE_HIGH_100G_CAUI2 |	\
      ICE_PHY_TYPE_HIGH_100G_AUI2_AOC_ACC | \
      ICE_PHY_TYPE_HIGH_100G_AUI2)
+#define ICE_PHYS_200GB			\
+    (ICE_PHY_TYPE_HIGH_200G_CR4_PAM4 |	\
+     ICE_PHY_TYPE_HIGH_200G_SR4 |	\
+     ICE_PHY_TYPE_HIGH_200G_FR4 |	\
+     ICE_PHY_TYPE_HIGH_200G_LR4 |	\
+     ICE_PHY_TYPE_HIGH_200G_DR4 |	\
+     ICE_PHY_TYPE_HIGH_200G_KR4_PAM4 |	\
+     ICE_PHY_TYPE_HIGH_200G_AUI4_AOC_ACC | \
+     ICE_PHY_TYPE_HIGH_200G_AUI4 |	\
+     ICE_PHY_TYPE_HIGH_200G_AUI8_AOC_ACC | \
+     ICE_PHY_TYPE_HIGH_200G_AUI8)
 
 /**
  * ice_aq_phy_types_to_link_speeds - Convert the PHY Types to speeds
@@ -2887,6 +3182,8 @@ ice_sysctl_speeds_to_aq_phy_types(u16 sysctl_speeds, u64 *phy_type_low,
 		*phy_type_low |= ICE_PHYS_100GB_LOW;
 		*phy_type_high |= ICE_PHYS_100GB_HIGH;
 	}
+	if (sysctl_speeds & ICE_AQ_LINK_SPEED_200GB)
+		*phy_type_high |= ICE_PHYS_200GB;
 }
 
 /**
@@ -2927,7 +3224,7 @@ ice_intersect_phy_types_and_speeds(struct ice_softc *sc,
 					"DFLT" };
 	struct ice_hw *hw = &sc->hw;
 	struct ice_port_info *pi = hw->port_info;
-	enum ice_status status;
+	int status;
 	u16 report_speeds, temp_speeds;
 	u8 report_type;
 	bool apply_speed_filter = false;
@@ -2956,7 +3253,7 @@ ice_intersect_phy_types_and_speeds(struct ice_softc *sc,
 		apply_speed_filter = true;
 
 	status = ice_aq_get_phy_caps(pi, false, phy_data->report_mode, &pcaps, NULL);
-	if (status != ICE_SUCCESS) {
+	if (status) {
 		device_printf(sc->dev,
 		    "%s: ice_aq_get_phy_caps (%s) failed; status %s, aq_err %s\n",
 		    __func__, report_types[report_type],
@@ -3029,7 +3326,7 @@ ice_sysctl_advertise_speed(SYSCTL_HANDLER_ARGS)
 	if ((ret) || (req->newptr == NULL))
 		return (ret);
 
-	if (sysctl_speeds > 0x7FF) {
+	if (sysctl_speeds > ICE_SYSCTL_SPEEDS_VALID_RANGE) {
 		device_printf(dev,
 			      "%s: \"%u\" is outside of the range of acceptable values.\n",
 			      __func__, sysctl_speeds);
@@ -3037,6 +3334,10 @@ ice_sysctl_advertise_speed(SYSCTL_HANDLER_ARGS)
 	}
 
 	pi->phy.curr_user_speed_req = sysctl_speeds;
+
+	if (!ice_test_state(&sc->state, ICE_STATE_LINK_ACTIVE_ON_DOWN) &&
+	    !sc->link_up && !(if_getflags(sc->ifp) & IFF_UP))
+		return 0;
 
 	/* Apply settings requested by user */
 	return ice_apply_saved_phy_cfg(sc, ICE_APPLY_LS);
@@ -3085,7 +3386,10 @@ ice_sysctl_fec_config(SYSCTL_HANDLER_ARGS)
 
 	if (strcmp(req_fec, "auto") == 0 ||
 	    strcmp(req_fec, ice_fec_str(ICE_FEC_AUTO)) == 0) {
-		new_mode = ICE_FEC_AUTO;
+		if (sc->allow_no_fec_mod_in_auto)
+			new_mode = ICE_FEC_DIS_AUTO;
+		else
+			new_mode = ICE_FEC_AUTO;
 	} else if (strcmp(req_fec, "fc") == 0 ||
 	    strcmp(req_fec, ice_fec_str(ICE_FEC_BASER)) == 0) {
 		new_mode = ICE_FEC_BASER;
@@ -3104,6 +3408,9 @@ ice_sysctl_fec_config(SYSCTL_HANDLER_ARGS)
 
 	/* Cache user FEC mode for later link ups */
 	pi->phy.curr_user_fec_req = new_mode;
+
+	if (!ice_test_state(&sc->state, ICE_STATE_LINK_ACTIVE_ON_DOWN) && !sc->link_up)
+		return 0;
 
 	/* Apply settings requested by user */
 	return ice_apply_saved_phy_cfg(sc, ICE_APPLY_FEC);
@@ -3170,7 +3477,7 @@ ice_sysctl_fc_config(SYSCTL_HANDLER_ARGS)
 	enum ice_fc_mode old_mode, new_mode;
 	struct ice_hw *hw = &sc->hw;
 	device_t dev = sc->dev;
-	enum ice_status status;
+	int status;
 	int ret, fc_num;
 	bool mode_set = false;
 	struct sbuf buf;
@@ -3184,7 +3491,7 @@ ice_sysctl_fc_config(SYSCTL_HANDLER_ARGS)
 
 	status = ice_aq_get_phy_caps(pi, false, ICE_AQC_REPORT_ACTIVE_CFG,
 				     &pcaps, NULL);
-	if (status != ICE_SUCCESS) {
+	if (status) {
 		device_printf(dev,
 		    "%s: ice_aq_get_phy_caps failed; status %s, aq_err %s\n",
 		    __func__, ice_status_str(status),
@@ -3273,6 +3580,9 @@ ice_sysctl_fc_config(SYSCTL_HANDLER_ARGS)
 			return (ret);
 	}
 
+	if (!ice_test_state(&sc->state, ICE_STATE_LINK_ACTIVE_ON_DOWN) && !sc->link_up)
+		return 0;
+
 	/* Apply settings requested by user */
 	return ice_apply_saved_phy_cfg(sc, ICE_APPLY_FC);
 }
@@ -3324,7 +3634,7 @@ __ice_sysctl_phy_type_handler(SYSCTL_HANDLER_ARGS, bool is_phy_type_high)
 	struct ice_aqc_set_phy_cfg_data cfg = { 0 };
 	struct ice_hw *hw = &sc->hw;
 	device_t dev = sc->dev;
-	enum ice_status status;
+	int status;
 	uint64_t types;
 	int ret;
 
@@ -3335,7 +3645,7 @@ __ice_sysctl_phy_type_handler(SYSCTL_HANDLER_ARGS, bool is_phy_type_high)
 
 	status = ice_aq_get_phy_caps(hw->port_info, false, ICE_AQC_REPORT_ACTIVE_CFG,
 				     &pcaps, NULL);
-	if (status != ICE_SUCCESS) {
+	if (status) {
 		device_printf(dev,
 		    "%s: ice_aq_get_phy_caps failed; status %s, aq_err %s\n",
 		    __func__, ice_status_str(status),
@@ -3361,7 +3671,7 @@ __ice_sysctl_phy_type_handler(SYSCTL_HANDLER_ARGS, bool is_phy_type_high)
 	cfg.caps |= ICE_AQ_PHY_ENA_AUTO_LINK_UPDT;
 
 	status = ice_aq_set_phy_cfg(hw, hw->port_info, &cfg, NULL);
-	if (status != ICE_SUCCESS) {
+	if (status) {
 		device_printf(dev,
 		    "%s: ice_aq_set_phy_cfg failed; status %s, aq_err %s\n",
 		    __func__, ice_status_str(status),
@@ -3424,7 +3734,7 @@ ice_sysctl_phy_caps(SYSCTL_HANDLER_ARGS, u8 report_mode)
 	struct ice_hw *hw = &sc->hw;
 	struct ice_port_info *pi = hw->port_info;
 	device_t dev = sc->dev;
-	enum ice_status status;
+	int status;
 	int ret;
 
 	UNREFERENCED_PARAMETER(arg2);
@@ -3437,7 +3747,7 @@ ice_sysctl_phy_caps(SYSCTL_HANDLER_ARGS, u8 report_mode)
 		return (ESHUTDOWN);
 
 	status = ice_aq_get_phy_caps(pi, true, report_mode, &pcaps, NULL);
-	if (status != ICE_SUCCESS) {
+	if (status) {
 		device_printf(dev,
 		    "%s: ice_aq_get_phy_caps failed; status %s, aq_err %s\n",
 		    __func__, ice_status_str(status),
@@ -3523,7 +3833,7 @@ ice_sysctl_phy_link_status(SYSCTL_HANDLER_ARGS)
 	struct ice_aqc_get_link_status *resp;
 	struct ice_aq_desc desc;
 	device_t dev = sc->dev;
-	enum ice_status status;
+	int status;
 	int ret;
 
 	UNREFERENCED_PARAMETER(arg2);
@@ -3544,7 +3854,7 @@ ice_sysctl_phy_link_status(SYSCTL_HANDLER_ARGS)
 	resp->lport_num = pi->lport;
 
 	status = ice_aq_send_cmd(hw, &desc, &link_data, sizeof(link_data), NULL);
-	if (status != ICE_SUCCESS) {
+	if (status) {
 		device_printf(dev,
 		    "%s: ice_aq_send_cmd failed; status %s, aq_err %s\n",
 		    __func__, ice_status_str(status),
@@ -3574,7 +3884,7 @@ ice_sysctl_fw_cur_lldp_persist_status(SYSCTL_HANDLER_ARGS)
 	struct ice_softc *sc = (struct ice_softc *)arg1;
 	struct ice_hw *hw = &sc->hw;
 	device_t dev = sc->dev;
-	enum ice_status status;
+	int status;
 	struct sbuf *sbuf;
 	u32 lldp_state;
 
@@ -3615,7 +3925,7 @@ ice_sysctl_fw_dflt_lldp_persist_status(SYSCTL_HANDLER_ARGS)
 	struct ice_softc *sc = (struct ice_softc *)arg1;
 	struct ice_hw *hw = &sc->hw;
 	device_t dev = sc->dev;
-	enum ice_status status;
+	int status;
 	struct sbuf *sbuf;
 	u32 lldp_state;
 
@@ -3641,6 +3951,23 @@ ice_sysctl_fw_dflt_lldp_persist_status(SYSCTL_HANDLER_ARGS)
 	return (0);
 }
 
+/**
+ * ice_dscp_is_mapped - Check for non-zero DSCP to TC mappings
+ * @dcbcfg: Configuration struct to check for mappings in
+ *
+ * @return true if there exists a non-zero DSCP to TC mapping
+ * inside the input DCB configuration struct.
+ */
+static bool
+ice_dscp_is_mapped(struct ice_dcbx_cfg *dcbcfg)
+{
+	for (int i = 0; i < ICE_DSCP_NUM_VAL; i++)
+		if (dcbcfg->dscp_map[i] != 0)
+			return (true);
+
+	return (false);
+}
+
 #define ICE_SYSCTL_HELP_FW_LLDP_AGENT	\
 "\nDisplay or change FW LLDP agent state:" \
 "\n\t0 - disabled"			\
@@ -3660,9 +3987,10 @@ static int
 ice_sysctl_fw_lldp_agent(SYSCTL_HANDLER_ARGS)
 {
 	struct ice_softc *sc = (struct ice_softc *)arg1;
+	struct ice_dcbx_cfg *local_dcbx_cfg;
 	struct ice_hw *hw = &sc->hw;
 	device_t dev = sc->dev;
-	enum ice_status status;
+	int status;
 	int ret;
 	u32 old_state;
 	u8 fw_lldp_enabled;
@@ -3706,6 +4034,15 @@ ice_sysctl_fw_lldp_agent(SYSCTL_HANDLER_ARGS)
 	if (old_state != 0 && fw_lldp_enabled == true)
 		return (0);
 
+	/* Block transition to FW LLDP if DSCP mode is enabled */
+	local_dcbx_cfg = &hw->port_info->qos_cfg.local_dcbx_cfg;
+	if ((local_dcbx_cfg->pfc_mode == ICE_QOS_MODE_DSCP) ||
+	    ice_dscp_is_mapped(local_dcbx_cfg)) {
+		device_printf(dev,
+			      "Cannot enable FW-LLDP agent while DSCP QoS is active.\n");
+		return (EOPNOTSUPP);
+	}
+
 	if (fw_lldp_enabled == false) {
 		status = ice_aq_stop_lldp(hw, true, true, NULL);
 		/* EPERM is returned if the LLDP agent is already shutdown */
@@ -3744,7 +4081,19 @@ retry_start_lldp:
 				return (EIO);
 			}
 		}
-		hw->port_info->qos_cfg.is_sw_lldp = false;
+		ice_start_dcbx_agent(sc);
+
+		/* Init DCB needs to be done during enabling LLDP to properly
+		 * propagate the configuration.
+		 */
+		status = ice_init_dcb(hw, true);
+		if (status) {
+			device_printf(dev,
+			    "%s: ice_init_dcb failed; status %s, aq_err %s\n",
+			    __func__, ice_status_str(status),
+			    ice_aq_str(hw->adminq.sq_last_status));
+			hw->port_info->qos_cfg.dcbx_status = ICE_DCBX_STATUS_NOT_STARTED;
+		}
 	}
 
 	return (ret);
@@ -3777,7 +4126,7 @@ ice_sysctl_ets_min_rate(SYSCTL_HANDLER_ARGS)
 	struct ice_port_info *pi;
 	struct ice_hw *hw = &sc->hw;
 	device_t dev = sc->dev;
-	enum ice_status status;
+	int status;
 	struct sbuf *sbuf;
 	int ret;
 
@@ -3855,7 +4204,7 @@ ice_sysctl_ets_min_rate(SYSCTL_HANDLER_ARGS)
 		return (EIO);
 	}
 
-	ice_do_dcb_reconfig(sc);
+	ice_do_dcb_reconfig(sc, false);
 
 	return (0);
 }
@@ -3887,7 +4236,7 @@ ice_sysctl_up2tc_map(SYSCTL_HANDLER_ARGS)
 	struct ice_port_info *pi;
 	struct ice_hw *hw = &sc->hw;
 	device_t dev = sc->dev;
-	enum ice_status status;
+	int status;
 	struct sbuf *sbuf;
 	int ret;
 
@@ -3930,15 +4279,18 @@ ice_sysctl_up2tc_map(SYSCTL_HANDLER_ARGS)
 	if (!hw->port_info->qos_cfg.is_sw_lldp)
 		return (EPERM);
 
-	ret = ice_ets_str_to_tbl(up2tc_user_buf, new_up2tc, 7);
+	ret = ice_ets_str_to_tbl(up2tc_user_buf, new_up2tc,
+	    ICE_MAX_TRAFFIC_CLASS - 1);
 	if (ret) {
 		device_printf(dev, "%s: Could not parse input priority assignment table: %s\n",
 		    __func__, up2tc_user_buf);
 		return (ret);
 	}
 
-	/* Prepare updated ETS TLV */
+	/* Prepare updated ETS CFG/REC TLVs */
 	memcpy(local_dcbx_cfg->etscfg.prio_table, new_up2tc,
+	    sizeof(new_up2tc));
+	memcpy(local_dcbx_cfg->etsrec.prio_table, new_up2tc,
 	    sizeof(new_up2tc));
 
 	status = ice_set_dcb_cfg(pi);
@@ -3950,7 +4302,7 @@ ice_sysctl_up2tc_map(SYSCTL_HANDLER_ARGS)
 		return (EIO);
 	}
 
-	ice_do_dcb_reconfig(sc);
+	ice_do_dcb_reconfig(sc, false);
 
 	return (0);
 }
@@ -3973,7 +4325,7 @@ ice_config_pfc(struct ice_softc *sc, u8 new_mode)
 	struct ice_hw *hw = &sc->hw;
 	struct ice_port_info *pi;
 	device_t dev = sc->dev;
-	enum ice_status status;
+	int status;
 
 	pi = hw->port_info;
 	local_dcbx_cfg = &pi->qos_cfg.local_dcbx_cfg;
@@ -3998,7 +4350,7 @@ ice_config_pfc(struct ice_softc *sc, u8 new_mode)
 		return (EIO);
 	}
 
-	ice_do_dcb_reconfig(sc);
+	ice_do_dcb_reconfig(sc, false);
 
 	return (0);
 }
@@ -4062,12 +4414,170 @@ ice_sysctl_pfc_config(SYSCTL_HANDLER_ARGS)
 	/* If LFC is active and PFC is going to be turned on, turn LFC off */
 	if (user_pfc != 0 && pi->phy.curr_user_fc_req != ICE_FC_NONE) {
 		pi->phy.curr_user_fc_req = ICE_FC_NONE;
-		ret = ice_apply_saved_phy_cfg(sc, ICE_APPLY_FC);
-		if (ret)
-			return (ret);
+		if (ice_test_state(&sc->state, ICE_STATE_LINK_ACTIVE_ON_DOWN) ||
+			 sc->link_up) {
+			ret = ice_apply_saved_phy_cfg(sc, ICE_APPLY_FC);
+			if (ret)
+				return (ret);
+		}
 	}
 
 	return ice_config_pfc(sc, user_pfc);
+}
+
+#define ICE_SYSCTL_HELP_PFC_MODE \
+"\nDisplay and set the current QoS mode for the firmware" \
+"\n\t0: VLAN UP mode" \
+"\n\t1: DSCP mode"
+
+/**
+ * ice_sysctl_pfc_mode
+ * @oidp: sysctl oid structure
+ * @arg1: pointer to private data structure
+ * @arg2: unused
+ * @req: sysctl request pointer
+ *
+ * Gets and sets whether the port is in DSCP or VLAN PCP-based
+ * PFC mode. This is also used to set whether DSCP or VLAN PCP
+ * -based settings are configured for DCB.
+ */
+static int
+ice_sysctl_pfc_mode(SYSCTL_HANDLER_ARGS)
+{
+	struct ice_softc *sc = (struct ice_softc *)arg1;
+	struct ice_dcbx_cfg *local_dcbx_cfg;
+	struct ice_port_info *pi;
+	struct ice_hw *hw = &sc->hw;
+	device_t dev = sc->dev;
+	int status;
+	u8 user_pfc_mode, aq_pfc_mode;
+	int ret;
+
+	UNREFERENCED_PARAMETER(arg2);
+
+	if (ice_driver_is_detaching(sc))
+		return (ESHUTDOWN);
+
+	if (req->oldptr == NULL && req->newptr == NULL) {
+		ret = SYSCTL_OUT(req, 0, sizeof(u8));
+		return (ret);
+	}
+
+	pi = hw->port_info;
+	local_dcbx_cfg = &pi->qos_cfg.local_dcbx_cfg;
+
+	user_pfc_mode = local_dcbx_cfg->pfc_mode;
+
+	/* Read in the new mode */
+	ret = sysctl_handle_8(oidp, &user_pfc_mode, 0, req);
+	if ((ret) || (req->newptr == NULL))
+		return (ret);
+
+	/* Don't allow setting changes in FW DCB mode */
+	if (!hw->port_info->qos_cfg.is_sw_lldp)
+		return (EPERM);
+
+	/* Currently, there are only two modes */
+	switch (user_pfc_mode) {
+	case 0:
+		aq_pfc_mode = ICE_AQC_PFC_VLAN_BASED_PFC;
+		break;
+	case 1:
+		aq_pfc_mode = ICE_AQC_PFC_DSCP_BASED_PFC;
+		break;
+	default:
+		device_printf(dev,
+		    "%s: Valid input range is 0-1 (input %d)\n",
+		    __func__, user_pfc_mode);
+		return (EINVAL);
+	}
+
+	status = ice_aq_set_pfc_mode(hw, aq_pfc_mode, NULL);
+	if (status == ICE_ERR_NOT_SUPPORTED) {
+		device_printf(dev,
+		    "%s: Failed to set PFC mode; DCB not supported\n",
+		    __func__);
+		return (ENODEV);
+	}
+	if (status) {
+		device_printf(dev,
+		    "%s: Failed to set PFC mode; status %s, aq_err %s\n",
+		    __func__, ice_status_str(status),
+		    ice_aq_str(hw->adminq.sq_last_status));
+		return (EIO);
+	}
+
+	/* Reset settings to default when mode is changed */
+	ice_set_default_local_mib_settings(sc);
+	/* Cache current settings and reconfigure */
+	local_dcbx_cfg->pfc_mode = user_pfc_mode;
+	ice_do_dcb_reconfig(sc, false);
+
+	return (0);
+}
+
+#define ICE_SYSCTL_HELP_SET_LINK_ACTIVE \
+"\nKeep link active after setting interface down:" \
+"\n\t0 - disable" \
+"\n\t1 - enable"
+
+/**
+ * ice_sysctl_set_link_active
+ * @oidp: sysctl oid structure
+ * @arg1: pointer to private data structure
+ * @arg2: unused
+ * @req: sysctl request pointer
+ *
+ * Set the link_active_on_if_down sysctl flag.
+ */
+static int
+ice_sysctl_set_link_active(SYSCTL_HANDLER_ARGS)
+{
+	struct ice_softc *sc = (struct ice_softc *)arg1;
+	bool mode;
+	int ret;
+
+	UNREFERENCED_PARAMETER(arg2);
+
+	mode = ice_test_state(&sc->state, ICE_STATE_LINK_ACTIVE_ON_DOWN);
+
+	ret = sysctl_handle_bool(oidp, &mode, 0, req);
+	if ((ret) || (req->newptr == NULL))
+		return (ret);
+
+	if (mode)
+		ice_set_state(&sc->state, ICE_STATE_LINK_ACTIVE_ON_DOWN);
+	else
+		ice_clear_state(&sc->state, ICE_STATE_LINK_ACTIVE_ON_DOWN);
+
+	return (0);
+}
+
+/**
+ * ice_sysctl_debug_set_link
+ * @oidp: sysctl oid structure
+ * @arg1: pointer to private data structure
+ * @arg2: unused
+ * @req: sysctl request pointer
+ *
+ * Set link up/down in debug session.
+ */
+static int
+ice_sysctl_debug_set_link(SYSCTL_HANDLER_ARGS)
+{
+	struct ice_softc *sc = (struct ice_softc *)arg1;
+	bool mode;
+	int ret;
+
+	UNREFERENCED_PARAMETER(arg2);
+
+	ret = sysctl_handle_bool(oidp, &mode, 0, req);
+	if ((ret) || (req->newptr == NULL))
+		return (ret);
+
+	ice_set_link(sc, mode != 0);
+
+	return (0);
 }
 
 /**
@@ -4099,6 +4609,12 @@ ice_add_device_sysctls(struct ice_softc *sc)
 		SYSCTL_ADD_PROC(ctx, ctx_list,
 		    OID_AUTO, "pba_number", CTLTYPE_STRING | CTLFLAG_RD, sc, 0,
 		    ice_sysctl_pba_number, "A", "Product Board Assembly Number");
+	}
+	if (ice_is_bit_set(sc->feat_en, ICE_FEATURE_TEMP_SENSOR)) {
+		SYSCTL_ADD_PROC(ctx, ctx_list,
+		    OID_AUTO, "temp", CTLTYPE_S8 | CTLFLAG_RD,
+		    sc, 0, ice_sysctl_temperature, "CU",
+		    "Device temperature in degrees Celcius (C)");
 	}
 
 	SYSCTL_ADD_PROC(ctx, ctx_list,
@@ -4141,6 +4657,30 @@ ice_add_device_sysctls(struct ice_softc *sc)
 	    OID_AUTO, "pfc", CTLTYPE_U8 | CTLFLAG_RW,
 	    sc, 0, ice_sysctl_pfc_config, "CU", ICE_SYSCTL_HELP_PFC_CONFIG);
 
+	SYSCTL_ADD_PROC(ctx, ctx_list,
+	    OID_AUTO, "pfc_mode", CTLTYPE_U8 | CTLFLAG_RWTUN,
+	    sc, 0, ice_sysctl_pfc_mode, "CU", ICE_SYSCTL_HELP_PFC_MODE);
+
+	SYSCTL_ADD_PROC(ctx, ctx_list,
+	    OID_AUTO, "allow_no_fec_modules_in_auto",
+	    CTLTYPE_U8 | CTLFLAG_RWTUN | CTLFLAG_MPSAFE,
+	    sc, 0, ice_sysctl_allow_no_fec_mod_in_auto, "CU",
+	    "Allow \"No FEC\" mode in FEC auto-negotiation");
+
+	SYSCTL_ADD_PROC(ctx, ctx_list,
+	    OID_AUTO, "link_active_on_if_down", CTLTYPE_U8 | CTLFLAG_RWTUN,
+	    sc, 0, ice_sysctl_set_link_active, "CU", ICE_SYSCTL_HELP_SET_LINK_ACTIVE);
+
+	SYSCTL_ADD_PROC(ctx, ctx_list,
+	    OID_AUTO, "create_mirror_interface", CTLTYPE_STRING | CTLFLAG_RW,
+	    sc, 0, ice_sysctl_create_mirror_interface, "A", "");
+
+	SYSCTL_ADD_PROC(ctx, ctx_list,
+	    OID_AUTO, "destroy_mirror_interface", CTLTYPE_STRING | CTLFLAG_RW,
+	    sc, 0, ice_sysctl_destroy_mirror_interface, "A", "");
+
+	ice_add_dscp2tc_map_sysctls(sc, ctx, ctx_list);
+
 	/* Differentiate software and hardware statistics, by keeping hw stats
 	 * in their own node. This isn't in ice_add_device_tunables, because
 	 * we won't have any CTLFLAG_TUN sysctls under this node.
@@ -4148,7 +4688,7 @@ ice_add_device_sysctls(struct ice_softc *sc)
 	hw_node = SYSCTL_ADD_NODE(ctx, ctx_list, OID_AUTO, "hw", CTLFLAG_RD,
 				  NULL, "Port Hardware Statistics");
 
-	ice_add_sysctls_mac_stats(ctx, hw_node, &sc->stats.cur);
+	ice_add_sysctls_mac_stats(ctx, hw_node, sc);
 
 	/* Add the main PF VSI stats now. Other VSIs will add their own stats
 	 * during creation
@@ -4400,7 +4940,6 @@ ice_sysctl_rx_errors_stat(SYSCTL_HANDLER_ARGS)
 	stat += hs->rx_fragments;
 	stat += hs->rx_oversize;
 	stat += hs->rx_jabber;
-	stat += hs->rx_len_errors;
 	stat += hs->crc_errors;
 	stat += hs->illegal_bytes;
 
@@ -4586,7 +5125,7 @@ ice_add_sysctls_mac_pfc_one_stat(struct sysctl_ctx_list *ctx,
 
 	namebuf = sbuf_new_auto();
 	descbuf = sbuf_new_auto();
-	for (int i = 0; i < ICE_MAX_DCB_TCS; i++) {
+	for (int i = 0; i < ICE_MAX_TRAFFIC_CLASS; i++) {
 		sbuf_clear(namebuf);
 		sbuf_clear(descbuf);
 
@@ -4640,17 +5179,18 @@ ice_add_sysctls_mac_pfc_stats(struct sysctl_ctx_list *ctx,
  * ice_add_sysctls_mac_stats - Add sysctls for global MAC statistics
  * @ctx: the sysctl ctx to use
  * @parent: parent node to add the sysctls under
- * @stats: the hw ports stat structure to pull values from
+ * @sc: device private structure
  *
  * Add global MAC statistics sysctls.
  */
 void
 ice_add_sysctls_mac_stats(struct sysctl_ctx_list *ctx,
 			  struct sysctl_oid *parent,
-			  struct ice_hw_port_stats *stats)
+			  struct ice_softc *sc)
 {
 	struct sysctl_oid *mac_node;
 	struct sysctl_oid_list *parent_list, *mac_list;
+	struct ice_hw_port_stats *stats = &sc->stats.cur;
 
 	parent_list = SYSCTL_CHILDREN(parent);
 
@@ -4675,9 +5215,7 @@ ice_add_sysctls_mac_stats(struct sysctl_ctx_list *ctx,
 		{&stats->rx_size_big, "rx_frames_big", "1523-9522 byte frames received"},
 		{&stats->rx_undersize, "rx_undersize", "Undersized packets received"},
 		{&stats->rx_fragments, "rx_fragmented", "Fragmented packets received"},
-		{&stats->rx_oversize, "rx_oversized", "Oversized packets received"},
 		{&stats->rx_jabber, "rx_jabber", "Received Jabber"},
-		{&stats->rx_len_errors, "rx_length_errors", "Receive Length Errors"},
 		{&stats->eth.rx_discards, "rx_discards",
 		    "Discarded Rx Packets by Port (shortage of storage space)"},
 		/* Packet Transmission Stats */
@@ -4710,6 +5248,11 @@ ice_add_sysctls_mac_stats(struct sysctl_ctx_list *ctx,
 			entry->description);
 		entry++;
 	}
+	/* Port oversize packet stats */
+	SYSCTL_ADD_U64(ctx, mac_list, OID_AUTO, "rx_oversized",
+		       CTLFLAG_RD | CTLFLAG_STATS, &sc->soft_stats.rx_roc_error,
+		       0, "Oversized packets received");
+
 }
 
 /**
@@ -4750,6 +5293,9 @@ ice_configure_misc_interrupts(struct ice_softc *sc)
 
 	/* Associate the Mailbox interrupt with ITR 0, and enable it */
 	wr32(hw, PFINT_MBX_CTL, PFINT_MBX_CTL_CAUSE_ENA_M);
+
+	/* Associate the SB Queue interrupt with ITR 0, and enable it */
+	wr32(hw, PFINT_SB_CTL, PFINT_SB_CTL_CAUSE_ENA_M);
 
 	/* Associate the AdminQ interrupt with ITR 0, and enable it */
 	wr32(hw, PFINT_FW_CTL, PFINT_FW_CTL_CAUSE_ENA_M);
@@ -4896,7 +5442,7 @@ ice_sync_multicast_filters(struct ice_softc *sc)
 	struct ice_fltr_mgmt_list_entry *itr;
 	struct ice_mcast_sync_data data = {};
 	struct ice_list_head *rules, remove_list;
-	enum ice_status status;
+	int status;
 	int err = 0;
 
 	INIT_LIST_HEAD(&data.add_list);
@@ -4975,61 +5521,133 @@ free_filter_lists:
 }
 
 /**
+ * ice_add_vlan_hw_filters - Add multiple VLAN filters for a given VSI
+ * @vsi: The VSI to add the filter for
+ * @vid: array of VLAN ids to add
+ * @length: length of vid array
+ *
+ * Programs HW filters so that the given VSI will receive the specified VLANs.
+ */
+int
+ice_add_vlan_hw_filters(struct ice_vsi *vsi, u16 *vid, u16 length)
+{
+	struct ice_hw *hw = &vsi->sc->hw;
+	struct ice_list_head vlan_list;
+	struct ice_fltr_list_entry *vlan_entries;
+	int status;
+
+	MPASS(length > 0);
+
+	INIT_LIST_HEAD(&vlan_list);
+
+	vlan_entries = (struct ice_fltr_list_entry *)
+	    malloc(sizeof(*vlan_entries) * length, M_ICE, M_NOWAIT | M_ZERO);
+	if (!vlan_entries)
+		return (ICE_ERR_NO_MEMORY);
+
+	for (u16 i = 0; i < length; i++) {
+		vlan_entries[i].fltr_info.lkup_type = ICE_SW_LKUP_VLAN;
+		vlan_entries[i].fltr_info.fltr_act = ICE_FWD_TO_VSI;
+		vlan_entries[i].fltr_info.flag = ICE_FLTR_TX;
+		vlan_entries[i].fltr_info.src_id = ICE_SRC_ID_VSI;
+		vlan_entries[i].fltr_info.vsi_handle = vsi->idx;
+		vlan_entries[i].fltr_info.l_data.vlan.vlan_id = vid[i];
+
+		LIST_ADD(&vlan_entries[i].list_entry, &vlan_list);
+	}
+
+	status = ice_add_vlan(hw, &vlan_list);
+	if (!status)
+		goto done;
+
+	device_printf(vsi->sc->dev, "Failed to add VLAN filters:\n");
+	for (u16 i = 0; i < length; i++) {
+		device_printf(vsi->sc->dev,
+		    "- vlan %d, status %d\n",
+		    vlan_entries[i].fltr_info.l_data.vlan.vlan_id,
+		    vlan_entries[i].status);
+	}
+done:
+	free(vlan_entries, M_ICE);
+	return (status);
+}
+
+/**
  * ice_add_vlan_hw_filter - Add a VLAN filter for a given VSI
  * @vsi: The VSI to add the filter for
  * @vid: VLAN to add
  *
  * Programs a HW filter so that the given VSI will receive the specified VLAN.
  */
-enum ice_status
+int
 ice_add_vlan_hw_filter(struct ice_vsi *vsi, u16 vid)
+{
+	return ice_add_vlan_hw_filters(vsi, &vid, 1);
+}
+
+/**
+ * ice_remove_vlan_hw_filters - Remove multiple VLAN filters for a given VSI
+ * @vsi: The VSI to remove the filters from
+ * @vid: array of VLAN ids to remove
+ * @length: length of vid array
+ *
+ * Removes previously programmed HW filters for the specified VSI.
+ */
+int
+ice_remove_vlan_hw_filters(struct ice_vsi *vsi, u16 *vid, u16 length)
 {
 	struct ice_hw *hw = &vsi->sc->hw;
 	struct ice_list_head vlan_list;
-	struct ice_fltr_list_entry vlan_entry;
+	struct ice_fltr_list_entry *vlan_entries;
+	int status;
+
+	MPASS(length > 0);
 
 	INIT_LIST_HEAD(&vlan_list);
-	memset(&vlan_entry, 0, sizeof(vlan_entry));
 
-	vlan_entry.fltr_info.lkup_type = ICE_SW_LKUP_VLAN;
-	vlan_entry.fltr_info.fltr_act = ICE_FWD_TO_VSI;
-	vlan_entry.fltr_info.flag = ICE_FLTR_TX;
-	vlan_entry.fltr_info.src_id = ICE_SRC_ID_VSI;
-	vlan_entry.fltr_info.vsi_handle = vsi->idx;
-	vlan_entry.fltr_info.l_data.vlan.vlan_id = vid;
+	vlan_entries = (struct ice_fltr_list_entry *)
+	    malloc(sizeof(*vlan_entries) * length, M_ICE, M_NOWAIT | M_ZERO);
+	if (!vlan_entries)
+		return (ICE_ERR_NO_MEMORY);
 
-	LIST_ADD(&vlan_entry.list_entry, &vlan_list);
+	for (u16 i = 0; i < length; i++) {
+		vlan_entries[i].fltr_info.lkup_type = ICE_SW_LKUP_VLAN;
+		vlan_entries[i].fltr_info.fltr_act = ICE_FWD_TO_VSI;
+		vlan_entries[i].fltr_info.flag = ICE_FLTR_TX;
+		vlan_entries[i].fltr_info.src_id = ICE_SRC_ID_VSI;
+		vlan_entries[i].fltr_info.vsi_handle = vsi->idx;
+		vlan_entries[i].fltr_info.l_data.vlan.vlan_id = vid[i];
 
-	return ice_add_vlan(hw, &vlan_list);
+		LIST_ADD(&vlan_entries[i].list_entry, &vlan_list);
+	}
+
+	status = ice_remove_vlan(hw, &vlan_list);
+	if (!status)
+		goto done;
+
+	device_printf(vsi->sc->dev, "Failed to remove VLAN filters:\n");
+	for (u16 i = 0; i < length; i++) {
+		device_printf(vsi->sc->dev,
+		    "- vlan %d, status %d\n",
+		    vlan_entries[i].fltr_info.l_data.vlan.vlan_id,
+		    vlan_entries[i].status);
+	}
+done:
+	free(vlan_entries, M_ICE);
+	return (status);
 }
 
 /**
  * ice_remove_vlan_hw_filter - Remove a VLAN filter for a given VSI
- * @vsi: The VSI to add the filter for
+ * @vsi: The VSI to remove the filter from
  * @vid: VLAN to remove
  *
  * Removes a previously programmed HW filter for the specified VSI.
  */
-enum ice_status
+int
 ice_remove_vlan_hw_filter(struct ice_vsi *vsi, u16 vid)
 {
-	struct ice_hw *hw = &vsi->sc->hw;
-	struct ice_list_head vlan_list;
-	struct ice_fltr_list_entry vlan_entry;
-
-	INIT_LIST_HEAD(&vlan_list);
-	memset(&vlan_entry, 0, sizeof(vlan_entry));
-
-	vlan_entry.fltr_info.lkup_type = ICE_SW_LKUP_VLAN;
-	vlan_entry.fltr_info.fltr_act = ICE_FWD_TO_VSI;
-	vlan_entry.fltr_info.flag = ICE_FLTR_TX;
-	vlan_entry.fltr_info.src_id = ICE_SRC_ID_VSI;
-	vlan_entry.fltr_info.vsi_handle = vsi->idx;
-	vlan_entry.fltr_info.l_data.vlan.vlan_id = vid;
-
-	LIST_ADD(&vlan_entry.list_entry, &vlan_list);
-
-	return ice_remove_vlan(hw, &vlan_list);
+	return ice_remove_vlan_hw_filters(vsi, &vid, 1);
 }
 
 #define ICE_SYSCTL_HELP_RX_ITR			\
@@ -5204,6 +5822,55 @@ ice_del_vsi_sysctl_ctx(struct ice_vsi *vsi)
 				      vsi->idx, ice_err_str(err));
 		vsi->vsi_node = NULL;
 	}
+}
+
+/**
+ * ice_add_dscp2tc_map_sysctls - Add sysctl tree for DSCP to TC mapping
+ * @sc: pointer to device private softc
+ * @ctx: the sysctl ctx to use
+ * @ctx_list: list of sysctl children for device (to add sysctl tree to)
+ *
+ * Add a sysctl tree for individual dscp2tc_map sysctls. Each child of this
+ * node can map 8 DSCPs to TC values; there are 8 of these in turn for a total
+ * of 64 DSCP to TC map values that the user can configure.
+ */
+void
+ice_add_dscp2tc_map_sysctls(struct ice_softc *sc,
+			    struct sysctl_ctx_list *ctx,
+			    struct sysctl_oid_list *ctx_list)
+{
+	struct sysctl_oid_list *node_list;
+	struct sysctl_oid *node;
+	struct sbuf *namebuf, *descbuf;
+	int first_dscp_val, last_dscp_val;
+
+	node = SYSCTL_ADD_NODE(ctx, ctx_list, OID_AUTO, "dscp2tc_map", CTLFLAG_RD,
+			       NULL, "Map of DSCP values to DCB TCs");
+	node_list = SYSCTL_CHILDREN(node);
+
+	namebuf = sbuf_new_auto();
+	descbuf = sbuf_new_auto();
+	for (int i = 0; i < ICE_MAX_TRAFFIC_CLASS; i++) {
+		sbuf_clear(namebuf);
+		sbuf_clear(descbuf);
+
+		first_dscp_val = i * 8;
+		last_dscp_val = first_dscp_val + 7;
+
+		sbuf_printf(namebuf, "%d-%d", first_dscp_val, last_dscp_val);
+		sbuf_printf(descbuf, "Map DSCP values %d to %d to TCs",
+			    first_dscp_val, last_dscp_val);
+
+		sbuf_finish(namebuf);
+		sbuf_finish(descbuf);
+
+		SYSCTL_ADD_PROC(ctx, node_list,
+		    OID_AUTO, sbuf_data(namebuf), CTLTYPE_STRING | CTLFLAG_RW,
+		    sc, i, ice_sysctl_dscp2tc_map, "A", sbuf_data(descbuf));
+	}
+
+	sbuf_delete(namebuf);
+	sbuf_delete(descbuf);
 }
 
 /**
@@ -5584,6 +6251,40 @@ ice_sysctl_dump_state_flags(SYSCTL_HANDLER_ARGS)
 	return (0);
 }
 
+#define ICE_SYSCTL_DEBUG_MASK_HELP \
+"\nSelect debug statements to print to kernel message log"	\
+"\nFlags:"							\
+"\n\t         0x1 - Function Tracing"				\
+"\n\t         0x2 - Driver Initialization"			\
+"\n\t         0x4 - Release"					\
+"\n\t         0x8 - FW Logging"					\
+"\n\t        0x10 - Link"					\
+"\n\t        0x20 - PHY"					\
+"\n\t        0x40 - Queue Context"				\
+"\n\t        0x80 - NVM"					\
+"\n\t       0x100 - LAN"					\
+"\n\t       0x200 - Flow"					\
+"\n\t       0x400 - DCB"					\
+"\n\t       0x800 - Diagnostics"				\
+"\n\t      0x1000 - Flow Director"				\
+"\n\t      0x2000 - Switch"					\
+"\n\t      0x4000 - Scheduler"					\
+"\n\t      0x8000 - RDMA"					\
+"\n\t     0x10000 - DDP Package"				\
+"\n\t     0x20000 - Resources"					\
+"\n\t     0x40000 - ACL"					\
+"\n\t     0x80000 - PTP"					\
+"\n\t   ..."							\
+"\n\t   0x1000000 - Admin Queue messages"			\
+"\n\t   0x2000000 - Admin Queue descriptors"			\
+"\n\t   0x4000000 - Admin Queue descriptor buffers"		\
+"\n\t   0x8000000 - Admin Queue commands"			\
+"\n\t  0x10000000 - Parser"					\
+"\n\t   ..."							\
+"\n\t  0x80000000 - (Reserved for user)"			\
+"\n\t"								\
+"\nUse \"sysctl -x\" to view flags properly."
+
 /**
  * ice_add_debug_tunables - Add tunables helpful for debugging the device driver
  * @sc: device private structure
@@ -5611,9 +6312,9 @@ ice_add_debug_tunables(struct ice_softc *sc)
 	debug_list = SYSCTL_CHILDREN(sc->debug_sysctls);
 
 	SYSCTL_ADD_U64(ctx, debug_list, OID_AUTO, "debug_mask",
-		       ICE_CTLFLAG_DEBUG | CTLFLAG_RW | CTLFLAG_TUN,
+		       ICE_CTLFLAG_DEBUG | CTLFLAG_RWTUN,
 		       &sc->hw.debug_mask, 0,
-		       "Debug message enable/disable mask");
+		       ICE_SYSCTL_DEBUG_MASK_HELP);
 
 	/* Load the default value from the global sysctl first */
 	sc->enable_tx_fc_filter = ice_enable_tx_fc_filter;
@@ -5622,6 +6323,12 @@ ice_add_debug_tunables(struct ice_softc *sc)
 			ICE_CTLFLAG_DEBUG | CTLFLAG_RDTUN,
 			&sc->enable_tx_fc_filter, 0,
 			"Drop Ethertype 0x8808 control frames originating from software on this PF");
+
+	sc->tx_balance_en = ice_tx_balance_en;
+	SYSCTL_ADD_BOOL(ctx, debug_list, OID_AUTO, "tx_balance",
+			ICE_CTLFLAG_DEBUG | CTLFLAG_RWTUN,
+			&sc->tx_balance_en, 0,
+			"Enable 5-layer scheduler topology");
 
 	/* Load the default value from the global sysctl first */
 	sc->enable_tx_lldp_filter = ice_enable_tx_lldp_filter;
@@ -5667,7 +6374,7 @@ ice_sysctl_request_reset(SYSCTL_HANDLER_ARGS)
 {
 	struct ice_softc *sc = (struct ice_softc *)arg1;
 	struct ice_hw *hw = &sc->hw;
-	enum ice_status status;
+	int status;
 	enum ice_reset_req reset_type = ICE_RESET_INVAL;
 	const char *reset_message;
 	int ret;
@@ -5768,6 +6475,368 @@ ice_sysctl_request_reset(SYSCTL_HANDLER_ARGS)
 	return (0);
 }
 
+#define ICE_AQC_DBG_DUMP_CLUSTER_ID_INVALID	(0xFFFFFF)
+#define ICE_SYSCTL_HELP_FW_DEBUG_DUMP_CLUSTER_SETTING		\
+"\nSelect clusters to dump with \"dump\" sysctl"		\
+"\nFlags:"							\
+"\n\t        0 - All clusters (default)"			\
+"\n\t      0x1 - Switch"					\
+"\n\t      0x2 - ACL"						\
+"\n\t      0x4 - Tx Scheduler"					\
+"\n\t      0x8 - Profile Configuration"				\
+"\n\t     0x20 - Link"						\
+"\n\t     0x80 - DCB"						\
+"\n\t    0x100 - L2P"						\
+"\n\t 0x400000 - Manageability Transactions (excluding E830)"	\
+"\n"								\
+"\nUse \"sysctl -x\" to view flags properly."
+
+/**
+ * ice_sysctl_fw_debug_dump_cluster_setting - Set which clusters to dump
+ *     from FW when FW debug dump occurs
+ * @oidp: sysctl oid structure
+ * @arg1: pointer to private data structure
+ * @arg2: unused
+ * @req: sysctl request pointer
+ */
+static int
+ice_sysctl_fw_debug_dump_cluster_setting(SYSCTL_HANDLER_ARGS)
+{
+	struct ice_softc *sc = (struct ice_softc *)arg1;
+	device_t dev = sc->dev;
+	u32 clusters;
+	int ret;
+
+	UNREFERENCED_PARAMETER(arg2);
+
+	ret = priv_check(curthread, PRIV_DRIVER);
+	if (ret)
+		return (ret);
+
+	if (ice_driver_is_detaching(sc))
+		return (ESHUTDOWN);
+
+	clusters = sc->fw_debug_dump_cluster_mask;
+
+	ret = sysctl_handle_32(oidp, &clusters, 0, req);
+	if ((ret) || (req->newptr == NULL))
+		return (ret);
+
+	u32 valid_cluster_mask;
+	if (ice_is_e830(&sc->hw))
+		valid_cluster_mask = ICE_FW_DEBUG_DUMP_VALID_CLUSTER_MASK_E830;
+	else
+		valid_cluster_mask = ICE_FW_DEBUG_DUMP_VALID_CLUSTER_MASK_E810;
+
+	if (clusters & ~(valid_cluster_mask)) {
+		device_printf(dev,
+		    "%s: ERROR: Incorrect settings requested\n",
+		    __func__);
+		sc->fw_debug_dump_cluster_mask = ICE_AQC_DBG_DUMP_CLUSTER_ID_INVALID;
+		return (EINVAL);
+	}
+
+	sc->fw_debug_dump_cluster_mask = clusters;
+
+	return (0);
+}
+
+#define ICE_FW_DUMP_AQ_COUNT_LIMIT	(10000)
+
+/**
+ * ice_fw_debug_dump_print_cluster - Print formatted cluster data from FW
+ * @sc: the device softc
+ * @sbuf: initialized sbuf to print data to
+ * @cluster_id: FW cluster ID to print data from
+ *
+ * Reads debug data from the specified cluster id in the FW and prints it to
+ * the input sbuf. This function issues multiple AQ commands to the FW in
+ * order to get all of the data in the cluster.
+ *
+ * @remark Only intended to be used by the sysctl handler
+ * ice_sysctl_fw_debug_dump_do_dump
+ */
+static u16
+ice_fw_debug_dump_print_cluster(struct ice_softc *sc, struct sbuf *sbuf, u16 cluster_id)
+{
+	struct ice_hw *hw = &sc->hw;
+	device_t dev = sc->dev;
+	u16 data_buf_size = ICE_AQ_MAX_BUF_LEN;
+	const u8 reserved_buf[8] = {};
+	int status;
+	int counter = 0;
+	u8 *data_buf;
+
+	/* Input parameters / loop variables */
+	u16 table_id = 0;
+	u32 offset = 0;
+
+	/* Output from the Get Internal Data AQ command */
+	u16 ret_buf_size = 0;
+	u16 ret_next_cluster = 0;
+	u16 ret_next_table = 0;
+	u32 ret_next_index = 0;
+
+	/* Other setup */
+	data_buf = (u8 *)malloc(data_buf_size, M_ICE, M_NOWAIT | M_ZERO);
+	if (!data_buf)
+		return ret_next_cluster;
+
+	ice_debug(hw, ICE_DBG_DIAG, "%s: dumping cluster id %d\n", __func__,
+	    cluster_id);
+
+	for (;;) {
+		/* Do not trust the FW behavior to be completely correct */
+		if (counter++ >= ICE_FW_DUMP_AQ_COUNT_LIMIT) {
+			device_printf(dev,
+			    "%s: Exceeded counter limit for cluster %d\n",
+			    __func__, cluster_id);
+			break;
+		}
+
+		ice_debug(hw, ICE_DBG_DIAG, "---\n");
+		ice_debug(hw, ICE_DBG_DIAG,
+		    "table_id 0x%04x offset 0x%08x buf_size %d\n",
+		    table_id, offset, data_buf_size);
+
+		status = ice_aq_get_internal_data(hw, cluster_id, table_id,
+		    offset, data_buf, data_buf_size, &ret_buf_size,
+		    &ret_next_cluster, &ret_next_table, &ret_next_index, NULL);
+		if (status) {
+			device_printf(dev,
+			    "%s: ice_aq_get_internal_data in cluster %d: err %s aq_err %s\n",
+			    __func__, cluster_id, ice_status_str(status),
+			    ice_aq_str(hw->adminq.sq_last_status));
+			break;
+		}
+
+		ice_debug(hw, ICE_DBG_DIAG,
+		    "ret_table_id 0x%04x ret_offset 0x%08x ret_buf_size %d\n",
+		    ret_next_table, ret_next_index, ret_buf_size);
+
+		/* Print cluster id */
+		u32 print_cluster_id = (u32)cluster_id;
+		sbuf_bcat(sbuf, &print_cluster_id, sizeof(print_cluster_id));
+		/* Print table id */
+		u32 print_table_id = (u32)table_id;
+		sbuf_bcat(sbuf, &print_table_id, sizeof(print_table_id));
+		/* Print table length */
+		u32 print_table_length = (u32)ret_buf_size;
+		sbuf_bcat(sbuf, &print_table_length, sizeof(print_table_length));
+		/* Print current offset */
+		u32 print_curr_offset = offset;
+		sbuf_bcat(sbuf, &print_curr_offset, sizeof(print_curr_offset));
+		/* Print reserved bytes */
+		sbuf_bcat(sbuf, reserved_buf, sizeof(reserved_buf));
+		/* Print data */
+		sbuf_bcat(sbuf, data_buf, ret_buf_size);
+
+		/* Adjust loop variables */
+		memset(data_buf, 0, data_buf_size);
+		bool same_table_next = (table_id == ret_next_table);
+		bool last_table_next;
+		if (ice_is_bit_set(sc->feat_en, ICE_FEATURE_NEXT_CLUSTER_ID))
+			last_table_next =
+			    (ret_next_table == 0xffff);
+		else
+			last_table_next =
+			    (ret_next_table == 0xff || ret_next_table == 0xffff);
+		bool last_offset_next = (ret_next_index == 0xffffffff || ret_next_index == 0);
+
+		if ((!same_table_next && !last_offset_next) ||
+		    (same_table_next && last_table_next)) {
+			device_printf(dev,
+			    "%s: Unexpected conditions for same_table_next(%d) last_table_next(%d) last_offset_next(%d), ending cluster (%d)\n",
+			    __func__, same_table_next, last_table_next, last_offset_next, cluster_id);
+			break;
+		}
+
+		if (!same_table_next && !last_table_next && last_offset_next) {
+			/* We've hit the end of the table */
+			table_id = ret_next_table;
+			offset = 0;
+		}
+		else if (!same_table_next && last_table_next && last_offset_next) {
+			/* We've hit the end of the cluster */
+			break;
+		}
+		else if (same_table_next && !last_table_next && last_offset_next) {
+			if (cluster_id == 0x1 && table_id < 39)
+				table_id += 1;
+			else
+				break;
+		}
+		else { /* if (same_table_next && !last_table_next && !last_offset_next) */
+			/* More data left in the table */
+			offset = ret_next_index;
+		}
+	}
+
+	free(data_buf, M_ICE);
+	return ret_next_cluster;
+}
+
+/**
+ * ice_fw_debug_dump_print_clusters - Print data from FW clusters to sbuf
+ * @sc: the device softc
+ * @sbuf: initialized sbuf to print data to
+ *
+ * Handles dumping all of the clusters to dump to the indicated sbuf. The
+ * clusters do dump are determined by the value in the
+ * fw_debug_dump_cluster_mask field in the sc argument.
+ *
+ * @remark Only intended to be used by the sysctl handler
+ * ice_sysctl_fw_debug_dump_do_dump
+ */
+static void
+ice_fw_debug_dump_print_clusters(struct ice_softc *sc, struct sbuf *sbuf)
+{
+	u16 next_cluster_id, max_cluster_id, start_cluster_id;
+	u32 cluster_mask = sc->fw_debug_dump_cluster_mask;
+	struct ice_hw *hw = &sc->hw;
+	int bit;
+
+	ice_debug(hw, ICE_DBG_DIAG, "%s: Debug Dump running...\n", __func__);
+
+	if (ice_is_e830(hw)) {
+		max_cluster_id = ICE_AQC_DBG_DUMP_CLUSTER_ID_QUEUE_MNG_E830;
+		start_cluster_id = ICE_AQC_DBG_DUMP_CLUSTER_ID_SW_E830;
+	} else {
+		max_cluster_id = ICE_AQC_DBG_DUMP_CLUSTER_ID_QUEUE_MNG_E810;
+		start_cluster_id = ICE_AQC_DBG_DUMP_CLUSTER_ID_SW_E810;
+	}
+
+	if (cluster_mask != 0) {
+		for_each_set_bit(bit, &cluster_mask,
+		    sizeof(cluster_mask) * BITS_PER_BYTE) {
+			ice_fw_debug_dump_print_cluster(sc, sbuf,
+			    bit + start_cluster_id);
+		}
+	} else {
+		next_cluster_id = start_cluster_id;
+
+		/* We don't support QUEUE_MNG and FULL_CSR_SPACE */
+		do {
+			next_cluster_id =
+			    ice_fw_debug_dump_print_cluster(sc, sbuf, next_cluster_id);
+		} while ((next_cluster_id != 0) &&
+			 (next_cluster_id < max_cluster_id));
+	}
+
+}
+
+#define ICE_SYSCTL_HELP_FW_DEBUG_DUMP_DO_DUMP \
+"\nWrite 1 to output a FW debug dump containing the clusters specified by the" \
+"\n\"clusters\" sysctl."						\
+"\n"									\
+"\nThe \"-b\" flag must be used in order to dump this data as binary data because" \
+"\nthis data is opaque and not a string."
+
+#define ICE_FW_DUMP_BASE_TEXT_SIZE	(1024 * 1024)
+#define ICE_FW_DUMP_ALL_TEXT_SIZE	(10 * 1024 * 1024)
+#define ICE_FW_DUMP_CLUST0_TEXT_SIZE	(2 * 1024 * 1024)
+#define ICE_FW_DUMP_CLUST1_TEXT_SIZE	(128 * 1024)
+#define ICE_FW_DUMP_CLUST2_TEXT_SIZE	(2 * 1024 * 1024)
+
+/**
+ * ice_sysctl_fw_debug_dump_do_dump - Dump data from FW to sysctl output
+ * @oidp: sysctl oid structure
+ * @arg1: pointer to private data structure
+ * @arg2: unused
+ * @req: sysctl request pointer
+ *
+ * Sysctl handler for the debug.dump.dump sysctl. Prints out a specially-
+ * formatted dump of some debug FW data intended to be processed by a special
+ * Intel tool. Prints out the cluster data specified by the "clusters"
+ * sysctl.
+ *
+ * @remark The actual AQ calls and printing are handled by a helper
+ * function above.
+ */
+static int
+ice_sysctl_fw_debug_dump_do_dump(SYSCTL_HANDLER_ARGS)
+{
+	struct ice_softc *sc = (struct ice_softc *)arg1;
+	device_t dev = sc->dev;
+	struct sbuf *sbuf;
+	int ret;
+
+	UNREFERENCED_PARAMETER(arg2);
+
+	ret = priv_check(curthread, PRIV_DRIVER);
+	if (ret)
+		return (ret);
+
+	if (ice_driver_is_detaching(sc))
+		return (ESHUTDOWN);
+
+	/* If the user hasn't written "1" to this sysctl yet: */
+	if (!ice_test_state(&sc->state, ICE_STATE_DO_FW_DEBUG_DUMP)) {
+		/* Avoid output on the first set of reads to this sysctl in
+		 * order to prevent a null byte from being written to the
+		 * end result when called via sysctl(8).
+		 */
+		if (req->oldptr == NULL && req->newptr == NULL) {
+			ret = SYSCTL_OUT(req, 0, 0);
+			return (ret);
+		}
+
+		char input_buf[2] = "";
+		ret = sysctl_handle_string(oidp, input_buf, sizeof(input_buf), req);
+		if ((ret) || (req->newptr == NULL))
+			return (ret);
+
+		/* If we get '1', then indicate we'll do a dump in the next
+		 * sysctl read call.
+		 */
+		if (input_buf[0] == '1') {
+			if (sc->fw_debug_dump_cluster_mask == ICE_AQC_DBG_DUMP_CLUSTER_ID_INVALID) {
+				device_printf(dev,
+				    "%s: Debug Dump failed because an invalid cluster was specified.\n",
+				    __func__);
+				return (EINVAL);
+			}
+
+			ice_set_state(&sc->state, ICE_STATE_DO_FW_DEBUG_DUMP);
+			return (0);
+		}
+
+		return (EINVAL);
+	}
+
+	/* --- FW debug dump state is set --- */
+
+
+	/* Caller just wants the upper bound for size */
+	if (req->oldptr == NULL && req->newptr == NULL) {
+		size_t est_output_len = ICE_FW_DUMP_BASE_TEXT_SIZE;
+		if (sc->fw_debug_dump_cluster_mask == 0)
+			est_output_len += ICE_FW_DUMP_ALL_TEXT_SIZE;
+		else {
+			if (sc->fw_debug_dump_cluster_mask & 0x1)
+				est_output_len += ICE_FW_DUMP_CLUST0_TEXT_SIZE;
+			if (sc->fw_debug_dump_cluster_mask & 0x2)
+				est_output_len += ICE_FW_DUMP_CLUST1_TEXT_SIZE;
+			if (sc->fw_debug_dump_cluster_mask & 0x4)
+				est_output_len += ICE_FW_DUMP_CLUST2_TEXT_SIZE;
+		}
+
+		ret = SYSCTL_OUT(req, 0, est_output_len);
+		return (ret);
+	}
+
+	sbuf = sbuf_new_for_sysctl(NULL, NULL, 128, req);
+	sbuf_clear_flags(sbuf, SBUF_INCLUDENUL);
+
+	ice_fw_debug_dump_print_clusters(sc, sbuf);
+
+	sbuf_finish(sbuf);
+	sbuf_delete(sbuf);
+
+	ice_clear_state(&sc->state, ICE_STATE_DO_FW_DEBUG_DUMP);
+	return (ret);
+}
+
 /**
  * ice_add_debug_sysctls - Add sysctls helpful for debugging the device driver
  * @sc: device private structure
@@ -5779,8 +6848,8 @@ ice_sysctl_request_reset(SYSCTL_HANDLER_ARGS)
 static void
 ice_add_debug_sysctls(struct ice_softc *sc)
 {
-	struct sysctl_oid *sw_node;
-	struct sysctl_oid_list *debug_list, *sw_list;
+	struct sysctl_oid *sw_node, *dump_node;
+	struct sysctl_oid_list *debug_list, *sw_list, *dump_list;
 	device_t dev = sc->dev;
 
 	struct sysctl_ctx_list *ctx = device_get_sysctl_ctx(dev);
@@ -5826,6 +6895,10 @@ ice_add_debug_sysctls(struct ice_softc *sc)
 			ICE_CTLFLAG_DEBUG | CTLTYPE_STRING | CTLFLAG_RD, sc, 0,
 			ice_sysctl_dump_state_flags, "A",
 			"Driver State Flags");
+
+	SYSCTL_ADD_PROC(ctx, debug_list, OID_AUTO, "set_link",
+			ICE_CTLFLAG_DEBUG | CTLTYPE_U8 | CTLFLAG_RW, sc, 0,
+			ice_sysctl_debug_set_link, "CU", "Set link");
 
 	SYSCTL_ADD_PROC(ctx, debug_list, OID_AUTO, "phy_type_low",
 			ICE_CTLFLAG_DEBUG | CTLTYPE_U64 | CTLFLAG_RW, sc, 0,
@@ -5886,6 +6959,13 @@ ice_add_debug_sysctls(struct ice_softc *sc)
 			ice_sysctl_negotiated_fc, "A",
 			"Current Negotiated Flow Control mode");
 
+	if (ice_is_bit_set(sc->feat_en, ICE_FEATURE_PHY_STATISTICS)) {
+		SYSCTL_ADD_PROC(ctx, debug_list, OID_AUTO, "phy_statistics",
+				CTLTYPE_STRING | CTLFLAG_RD,
+				sc, 0, ice_sysctl_dump_phy_stats, "A",
+				"Dumps PHY statistics from firmware");
+	}
+
 	SYSCTL_ADD_PROC(ctx, debug_list, OID_AUTO, "local_dcbx_cfg",
 			CTLTYPE_STRING | CTLFLAG_RD, sc, ICE_AQ_LLDP_MIB_LOCAL,
 			ice_sysctl_dump_dcbx_cfg, "A",
@@ -5903,6 +6983,10 @@ ice_add_debug_sysctls(struct ice_softc *sc)
 	SYSCTL_ADD_PROC(ctx, debug_list, OID_AUTO, "query_port_ets", CTLTYPE_STRING | CTLFLAG_RD,
 			sc, 0, ice_sysctl_query_port_ets, "A",
 			"Prints selected output from Query Port ETS AQ command");
+
+	SYSCTL_ADD_U64(ctx, debug_list, OID_AUTO, "rx_length_errors",
+		       CTLFLAG_RD | CTLFLAG_STATS, &sc->stats.cur.rx_len_errors, 0,
+		       "Receive Length Errors (SNAP packets)");
 
 	sw_node = SYSCTL_ADD_NODE(ctx, debug_list, OID_AUTO, "switch",
 				  ICE_CTLFLAG_DEBUG | CTLFLAG_RD, NULL,
@@ -5929,6 +7013,20 @@ ice_add_debug_sysctls(struct ice_softc *sc)
 			ice_sysctl_dump_ethertype_mac_filters, "A",
 			"Ethertype/MAC Filters");
 
+	dump_node = SYSCTL_ADD_NODE(ctx, debug_list, OID_AUTO, "dump",
+				  ICE_CTLFLAG_DEBUG | CTLFLAG_RD, NULL,
+				  "Internal FW Dump");
+	dump_list = SYSCTL_CHILDREN(dump_node);
+
+	SYSCTL_ADD_PROC(ctx, dump_list, OID_AUTO, "clusters",
+			ICE_CTLFLAG_DEBUG | CTLTYPE_U32 | CTLFLAG_RW, sc, 0,
+			ice_sysctl_fw_debug_dump_cluster_setting, "SU",
+			ICE_SYSCTL_HELP_FW_DEBUG_DUMP_CLUSTER_SETTING);
+
+	SYSCTL_ADD_PROC(ctx, dump_list, OID_AUTO, "dump",
+			ICE_CTLFLAG_DEBUG | CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
+			ice_sysctl_fw_debug_dump_do_dump, "",
+			ICE_SYSCTL_HELP_FW_DEBUG_DUMP_DO_DUMP);
 }
 
 /**
@@ -5943,7 +7041,7 @@ ice_vsi_disable_tx(struct ice_vsi *vsi)
 {
 	struct ice_softc *sc = vsi->sc;
 	struct ice_hw *hw = &sc->hw;
-	enum ice_status status;
+	int status;
 	u32 *q_teids;
 	u16 *q_ids, *q_handles;
 	size_t q_teids_size, q_ids_size, q_handles_size;
@@ -5972,21 +7070,26 @@ ice_vsi_disable_tx(struct ice_vsi *vsi)
 	}
 
 	ice_for_each_traffic_class(tc) {
-		buf_idx = 0;
-		for (j = 0; j < vsi->num_tx_queues; j++) {
-			struct ice_tx_queue *txq = &vsi->tx_queues[j];
+		struct ice_tc_info *tc_info = &vsi->tc_info[tc];
+		u16 start_idx, end_idx;
 
-			if (txq->tc != tc)
-				continue;
+		/* Skip rest of disabled TCs once the first
+		 * disabled TC is found */
+		if (!(vsi->tc_map & BIT(tc)))
+			break;
+
+		/* Fill out TX queue information for this TC */
+		start_idx = tc_info->qoffset;
+		end_idx = start_idx + tc_info->qcount_tx;
+		buf_idx = 0;
+		for (j = start_idx; j < end_idx; j++) {
+			struct ice_tx_queue *txq = &vsi->tx_queues[j];
 
 			q_ids[buf_idx] = vsi->tx_qmap[j];
 			q_handles[buf_idx] = txq->q_handle;
 			q_teids[buf_idx] = txq->q_teid;
 			buf_idx++;
 		}
-		/* Skip TC if no queues belong to it */
-		if (buf_idx == 0)
-			continue;
 
 		status = ice_dis_vsi_txq(hw->port_info, vsi->idx, tc, buf_idx,
 					 q_handles, q_ids, q_teids, ICE_NO_RESET, 0, NULL);
@@ -6005,9 +7108,9 @@ ice_vsi_disable_tx(struct ice_vsi *vsi)
 		}
 
 		/* Clear buffers */
-		memset(q_teids, 0, q_teids_size); 
-		memset(q_ids, 0, q_ids_size); 
-		memset(q_handles, 0, q_handles_size); 
+		memset(q_teids, 0, q_teids_size);
+		memset(q_ids, 0, q_ids_size);
+		memset(q_handles, 0, q_handles_size);
 	}
 
 /* free_q_handles: */
@@ -6039,11 +7142,12 @@ ice_vsi_set_rss_params(struct ice_vsi *vsi)
 	case ICE_VSI_PF:
 		/* The PF VSI inherits RSS instance of the PF */
 		vsi->rss_table_size = cap->rss_table_size;
-		vsi->rss_lut_type = ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_PF;
+		vsi->rss_lut_type = ICE_LUT_PF;
 		break;
 	case ICE_VSI_VF:
+	case ICE_VSI_VMDQ2:
 		vsi->rss_table_size = ICE_VSIQF_HLUT_ARRAY_SIZE;
-		vsi->rss_lut_type = ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_VSI;
+		vsi->rss_lut_type = ICE_LUT_VSI;
 		break;
 	default:
 		device_printf(sc->dev,
@@ -6163,6 +7267,7 @@ ice_add_txq_sysctls(struct ice_tx_queue *txq)
 		{ &txq->stats.tx_packets, "tx_packets", "Queue Packets Transmitted" },
 		{ &txq->stats.tx_bytes, "tx_bytes", "Queue Bytes Transmitted" },
 		{ &txq->stats.mss_too_small, "mss_too_small", "TSO sends with an MSS less than 64" },
+		{ &txq->stats.tso, "tso", "TSO packets" },
 		{ 0, 0, 0 }
 	};
 
@@ -6236,37 +7341,10 @@ ice_add_rxq_sysctls(struct ice_rx_queue *rxq)
 }
 
 /**
- * ice_get_default_rss_key - Obtain a default RSS key
- * @seed: storage for the RSS key data
- *
- * Copies a pre-generated RSS key into the seed memory. The seed pointer must
- * point to a block of memory that is at least 40 bytes in size.
- *
- * The key isn't randomly generated each time this function is called because
- * that makes the RSS key change every time we reconfigure RSS. This does mean
- * that we're hard coding a possibly 'well known' key. We might want to
- * investigate randomly generating this key once during the first call.
- */
-static void
-ice_get_default_rss_key(u8 *seed)
-{
-	const u8 default_seed[ICE_AQC_GET_SET_RSS_KEY_DATA_RSS_KEY_SIZE] = {
-		0x39, 0xed, 0xff, 0x4d, 0x43, 0x58, 0x42, 0xc3, 0x5f, 0xb8,
-		0xa5, 0x32, 0x95, 0x65, 0x81, 0xcd, 0x36, 0x79, 0x71, 0x97,
-		0xde, 0xa4, 0x41, 0x40, 0x6f, 0x27, 0xe9, 0x81, 0x13, 0xa0,
-		0x95, 0x93, 0x5b, 0x1e, 0x9d, 0x27, 0x9d, 0x24, 0x84, 0xb5,
-	};
-
-	bcopy(default_seed, seed, ICE_AQC_GET_SET_RSS_KEY_DATA_RSS_KEY_SIZE);
-}
-
-/**
  * ice_set_rss_key - Configure a given VSI with the default RSS key
  * @vsi: the VSI to configure
  *
  * Program the hardware RSS key. We use rss_getkey to grab the kernel RSS key.
- * If the kernel RSS interface is not available, this will fall back to our
- * pre-generated hash seed from ice_get_default_rss_key().
  */
 static int
 ice_set_rss_key(struct ice_vsi *vsi)
@@ -6274,19 +7352,19 @@ ice_set_rss_key(struct ice_vsi *vsi)
 	struct ice_aqc_get_set_rss_keys keydata = { .standard_rss_key = {0} };
 	struct ice_softc *sc = vsi->sc;
 	struct ice_hw *hw = &sc->hw;
-	enum ice_status status;
+	int status;
 
 	/*
-	 * If the RSS kernel interface is disabled, this will return the
-	 * default RSS key above.
+	 * Even if the RSS kernel interface is disabled, this function
+	 * is still available.
 	 */
 	rss_getkey(keydata.standard_rss_key);
 
 	status = ice_aq_set_rss_key(hw, vsi->idx, &keydata);
 	if (status) {
 		device_printf(sc->dev,
-			      "ice_aq_set_rss_key status %s, error %s\n",
-			      ice_status_str(status), ice_aq_str(hw->adminq.sq_last_status));
+		    "ice_aq_set_rss_key status %s, error %s\n",
+		    ice_status_str(status), ice_aq_str(hw->adminq.sq_last_status));
 		return (EIO);
 	}
 
@@ -6309,7 +7387,7 @@ ice_set_rss_flow_flds(struct ice_vsi *vsi)
 	struct ice_hw *hw = &sc->hw;
 	struct ice_rss_hash_cfg rss_cfg = { 0, 0, ICE_RSS_ANY_HEADERS, false };
 	device_t dev = sc->dev;
-	enum ice_status status;
+	int status;
 	u_int rss_hash_config;
 
 	rss_hash_config = rss_gethashconfig();
@@ -6395,7 +7473,7 @@ ice_set_rss_lut(struct ice_vsi *vsi)
 	struct ice_hw *hw = &sc->hw;
 	device_t dev = sc->dev;
 	struct ice_aq_get_set_rss_lut_params lut_params;
-	enum ice_status status;
+	int status;
 	int i, err = 0;
 	u8 *lut;
 
@@ -6463,15 +7541,15 @@ ice_config_rss(struct ice_vsi *vsi)
  * @pkg_status: the status result of ice_copy_and_init_pkg
  *
  * Called by ice_load_pkg after an attempt to download the DDP package
- * contents to the device. Determines whether the download was successful or
- * not and logs an appropriate message for the system administrator.
+ * contents to the device to log an appropriate message for the system
+ * administrator about download status.
  *
- * @post if a DDP package was previously downloaded on another port and it
- * is not compatible with this driver, pkg_status will be updated to reflect
- * this, and the driver will transition to safe mode.
+ * @post ice_is_init_pkg_successful function is used to determine
+ * whether the download was successful and DDP package is compatible
+ * with this driver. Otherwise driver will transition to Safe Mode.
  */
 void
-ice_log_pkg_init(struct ice_softc *sc, enum ice_status *pkg_status)
+ice_log_pkg_init(struct ice_softc *sc, enum ice_ddp_state pkg_status)
 {
 	struct ice_hw *hw = &sc->hw;
 	device_t dev = sc->dev;
@@ -6485,60 +7563,37 @@ ice_log_pkg_init(struct ice_softc *sc, enum ice_status *pkg_status)
 	ice_os_pkg_version_str(hw, os_pkg);
 	sbuf_finish(os_pkg);
 
-	switch (*pkg_status) {
-	case ICE_SUCCESS:
-		/* The package download AdminQ command returned success because
-		 * this download succeeded or ICE_ERR_AQ_NO_WORK since there is
-		 * already a package loaded on the device.
-		 */
-		if (hw->pkg_ver.major == hw->active_pkg_ver.major &&
-		    hw->pkg_ver.minor == hw->active_pkg_ver.minor &&
-		    hw->pkg_ver.update == hw->active_pkg_ver.update &&
-		    hw->pkg_ver.draft == hw->active_pkg_ver.draft &&
-		    !memcmp(hw->pkg_name, hw->active_pkg_name,
-			    sizeof(hw->pkg_name))) {
-			switch (hw->pkg_dwnld_status) {
-			case ICE_AQ_RC_OK:
-				device_printf(dev,
-					      "The DDP package was successfully loaded: %s.\n",
-					      sbuf_data(active_pkg));
-				break;
-			case ICE_AQ_RC_EEXIST:
-				device_printf(dev,
-					      "DDP package already present on device: %s.\n",
-					      sbuf_data(active_pkg));
-				break;
-			default:
-				/* We do not expect this to occur, but the
-				 * extra messaging is here in case something
-				 * changes in the ice_init_pkg flow.
-				 */
-				device_printf(dev,
-					      "DDP package already present on device: %s.  An unexpected error occurred, pkg_dwnld_status %s.\n",
-					      sbuf_data(active_pkg),
-					      ice_aq_str(hw->pkg_dwnld_status));
-				break;
-			}
-		} else if (pkg_ver_compatible(&hw->active_pkg_ver) == 0) {
-			device_printf(dev,
-				      "The driver could not load the DDP package file because a compatible DDP package is already present on the device.  The device has package %s.  The ice_ddp module has package: %s.\n",
-				      sbuf_data(active_pkg),
-				      sbuf_data(os_pkg));
-		} else if (pkg_ver_compatible(&hw->active_pkg_ver) > 0) {
-			device_printf(dev,
-				      "The device has a DDP package that is higher than the driver supports.  The device has package %s.  The driver requires version %d.%d.x.x.  Entering Safe Mode.\n",
-				      sbuf_data(active_pkg),
-				      ICE_PKG_SUPP_VER_MAJ, ICE_PKG_SUPP_VER_MNR);
-			*pkg_status = ICE_ERR_NOT_SUPPORTED;
-		} else {
-			device_printf(dev,
-				      "The device has a DDP package that is lower than the driver supports.  The device has package %s.  The driver requires version %d.%d.x.x.  Entering Safe Mode.\n",
-				      sbuf_data(active_pkg),
-				      ICE_PKG_SUPP_VER_MAJ, ICE_PKG_SUPP_VER_MNR);
-			*pkg_status = ICE_ERR_NOT_SUPPORTED;
-		}
+	switch (pkg_status) {
+	case ICE_DDP_PKG_SUCCESS:
+		device_printf(dev,
+			      "The DDP package was successfully loaded: %s.\n",
+			      sbuf_data(active_pkg));
 		break;
-	case ICE_ERR_NOT_SUPPORTED:
+	case ICE_DDP_PKG_SAME_VERSION_ALREADY_LOADED:
+	case ICE_DDP_PKG_ALREADY_LOADED:
+		device_printf(dev,
+			      "DDP package already present on device: %s.\n",
+			      sbuf_data(active_pkg));
+		break;
+	case ICE_DDP_PKG_COMPATIBLE_ALREADY_LOADED:
+		device_printf(dev,
+			      "The driver could not load the DDP package file because a compatible DDP package is already present on the device.  The device has package %s.  The ice_ddp module has package: %s.\n",
+			      sbuf_data(active_pkg),
+			      sbuf_data(os_pkg));
+		break;
+	case ICE_DDP_PKG_FILE_VERSION_TOO_HIGH:
+		device_printf(dev,
+			      "The device has a DDP package that is higher than the driver supports.  The device has package %s.  The driver requires version %d.%d.x.x.  Entering Safe Mode.\n",
+			      sbuf_data(active_pkg),
+			      ICE_PKG_SUPP_VER_MAJ, ICE_PKG_SUPP_VER_MNR);
+		break;
+	case ICE_DDP_PKG_FILE_VERSION_TOO_LOW:
+		device_printf(dev,
+			      "The device has a DDP package that is lower than the driver supports.  The device has package %s.  The driver requires version %d.%d.x.x.  Entering Safe Mode.\n",
+			      sbuf_data(active_pkg),
+			      ICE_PKG_SUPP_VER_MAJ, ICE_PKG_SUPP_VER_MNR);
+		break;
+	case ICE_DDP_PKG_ALREADY_LOADED_NOT_SUPPORTED:
 		/*
 		 * This assumes that the active_pkg_ver will not be
 		 * initialized if the ice_ddp package version is not
@@ -6558,9 +7613,7 @@ ice_log_pkg_init(struct ice_softc *sc, enum ice_status *pkg_status)
 					      ICE_PKG_SUPP_VER_MAJ, ICE_PKG_SUPP_VER_MNR);
 			} else {
 				device_printf(dev,
-					      "An unknown error (%s aq_err %s) occurred when loading the DDP package.  The ice_ddp module has package %s.  The device has package %s.  The driver requires version %d.%d.x.x.  Entering Safe Mode.\n",
-					      ice_status_str(*pkg_status),
-					      ice_aq_str(hw->pkg_dwnld_status),
+					      "An unknown error occurred when loading the DDP package.  The ice_ddp module has package %s.  The device has package %s.  The driver requires version %d.%d.x.x.  Entering Safe Mode.\n",
 					      sbuf_data(os_pkg),
 					      sbuf_data(active_pkg),
 					      ICE_PKG_SUPP_VER_MAJ, ICE_PKG_SUPP_VER_MNR);
@@ -6578,54 +7631,41 @@ ice_log_pkg_init(struct ice_softc *sc, enum ice_status *pkg_status)
 					      ICE_PKG_SUPP_VER_MAJ, ICE_PKG_SUPP_VER_MNR);
 			} else {
 				device_printf(dev,
-					      "An unknown error (%s aq_err %s) occurred when loading the DDP package.  The ice_ddp module has package %s.  The device has package %s.  The driver requires version %d.%d.x.x.  Entering Safe Mode.\n",
-					      ice_status_str(*pkg_status),
-					      ice_aq_str(hw->pkg_dwnld_status),
+					      "An unknown error occurred when loading the DDP package.  The ice_ddp module has package %s.  The device has package %s.  The driver requires version %d.%d.x.x.  Entering Safe Mode.\n",
 					      sbuf_data(os_pkg),
 					      sbuf_data(active_pkg),
 					      ICE_PKG_SUPP_VER_MAJ, ICE_PKG_SUPP_VER_MNR);
 			}
 		}
 		break;
-	case ICE_ERR_CFG:
-	case ICE_ERR_BUF_TOO_SHORT:
-	case ICE_ERR_PARAM:
+	case ICE_DDP_PKG_INVALID_FILE:
 		device_printf(dev,
 			      "The DDP package in the ice_ddp module is invalid.  Entering Safe Mode\n");
 		break;
-	case ICE_ERR_FW_DDP_MISMATCH:
+	case ICE_DDP_PKG_FW_MISMATCH:
 		device_printf(dev,
 			      "The firmware loaded on the device is not compatible with the DDP package.  Please update the device's NVM.  Entering safe mode.\n");
 		break;
-	case ICE_ERR_AQ_ERROR:
-		switch (hw->pkg_dwnld_status) {
-		case ICE_AQ_RC_ENOSEC:
-		case ICE_AQ_RC_EBADSIG:
-			device_printf(dev,
-				 "The DDP package in the ice_ddp module cannot be loaded because its signature is not valid.  Please use a valid ice_ddp module.  Entering Safe Mode.\n");
-			goto free_sbufs;
-		case ICE_AQ_RC_ESVN:
-			device_printf(dev,
-				 "The DDP package in the ice_ddp module could not be loaded because its security revision is too low.  Please use an updated ice_ddp module.  Entering Safe Mode.\n");
-			goto free_sbufs;
-		case ICE_AQ_RC_EBADMAN:
-		case ICE_AQ_RC_EBADBUF:
-			device_printf(dev,
-				 "An error occurred on the device while loading the DDP package.  Entering Safe Mode.\n");
-			goto free_sbufs;
-		default:
-			break;
-		}
-		/* fall-through */
+	case ICE_DDP_PKG_NO_SEC_MANIFEST:
+	case ICE_DDP_PKG_FILE_SIGNATURE_INVALID:
+		device_printf(dev,
+			      "The DDP package in the ice_ddp module cannot be loaded because its signature is not valid.  Please use a valid ice_ddp module.  Entering Safe Mode.\n");
+		break;
+	case ICE_DDP_PKG_SECURE_VERSION_NBR_TOO_LOW:
+		device_printf(dev,
+			      "The DDP package in the ice_ddp module could not be loaded because its security revision is too low.  Please use an updated ice_ddp module.  Entering Safe Mode.\n");
+		break;
+	case ICE_DDP_PKG_MANIFEST_INVALID:
+	case ICE_DDP_PKG_BUFFER_INVALID:
+		device_printf(dev,
+			      "An error occurred on the device while loading the DDP package.  Entering Safe Mode.\n");
+		break;
 	default:
 		device_printf(dev,
-			 "An unknown error (%s aq_err %s) occurred when loading the DDP package.  Entering Safe Mode.\n",
-			 ice_status_str(*pkg_status),
-			 ice_aq_str(hw->pkg_dwnld_status));
+			 "An unknown error occurred when loading the DDP package.  Entering Safe Mode.\n");
 		break;
 	}
 
-free_sbufs:
 	sbuf_delete(active_pkg);
 	sbuf_delete(os_pkg);
 }
@@ -6643,39 +7683,81 @@ free_sbufs:
  * ice_deinit_hw(). This allows the firmware reference to be immediately
  * released using firmware_put.
  */
-void
+int
 ice_load_pkg_file(struct ice_softc *sc)
 {
 	struct ice_hw *hw = &sc->hw;
 	device_t dev = sc->dev;
-	enum ice_status status;
+	enum ice_ddp_state state;
 	const struct firmware *pkg;
+	int status = 0;
+	u8 cached_layer_count;
+	u8 *buf_copy;
 
 	pkg = firmware_get("ice_ddp");
 	if (!pkg) {
-		device_printf(dev, "The DDP package module (ice_ddp) failed to load or could not be found. Entering Safe Mode.\n");
+		device_printf(dev,
+		    "The DDP package module (ice_ddp) failed to load or could not be found. Entering Safe Mode.\n");
 		if (cold)
 			device_printf(dev,
-				      "The DDP package module cannot be automatically loaded while booting. You may want to specify ice_ddp_load=\"YES\" in your loader.conf\n");
-		ice_set_bit(ICE_FEATURE_SAFE_MODE, sc->feat_cap);
-		ice_set_bit(ICE_FEATURE_SAFE_MODE, sc->feat_en);
-		return;
+			    "The DDP package module cannot be automatically loaded while booting. You may want to specify ice_ddp_load=\"YES\" in your loader.conf\n");
+		status = ICE_ERR_CFG;
+		goto err_load_pkg;
+	}
+
+	/* Check for topology change */
+	if (ice_is_bit_set(sc->feat_cap, ICE_FEATURE_TX_BALANCE)) {
+		cached_layer_count = hw->num_tx_sched_layers;
+		buf_copy = (u8 *)malloc(pkg->datasize, M_ICE, M_NOWAIT);
+		if (buf_copy == NULL)
+			return ICE_ERR_NO_MEMORY;
+		memcpy(buf_copy, pkg->data, pkg->datasize);
+		status = ice_cfg_tx_topo(&sc->hw, buf_copy, pkg->datasize);
+		free(buf_copy, M_ICE);
+		/* Success indicates a change was made */
+		if (!status) {
+			/* 9 -> 5 */
+			if (cached_layer_count == 9)
+				device_printf(dev,
+				    "Transmit balancing feature enabled\n");
+			else
+				device_printf(dev,
+				    "Transmit balancing feature disabled\n");
+			ice_set_bit(ICE_FEATURE_TX_BALANCE, sc->feat_en);
+			return (status);
+		} else if (status == ICE_ERR_CFG) {
+			/* Status is ICE_ERR_CFG when DDP does not support transmit balancing */
+			device_printf(dev,
+			    "DDP package does not support transmit balancing feature - please update to the latest DDP package and try again\n");
+		} else if (status == ICE_ERR_ALREADY_EXISTS) {
+			/* Requested config already loaded */
+		} else if (status == ICE_ERR_AQ_ERROR) {
+			device_printf(dev,
+			    "Error configuring transmit balancing: %s\n",
+			    ice_status_str(status));
+		}
 	}
 
 	/* Copy and download the pkg contents */
-	status = ice_copy_and_init_pkg(hw, (const u8 *)pkg->data, pkg->datasize);
+	state = ice_copy_and_init_pkg(hw, (const u8 *)pkg->data, pkg->datasize);
 
 	/* Release the firmware reference */
 	firmware_put(pkg, FIRMWARE_UNLOAD);
 
 	/* Check the active DDP package version and log a message */
-	ice_log_pkg_init(sc, &status);
+	ice_log_pkg_init(sc, state);
 
 	/* Place the driver into safe mode */
-	if (status != ICE_SUCCESS) {
-		ice_set_bit(ICE_FEATURE_SAFE_MODE, sc->feat_cap);
-		ice_set_bit(ICE_FEATURE_SAFE_MODE, sc->feat_en);
-	}
+	if (ice_is_init_pkg_successful(state))
+		return (ICE_ERR_ALREADY_EXISTS);
+
+err_load_pkg:
+	ice_zero_bitmap(sc->feat_cap, ICE_FEATURE_COUNT);
+	ice_zero_bitmap(sc->feat_en, ICE_FEATURE_COUNT);
+	ice_set_bit(ICE_FEATURE_SAFE_MODE, sc->feat_cap);
+	ice_set_bit(ICE_FEATURE_SAFE_MODE, sc->feat_en);
+
+	return (status);
 }
 
 /**
@@ -6703,12 +7785,13 @@ ice_get_ifnet_counter(struct ice_vsi *vsi, ift_counter counter)
 	case IFCOUNTER_IERRORS:
 		return (hs->crc_errors + hs->illegal_bytes +
 			hs->mac_local_faults + hs->mac_remote_faults +
-			hs->rx_len_errors + hs->rx_undersize +
-			hs->rx_oversize + hs->rx_fragments + hs->rx_jabber);
+			hs->rx_undersize + hs->rx_oversize + hs->rx_fragments +
+			hs->rx_jabber);
 	case IFCOUNTER_OPACKETS:
 		return (es->tx_unicast + es->tx_multicast + es->tx_broadcast);
 	case IFCOUNTER_OERRORS:
-		return (es->tx_errors);
+		return (if_get_counter_default(vsi->sc->ifp, counter) +
+		    es->tx_errors);
 	case IFCOUNTER_COLLISIONS:
 		return (0);
 	case IFCOUNTER_IBYTES:
@@ -6722,7 +7805,8 @@ ice_get_ifnet_counter(struct ice_vsi *vsi, ift_counter counter)
 	case IFCOUNTER_IQDROPS:
 		return (es->rx_discards);
 	case IFCOUNTER_OQDROPS:
-		return (hs->tx_dropped_link_down);
+		return (if_get_counter_default(vsi->sc->ifp, counter) +
+		    hs->tx_dropped_link_down);
 	case IFCOUNTER_NOPROTO:
 		return (es->rx_unknown_protocol);
 	default:
@@ -6762,7 +7846,7 @@ int
 ice_replay_all_vsi_cfg(struct ice_softc *sc)
 {
 	struct ice_hw *hw = &sc->hw;
-	enum ice_status status;
+	int status;
 	int i;
 
 	for (i = 0 ; i < sc->num_available_vsi; i++) {
@@ -6803,7 +7887,7 @@ ice_clean_vsi_rss_cfg(struct ice_vsi *vsi)
 	struct ice_softc *sc = vsi->sc;
 	struct ice_hw *hw = &sc->hw;
 	device_t dev = sc->dev;
-	enum ice_status status;
+	int status;
 
 	status = ice_rem_vsi_rss_cfg(hw, vsi->idx);
 	if (status)
@@ -6852,7 +7936,7 @@ static const char *
 ice_requested_fec_mode(struct ice_port_info *pi)
 {
 	struct ice_aqc_get_phy_caps_data pcaps = { 0 };
-	enum ice_status status;
+	int status;
 
 	status = ice_aq_get_phy_caps(pi, false, ICE_AQC_REPORT_ACTIVE_CFG,
 				     &pcaps, NULL);
@@ -6942,7 +8026,7 @@ ice_link_up_msg(struct ice_softc *sc)
 	flowcontrol = ice_flowcontrol_mode(hw->port_info);
 
 	log(LOG_NOTICE, "%s: Link is up, %s Full Duplex, Requested FEC: %s, Negotiated FEC: %s, Autoneg: %s, Flow Control: %s\n",
-	    ifp->if_xname, speed, req_fec, neg_fec, autoneg, flowcontrol);
+	    if_name(ifp), speed, req_fec, neg_fec, autoneg, flowcontrol);
 }
 
 /**
@@ -6960,9 +8044,9 @@ ice_link_up_msg(struct ice_softc *sc)
 int
 ice_update_laa_mac(struct ice_softc *sc)
 {
-	const u8 *lladdr = (const u8 *)IF_LLADDR(sc->ifp);
+	const u8 *lladdr = (const u8 *)if_getlladdr(sc->ifp);
 	struct ice_hw *hw = &sc->hw;
-	enum ice_status status;
+	int status;
 
 	/* If the address is the same, then there is nothing to update */
 	if (!memcmp(lladdr, hw->port_info->mac.lan_addr, ETHER_ADDR_LEN))
@@ -6991,7 +8075,9 @@ ice_update_laa_mac(struct ice_softc *sc)
  * @sc: device softc
  *
  * This will potentially print out a warning message if bus bandwidth
- * is insufficient for full-speed operation.
+ * is insufficient for full-speed operation. This will not print out anything
+ * for E82x devices since those are in SoCs, do not report valid PCIe info,
+ * and cannot be moved to a different slot.
  *
  * This should only be called once, during the attach process, after
  * hw->port_info has been filled out with port link topology information
@@ -7004,6 +8090,9 @@ ice_get_and_print_bus_info(struct ice_softc *sc)
 	device_t dev = sc->dev;
 	u16 pci_link_status;
 	int offset;
+
+	if (!ice_is_e810(hw) && !ice_is_e830(hw))
+		return;
 
 	pci_find_cap(dev, PCIY_EXPRESS, &offset);
 	pci_link_status = pci_read_config(dev, offset + PCIER_LINK_STA, 2);
@@ -7027,7 +8116,7 @@ ice_get_and_print_bus_info(struct ice_softc *sc)
  * a 64-bit baudrate.
  * @speed: enum value to convert
  *
- * This only goes up to PCIE Gen 4.
+ * This only goes up to PCIE Gen 5.
  */
 static uint64_t
 ice_pcie_bus_speed_to_rate(enum ice_pcie_bus_speed speed)
@@ -7044,6 +8133,8 @@ ice_pcie_bus_speed_to_rate(enum ice_pcie_bus_speed speed)
 		return IF_Gbps(8);
 	case ice_pcie_speed_16_0GT:
 		return IF_Gbps(16);
+	case ice_pcie_speed_32_0GT:
+		return IF_Gbps(32);
 	case ice_pcie_speed_unknown:
 	default:
 		return 0;
@@ -7102,10 +8193,12 @@ ice_pcie_bandwidth_check(struct ice_softc *sc)
 	pcie_width = ice_pcie_lnk_width_to_int(hw->bus.width);
 
 	/*
-	 * If 2x100, clamp ports to 1 -- 2nd port is intended for
-	 * failover.
+	 * If 2x100 on E810 or 2x200 on E830, clamp ports to 1 -- 2nd port is
+	 * intended for failover.
 	 */
-	if (port_speed == IF_Gbps(100))
+	if ((port_speed >= IF_Gbps(100)) &&
+	    ((port_speed == IF_Gbps(100) && ice_is_e810(hw)) ||
+	     (port_speed == IF_Gbps(200) && ice_is_e830(hw))))
 		num_ports = 1;
 
 	return !!((num_ports * port_speed) > pcie_speed * pcie_width);
@@ -7119,18 +8212,19 @@ ice_pcie_bandwidth_check(struct ice_softc *sc)
 static void
 ice_print_bus_link_data(device_t dev, struct ice_hw *hw)
 {
-        device_printf(dev, "PCI Express Bus: Speed %s %s\n",
-            ((hw->bus.speed == ice_pcie_speed_16_0GT) ? "16.0GT/s" :
+        device_printf(dev, "PCI Express Bus: Speed %s Width %s\n",
+            ((hw->bus.speed == ice_pcie_speed_32_0GT) ? "32.0GT/s" :
+            (hw->bus.speed == ice_pcie_speed_16_0GT) ? "16.0GT/s" :
             (hw->bus.speed == ice_pcie_speed_8_0GT) ? "8.0GT/s" :
             (hw->bus.speed == ice_pcie_speed_5_0GT) ? "5.0GT/s" :
             (hw->bus.speed == ice_pcie_speed_2_5GT) ? "2.5GT/s" : "Unknown"),
-            (hw->bus.width == ice_pcie_lnk_x32) ? "Width x32" :
-            (hw->bus.width == ice_pcie_lnk_x16) ? "Width x16" :
-            (hw->bus.width == ice_pcie_lnk_x12) ? "Width x12" :
-            (hw->bus.width == ice_pcie_lnk_x8) ? "Width x8" :
-            (hw->bus.width == ice_pcie_lnk_x4) ? "Width x4" :
-            (hw->bus.width == ice_pcie_lnk_x2) ? "Width x2" :
-            (hw->bus.width == ice_pcie_lnk_x1) ? "Width x1" : "Width Unknown");
+            (hw->bus.width == ice_pcie_lnk_x32) ? "x32" :
+            (hw->bus.width == ice_pcie_lnk_x16) ? "x16" :
+            (hw->bus.width == ice_pcie_lnk_x12) ? "x12" :
+            (hw->bus.width == ice_pcie_lnk_x8) ? "x8" :
+            (hw->bus.width == ice_pcie_lnk_x4) ? "x4" :
+            (hw->bus.width == ice_pcie_lnk_x2) ? "x2" :
+            (hw->bus.width == ice_pcie_lnk_x1) ? "x1" : "Unknown");
 }
 
 /**
@@ -7171,6 +8265,7 @@ ice_set_pci_link_status_data(struct ice_hw *hw, u16 link_status)
 	case ice_pcie_speed_5_0GT:
 	case ice_pcie_speed_8_0GT:
 	case ice_pcie_speed_16_0GT:
+	case ice_pcie_speed_32_0GT:
 		hw->bus.speed = (enum ice_pcie_bus_speed)reg;
 		break;
 	default:
@@ -7191,7 +8286,7 @@ int
 ice_init_link_events(struct ice_softc *sc)
 {
 	struct ice_hw *hw = &sc->hw;
-	enum ice_status status;
+	int status;
 	u16 wanted_events;
 
 	/* Set the bits for the events that we want to be notified by */
@@ -7220,6 +8315,11 @@ ice_init_link_events(struct ice_softc *sc)
 	return (0);
 }
 
+#ifndef GL_MDET_TX_TCLAN
+/* Temporarily use this redefinition until the definition is fixed */
+#define GL_MDET_TX_TCLAN	E800_GL_MDET_TX_TCLAN
+#define PF_MDET_TX_TCLAN	E800_PF_MDET_TX_TCLAN
+#endif /* !defined(GL_MDET_TX_TCLAN) */
 /**
  * ice_handle_mdd_event - Handle possibly malicious events
  * @sc: the device softc
@@ -7333,6 +8433,41 @@ ice_handle_mdd_event(struct ice_softc *sc)
 }
 
 /**
+ * ice_start_dcbx_agent - Start DCBX agent in FW via AQ command
+ * @sc: the device softc
+ *
+ * @pre device is DCB capable and the FW LLDP agent has started
+ *
+ * Checks DCBX status and starts the DCBX agent if it is not in
+ * a valid state via an AQ command.
+ */
+static void
+ice_start_dcbx_agent(struct ice_softc *sc)
+{
+	struct ice_hw *hw = &sc->hw;
+	device_t dev = sc->dev;
+	bool dcbx_agent_status;
+	int status;
+
+	hw->port_info->qos_cfg.dcbx_status = ice_get_dcbx_status(hw);
+
+	if (hw->port_info->qos_cfg.dcbx_status != ICE_DCBX_STATUS_DONE &&
+	    hw->port_info->qos_cfg.dcbx_status != ICE_DCBX_STATUS_IN_PROGRESS) {
+		/*
+		 * Start DCBX agent, but not LLDP. The return value isn't
+		 * checked here because a more detailed dcbx agent status is
+		 * retrieved and checked in ice_init_dcb() and elsewhere.
+		 */
+		status = ice_aq_start_stop_dcbx(hw, true, &dcbx_agent_status, NULL);
+		if (status && hw->adminq.sq_last_status != ICE_AQ_RC_EPERM)
+			device_printf(dev,
+			    "start_stop_dcbx failed, err %s aq_err %s\n",
+			    ice_status_str(status),
+			    ice_aq_str(hw->adminq.sq_last_status));
+	}
+}
+
+/**
  * ice_init_dcb_setup - Initialize DCB settings for HW
  * @sc: the device softc
  *
@@ -7345,33 +8480,20 @@ ice_handle_mdd_event(struct ice_softc *sc)
 void
 ice_init_dcb_setup(struct ice_softc *sc)
 {
+	struct ice_dcbx_cfg *local_dcbx_cfg;
 	struct ice_hw *hw = &sc->hw;
 	device_t dev = sc->dev;
-	bool dcbx_agent_status;
-	enum ice_status status;
+	int status;
+	u8 pfcmode_ret;
 
 	/* Don't do anything if DCB isn't supported */
-	if (!hw->func_caps.common_cap.dcb) {
-		device_printf(dev, "%s: No DCB support\n",
-		    __func__);
+	if (!ice_is_bit_set(sc->feat_cap, ICE_FEATURE_DCB)) {
+		device_printf(dev, "%s: No DCB support\n", __func__);
 		return;
 	}
 
-	hw->port_info->qos_cfg.dcbx_status = ice_get_dcbx_status(hw);
-	if (hw->port_info->qos_cfg.dcbx_status != ICE_DCBX_STATUS_DONE &&
-	    hw->port_info->qos_cfg.dcbx_status != ICE_DCBX_STATUS_IN_PROGRESS) {
-		/*
-		 * Start DCBX agent, but not LLDP. The return value isn't
-		 * checked here because a more detailed dcbx agent status is
-		 * retrieved and checked in ice_init_dcb() and below.
-		 */
-		status = ice_aq_start_stop_dcbx(hw, true, &dcbx_agent_status, NULL);
-		if (status && hw->adminq.sq_last_status != ICE_AQ_RC_EPERM)
-			device_printf(dev,
-			    "start_stop_dcbx failed, err %s aq_err %s\n",
-			    ice_status_str(status),
-			    ice_aq_str(hw->adminq.sq_last_status));
-	}
+	/* Starts DCBX agent if it needs starting */
+	ice_start_dcbx_agent(sc);
 
 	/* This sets hw->port_info->qos_cfg.is_sw_lldp */
 	status = ice_init_dcb(hw, true);
@@ -7410,6 +8532,31 @@ ice_init_dcb_setup(struct ice_softc *sc)
 		ice_add_rx_lldp_filter(sc);
 		device_printf(dev, "Firmware LLDP agent disabled\n");
 	}
+
+	/* Query and cache PFC mode */
+	status = ice_aq_query_pfc_mode(hw, &pfcmode_ret, NULL);
+	if (status) {
+		device_printf(dev, "PFC mode query failed, err %s aq_err %s\n",
+			      ice_status_str(status),
+			      ice_aq_str(hw->adminq.sq_last_status));
+	}
+	local_dcbx_cfg = &hw->port_info->qos_cfg.local_dcbx_cfg;
+	switch (pfcmode_ret) {
+	case ICE_AQC_PFC_VLAN_BASED_PFC:
+		local_dcbx_cfg->pfc_mode = ICE_QOS_MODE_VLAN;
+		break;
+	case ICE_AQC_PFC_DSCP_BASED_PFC:
+		local_dcbx_cfg->pfc_mode = ICE_QOS_MODE_DSCP;
+		break;
+	default:
+		/* DCB is disabled, but we shouldn't get here */
+		break;
+	}
+
+	/* Set default SW MIB for init */
+	ice_set_default_local_mib_settings(sc);
+
+	ice_set_bit(ICE_FEATURE_DCB, sc->feat_en);
 }
 
 /**
@@ -7419,7 +8566,7 @@ ice_init_dcb_setup(struct ice_softc *sc)
  * Scans a TC mapping table inside dcbcfg to find traffic classes
  * enabled and @returns a bitmask of enabled TCs
  */
-static u8
+u8
 ice_dcb_get_tc_map(const struct ice_dcbx_cfg *dcbcfg)
 {
 	u8 tc_map = 0;
@@ -7434,6 +8581,10 @@ ice_dcb_get_tc_map(const struct ice_dcbx_cfg *dcbcfg)
 		for (i = 0; i < ICE_MAX_TRAFFIC_CLASS; i++)
 			tc_map |= BIT(dcbcfg->etscfg.prio_table[i]);
 		break;
+	case ICE_QOS_MODE_DSCP:
+		for (i = 0; i < ICE_DSCP_NUM_VAL; i++)
+			tc_map |= BIT(dcbcfg->dscp_map[i]);
+		break;
 	default:
 		/* Invalid Mode */
 		tc_map = ICE_DFLT_TRAFFIC_CLASS;
@@ -7444,32 +8595,22 @@ ice_dcb_get_tc_map(const struct ice_dcbx_cfg *dcbcfg)
 }
 
 /**
- * ice_dcb_num_tc - Count the number of TCs in a bitmap
- * @tc_map: bitmap of enabled traffic classes
+ * ice_dcb_get_num_tc - Get the number of TCs from DCBX config
+ * @dcbcfg: config to retrieve number of TCs from
  *
- * @return the number of traffic classes in
- * an 8-bit TC bitmap, or 0 if they are noncontiguous
+ * @return number of contiguous TCs found in dcbcfg's ETS Configuration
+ * Priority Assignment Table, a value from 1 to 8. If there are
+ * non-contiguous TCs used (e.g. assigning 1 and 3 without using 2),
+ * then returns 0.
  */
 static u8
-ice_dcb_num_tc(u8 tc_map)
+ice_dcb_get_num_tc(struct ice_dcbx_cfg *dcbcfg)
 {
-	bool tc_unused = false;
-	u8 ret = 0;
-	int i = 0;
+	u8 tc_map;
 
-	ice_for_each_traffic_class(i) {
-		if (tc_map & BIT(i)) {
-			if (!tc_unused) {
-				ret++;
-			} else {
-				/* Non-contiguous TCs detected */
-				return (0);
-			}
-		} else
-			tc_unused = true;
-	}
+	tc_map = ice_dcb_get_tc_map(dcbcfg);
 
-	return (ret);
+	return (ice_dcb_tc_contig(tc_map));
 }
 
 /**
@@ -7541,6 +8682,13 @@ ice_dcb_needs_reconfig(struct ice_softc *sc, struct ice_dcbx_cfg *old_cfg,
 	struct ice_hw *hw = &sc->hw;
 	bool needs_reconfig = false;
 
+	/* No change detected in DCBX config */
+	if (!memcmp(old_cfg, new_cfg, sizeof(*old_cfg))) {
+		ice_debug(hw, ICE_DBG_DCB,
+		    "No change detected in local DCBX configuration\n");
+		return (false);
+	}
+
 	/* Check if ETS config has changed */
 	if (memcmp(&new_cfg->etscfg, &old_cfg->etscfg,
 		   sizeof(new_cfg->etscfg))) {
@@ -7555,20 +8703,28 @@ ice_dcb_needs_reconfig(struct ice_softc *sc, struct ice_dcbx_cfg *old_cfg,
 		/* These are just informational */
 		if (memcmp(&new_cfg->etscfg.tcbwtable,
 			   &old_cfg->etscfg.tcbwtable,
-			   sizeof(new_cfg->etscfg.tcbwtable)))
+			   sizeof(new_cfg->etscfg.tcbwtable))) {
 			ice_debug(hw, ICE_DBG_DCB, "ETS TCBW table changed\n");
+			needs_reconfig = true;
+		}
 
 		if (memcmp(&new_cfg->etscfg.tsatable,
 			   &old_cfg->etscfg.tsatable,
-			   sizeof(new_cfg->etscfg.tsatable)))
+			   sizeof(new_cfg->etscfg.tsatable))) {
 			ice_debug(hw, ICE_DBG_DCB, "ETS TSA table changed\n");
+			needs_reconfig = true;
+		}
 	}
 
 	/* Check if PFC config has changed */
 	if (memcmp(&new_cfg->pfc, &old_cfg->pfc, sizeof(new_cfg->pfc))) {
-		needs_reconfig = true;
 		ice_debug(hw, ICE_DBG_DCB, "PFC config changed\n");
+		needs_reconfig = true;
 	}
+
+	/* Check if APP table has changed */
+	if (memcmp(&new_cfg->app, &old_cfg->app, sizeof(new_cfg->app)))
+		ice_debug(hw, ICE_DBG_DCB, "APP Table changed\n");
 
 	ice_debug(hw, ICE_DBG_DCB, "%s result: %d\n", __func__, needs_reconfig);
 
@@ -7593,7 +8749,7 @@ ice_stop_pf_vsi(struct ice_softc *sc)
 
 	/* Disable the Tx and Rx queues */
 	ice_vsi_disable_tx(&sc->pf_vsi);
-	ice_control_rx_queues(&sc->pf_vsi, false);
+	ice_control_all_rx_queues(&sc->pf_vsi, false);
 }
 
 /**
@@ -7604,8 +8760,9 @@ ice_stop_pf_vsi(struct ice_softc *sc)
 static void
 ice_vsi_setup_q_map(struct ice_vsi *vsi, struct ice_vsi_ctx *ctxt)
 {
+	u16 qcounts[ICE_MAX_TRAFFIC_CLASS] = {};
 	u16 offset = 0, qmap = 0, pow = 0;
-	u16 num_txq_per_tc, num_rxq_per_tc, qcount_rx;
+	u16 num_q_per_tc, qcount_rx, rem_queues;
 	int i, j, k;
 
 	if (vsi->num_tcs == 0) {
@@ -7615,15 +8772,20 @@ ice_vsi_setup_q_map(struct ice_vsi *vsi, struct ice_vsi_ctx *ctxt)
 	}
 
 	qcount_rx = vsi->num_rx_queues;
-	num_rxq_per_tc = min(qcount_rx / vsi->num_tcs, ICE_MAX_RXQS_PER_TC);
-	if (!num_rxq_per_tc)
-		num_rxq_per_tc = 1;
+	num_q_per_tc = min(qcount_rx / vsi->num_tcs, ICE_MAX_RXQS_PER_TC);
 
-	/* Have TX queue count match RX queue count */
-	num_txq_per_tc = num_rxq_per_tc;
+	if (!num_q_per_tc)
+		num_q_per_tc = 1;
 
-	/* find the (rounded up) power-of-2 of qcount */
-	pow = flsl(num_rxq_per_tc - 1);
+	/* Set initial values for # of queues to use for each active TC */
+	ice_for_each_traffic_class(i)
+		if (i < vsi->num_tcs)
+			qcounts[i] = num_q_per_tc;
+
+	/* If any queues are unassigned, add them to TC 0 */
+	rem_queues = qcount_rx % vsi->num_tcs;
+	if (rem_queues > 0)
+		qcounts[0] += rem_queues;
 
 	/* TC mapping is a function of the number of Rx queues assigned to the
 	 * VSI for each traffic class and the offset of these queues.
@@ -7649,8 +8811,11 @@ ice_vsi_setup_q_map(struct ice_vsi *vsi, struct ice_vsi_ctx *ctxt)
 
 		/* TC is enabled */
 		vsi->tc_info[i].qoffset = offset;
-		vsi->tc_info[i].qcount_rx = num_rxq_per_tc;
-		vsi->tc_info[i].qcount_tx = num_txq_per_tc;
+		vsi->tc_info[i].qcount_rx = qcounts[i];
+		vsi->tc_info[i].qcount_tx = qcounts[i];
+
+		/* find the (rounded up) log-2 of queue count for current TC */
+		pow = fls(qcounts[i] - 1);
 
 		qmap = ((offset << ICE_AQ_VSI_TC_Q_OFFSET_S) &
 			ICE_AQ_VSI_TC_Q_OFFSET_M) |
@@ -7659,14 +8824,14 @@ ice_vsi_setup_q_map(struct ice_vsi *vsi, struct ice_vsi_ctx *ctxt)
 		ctxt->info.tc_mapping[i] = CPU_TO_LE16(qmap);
 
 		/* Store traffic class and handle data in queue structures */
-		for (j = offset, k = 0; j < offset + num_txq_per_tc; j++, k++) {
+		for (j = offset, k = 0; j < offset + qcounts[i]; j++, k++) {
 			vsi->tx_queues[j].q_handle = k;
 			vsi->tx_queues[j].tc = i;
-		}
-		for (j = offset; j < offset + num_rxq_per_tc; j++)
+
 			vsi->rx_queues[j].tc = i;
+		}
 		
-		offset += num_rxq_per_tc;
+		offset += qcounts[i];
 	}
 
 	/* Rx queue mapping */
@@ -7694,7 +8859,7 @@ ice_pf_vsi_cfg_tc(struct ice_softc *sc, u8 tc_map)
 	struct ice_hw *hw = &sc->hw;
 	struct ice_vsi_ctx ctx = { 0 };
 	device_t dev = sc->dev;
-	enum ice_status status;
+	int status;
 	u8 num_tcs = 0;
 	int i = 0;
 
@@ -7729,6 +8894,13 @@ ice_pf_vsi_cfg_tc(struct ice_softc *sc, u8 tc_map)
 	for (i = 0; i < num_tcs; i++)
 		max_txqs[i] = vsi->tc_info[i].qcount_tx;
 
+	if (hw->debug_mask & ICE_DBG_DCB) {
+		device_printf(dev, "%s: max_txqs:", __func__);
+		ice_for_each_traffic_class(i)
+			printf(" %d", max_txqs[i]);
+		printf("\n");
+	}
+
 	/* Update LAN Tx queue info in firmware */
 	status = ice_cfg_vsi_lan(hw->port_info, vsi->idx, vsi->tc_map,
 				 max_txqs);
@@ -7743,6 +8915,35 @@ ice_pf_vsi_cfg_tc(struct ice_softc *sc, u8 tc_map)
 	vsi->info.valid_sections = 0;
 
 	return (0);
+}
+
+/**
+ * ice_dcb_tc_contig - Count TCs if they're contiguous
+ * @tc_map: pointer to priority table
+ *
+ * @return The number of traffic classes in
+ * an 8-bit TC bitmap, or if there is a gap, then returns 0.
+ */
+static u8
+ice_dcb_tc_contig(u8 tc_map)
+{
+	bool tc_unused = false;
+	u8 ret = 0;
+
+	/* Scan bitmask for contiguous TCs starting with TC0 */
+	for (int i = 0; i < ICE_MAX_TRAFFIC_CLASS; i++) {
+		if (tc_map & BIT(i)) {
+			if (!tc_unused) {
+				ret++;
+			} else {
+				/* Non-contiguous TCs detected */
+				return (0);
+			}
+		} else
+			tc_unused = true;
+	}
+
+	return (ret);
 }
 
 /**
@@ -7768,7 +8969,7 @@ ice_dcb_recfg(struct ice_softc *sc)
 	 * the default TC instead. There's no support for
 	 * non-contiguous TCs being used.
 	 */
-	if (ice_dcb_num_tc(tc_map) == 0) {
+	if (ice_dcb_tc_contig(tc_map) == 0) {
 		tc_map = ICE_DFLT_TRAFFIC_CLASS;
 		ice_set_default_local_lldp_mib(sc);
 	}
@@ -7783,33 +8984,97 @@ ice_dcb_recfg(struct ice_softc *sc)
 }
 
 /**
+ * ice_set_default_local_mib_settings - Set Local LLDP MIB to default settings
+ * @sc: device softc structure
+ *
+ * Overwrites the driver's SW local LLDP MIB with default settings. This
+ * ensures the driver has a valid MIB when it next uses the Set Local LLDP MIB
+ * admin queue command.
+ */
+static void
+ice_set_default_local_mib_settings(struct ice_softc *sc)
+{
+	struct ice_dcbx_cfg *dcbcfg;
+	struct ice_hw *hw = &sc->hw;
+	struct ice_port_info *pi;
+	u8 maxtcs, maxtcs_ets, old_pfc_mode;
+
+	pi = hw->port_info;
+
+	dcbcfg = &pi->qos_cfg.local_dcbx_cfg;
+
+	maxtcs = hw->func_caps.common_cap.maxtc;
+	/* This value is only 3 bits; 8 TCs maps to 0 */
+	maxtcs_ets = maxtcs & ICE_IEEE_ETS_MAXTC_M;
+
+	/* VLAN vs DSCP mode needs to be preserved */
+	old_pfc_mode = dcbcfg->pfc_mode;
+
+	/**
+	 * Setup the default settings used by the driver for the Set Local
+	 * LLDP MIB Admin Queue command (0x0A08). (1TC w/ 100% BW, ETS, no
+	 * PFC, TSA=2).
+	 */
+	memset(dcbcfg, 0, sizeof(*dcbcfg));
+
+	dcbcfg->etscfg.willing = 1;
+	dcbcfg->etscfg.tcbwtable[0] = 100;
+	dcbcfg->etscfg.maxtcs = maxtcs_ets;
+	dcbcfg->etscfg.tsatable[0] = 2;
+
+	dcbcfg->etsrec = dcbcfg->etscfg;
+	dcbcfg->etsrec.willing = 0;
+
+	dcbcfg->pfc.willing = 1;
+	dcbcfg->pfc.pfccap = maxtcs;
+
+	dcbcfg->pfc_mode = old_pfc_mode;
+}
+
+/**
  * ice_do_dcb_reconfig - notify RDMA and reconfigure PF LAN VSI
  * @sc: the device private softc
+ * @pending_mib: FW has a pending MIB change to execute
  * 
  * @pre Determined that the DCB configuration requires a change
  *
  * Reconfigures the PF LAN VSI based on updated DCB configuration
  * found in the hw struct's/port_info's/ local dcbx configuration.
  */
-static void
-ice_do_dcb_reconfig(struct ice_softc *sc)
+void
+ice_do_dcb_reconfig(struct ice_softc *sc, bool pending_mib)
 {
 	struct ice_aqc_port_ets_elem port_ets = { 0 };
 	struct ice_dcbx_cfg *local_dcbx_cfg;
 	struct ice_hw *hw = &sc->hw;
 	struct ice_port_info *pi;
 	device_t dev = sc->dev;
-	enum ice_status status;
-	u8 tc_map;
+	int status;
 
 	pi = sc->hw.port_info;
 	local_dcbx_cfg = &pi->qos_cfg.local_dcbx_cfg;
 
 	ice_rdma_notify_dcb_qos_change(sc);
+	/* If there's a pending MIB, tell the FW to execute the MIB change
+	 * now.
+	 */
+	if (pending_mib) {
+		status = ice_lldp_execute_pending_mib(hw);
+		if ((status == ICE_ERR_AQ_ERROR) &&
+		    (hw->adminq.sq_last_status == ICE_AQ_RC_ENOENT)) {
+			device_printf(dev,
+			    "Execute Pending LLDP MIB AQ call failed, no pending MIB\n");
+		} else if (status) {
+			device_printf(dev,
+			    "Execute Pending LLDP MIB AQ call failed, err %s aq_err %s\n",
+			    ice_status_str(status),
+			    ice_aq_str(hw->adminq.sq_last_status));
+			/* This won't break traffic, but QoS will not work as expected */
+		}
+	}
 
 	/* Set state when there's more than one TC */
-	tc_map = ice_dcb_get_tc_map(local_dcbx_cfg);
-	if (ice_dcb_num_tc(tc_map) > 1) {
+	if (ice_dcb_get_num_tc(local_dcbx_cfg) > 1) {
 		device_printf(dev, "Multiple traffic classes enabled\n");
 		ice_set_state(&sc->state, ICE_STATE_MULTIPLE_TCS);
 	} else {
@@ -7822,7 +9087,7 @@ ice_do_dcb_reconfig(struct ice_softc *sc)
 
 	/* Query ETS configuration and update SW Tx scheduler info */
 	status = ice_query_port_ets(pi, &port_ets, sizeof(port_ets), NULL);
-	if (status != ICE_SUCCESS) {
+	if (status) {
 		device_printf(dev,
 		    "Query Port ETS AQ call failed, err %s aq_err %s\n",
 		    ice_status_str(status),
@@ -7857,8 +9122,8 @@ ice_handle_mib_change_event(struct ice_softc *sc, struct ice_rq_event_info *even
 	struct ice_port_info *pi;
 	device_t dev = sc->dev;
 	struct ice_hw *hw = &sc->hw;
-	bool needs_reconfig;
-	enum ice_status status;
+	bool needs_reconfig, mib_is_pending;
+	int status;
 	u8 mib_type, bridge_type;
 
 	ASSERT_CFG_LOCKED(sc);
@@ -7871,6 +9136,8 @@ ice_handle_mib_change_event(struct ice_softc *sc, struct ice_rq_event_info *even
 	    ICE_AQ_LLDP_MIB_TYPE_S;
 	bridge_type = (params->type & ICE_AQ_LLDP_BRID_TYPE_M) >>
 	    ICE_AQ_LLDP_BRID_TYPE_S;
+	mib_is_pending = (params->state & ICE_AQ_LLDP_MIB_CHANGE_STATE_M) >>
+	    ICE_AQ_LLDP_MIB_CHANGE_STATE_S;
 
 	/* Ignore if event is not for Nearest Bridge */
 	if (bridge_type != ICE_AQ_LLDP_BRID_TYPE_NEAREST_BRID)
@@ -7897,32 +9164,32 @@ ice_handle_mib_change_event(struct ice_softc *sc, struct ice_rq_event_info *even
 	tmp_dcbx_cfg = *local_dcbx_cfg;
 	memset(local_dcbx_cfg, 0, sizeof(*local_dcbx_cfg));
 
-	/* Get updated DCBX data from firmware */
-	status = ice_get_dcb_cfg(pi);
-	if (status) {
-		device_printf(dev,
-		    "%s: Failed to get Local DCB config; status %s, aq_err %s\n",
-		    __func__, ice_status_str(status),
-		    ice_aq_str(hw->adminq.sq_last_status));
-		return;
-	}
-
-	/* No change detected in DCBX config */
-	if (!memcmp(&tmp_dcbx_cfg, local_dcbx_cfg,
-		    sizeof(tmp_dcbx_cfg))) {
-		ice_debug(hw, ICE_DBG_DCB, "No change detected in local DCBX configuration\n");
-		return;
+	/* Update the current local_dcbx_cfg with new data */
+	if (mib_is_pending) {
+		ice_get_dcb_cfg_from_mib_change(pi, event);
+	} else {
+		/* Get updated DCBX data from firmware */
+		status = ice_get_dcb_cfg(pi);
+		if (status) {
+			device_printf(dev,
+			    "%s: Failed to get Local DCB config; status %s, aq_err %s\n",
+			    __func__, ice_status_str(status),
+			    ice_aq_str(hw->adminq.sq_last_status));
+			return;
+		}
 	}
 
 	/* Check to see if DCB needs reconfiguring */
 	needs_reconfig = ice_dcb_needs_reconfig(sc, &tmp_dcbx_cfg,
 	    local_dcbx_cfg);
 
-	if (!needs_reconfig)
+	if (!needs_reconfig && !mib_is_pending)
 		return;
 
-	/* Reconfigure */
-	ice_do_dcb_reconfig(sc);
+	/* Reconfigure -- this will also notify FW that configuration is done,
+	 * if the FW MIB change is only pending instead of executed.
+	 */
+	ice_do_dcb_reconfig(sc, mib_is_pending);
 }
 
 /**
@@ -7938,7 +9205,7 @@ ice_send_version(struct ice_softc *sc)
 	struct ice_driver_ver driver_version = {0};
 	struct ice_hw *hw = &sc->hw;
 	device_t dev = sc->dev;
-	enum ice_status status;
+	int status;
 
 	driver_version.major_ver = ice_major_version;
 	driver_version.minor_ver = ice_minor_version;
@@ -8034,7 +9301,7 @@ ice_cfg_pf_ethertype_filters(struct ice_softc *sc)
 	struct ice_vsi *vsi = &sc->pf_vsi;
 	struct ice_hw *hw = &sc->hw;
 	device_t dev = sc->dev;
-	enum ice_status status;
+	int status;
 	int err = 0;
 
 	INIT_LIST_HEAD(&ethertype_list);
@@ -8085,14 +9352,14 @@ free_ethertype_list:
  * VSI. Called when the fw_lldp_agent is disabled, to allow the LLDP frames to
  * be forwarded to the stack.
  */
-static void
+void
 ice_add_rx_lldp_filter(struct ice_softc *sc)
 {
 	struct ice_list_head ethertype_list;
 	struct ice_vsi *vsi = &sc->pf_vsi;
 	struct ice_hw *hw = &sc->hw;
 	device_t dev = sc->dev;
-	enum ice_status status;
+	int status;
 	int err;
 	u16 vsi_num;
 
@@ -8160,7 +9427,7 @@ ice_del_rx_lldp_filter(struct ice_softc *sc)
 	struct ice_vsi *vsi = &sc->pf_vsi;
 	struct ice_hw *hw = &sc->hw;
 	device_t dev = sc->dev;
-	enum ice_status status;
+	int status;
 	int err;
 	u16 vsi_num;
 
@@ -8230,29 +9497,46 @@ ice_init_link_configuration(struct ice_softc *sc)
 	struct ice_port_info *pi = sc->hw.port_info;
 	struct ice_hw *hw = &sc->hw;
 	device_t dev = sc->dev;
-	enum ice_status status;
+	int status, retry_count = 0;
 
+retry:
 	pi->phy.get_link_info = true;
 	status = ice_get_link_status(pi, &sc->link_up);
-	if (status != ICE_SUCCESS) {
-		device_printf(dev,
-		    "%s: ice_get_link_status failed; status %s, aq_err %s\n",
-		    __func__, ice_status_str(status),
-		    ice_aq_str(hw->adminq.sq_last_status));
+
+	if (status) {
+		if (hw->adminq.sq_last_status == ICE_AQ_RC_EAGAIN) {
+			retry_count++;
+			ice_debug(hw, ICE_DBG_LINK,
+			    "%s: ice_get_link_status failed with EAGAIN, attempt %d\n",
+			    __func__, retry_count);
+			if (retry_count < ICE_LINK_AQ_MAX_RETRIES) {
+				ice_msec_pause(ICE_LINK_RETRY_DELAY);
+				goto retry;
+			}
+		} else {
+			device_printf(dev,
+			    "%s: ice_get_link_status failed; status %s, aq_err %s\n",
+			    __func__, ice_status_str(status),
+			    ice_aq_str(hw->adminq.sq_last_status));
+		}
 		return;
 	}
 
 	if (pi->phy.link_info.link_info & ICE_AQ_MEDIA_AVAILABLE) {
 		ice_clear_state(&sc->state, ICE_STATE_NO_MEDIA);
 		/* Apply default link settings */
-		ice_apply_saved_phy_cfg(sc, ICE_APPLY_LS_FEC_FC);
+		if (!ice_test_state(&sc->state, ICE_STATE_LINK_ACTIVE_ON_DOWN)) {
+			ice_set_link(sc, false);
+			ice_set_state(&sc->state, ICE_STATE_LINK_STATUS_REPORTED);
+		} else
+			ice_apply_saved_phy_cfg(sc, ICE_APPLY_LS_FEC_FC);
 	} else {
 		 /* Set link down, and poll for media available in timer. This prevents the
 		  * driver from receiving spurious link-related events.
 		  */
 		ice_set_state(&sc->state, ICE_STATE_NO_MEDIA);
 		status = ice_aq_set_link_restart_an(pi, false, NULL);
-		if (status != ICE_SUCCESS)
+		if (status && hw->adminq.sq_last_status != ICE_AQ_RC_EMODE)
 			device_printf(dev,
 			    "%s: ice_aq_set_link_restart_an: status %s, aq_err %s\n",
 			    __func__, ice_status_str(status),
@@ -8392,7 +9676,7 @@ ice_apply_saved_fec_req_to_cfg(struct ice_softc *sc,
 			       struct ice_aqc_set_phy_cfg_data *cfg)
 {
 	struct ice_port_info *pi = sc->hw.port_info;
-	enum ice_status status;
+	int status;
 
 	cfg->caps &= ~ICE_AQC_PHY_EN_AUTO_FEC;
 	status = ice_cfg_phy_fec(pi, cfg, pi->phy.curr_user_fec_req);
@@ -8458,7 +9742,7 @@ ice_apply_saved_phy_cfg(struct ice_softc *sc, u8 settings)
 	struct ice_hw *hw = &sc->hw;
 	device_t dev = sc->dev;
 	u64 phy_low, phy_high;
-	enum ice_status status;
+	int status;
 	enum ice_fec_mode dflt_fec_mode;
 	u16 dflt_user_speed;
 
@@ -8469,7 +9753,7 @@ ice_apply_saved_phy_cfg(struct ice_softc *sc, u8 settings)
 
 	status = ice_aq_get_phy_caps(pi, false, ICE_AQC_REPORT_ACTIVE_CFG,
 				     &pcaps, NULL);
-	if (status != ICE_SUCCESS) {
+	if (status) {
 		device_printf(dev,
 		    "%s: ice_aq_get_phy_caps (ACTIVE) failed; status %s, aq_err %s\n",
 		    __func__, ice_status_str(status),
@@ -8508,7 +9792,7 @@ ice_apply_saved_phy_cfg(struct ice_softc *sc, u8 settings)
 	cfg.caps |= ICE_AQ_PHY_ENA_AUTO_LINK_UPDT | ICE_AQ_PHY_ENA_LINK;
 
 	status = ice_aq_set_phy_cfg(hw, pi, &cfg, NULL);
-	if (status != ICE_SUCCESS) {
+	if (status) {
 		/* Don't indicate failure if there's no media in the port.
 		 * The settings have been saved and will apply when media
 		 * is inserted.
@@ -8569,7 +9853,7 @@ ice_set_link_management_mode(struct ice_softc *sc)
 	struct ice_port_info *pi = sc->hw.port_info;
 	device_t dev = sc->dev;
 	struct ice_link_default_override_tlv tlv = { 0 };
-	enum ice_status status;
+	int status;
 
 	/* Port must be in strict mode if FW version is below a certain
 	 * version. (i.e. Don't set lenient mode features)
@@ -8578,7 +9862,7 @@ ice_set_link_management_mode(struct ice_softc *sc)
 		return;
 
 	status = ice_get_link_default_override(&tlv, pi);
-	if (status != ICE_SUCCESS) {
+	if (status) {
 		device_printf(dev,
 		    "%s: ice_get_link_default_override failed; status %s, aq_err %s\n",
 		    __func__, ice_status_str(status),
@@ -8618,6 +9902,45 @@ ice_set_link_management_mode(struct ice_softc *sc)
 }
 
 /**
+ * ice_set_link -- Set up/down link on phy
+ * @sc: device private structure
+ * @enabled: link status to set up
+ *
+ * This should be called when change of link status is needed.
+ */
+void
+ice_set_link(struct ice_softc *sc, bool enabled)
+{
+	struct ice_hw *hw = &sc->hw;
+	device_t dev = sc->dev;
+	int status;
+
+	if (ice_driver_is_detaching(sc))
+		return;
+
+	if (ice_test_state(&sc->state, ICE_STATE_NO_MEDIA))
+		return;
+
+	if (enabled)
+		ice_apply_saved_phy_cfg(sc, ICE_APPLY_LS_FEC_FC);
+	else {
+		status = ice_aq_set_link_restart_an(hw->port_info, false, NULL);
+		if (status) {
+			if (hw->adminq.sq_last_status == ICE_AQ_RC_EMODE)
+				device_printf(dev,
+				    "%s: Link control not enabled in current device mode\n",
+				    __func__);
+			else
+				device_printf(dev,
+				    "%s: ice_aq_set_link_restart_an: status %s, aq_err %s\n",
+				    __func__, ice_status_str(status),
+				    ice_aq_str(hw->adminq.sq_last_status));
+		} else
+			sc->link_up = false;
+	}
+}
+
+/**
  * ice_init_saved_phy_cfg -- Set cached user PHY cfg settings with NVM defaults
  * @sc: device private structure
  *
@@ -8636,14 +9959,14 @@ ice_init_saved_phy_cfg(struct ice_softc *sc)
 	struct ice_aqc_get_phy_caps_data pcaps = { 0 };
 	struct ice_hw *hw = &sc->hw;
 	device_t dev = sc->dev;
-	enum ice_status status;
+	int status;
 	u64 phy_low, phy_high;
 	u8 report_mode = ICE_AQC_REPORT_TOPO_CAP_MEDIA;
 
 	if (ice_is_bit_set(sc->feat_en, ICE_FEATURE_LINK_MGMT_VER_2))
 		report_mode = ICE_AQC_REPORT_DFLT_CFG;
 	status = ice_aq_get_phy_caps(pi, false, report_mode, &pcaps, NULL);
-	if (status != ICE_SUCCESS) {
+	if (status) {
 		device_printf(dev,
 		    "%s: ice_aq_get_phy_caps (%s) failed; status %s, aq_err %s\n",
 		    __func__,
@@ -8731,7 +10054,7 @@ ice_handle_nvm_access_ioctl(struct ice_softc *sc, struct ifdrv *ifd)
 	size_t ifd_len = ifd->ifd_len, malloc_len;
 	struct ice_hw *hw = &sc->hw;
 	device_t dev = sc->dev;
-	enum ice_status status;
+	int status;
 	u8 *nvm_buffer;
 	int err;
 
@@ -8744,6 +10067,12 @@ ice_handle_nvm_access_ioctl(struct ice_softc *sc, struct ifdrv *ifd)
 	err = priv_check(curthread, PRIV_DRIVER);
 	if (err)
 		return (err);
+
+	if (ice_test_state(&sc->state, ICE_STATE_PREPARED_FOR_RESET)) {
+		device_printf(dev, "%s: Driver must rebuild data structures after a reset. Operation aborted.\n",
+			      __func__);
+		return (EBUSY);
+	}
 
 	if (ifd_len < sizeof(struct ice_nvm_access_cmd)) {
 		device_printf(dev, "%s: ifdrv length is too small. Got %zu, but expected %zu\n",
@@ -8804,7 +10133,7 @@ ice_handle_nvm_access_ioctl(struct ice_softc *sc, struct ifdrv *ifd)
 
 	/* Convert private status to an error code for proper ioctl response */
 	switch (status) {
-	case ICE_SUCCESS:
+	case 0:
 		err = (0);
 		break;
 	case ICE_ERR_NO_MEMORY:
@@ -8841,7 +10170,7 @@ ice_read_sff_eeprom(struct ice_softc *sc, u16 dev_addr, u16 offset, u8* data, u1
 {
 	struct ice_hw *hw = &sc->hw;
 	int ret = 0, retries = 0;
-	enum ice_status status;
+	int status;
 
 	if (length > 16)
 		return (EINVAL);
@@ -9024,8 +10353,15 @@ ice_alloc_intr_tracking(struct ice_softc *sc)
 	device_t dev = sc->dev;
 	int err;
 
+	if (hw->func_caps.common_cap.num_msix_vectors > ICE_MAX_MSIX_VECTORS) {
+		device_printf(dev, "%s: Invalid num_msix_vectors value (%u) received from FW.\n",
+			__func__,
+			hw->func_caps.common_cap.num_msix_vectors);
+		return (EINVAL);
+	}
+
 	/* Initialize the interrupt allocation manager */
-	err = ice_resmgr_init_contig_only(&sc->imgr,
+	err = ice_resmgr_init_contig_only(&sc->dev_imgr,
 	    hw->func_caps.common_cap.num_msix_vectors);
 	if (err) {
 		device_printf(dev, "Unable to initialize PF interrupt manager: %s\n",
@@ -9057,7 +10393,7 @@ ice_alloc_intr_tracking(struct ice_softc *sc)
 	return (0);
 
 free_imgr:
-	ice_resmgr_destroy(&sc->imgr);
+	ice_resmgr_destroy(&sc->dev_imgr);
 	return (err);
 }
 
@@ -9074,19 +10410,21 @@ void
 ice_free_intr_tracking(struct ice_softc *sc)
 {
 	if (sc->pf_imap) {
-		ice_resmgr_release_map(&sc->imgr, sc->pf_imap,
+		ice_resmgr_release_map(&sc->dev_imgr, sc->pf_imap,
 				       sc->lan_vectors);
 		free(sc->pf_imap, M_ICE);
 		sc->pf_imap = NULL;
 	}
 	if (sc->rdma_imap) {
-		ice_resmgr_release_map(&sc->imgr, sc->rdma_imap,
+		ice_resmgr_release_map(&sc->dev_imgr, sc->rdma_imap,
 				       sc->lan_vectors);
 		free(sc->rdma_imap, M_ICE);
 		sc->rdma_imap = NULL;
 	}
 
-	ice_resmgr_destroy(&sc->imgr);
+	ice_resmgr_destroy(&sc->dev_imgr);
+
+	ice_resmgr_destroy(&sc->os_imgr);
 }
 
 /**
@@ -9136,7 +10474,8 @@ ice_apply_supported_speed_filter(u16 report_speeds, u8 mod_type)
 		if (module == IS_QSFP)
 			speed_mask = ~((u16)ICE_AQ_LINK_SPEED_10GB - 1);
 	}
-	if (report_speeds & ICE_AQ_LINK_SPEED_100GB)
+	if ((report_speeds & ICE_AQ_LINK_SPEED_100GB) ||
+	    (report_speeds & ICE_AQ_LINK_SPEED_200GB))
 		speed_mask = ~((u16)ICE_AQ_LINK_SPEED_25GB - 1);
 	return (report_speeds & speed_mask);
 }
@@ -9151,7 +10490,7 @@ ice_apply_supported_speed_filter(u16 report_speeds, u8 mod_type)
 void
 ice_init_health_events(struct ice_softc *sc)
 {
-	enum ice_status status;
+	int status;
 	u8 health_mask;
 
 	if ((!ice_is_bit_set(sc->feat_cap, ICE_FEATURE_HEALTH_STATUS)) ||
@@ -9277,7 +10616,8 @@ ice_print_health_status_string(device_t dev,
 		device_printf(dev, "Possible Solution: Change the module or use Intel(R) Ethernet Port Configuration Tool to configure the port option to match the current module speed.\n");
 		break;
 	case ICE_AQC_HEALTH_STATUS_ERR_PARALLEL_FAULT:
-		device_printf(dev, "A parallel fault was detected.\n");
+		device_printf(dev, "All configured link modes were attempted but failed to establish link.\n");
+		device_printf(dev, "The device will restart the process to establish link.\n");
 		device_printf(dev, "Possible Solution: Check link partner connection and configuration.\n");
 		break;
 	case ICE_AQC_HEALTH_STATUS_INFO_PORT_SPEED_PHY_LIMITED:
@@ -9349,43 +10689,34 @@ ice_handle_health_status_event(struct ice_softc *sc,
 }
 
 /**
- * ice_set_default_local_lldp_mib - Set Local LLDP MIB to default settings
+ * ice_set_default_local_lldp_mib - Possibly apply local LLDP MIB to FW
  * @sc: device softc structure
  *
- * This function needs to be called after link up; it makes sure the FW
- * has certain PFC/DCB settings. This is intended to workaround a FW behavior
- * where these settings seem to be cleared on link up.
+ * This function needs to be called after link up; it makes sure the FW has
+ * certain PFC/DCB settings. In certain configurations this will re-apply a
+ * default local LLDP MIB configuration; this is intended to workaround a FW
+ * behavior where these settings seem to be cleared on link up.
  */
 void
 ice_set_default_local_lldp_mib(struct ice_softc *sc)
 {
-	struct ice_dcbx_cfg *dcbcfg;
 	struct ice_hw *hw = &sc->hw;
 	struct ice_port_info *pi;
 	device_t dev = sc->dev;
-	enum ice_status status;
-	u8 maxtcs, maxtcs_ets;
+	int status;
+
+	/* Set Local MIB can disrupt flow control settings for
+	 * non-DCB-supported devices.
+	 */
+	if (!ice_is_bit_set(sc->feat_en, ICE_FEATURE_DCB))
+		return;
 
 	pi = hw->port_info;
 
-	dcbcfg = &pi->qos_cfg.local_dcbx_cfg;
-
-	maxtcs = hw->func_caps.common_cap.maxtc;
-	/* This value is only 3 bits; 8 TCs maps to 0 */
-	maxtcs_ets = maxtcs & ICE_IEEE_ETS_MAXTC_M;
-
-	/**
-	 * Setup the default settings used by the driver for the Set Local
-	 * LLDP MIB Admin Queue command (0x0A08). (1TC w/ 100% BW, ETS, no
-	 * PFC).
-	 */
-	memset(dcbcfg, 0, sizeof(*dcbcfg));
-	dcbcfg->etscfg.willing = 1;
-	dcbcfg->etscfg.tcbwtable[0] = 100;
-	dcbcfg->etscfg.maxtcs = maxtcs_ets;
-	dcbcfg->etsrec = dcbcfg->etscfg;
-	dcbcfg->pfc.willing = 1;
-	dcbcfg->pfc.pfccap = maxtcs;
+	/* Don't overwrite a custom SW configuration */
+	if (!pi->qos_cfg.is_sw_lldp &&
+	    !ice_test_state(&sc->state, ICE_STATE_MULTIPLE_TCS))
+		ice_set_default_local_mib_settings(sc);
 
 	status = ice_set_dcb_cfg(pi);
 
@@ -9449,7 +10780,7 @@ ice_sysctl_dump_dcbx_cfg(SYSCTL_HANDLER_ARGS)
 	struct ice_hw *hw = &sc->hw;
 	device_t dev = sc->dev;
 	struct sbuf *sbuf;
-	enum ice_status status;
+	int status;
 	u8 maxtcs, dcbx_status, is_sw_lldp;
 
 	UNREFERENCED_PARAMETER(oidp);
@@ -9484,10 +10815,14 @@ ice_sysctl_dump_dcbx_cfg(SYSCTL_HANDLER_ARGS)
 	}
 
 	status = ice_aq_get_cee_dcb_cfg(hw, &cee_cfg, NULL);
-	if (status == ICE_SUCCESS)
+	if (!status)
 		dcbcfg->dcbx_mode = ICE_DCBX_MODE_CEE;
 	else if (hw->adminq.sq_last_status == ICE_AQ_RC_ENOENT)
 		dcbcfg->dcbx_mode = ICE_DCBX_MODE_IEEE;
+	else
+		device_printf(dev, "Get CEE DCB Cfg AQ cmd err %s aq_err %s\n",
+		    ice_status_str(status),
+		    ice_aq_str(hw->adminq.sq_last_status));
 
 	maxtcs = hw->func_caps.common_cap.maxtc;
 	dcbx_status = ice_get_dcbx_status(hw);
@@ -9518,6 +10853,14 @@ ice_sysctl_dump_dcbx_cfg(SYSCTL_HANDLER_ARGS)
 	sbuf_printf(sbuf, "pfc.pfcena: 0x%0x\n", dcbcfg->pfc.pfcena);
 
 	if (arg2 == ICE_AQ_LLDP_MIB_LOCAL) {
+		sbuf_printf(sbuf, "dscp_map:\n");
+		for (int i = 0; i < 8; i++) {
+			for (int j = 0; j < 8; j++)
+				sbuf_printf(sbuf, " %d",
+					    dcbcfg->dscp_map[i * 8 + j]);
+			sbuf_printf(sbuf, "\n");
+		}
+
 		sbuf_printf(sbuf, "\nLocal registers:\n");
 		sbuf_printf(sbuf, "PRTDCB_GENC.NUMTC: %d\n",
 		    (rd32(hw, PRTDCB_GENC) & PRTDCB_GENC_NUMTC_M)
@@ -9555,7 +10898,7 @@ ice_sysctl_dump_vsi_cfg(SYSCTL_HANDLER_ARGS)
 	struct ice_hw *hw = &sc->hw;
 	device_t dev = sc->dev;
 	struct sbuf *sbuf;
-	enum ice_status status;
+	int status;
 
 	UNREFERENCED_PARAMETER(oidp);
 	UNREFERENCED_PARAMETER(arg2);
@@ -9567,7 +10910,7 @@ ice_sysctl_dump_vsi_cfg(SYSCTL_HANDLER_ARGS)
 	ctx.vsi_num = ice_get_hw_vsi_num(hw, sc->pf_vsi.idx);
 
 	status = ice_aq_get_vsi_params(hw, &ctx, NULL);
-	if (status != ICE_SUCCESS) {
+	if (status) {
 		device_printf(dev,
 		    "Get VSI AQ call failed, err %s aq_err %s\n",
 		    ice_status_str(status),
@@ -9605,6 +10948,521 @@ ice_sysctl_dump_vsi_cfg(SYSCTL_HANDLER_ARGS)
 		sbuf_printf(sbuf, " %4d",
 		    1 << (ctx.info.tc_mapping[i] >> ICE_AQ_VSI_TC_Q_NUM_S));
 	}
+
+	/* Finish */
+	sbuf_finish(sbuf);
+	sbuf_delete(sbuf);
+
+	return (0);
+}
+
+/**
+ * ice_get_tx_rx_equalizations -- read serdes tx rx equalization params
+ * @hw: pointer to the HW struct
+ * @serdes_num: represents the serdes number
+ * @ptr: structure to read all serdes parameter for given serdes
+ *
+ * returns all serdes equalization parameter supported per serdes number
+ */
+static int
+ice_get_tx_rx_equalizations(struct ice_hw *hw, u8 serdes_num,
+			    struct ice_serdes_equalization *ptr)
+{
+	int err = 0;
+
+	if (!ptr)
+		return (EOPNOTSUPP);
+
+#define ICE_GET_PHY_EQUALIZATION(equ, dir, value) \
+	ice_aq_get_phy_equalization(hw, equ, dir, serdes_num, &(ptr->value))
+
+	err = ICE_GET_PHY_EQUALIZATION(ICE_AQC_RX_EQU_PRE1,
+			ICE_AQC_OP_CODE_RX_EQU, rx_equalization_pre1);
+	if (err)
+		return err;
+
+	err = ICE_GET_PHY_EQUALIZATION(ICE_AQC_RX_EQU_PRE2,
+			ICE_AQC_OP_CODE_RX_EQU, rx_equalization_pre2);
+	if (err)
+		return err;
+
+	err = ICE_GET_PHY_EQUALIZATION(ICE_AQC_RX_EQU_POST1,
+			ICE_AQC_OP_CODE_RX_EQU, rx_equalization_post1);
+	if (err)
+		return err;
+
+	err = ICE_GET_PHY_EQUALIZATION(ICE_AQC_RX_EQU_BFLF,
+			ICE_AQC_OP_CODE_RX_EQU, rx_equalization_bflf);
+	if (err)
+		return err;
+
+	err = ICE_GET_PHY_EQUALIZATION(ICE_AQC_RX_EQU_BFHF,
+			ICE_AQC_OP_CODE_RX_EQU, rx_equalization_bfhf);
+	if (err)
+		return err;
+
+	err = ICE_GET_PHY_EQUALIZATION(ICE_AQC_RX_EQU_DRATE,
+			ICE_AQC_OP_CODE_RX_EQU, rx_equalization_drate);
+	if (err)
+		return err;
+
+	err = ICE_GET_PHY_EQUALIZATION(ICE_AQC_TX_EQU_PRE1,
+			ICE_AQC_OP_CODE_TX_EQU, tx_equalization_pre1);
+	if (err)
+		return err;
+
+	err = ICE_GET_PHY_EQUALIZATION(ICE_AQC_TX_EQU_PRE2,
+			ICE_AQC_OP_CODE_TX_EQU, tx_equalization_pre2);
+	if (err)
+		return err;
+
+	err = ICE_GET_PHY_EQUALIZATION(ICE_AQC_TX_EQU_PRE3,
+			ICE_AQC_OP_CODE_TX_EQU, tx_equalization_pre3);
+	if (err)
+		return err;
+
+	err = ICE_GET_PHY_EQUALIZATION(ICE_AQC_TX_EQU_ATTEN,
+			ICE_AQC_OP_CODE_TX_EQU, tx_equalization_atten);
+	if (err)
+		return err;
+
+	err = ICE_GET_PHY_EQUALIZATION(ICE_AQC_TX_EQU_POST1,
+			ICE_AQC_OP_CODE_TX_EQU, tx_equalization_post1);
+	if (err)
+		return err;
+
+	return (0);
+}
+
+/**
+ * ice_fec_counter_read - reads FEC stats from PHY
+ * @hw: pointer to the HW struct
+ * @receiver_id: pcsquad at registerlevel
+ * @reg_offset: register for the current request
+ * @output: pointer to the caller-supplied buffer to return requested fec stats
+ *
+ * Returns fec stats from phy
+ */
+static int
+ice_fec_counter_read(struct ice_hw *hw, u32 receiver_id, u32 reg_offset,
+			    u16 *output)
+{
+	u16 flag = (ICE_AQ_FLAG_RD | ICE_AQ_FLAG_BUF | ICE_AQ_FLAG_SI);
+	struct ice_sbq_msg_input msg = {};
+	int err = 0;
+
+	memset(&msg, 0, sizeof(msg));
+	msg.msg_addr_low = ICE_LO_WORD(reg_offset);
+	msg.msg_addr_high = ICE_LO_DWORD(receiver_id);
+	msg.opcode = ice_sbq_msg_rd;
+	msg.dest_dev = rmn_0;
+
+	err = ice_sbq_rw_reg(hw, &msg, flag);
+	if (err) {
+		return err;
+	}
+	*output = ICE_LO_WORD(msg.data);
+	return (0);
+}
+
+/**
+ * ice_get_port_fec_stats - returns fec correctable, uncorrectable stats per pcsquad, pcsport
+ * @hw: pointer to the HW struct
+ * @pcs_quad: pcsquad for input port
+ * @pcs_port: pcsport for input port
+ * @fec_stats: buffer to hold fec statistics for given port
+ *
+ * Returns fec stats
+ */
+static int
+ice_get_port_fec_stats(struct ice_hw *hw, u16 pcs_quad, u16 pcs_port,
+		       struct ice_fec_stats_to_sysctl *fec_stats)
+{
+	u32 uncorr_low_reg = 0, uncorr_high_reg = 0;
+	u16 uncorr_low_val = 0, uncorr_high_val = 0;
+	u32 corr_low_reg = 0, corr_high_reg = 0;
+	u16 corr_low_val = 0, corr_high_val = 0;
+	u32 receiver_id = 0;
+	int err;
+
+	switch (pcs_port) {
+	case 0:
+		corr_low_reg = ICE_RS_FEC_CORR_LOW_REG_PORT0;
+		corr_high_reg = ICE_RS_FEC_CORR_HIGH_REG_PORT0;
+		uncorr_low_reg = ICE_RS_FEC_UNCORR_LOW_REG_PORT0;
+		uncorr_high_reg = ICE_RS_FEC_UNCORR_HIGH_REG_PORT0;
+		break;
+	case 1:
+		corr_low_reg = ICE_RS_FEC_CORR_LOW_REG_PORT1;
+		corr_high_reg = ICE_RS_FEC_CORR_HIGH_REG_PORT1;
+		uncorr_low_reg = ICE_RS_FEC_UNCORR_LOW_REG_PORT1;
+		uncorr_high_reg = ICE_RS_FEC_UNCORR_HIGH_REG_PORT1;
+		break;
+	case 2:
+		corr_low_reg = ICE_RS_FEC_CORR_LOW_REG_PORT2;
+		corr_high_reg = ICE_RS_FEC_CORR_HIGH_REG_PORT2;
+		uncorr_low_reg = ICE_RS_FEC_UNCORR_LOW_REG_PORT2;
+		uncorr_high_reg = ICE_RS_FEC_UNCORR_HIGH_REG_PORT2;
+		break;
+	case 3:
+		corr_low_reg = ICE_RS_FEC_CORR_LOW_REG_PORT3;
+		corr_high_reg = ICE_RS_FEC_CORR_HIGH_REG_PORT3;
+		uncorr_low_reg = ICE_RS_FEC_UNCORR_LOW_REG_PORT3;
+		uncorr_high_reg = ICE_RS_FEC_UNCORR_HIGH_REG_PORT3;
+		break;
+	default:
+		return (EINVAL);
+	}
+	if (pcs_quad == 0)
+		receiver_id = ICE_RS_FEC_RECEIVER_ID_PCS0; /* MTIP PCS Quad 0 -FEC */
+	else if (pcs_quad == 1)
+		receiver_id = ICE_RS_FEC_RECEIVER_ID_PCS1; /* MTIP PCS Quad 1 -FEC */
+	else
+		return (EINVAL);
+
+	err = ice_fec_counter_read(hw, receiver_id, corr_low_reg,
+			&corr_low_val);
+	if (err)
+		return err;
+
+	err = ice_fec_counter_read(hw, receiver_id, corr_high_reg,
+			&corr_high_val);
+	if (err)
+		return err;
+
+	err = ice_fec_counter_read(hw, receiver_id, uncorr_low_reg,
+			&uncorr_low_val);
+	if (err)
+		return err;
+
+	err = ice_fec_counter_read(hw, receiver_id, uncorr_high_reg,
+			&uncorr_high_val);
+	if (err)
+		return err;
+
+	fec_stats->fec_corr_cnt_low =  corr_low_val;
+	fec_stats->fec_corr_cnt_high =  corr_high_val;
+	fec_stats->fec_uncorr_cnt_low =  uncorr_low_val;
+	fec_stats->fec_uncorr_cnt_high =  uncorr_high_val;
+
+	return (0);
+}
+
+/**
+ * ice_is_serdes_muxed - returns whether serdes is muxed in hardware
+ * @hw: pointer to the HW struct
+ *
+ * Returns True : when serdes is muxed
+ *         False: when serdes is not muxed
+ */
+static bool
+ice_is_serdes_muxed(struct ice_hw *hw)
+{
+	return (rd32(hw, 0xB81E0) & 0x4);
+}
+
+/**
+ * ice_get_maxspeed - Get the max speed for given lport
+ * @hw: pointer to the HW struct
+ * @lport: logical port for which max speed is requested
+ * @max_speed: return max speed for input lport
+ */
+static int
+ice_get_maxspeed(struct ice_hw *hw, u8 lport, u8 *max_speed)
+{
+	struct ice_aqc_get_port_options_elem options[ICE_AQC_PORT_OPT_MAX] = {};
+	u8 option_count = ICE_AQC_PORT_OPT_MAX;
+	bool active_valid, pending_valid;
+	u8 active_idx, pending_idx;
+	int status;
+
+	status = ice_aq_get_port_options(hw, options, &option_count,
+			lport, true, &active_idx, &active_valid,
+			&pending_idx, &pending_valid);
+
+	if (status || active_idx >= ICE_AQC_PORT_OPT_MAX) {
+		ice_debug(hw, ICE_DBG_PHY, "Port split read err: %d\n", status);
+		return (EIO);
+	}
+
+	if (active_valid) {
+		ice_debug(hw, ICE_DBG_PHY, "Active idx: %d\n", active_idx);
+	} else {
+		ice_debug(hw, ICE_DBG_PHY, "No valid Active option\n");
+		return (EINVAL);
+	}
+	*max_speed = options[active_idx].max_lane_speed;
+
+	return (0);
+}
+
+/**
+ * ice_update_port_topology - update port topology
+ * @lport: logical port for which physical info requested
+ * @port_topology: buffer to hold port topology
+ * @is_muxed: serdes is muxed in hardware
+ */
+static int
+ice_update_port_topology(u8 lport, struct ice_port_topology *port_topology,
+		bool is_muxed)
+{
+	switch (lport) {
+	case 0:
+		port_topology->pcs_quad_select = 0;
+		port_topology->pcs_port = 0;
+		port_topology->primary_serdes_lane = 0;
+		break;
+	case 1:
+		port_topology->pcs_quad_select = 1;
+		port_topology->pcs_port = 0;
+		if (is_muxed == true)
+			port_topology->primary_serdes_lane = 2;
+		else
+			port_topology->primary_serdes_lane = 4;
+		break;
+	case 2:
+		port_topology->pcs_quad_select = 0;
+		port_topology->pcs_port = 1;
+		port_topology->primary_serdes_lane = 1;
+		break;
+	case 3:
+		port_topology->pcs_quad_select = 1;
+		port_topology->pcs_port = 1;
+		if (is_muxed == true)
+			port_topology->primary_serdes_lane = 3;
+		else
+			port_topology->primary_serdes_lane = 5;
+		break;
+	case 4:
+		port_topology->pcs_quad_select = 0;
+		port_topology->pcs_port = 2;
+		port_topology->primary_serdes_lane = 2;
+		break;
+	case 5:
+		port_topology->pcs_quad_select = 1;
+		port_topology->pcs_port = 2;
+		port_topology->primary_serdes_lane = 6;
+		break;
+	case 6:
+		port_topology->pcs_quad_select = 0;
+		port_topology->pcs_port = 3;
+		port_topology->primary_serdes_lane = 3;
+		break;
+	case 7:
+		port_topology->pcs_quad_select = 1;
+		port_topology->pcs_port = 3;
+		port_topology->primary_serdes_lane = 7;
+		break;
+	default:
+		return (EINVAL);
+	}
+	return 0;
+}
+
+/**
+ * ice_get_port_topology - returns physical topology
+ * @hw: pointer to the HW struct
+ * @lport: logical port for which physical info requested
+ * @port_topology: buffer to hold port topology
+ *
+ * Returns the physical component associated with the Port like pcsquad, pcsport, serdesnumber
+ */
+static int
+ice_get_port_topology(struct ice_hw *hw, u8 lport,
+		      struct ice_port_topology *port_topology)
+{
+	struct ice_aqc_get_link_topo cmd;
+	bool is_muxed = false;
+	u8 cage_type = 0;
+	u16 node_handle;
+	u8 ctx = 0;
+	int err;
+
+	if (!hw || !port_topology)
+		return (EINVAL);
+
+	if (hw->device_id >= ICE_DEV_ID_E810_XXV_BACKPLANE) {
+		port_topology->serdes_lane_count = 1;
+		if (lport == 0) {
+			port_topology->pcs_quad_select = 0;
+			port_topology->pcs_port = 0;
+			port_topology->primary_serdes_lane = 0;
+		} else if (lport == 1) {
+			port_topology->pcs_quad_select = 1;
+			port_topology->pcs_port = 0;
+			port_topology->primary_serdes_lane = 1;
+		} else {
+			return (EINVAL);
+		}
+		return (0);
+	}
+
+	memset(&cmd, 0, sizeof(cmd));
+	ctx = ICE_AQC_LINK_TOPO_NODE_TYPE_CAGE << ICE_AQC_LINK_TOPO_NODE_TYPE_S;
+	ctx |= ICE_AQC_LINK_TOPO_NODE_CTX_PORT << ICE_AQC_LINK_TOPO_NODE_CTX_S;
+	cmd.addr.topo_params.node_type_ctx = ctx;
+	cmd.addr.topo_params.index = 0;
+	cmd.addr.topo_params.lport_num = 0;
+	cmd.addr.topo_params.lport_num_valid = 0;
+
+	err = ice_aq_get_netlist_node(hw, &cmd, &cage_type, &node_handle);
+	if (err)
+		return (EINVAL);
+
+	is_muxed = ice_is_serdes_muxed(hw);
+
+	err = ice_update_port_topology(lport, port_topology, is_muxed);
+	if (err)
+		return err;
+
+	if (cage_type == 0x11 ||  /* SFP */
+	    cage_type == 0x12) {   /* SFP28 */
+		port_topology->serdes_lane_count = 1;
+	} else if (cage_type == 0x13 ||  /* QSFP */
+	    cage_type == 0x14) {   /* QSFP28 */
+		u8 max_speed = 0;
+
+		err = ice_get_maxspeed(hw, port_topology->primary_serdes_lane,
+		    &max_speed);
+		if (err)
+			return err;
+
+		if (max_speed == ICE_AQC_PORT_OPT_MAX_LANE_M)
+			device_printf(ice_hw_to_dev(hw),
+			    "%s: WARNING: reported max_lane_speed is N/A\n",
+			    __func__);
+
+		if (max_speed == ICE_AQC_PORT_OPT_MAX_LANE_100G)
+			port_topology->serdes_lane_count = 4;
+		else if (max_speed == ICE_AQC_PORT_OPT_MAX_LANE_50G ||
+		    max_speed == ICE_AQC_PORT_OPT_MAX_LANE_40G)
+			port_topology->serdes_lane_count = 2;
+		else
+			port_topology->serdes_lane_count = 1;
+	} else
+		return (EINVAL);
+
+	ice_debug(hw, ICE_DBG_PHY, "%s: Port Topology (lport %d):\n",
+	    __func__, lport);
+	ice_debug(hw, ICE_DBG_PHY, "serdes lane count %d\n",
+	    port_topology->serdes_lane_count);
+	ice_debug(hw, ICE_DBG_PHY, "pcs quad select %d\n",
+	    port_topology->pcs_quad_select);
+	ice_debug(hw, ICE_DBG_PHY, "pcs port %d\n",
+	    port_topology->pcs_port);
+	ice_debug(hw, ICE_DBG_PHY, "primary serdes lane %d\n",
+	    port_topology->primary_serdes_lane);
+
+	return (0);
+}
+
+/**
+ * ice_sysctl_dump_phy_stats - print PHY stats
+ * @oidp: sysctl oid structure
+ * @arg1: pointer to private data structure
+ * @arg2: unused
+ * @req: sysctl request pointer
+ */
+static int
+ice_sysctl_dump_phy_stats(SYSCTL_HANDLER_ARGS)
+{
+	struct ice_regdump_to_sysctl ice_prv_regs_buf = {};
+	struct ice_softc *sc = (struct ice_softc *)arg1;
+	struct ice_port_topology port_topology;
+	struct ice_hw *hw = &sc->hw;
+	struct ice_port_info *pi;
+	device_t dev = sc->dev;
+	u8 serdes_num = 0;
+	unsigned int i;
+	int err = 0;
+	struct sbuf *sbuf;
+
+	pi = hw->port_info;
+
+	if (!pi) {
+		device_printf(dev, "Port info structure is null\n");
+		return (EINVAL);
+	}
+
+	UNREFERENCED_PARAMETER(oidp);
+	UNREFERENCED_PARAMETER(arg2);
+	UNREFERENCED_PARAMETER(req);
+
+	if (ice_driver_is_detaching(sc))
+		return (ESHUTDOWN);
+
+	if (ice_get_port_topology(hw, pi->lport, &port_topology) != 0) {
+		device_printf(dev,
+			      "Extended register dump failed for Lport %d\n",
+			      pi->lport);
+		return (EIO);
+	}
+
+	if (port_topology.serdes_lane_count > ICE_MAX_SERDES_LANE_COUNT) {
+		device_printf(dev,
+			"Extended register dump failed: Lport %d Serdes count %d\n",
+			pi->lport,
+			port_topology.serdes_lane_count);
+		return (EINVAL);
+	}
+
+	sbuf = sbuf_new_for_sysctl(NULL, NULL, 128, req);
+	/* Get serdes equalization parameter for available serdes */
+	for (i = 0; i < port_topology.serdes_lane_count; i++) {
+		serdes_num = port_topology.primary_serdes_lane + i;
+		err = ice_get_tx_rx_equalizations(hw, serdes_num,
+				&(ice_prv_regs_buf.equalization[i]));
+		if (err) {
+			device_printf(dev,
+			    "Serdes equalization get failed Lport %d Serdes %d Err %d\n",
+			    pi->lport,serdes_num, err);
+			sbuf_finish(sbuf);
+			sbuf_delete(sbuf);
+			return (EIO);
+		}
+		sbuf_printf(sbuf, "\nSerdes lane: %d\n", i);
+		sbuf_printf(sbuf, "RX PRE1 = %d\n",
+			ice_prv_regs_buf.equalization[i].rx_equalization_pre1);
+		sbuf_printf(sbuf, "RX PRE2 = %d\n",
+			(s16)ice_prv_regs_buf.equalization[i].rx_equalization_pre2);
+		sbuf_printf(sbuf, "RX POST1 = %d\n",
+			ice_prv_regs_buf.equalization[i].rx_equalization_post1);
+		sbuf_printf(sbuf, "RX BFLF = %d\n",
+			ice_prv_regs_buf.equalization[i].rx_equalization_bflf);
+		sbuf_printf(sbuf, "RX BFHF = %d\n",
+			ice_prv_regs_buf.equalization[i].rx_equalization_bfhf);
+		sbuf_printf(sbuf, "RX DRATE = %d\n",
+			(s16)ice_prv_regs_buf.equalization[i].rx_equalization_drate);
+		sbuf_printf(sbuf, "TX PRE1 = %d\n",
+			ice_prv_regs_buf.equalization[i].tx_equalization_pre1);
+		sbuf_printf(sbuf, "TX PRE2 = %d\n",
+			ice_prv_regs_buf.equalization[i].tx_equalization_pre2);
+		sbuf_printf(sbuf, "TX PRE3 = %d\n",
+			ice_prv_regs_buf.equalization[i].tx_equalization_pre3);
+		sbuf_printf(sbuf, "TX POST1 = %d\n",
+			ice_prv_regs_buf.equalization[i].tx_equalization_post1);
+		sbuf_printf(sbuf, "TX ATTEN = %d\n",
+			ice_prv_regs_buf.equalization[i].tx_equalization_atten);
+	}
+
+	/* Get fec  correctable , uncorrectable counter */
+	err = ice_get_port_fec_stats(hw, port_topology.pcs_quad_select,
+			             port_topology.pcs_port,
+				     &(ice_prv_regs_buf.stats));
+	if (err) {
+		device_printf(dev, "failed to get FEC stats Lport %d Err %d\n",
+				pi->lport, err);
+		sbuf_finish(sbuf);
+		sbuf_delete(sbuf);
+		return (EIO);
+	}
+
+	sbuf_printf(sbuf, "\nRS FEC Corrected codeword count = %d\n",
+			((u32)ice_prv_regs_buf.stats.fec_corr_cnt_high << 16) |
+			    ice_prv_regs_buf.stats.fec_corr_cnt_low);
+	sbuf_printf(sbuf, "RS FEC Uncorrected codeword count = %d\n",
+			((u32)ice_prv_regs_buf.stats.fec_uncorr_cnt_high << 16) |
+			    ice_prv_regs_buf.stats.fec_uncorr_cnt_low);
 
 	/* Finish */
 	sbuf_finish(sbuf);
@@ -9696,7 +11554,7 @@ ice_sysctl_query_port_ets(SYSCTL_HANDLER_ARGS)
 	struct ice_port_info *pi;
 	device_t dev = sc->dev;
 	struct sbuf *sbuf;
-	enum ice_status status;
+	int status;
 	int i = 0;
 
 	UNREFERENCED_PARAMETER(oidp);
@@ -9708,7 +11566,7 @@ ice_sysctl_query_port_ets(SYSCTL_HANDLER_ARGS)
 	pi = hw->port_info;
 
 	status = ice_aq_query_port_ets(pi, &port_ets, sizeof(port_ets), NULL);
-	if (status != ICE_SUCCESS) {
+	if (status) {
 		device_printf(dev,
 		    "Query Port ETS AQ call failed, err %s aq_err %s\n",
 		    ice_status_str(status),
@@ -9743,4 +11601,482 @@ ice_sysctl_query_port_ets(SYSCTL_HANDLER_ARGS)
 	sbuf_delete(sbuf);
 
 	return (0);
+}
+
+/**
+ * ice_sysctl_dscp2tc_map - Map DSCP to hardware TCs
+ * @oidp: sysctl oid structure
+ * @arg1: pointer to private data structure
+ * @arg2: which eight DSCP to UP mappings to configure (0 - 7)
+ * @req: sysctl request pointer
+ *
+ * Gets or sets the current DSCP to UP table cached by the driver. Since there
+ * are 64 possible DSCP values to configure, this sysctl only configures
+ * chunks of 8 in that space at a time.
+ *
+ * This sysctl is only relevant in DSCP mode, and will only function in SW DCB
+ * mode.
+ */
+static int
+ice_sysctl_dscp2tc_map(SYSCTL_HANDLER_ARGS)
+{
+	struct ice_softc *sc = (struct ice_softc *)arg1;
+	struct ice_dcbx_cfg *local_dcbx_cfg;
+	struct ice_port_info *pi;
+	struct ice_hw *hw = &sc->hw;
+	device_t dev = sc->dev;
+	int status;
+	struct sbuf *sbuf;
+	int ret;
+
+	/* Store input rates from user */
+	char dscp_user_buf[128] = "";
+	u8 new_dscp_table_seg[ICE_MAX_TRAFFIC_CLASS] = {};
+
+	if (ice_driver_is_detaching(sc))
+		return (ESHUTDOWN);
+
+	if (req->oldptr == NULL && req->newptr == NULL) {
+		ret = SYSCTL_OUT(req, 0, 128);
+		return (ret);
+	}
+
+	pi = hw->port_info;
+	local_dcbx_cfg = &pi->qos_cfg.local_dcbx_cfg;
+
+	sbuf = sbuf_new(NULL, dscp_user_buf, 128, SBUF_FIXEDLEN | SBUF_INCLUDENUL);
+
+	/* Format DSCP-to-UP data for output */
+	for (int i = 0; i < ICE_MAX_TRAFFIC_CLASS; i++) {
+		sbuf_printf(sbuf, "%d", local_dcbx_cfg->dscp_map[arg2 * 8 + i]);
+		if (i != ICE_MAX_TRAFFIC_CLASS - 1)
+			sbuf_printf(sbuf, ",");
+	}
+
+	sbuf_finish(sbuf);
+	sbuf_delete(sbuf);
+
+	/* Read in the new DSCP mapping values */
+	ret = sysctl_handle_string(oidp, dscp_user_buf, sizeof(dscp_user_buf), req);
+	if ((ret) || (req->newptr == NULL))
+		return (ret);
+
+	/* Don't allow setting changes in FW DCB mode */
+	if (!hw->port_info->qos_cfg.is_sw_lldp) {
+		device_printf(dev, "%s: DSCP mapping is not allowed in FW DCBX mode\n",
+		    __func__);
+		return (EINVAL);
+	}
+
+	/* Convert 8 values in a string to a table; this is similar to what
+	 * needs to be done for ETS settings, so this function can be re-used
+	 * for that purpose.
+	 */
+	ret = ice_ets_str_to_tbl(dscp_user_buf, new_dscp_table_seg,
+	    ICE_MAX_TRAFFIC_CLASS - 1);
+	if (ret) {
+		device_printf(dev, "%s: Could not parse input DSCP2TC table: %s\n",
+		    __func__, dscp_user_buf);
+		return (ret);
+	}
+
+	memcpy(&local_dcbx_cfg->dscp_map[arg2 * 8], new_dscp_table_seg,
+	    sizeof(new_dscp_table_seg));
+
+	local_dcbx_cfg->app_mode = ICE_DCBX_APPS_NON_WILLING;
+
+	status = ice_set_dcb_cfg(pi);
+	if (status) {
+		device_printf(dev,
+		    "%s: Failed to set DCB config; status %s, aq_err %s\n",
+		    __func__, ice_status_str(status),
+		    ice_aq_str(hw->adminq.sq_last_status));
+		return (EIO);
+	}
+
+	ice_do_dcb_reconfig(sc, false);
+
+	return (0);
+}
+
+/**
+ * ice_handle_debug_dump_ioctl - Handle a debug dump ioctl request
+ * @sc: the device private softc
+ * @ifd: ifdrv ioctl request pointer
+ */
+int
+ice_handle_debug_dump_ioctl(struct ice_softc *sc, struct ifdrv *ifd)
+{
+	size_t ifd_len = ifd->ifd_len;
+	struct ice_hw *hw = &sc->hw;
+	device_t dev = sc->dev;
+	struct ice_debug_dump_cmd *ddc;
+	int status;
+	int err = 0;
+
+	/* Returned arguments from the Admin Queue */
+	u16 ret_buf_size = 0;
+	u16 ret_next_cluster = 0;
+	u16 ret_next_table = 0;
+	u32 ret_next_index = 0;
+
+	/*
+	 * ifioctl forwards SIOCxDRVSPEC to iflib without performing
+	 * a privilege check. In turn, iflib forwards the ioctl to the driver
+	 * without performing a privilege check. Perform one here to ensure
+	 * that non-privileged threads cannot access this interface.
+	 */
+	err = priv_check(curthread, PRIV_DRIVER);
+	if (err)
+		return (err);
+
+	if (ice_test_state(&sc->state, ICE_STATE_PREPARED_FOR_RESET)) {
+		device_printf(dev,
+		    "%s: Driver must rebuild data structures after a reset. Operation aborted.\n",
+		    __func__);
+		return (EBUSY);
+	}
+
+	if (ifd_len < sizeof(*ddc)) {
+		device_printf(dev,
+		    "%s: ifdrv length is too small. Got %zu, but expected %zu\n",
+		    __func__, ifd_len, sizeof(*ddc));
+		return (EINVAL);
+	}
+
+	if (ifd->ifd_data == NULL) {
+		device_printf(dev, "%s: ifd data buffer not present.\n",
+		     __func__);
+		return (EINVAL);
+	}
+
+	ddc = (struct ice_debug_dump_cmd *)malloc(ifd_len, M_ICE, M_ZERO | M_NOWAIT);
+	if (!ddc)
+		return (ENOMEM);
+
+	/* Copy the NVM access command and data in from user space */
+	/* coverity[tainted_data_argument] */
+	err = copyin(ifd->ifd_data, ddc, ifd_len);
+	if (err) {
+		device_printf(dev, "%s: Copying request from user space failed, err %s\n",
+			      __func__, ice_err_str(err));
+		goto out;
+	}
+
+	/* The data_size arg must be at least 1 for the AQ cmd to work */
+	if (ddc->data_size == 0) {
+		device_printf(dev,
+		    "%s: data_size must be greater than 0\n", __func__);
+		err = EINVAL;
+		goto out;
+	}
+	/* ...and it can't be too long */
+	if (ddc->data_size > (ifd_len - sizeof(*ddc))) {
+		device_printf(dev,
+		    "%s: data_size (%d) is larger than ifd_len space (%zu)?\n", __func__,
+		    ddc->data_size, ifd_len - sizeof(*ddc));
+		err = EINVAL;
+		goto out;
+	}
+
+	/* Make sure any possible data buffer space is zeroed */
+	memset(ddc->data, 0, ifd_len - sizeof(*ddc));
+
+	status = ice_aq_get_internal_data(hw, ddc->cluster_id, ddc->table_id, ddc->offset,
+	    (u8 *)ddc->data, ddc->data_size, &ret_buf_size, 
+	    &ret_next_cluster, &ret_next_table, &ret_next_index, NULL);
+	ice_debug(hw, ICE_DBG_DIAG, "%s: ret_buf_size %d, ret_next_table %d, ret_next_index %d\n",
+	    __func__, ret_buf_size, ret_next_table, ret_next_index);
+	if (status) {
+		device_printf(dev,
+		    "%s: Get Internal Data AQ command failed, err %s aq_err %s\n",
+		    __func__,
+		    ice_status_str(status),
+		    ice_aq_str(hw->adminq.sq_last_status));
+		goto aq_error;
+	}
+
+	ddc->table_id = ret_next_table;
+	ddc->offset = ret_next_index;
+	ddc->data_size = ret_buf_size;
+	ddc->cluster_id = ret_next_cluster;
+
+	/* Copy the possibly modified contents of the handled request out */
+	err = copyout(ddc, ifd->ifd_data, ifd->ifd_len);
+	if (err) {
+		device_printf(dev, "%s: Copying response back to user space failed, err %s\n",
+			      __func__, ice_err_str(err));
+		goto out;
+	}
+
+aq_error:
+	/* Convert private status to an error code for proper ioctl response */
+	switch (status) {
+	case 0:
+		err = (0);
+		break;
+	case ICE_ERR_NO_MEMORY:
+		err = (ENOMEM);
+		break;
+	case ICE_ERR_OUT_OF_RANGE:
+		err = (ENOTTY);
+		break;
+	case ICE_ERR_AQ_ERROR:
+		err = (EIO);
+		break;
+	case ICE_ERR_PARAM:
+	default:
+		err = (EINVAL);
+		break;
+	}
+
+out:
+	free(ddc, M_ICE);
+	return (err);
+}
+
+/**
+ * ice_sysctl_allow_no_fec_mod_in_auto - Change Auto FEC behavior
+ * @oidp: sysctl oid structure
+ * @arg1: pointer to private data structure
+ * @arg2: unused
+ * @req: sysctl request pointer
+ *
+ * Allows user to let "No FEC" mode to be used in "Auto"
+ * FEC mode during FEC negotiation. This is only supported
+ * on newer firmware versions.
+ */
+static int
+ice_sysctl_allow_no_fec_mod_in_auto(SYSCTL_HANDLER_ARGS)
+{
+	struct ice_softc *sc = (struct ice_softc *)arg1;
+	struct ice_hw *hw = &sc->hw;
+	device_t dev = sc->dev;
+	u8 user_flag;
+	int ret;
+
+	UNREFERENCED_PARAMETER(arg2);
+
+	ret = priv_check(curthread, PRIV_DRIVER);
+	if (ret)
+		return (ret);
+
+	if (ice_driver_is_detaching(sc))
+		return (ESHUTDOWN);
+
+	user_flag = (u8)sc->allow_no_fec_mod_in_auto;
+
+	ret = sysctl_handle_bool(oidp, &user_flag, 0, req);
+	if ((ret) || (req->newptr == NULL))
+		return (ret);
+
+	if (!ice_fw_supports_fec_dis_auto(hw)) {
+		log(LOG_INFO,
+		    "%s: Enabling or disabling of auto configuration of modules that don't support FEC is unsupported by the current firmware\n",
+		    device_get_nameunit(dev));
+		return (ENODEV);
+	}
+
+	if (user_flag == (bool)sc->allow_no_fec_mod_in_auto)
+		return (0);
+
+	sc->allow_no_fec_mod_in_auto = (u8)user_flag;
+
+	if (sc->allow_no_fec_mod_in_auto)
+		log(LOG_INFO, "%s: Enabled auto configuration of No FEC modules\n",
+		    device_get_nameunit(dev));
+	else
+		log(LOG_INFO,
+		    "%s: Auto configuration of No FEC modules reset to NVM defaults\n",
+		    device_get_nameunit(dev));
+
+	return (0);
+}
+
+/**
+ * ice_sysctl_temperature - Retrieve NIC temp via AQ command
+ * @oidp: sysctl oid structure
+ * @arg1: pointer to private data structure
+ * @arg2: unused
+ * @req: sysctl request pointer
+ *
+ * If ICE_DBG_DIAG is set in the debug.debug_mask sysctl, then this will print
+ * temperature threshold information in the kernel message log, too.
+ */
+static int
+ice_sysctl_temperature(SYSCTL_HANDLER_ARGS)
+{
+	struct ice_aqc_get_sensor_reading_resp resp;
+	struct ice_softc *sc = (struct ice_softc *)arg1;
+	struct ice_hw *hw = &sc->hw;
+	device_t dev = sc->dev;
+	int status;
+
+	UNREFERENCED_PARAMETER(oidp);
+	UNREFERENCED_PARAMETER(arg2);
+
+	if (ice_driver_is_detaching(sc))
+		return (ESHUTDOWN);
+
+	status = ice_aq_get_sensor_reading(hw, ICE_AQC_INT_TEMP_SENSOR,
+	    ICE_AQC_INT_TEMP_FORMAT, &resp, NULL);
+	if (status) {
+		device_printf(dev,
+		    "Get Sensor Reading AQ call failed, err %s aq_err %s\n",
+		    ice_status_str(status),
+		    ice_aq_str(hw->adminq.sq_last_status));
+		return (EIO);
+	}
+
+	ice_debug(hw, ICE_DBG_DIAG, "%s: Warning Temp Threshold: %d\n", __func__,
+	    resp.data.s0f0.temp_warning_threshold);
+	ice_debug(hw, ICE_DBG_DIAG, "%s: Critical Temp Threshold: %d\n", __func__,
+	    resp.data.s0f0.temp_critical_threshold);
+	ice_debug(hw, ICE_DBG_DIAG, "%s: Fatal Temp Threshold: %d\n", __func__,
+	    resp.data.s0f0.temp_fatal_threshold);
+
+	return sysctl_handle_8(oidp, &resp.data.s0f0.temp, 0, req);
+}
+
+/**
+ * ice_sysctl_create_mirror_interface - Create a new ifnet that monitors
+ *     traffic from the main PF VSI
+ */
+static int
+ice_sysctl_create_mirror_interface(SYSCTL_HANDLER_ARGS)
+{
+	struct ice_softc *sc = (struct ice_softc *)arg1;
+	device_t dev = sc->dev;
+	int ret;
+
+	UNREFERENCED_PARAMETER(arg2);
+
+	ret = priv_check(curthread, PRIV_DRIVER);
+	if (ret)
+		return (ret);
+
+	if (ice_driver_is_detaching(sc))
+		return (ESHUTDOWN);
+
+	/* If the user hasn't written "1" to this sysctl yet: */
+	if (!ice_test_state(&sc->state, ICE_STATE_DO_CREATE_MIRR_INTFC)) {
+		/* Avoid output on the first set of reads to this sysctl in
+		 * order to prevent a null byte from being written to the
+		 * end result when called via sysctl(8).
+		 */
+		if (req->oldptr == NULL && req->newptr == NULL) {
+			ret = SYSCTL_OUT(req, 0, 0);
+			return (ret);
+		}
+
+		char input_buf[2] = "";
+		ret = sysctl_handle_string(oidp, input_buf, sizeof(input_buf), req);
+		if ((ret) || (req->newptr == NULL))
+			return (ret);
+
+		/* If we get '1', then indicate we'll create the interface in
+		 * the next sysctl read call.
+		 */
+		if (input_buf[0] == '1') {
+			if (sc->mirr_if) {
+				device_printf(dev,
+				    "Mirror interface %s already exists!\n",
+				    if_name(sc->mirr_if->ifp));
+				return (EEXIST);
+			}
+			ice_set_state(&sc->state, ICE_STATE_DO_CREATE_MIRR_INTFC);
+			return (0);
+		}
+
+		return (EINVAL);
+	}
+
+	/* --- "Do Create Mirror Interface" is set --- */
+
+	/* Caller just wants the upper bound for size */
+	if (req->oldptr == NULL && req->newptr == NULL) {
+		ret = SYSCTL_OUT(req, 0, 128);
+		return (ret);
+	}
+
+	device_printf(dev, "Creating new mirroring interface...\n");
+
+	ret = ice_create_mirror_interface(sc);
+	if (ret)
+		return (ret);
+
+	ice_clear_state(&sc->state, ICE_STATE_DO_CREATE_MIRR_INTFC);
+
+	ret = sysctl_handle_string(oidp, __DECONST(char *, "Interface attached"), 0, req);
+	return (ret);
+}
+
+/**
+ * ice_sysctl_destroy_mirror_interface - Destroy network interface that monitors
+ *     traffic from the main PF VSI
+ */
+static int
+ice_sysctl_destroy_mirror_interface(SYSCTL_HANDLER_ARGS)
+{
+	struct ice_softc *sc = (struct ice_softc *)arg1;
+	device_t dev = sc->dev;
+	int ret;
+
+	UNREFERENCED_PARAMETER(arg2);
+
+	ret = priv_check(curthread, PRIV_DRIVER);
+	if (ret)
+		return (ret);
+
+	if (ice_driver_is_detaching(sc))
+		return (ESHUTDOWN);
+
+	/* If the user hasn't written "1" to this sysctl yet: */
+	if (!ice_test_state(&sc->state, ICE_STATE_DO_DESTROY_MIRR_INTFC)) {
+		/* Avoid output on the first set of reads to this sysctl in
+		 * order to prevent a null byte from being written to the
+		 * end result when called via sysctl(8).
+		 */
+		if (req->oldptr == NULL && req->newptr == NULL) {
+			ret = SYSCTL_OUT(req, 0, 0);
+			return (ret);
+		}
+
+		char input_buf[2] = "";
+		ret = sysctl_handle_string(oidp, input_buf, sizeof(input_buf), req);
+		if ((ret) || (req->newptr == NULL))
+			return (ret);
+
+		/* If we get '1', then indicate we'll create the interface in
+		 * the next sysctl read call.
+		 */
+		if (input_buf[0] == '1') {
+			if (!sc->mirr_if) {
+				device_printf(dev,
+				    "No mirror interface exists!\n");
+				return (EINVAL);
+			}
+			ice_set_state(&sc->state, ICE_STATE_DO_DESTROY_MIRR_INTFC);
+			return (0);
+		}
+
+		return (EINVAL);
+	}
+
+	/* --- "Do Destroy Mirror Interface" is set --- */
+
+	/* Caller just wants the upper bound for size */
+	if (req->oldptr == NULL && req->newptr == NULL) {
+		ret = SYSCTL_OUT(req, 0, 128);
+		return (ret);
+	}
+
+	device_printf(dev, "Destroying mirroring interface...\n");
+
+	ice_destroy_mirror_interface(sc);
+
+	ice_clear_state(&sc->state, ICE_STATE_DO_DESTROY_MIRR_INTFC);
+
+	ret = sysctl_handle_string(oidp, __DECONST(char *, "Interface destroyed"), 0, req);
+	return (ret);
 }

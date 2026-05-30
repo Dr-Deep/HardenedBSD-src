@@ -67,10 +67,8 @@
  * is being followed here.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_ipstealth.h"
+#include "opt_sctp.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -86,6 +84,7 @@ __FBSDID("$FreeBSD$");
 #include <net/if_types.h>
 #include <net/if_var.h>
 #include <net/if_dl.h>
+#include <net/if_private.h>
 #include <net/pfil.h>
 #include <net/route.h>
 #include <net/route/nhop.h>
@@ -102,6 +101,10 @@ __FBSDID("$FreeBSD$");
 #include <netinet/ip_options.h>
 
 #include <machine/in_cksum.h>
+
+#if defined(SCTP) || defined(SCTP_SUPPORT)
+#include <netinet/sctp_crc32.h>
+#endif
 
 #define	V_ipsendredirects	VNET(ipsendredirects)
 
@@ -251,14 +254,6 @@ ip_tryforward(struct mbuf *m)
 	M_ASSERTVALID(m);
 	M_ASSERTPKTHDR(m);
 
-#ifdef ALTQ
-	/*
-	 * Is packet dropped by traffic conditioner?
-	 */
-	if (altq_input != NULL && (*altq_input)(m, AF_INET) == 0)
-		goto drop;
-#endif
-
 	/*
 	 * Only IP packets without options
 	 */
@@ -287,20 +282,18 @@ ip_tryforward(struct mbuf *m)
 	 */
 	if ((m->m_flags & (M_BCAST|M_MCAST)) ||
 	    (m->m_pkthdr.rcvif->if_flags & IFF_LOOPBACK) ||
-	    ntohl(ip->ip_src.s_addr) == (u_long)INADDR_BROADCAST ||
-	    ntohl(ip->ip_dst.s_addr) == (u_long)INADDR_BROADCAST ||
+	    in_broadcast(ip->ip_src) ||
+	    in_broadcast(ip->ip_dst) ||
 	    IN_MULTICAST(ntohl(ip->ip_src.s_addr)) ||
 	    IN_MULTICAST(ntohl(ip->ip_dst.s_addr)) ||
 	    IN_LINKLOCAL(ntohl(ip->ip_src.s_addr)) ||
-	    IN_LINKLOCAL(ntohl(ip->ip_dst.s_addr)) ||
-	    ip->ip_src.s_addr == INADDR_ANY ||
-	    ip->ip_dst.s_addr == INADDR_ANY )
+	    IN_LINKLOCAL(ntohl(ip->ip_dst.s_addr)) )
 		return m;
 
 	/*
 	 * Is it for a local address on this host?
 	 */
-	if (in_localip(ip->ip_dst))
+	if (in_localip_fib(ip->ip_dst, M_GETFIB(m)))
 		return m;
 
 	IPSTAT_INC(ips_total);
@@ -318,7 +311,7 @@ ip_tryforward(struct mbuf *m)
 	if (!PFIL_HOOKED_IN(V_inet_pfil_head))
 		goto passin;
 
-	if (pfil_run_hooks(V_inet_pfil_head, &m, m->m_pkthdr.rcvif, PFIL_IN,
+	if (pfil_mbuf_in(V_inet_pfil_head, &m, m->m_pkthdr.rcvif,
 	    NULL) != PFIL_PASS)
 		goto drop;
 
@@ -335,7 +328,7 @@ ip_tryforward(struct mbuf *m)
 		/*
 		 * Is it now for a local address on this host?
 		 */
-		if (in_localip(dest))
+		if (in_localip_fib(dest, M_GETFIB(m)))
 			goto forwardlocal;
 		/*
 		 * Go on with new destination address
@@ -366,15 +359,20 @@ passin:
 	}
 
 	/*
-	 * Decrement the TTL and incrementally change the IP header checksum.
-	 * Don't bother doing this with hw checksum offloading, it's faster
-	 * doing it right here.
+	 * Decrement the TTL.
+	 * If the IP header checksum field contains a valid value, incrementally
+	 * change this value. Don't use hw checksum offloading, which would
+	 * recompute the checksum. It's faster to just change it here
+	 * according to the decremented TTL.
+	 * If the checksum still needs to be computed, don't touch it.
 	 */
 	ip->ip_ttl -= IPTTLDEC;
-	if (ip->ip_sum >= (u_int16_t) ~htons(IPTTLDEC << 8))
-		ip->ip_sum -= ~htons(IPTTLDEC << 8);
-	else
-		ip->ip_sum += htons(IPTTLDEC << 8);
+	if (__predict_true((m->m_pkthdr.csum_flags & CSUM_IP) == 0)) {
+		if (ip->ip_sum >= (u_int16_t) ~htons(IPTTLDEC << 8))
+			ip->ip_sum -= ~htons(IPTTLDEC << 8);
+		else
+			ip->ip_sum += htons(IPTTLDEC << 8);
+	}
 #ifdef IPSTEALTH
 	}
 #endif
@@ -410,8 +408,8 @@ passin:
 	if (!PFIL_HOOKED_OUT(V_inet_pfil_head))
 		goto passout;
 
-	if (pfil_run_hooks(V_inet_pfil_head, &m, nh->nh_ifp,
-	    PFIL_OUT | PFIL_FWD, NULL) != PFIL_PASS)
+	if (pfil_mbuf_fwd(V_inet_pfil_head, &m, nh->nh_ifp,
+	    NULL) != PFIL_PASS)
 		goto drop;
 
 	M_ASSERTVALID(m);
@@ -470,6 +468,32 @@ passout:
 		ro.ro_flags |= RT_HAS_GW;
 	} else
 		gw = (const struct sockaddr *)dst;
+
+	/*
+	 * If the IP/SCTP/TCP/UDP header still needs a valid checksum and the
+	 * interface will not calculate it for us, do it here.
+	 * Note that if we defer checksum calculation, we might send an ICMP
+	 * message later that reflects this packet, which still has an
+	 * invalid checksum.
+	 */
+	if (__predict_false(m->m_pkthdr.csum_flags & CSUM_IP &
+	    ~nh->nh_ifp->if_hwassist)) {
+		ip->ip_sum = 0;
+		ip->ip_sum = in_cksum(m, (ip->ip_hl << 2));
+		m->m_pkthdr.csum_flags &= ~CSUM_IP;
+	}
+	if (__predict_false(m->m_pkthdr.csum_flags & CSUM_DELAY_DATA &
+	    ~nh->nh_ifp->if_hwassist)) {
+		in_delayed_cksum(m);
+		m->m_pkthdr.csum_flags &= ~CSUM_DELAY_DATA;
+	}
+#if defined(SCTP) || defined(SCTP_SUPPORT)
+	if (__predict_false(m->m_pkthdr.csum_flags & CSUM_IP_SCTP &
+	    ~nh->nh_ifp->if_hwassist)) {
+		sctp_delayed_cksum(m, (uint32_t)(ip->ip_hl << 2));
+		m->m_pkthdr.csum_flags &= ~CSUM_IP_SCTP;
+	}
+#endif
 
 	/* Handle redirect case. */
 	redest.s_addr = 0;

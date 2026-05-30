@@ -25,9 +25,6 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\"     @(#)chpass.1	8.2 (Berkeley) 12/30/93
-.\" $FreeBSD$
-.\"
 .Dd May 25, 2021
 .Dt CHPASS 1
 .Os
@@ -230,7 +227,7 @@ The
 field is the command interpreter the user prefers.
 If the
 .Ar shell
-field is empty, the Bourne shell,
+field is empty, the POSIX shell,
 .Pa /bin/sh ,
 is assumed.
 When altering a login shell, and not the super-user, the user

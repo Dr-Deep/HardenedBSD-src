@@ -18,8 +18,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*-
  * Ralink Technology RT2860/RT3090/RT3390/RT3562/RT5390/RT5392 chipset driver
  * http://www.ralinktech.com/
@@ -324,6 +322,8 @@ rt2860_attach(device_t dev, int id)
 #endif
 		| IEEE80211_C_WME		/* 802.11e */
 		;
+
+	ic->ic_flags_ext |= IEEE80211_FEXT_SEQNO_OFFLOAD;
 
 	rt2860_getradiocaps(ic, IEEE80211_CHAN_MAX, &ic->ic_nchans,
 	    ic->ic_channels);
@@ -1178,7 +1178,6 @@ rt2860_maxrssi_chain(struct rt2860_softc *sc, const struct rt2860_rxwi *rxwi)
 static void
 rt2860_rx_intr(struct rt2860_softc *sc)
 {
-	struct epoch_tracker et;
 	struct rt2860_rx_radiotap_header *tap;
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct ieee80211_frame *wh;
@@ -1326,13 +1325,11 @@ rt2860_rx_intr(struct rt2860_softc *sc)
 		/* send the frame to the 802.11 layer */
 		ni = ieee80211_find_rxnode(ic,
 		    (struct ieee80211_frame_min *)wh);
-		NET_EPOCH_ENTER(et);
 		if (ni != NULL) {
 			(void)ieee80211_input(ni, m, rssi - nf, nf);
 			ieee80211_free_node(ni);
 		} else
 			(void)ieee80211_input_all(ic, m, rssi - nf, nf);
-		NET_EPOCH_EXIT(et);
 
 		RAL_LOCK(sc);
 
@@ -1476,6 +1473,7 @@ rt2860_tx(struct rt2860_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 
 	wh = mtod(m, struct ieee80211_frame *);
 
+	ieee80211_output_seqno_assign(ni, -1, m);
 	if (wh->i_fc[1] & IEEE80211_FC1_PROTECTED) {
 		k = ieee80211_crypto_encap(ni, m);
 		if (k == NULL) {
@@ -1498,7 +1496,7 @@ rt2860_tx(struct rt2860_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 		rate = tp->ucastrate;
 	} else {
 		(void) ieee80211_ratectl_rate(ni, NULL, 0);
-		rate = ni->ni_txrate;
+		rate = ieee80211_node_get_txrate_dot11rate(ni);
 	}
 	rate &= IEEE80211_RATE_VAL;
 
@@ -1564,9 +1562,7 @@ rt2860_tx(struct rt2860_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 		*(uint16_t *)wh->i_dur = htole16(dur);
 	}
 	/* ask MAC to insert timestamp into probe responses */
-	if ((wh->i_fc[0] &
-	     (IEEE80211_FC0_TYPE_MASK | IEEE80211_FC0_SUBTYPE_MASK)) ==
-	     (IEEE80211_FC0_TYPE_MGT | IEEE80211_FC0_SUBTYPE_PROBE_RESP))
+	if (IEEE80211_IS_MGMT_PROBE_RESP(wh))
 	    /* NOTE: beacons do not pass through tx_data() */
 		txwi->flags |= RT2860_TX_TS;
 
@@ -1807,9 +1803,7 @@ rt2860_tx_raw(struct rt2860_softc *sc, struct mbuf *m,
 		*(uint16_t *)wh->i_dur = htole16(dur);
 	}
 	/* ask MAC to insert timestamp into probe responses */
-	if ((wh->i_fc[0] &
-	     (IEEE80211_FC0_TYPE_MASK | IEEE80211_FC0_SUBTYPE_MASK)) ==
-	     (IEEE80211_FC0_TYPE_MGT | IEEE80211_FC0_SUBTYPE_PROBE_RESP))
+	if (IEEE80211_IS_MGMT_PROBE_RESP(wh))
 	    /* NOTE: beacons do not pass through tx_data() */
 		txwi->flags |= RT2860_TX_TS;
 

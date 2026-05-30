@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2000 Peter Wemm
  *
@@ -25,9 +25,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/conf.h>
@@ -36,6 +33,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/proc.h>
 #include <sys/mutex.h>
 #include <sys/mman.h>
+#include <sys/pctrie.h>
 #include <sys/rwlock.h>
 #include <sys/sysctl.h>
 #include <sys/user.h>
@@ -233,10 +231,12 @@ default_phys_pager_populate(vm_object_t object, vm_pindex_t pidx,
     int fault_type __unused, vm_prot_t max_prot __unused, vm_pindex_t *first,
     vm_pindex_t *last)
 {
+	struct pctrie_iter pages;
 	vm_page_t m;
 	vm_pindex_t base, end, i;
 	int ahead;
 
+	VM_OBJECT_ASSERT_WLOCKED(object);
 	base = rounddown(pidx, phys_pager_cluster);
 	end = base + phys_pager_cluster - 1;
 	if (end >= object->size)
@@ -247,11 +247,12 @@ default_phys_pager_populate(vm_object_t object, vm_pindex_t pidx,
 		end = *last;
 	*first = base;
 	*last = end;
+	vm_page_iter_init(&pages, object);
 
 	for (i = base; i <= end; i++) {
 		ahead = MIN(end - i, PHYSALLOC);
-		m = vm_page_grab(object, i,
-		    VM_ALLOC_NORMAL | VM_ALLOC_COUNT(ahead));
+		m = vm_page_grab_iter(object, i,
+		    VM_ALLOC_NORMAL | VM_ALLOC_COUNT(ahead), &pages);
 		if (!vm_page_all_valid(m))
 			vm_page_zero_invalid(m, TRUE);
 		KASSERT(m->dirty == 0,
@@ -269,7 +270,7 @@ phys_pager_populate(vm_object_t object, vm_pindex_t pidx, int fault_type,
 }
 
 static void
-phys_pager_putpages(vm_object_t object, vm_page_t *m, int count, boolean_t sync,
+phys_pager_putpages(vm_object_t object, vm_page_t *m, int count, int flags,
     int *rtvals)
 {
 

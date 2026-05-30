@@ -1,3 +1,4 @@
+.\" SPDX-License-Identifier: CDDL-1.0
 .\"
 .\" CDDL HEADER START
 .\"
@@ -37,7 +38,7 @@
 .\" Copyright 2019 Joyent, Inc.
 .\" Copyright 2021 Klara, Inc.
 .\"
-.Dd June 3, 2022
+.Dd July 11, 2022
 .Dt ZFS-ZONE 8
 .Os
 .
@@ -113,4 +114,17 @@ dataset to a user namespace identified by user namespace file
 .Dl # Nm zfs Cm zone Ar /proc/1234/ns/user Ar tank/users
 .
 .Sh SEE ALSO
-.Xr zfsprops 7
+.Xr zfsprops 7 ,
+.Xr zfs-allow 8
+.Pp
+For rootless container use cases where the namespace is ephemeral,
+consider using the
+.Sy zoned_uid
+property instead, which delegates to all namespaces owned by a UID
+rather than requiring attachment to a specific namespace file.
+The
+.Sy zoned_uid
+property uses a three-layer additive authorization model
+.Pq UID match, dsl_deleg grants, capability tiers
+described in
+.Xr zfsprops 7 .

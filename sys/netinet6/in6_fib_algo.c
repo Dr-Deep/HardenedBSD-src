@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2020 Alexander V. Chernikov
  *
@@ -25,8 +25,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 #include "opt_inet6.h"
 
 #include <sys/param.h>
@@ -352,7 +350,7 @@ struct fib_lookup_module flm_radix6 = {
 };
 
 static void
-fib6_algo_init(void)
+fib6_algo_init(void *dummy __unused)
 {
 
 	fib_module_register(&flm_radix6_lockless);

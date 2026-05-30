@@ -11,13 +11,13 @@
 
 #include "PDBSymbol.h"
 #include "PDBTypes.h"
+#include "llvm/Support/Compiler.h"
 
 namespace llvm {
 
-class raw_ostream;
 namespace pdb {
 
-class PDBSymbolTypeBuiltin : public PDBSymbol {
+class LLVM_ABI PDBSymbolTypeBuiltin : public PDBSymbol {
   DECLARE_PDB_SYMBOL_CONCRETE_TYPE(PDB_SymType::BuiltinType)
 public:
   void dump(PDBSymDumper &Dumper) const override;

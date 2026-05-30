@@ -27,9 +27,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)socket.h	8.4 (Berkeley) 2/21/94
- * $FreeBSD$
  */
 
 #ifndef _SYS_SOCKET_H_
@@ -38,7 +35,8 @@
 #include <sys/cdefs.h>
 #include <sys/_types.h>
 #include <sys/_iovec.h>
-#include <machine/_align.h>
+#include <sys/_timeval.h>
+#include <sys/_align.h>
 
 /*
  * Definitions related to sockets: types, address families, options.
@@ -113,10 +111,11 @@ typedef	__uintptr_t	uintptr_t;
  */
 #define	SOCK_CLOEXEC	0x10000000
 #define	SOCK_NONBLOCK	0x20000000
+#define	SOCK_CLOFORK	0x40000000
 #ifdef _KERNEL
 /*
  * Flags for accept1(), kern_accept4() and solisten_dequeue, in addition
- * to SOCK_CLOEXEC and SOCK_NONBLOCK.
+ * to SOCK_CLOEXEC, SOCK_CLOFORK and SOCK_NONBLOCK.
  */
 #define ACCEPT4_INHERIT 0x1
 #define ACCEPT4_COMPAT  0x2
@@ -166,13 +165,15 @@ typedef	__uintptr_t	uintptr_t;
 #define	SO_LISTENQLIMIT	0x1011		/* socket's backlog limit */
 #define	SO_LISTENQLEN	0x1012		/* socket's complete queue length */
 #define	SO_LISTENINCQLEN	0x1013	/* socket's incomplete queue length */
-#define	SO_SETFIB	0x1014		/* use this FIB to route */
+#define	SO_FIB		0x1014		/* get or set socket FIB */
+#define	SO_SETFIB	SO_FIB		/* backward compat alias */
 #define	SO_USER_COOKIE	0x1015		/* user cookie (dummynet etc.) */
 #define	SO_PROTOCOL	0x1016		/* get socket protocol (Linux name) */
 #define	SO_PROTOTYPE	SO_PROTOCOL	/* alias for SO_PROTOCOL (SunOS name) */
 #define	SO_TS_CLOCK	0x1017		/* clock type used for SO_TIMESTAMP */
 #define	SO_MAX_PACING_RATE	0x1018	/* socket's max TX pacing rate (Linux name) */
 #define	SO_DOMAIN	0x1019		/* get socket domain */
+#define	SO_SPLICE	0x1023		/* splice data to other socket */
 #endif
 
 #if __BSD_VISIBLE
@@ -269,7 +270,8 @@ struct accept_filter_arg {
 #define	AF_INET6_SDP	42		/* OFED Socket Direct Protocol ipv6 */
 #define	AF_HYPERV	43		/* HyperV sockets */
 #define	AF_DIVERT	44		/* divert(4) */
-#define	AF_MAX		44
+#define	AF_IPFWLOG	46
+#define	AF_MAX		46
 /*
  * When allocating a new AF_ constant, please only allocate
  * even numbered constants for FreeBSD until 134 as odd numbered AF_
@@ -394,7 +396,9 @@ struct sockproto {
 #define	PF_NETLINK	AF_NETLINK
 #define	PF_INET_SDP	AF_INET_SDP
 #define	PF_INET6_SDP	AF_INET6_SDP
+#define	PF_HYPERV	AF_HYPERV
 #define	PF_DIVERT	AF_DIVERT
+#define	PF_IPFWLOG	AF_IPFWLOG
 
 #define	PF_MAX		AF_MAX
 
@@ -475,6 +479,9 @@ struct msghdr {
 #ifdef _KERNEL
 #define	MSG_MORETOCOME	 0x00100000	/* additional data pending */
 #define	MSG_TLSAPPDATA	 0x00200000	/* do not soreceive() alert rec. (TLS) */
+#endif
+#if __BSD_VISIBLE
+#define	MSG_CMSG_CLOFORK 0x00400000	/* make received fds close-on-fork */
 #endif
 
 /*
@@ -630,17 +637,14 @@ struct omsghdr {
 /*
  * howto arguments for shutdown(2), specified by Posix.1g.
  */
-#define	SHUT_RD		0		/* shut down the reading side */
-#define	SHUT_WR		1		/* shut down the writing side */
-#define	SHUT_RDWR	2		/* shut down both sides */
-
-#if __BSD_VISIBLE
-/* for SCTP */
-/* we cheat and use the SHUT_XX defines for these */
-#define PRU_FLUSH_RD     SHUT_RD
-#define PRU_FLUSH_WR     SHUT_WR
-#define PRU_FLUSH_RDWR   SHUT_RDWR
-#endif
+enum shutdown_how {
+	SHUT_RD = 0,		/* shut down the reading side */
+#define	SHUT_RD		SHUT_RD
+	SHUT_WR,		/* shut down the writing side */
+#define	SHUT_WR		SHUT_WR
+	SHUT_RDWR		/* shut down both sides */
+#define	SHUT_RDWR	SHUT_RDWR
+};
 
 #if __BSD_VISIBLE
 /*
@@ -658,7 +662,7 @@ struct sf_hdtr {
  */
 #define	SF_NODISKIO     0x00000001
 #define	SF_MNOWAIT	0x00000002	/* obsolete */
-#define	SF_SYNC		0x00000004
+/* was	SF_SYNC		0x00000004	*/
 #define	SF_USER_READAHEAD	0x00000008
 #define	SF_NOCACHE	0x00000010
 #define	SF_FLAGS(rh, flags)	(((rh) << 16) | (flags))
@@ -674,9 +678,23 @@ struct mmsghdr {
 	struct msghdr	msg_hdr;		/* message header */
 	ssize_t		msg_len;		/* message length */
 };
+
+/*
+ * Structure used for manipulating splice option.
+ */
+struct splice {
+	int	sp_fd;			/* drain socket file descriptor */
+	off_t	sp_max;			/* if set, maximum bytes to splice */
+	struct timeval sp_idle;		/* idle timeout */
+};
+
 #endif /* __BSD_VISIBLE */
 
 #ifndef	_KERNEL
+
+#if defined(_FORTIFY_SOURCE) && _FORTIFY_SOURCE > 0
+#include <ssp/socket.h>
+#endif
 
 #include <sys/cdefs.h>
 
@@ -722,34 +740,10 @@ __END_DECLS
 #ifdef _KERNEL
 struct socket;
 
-struct tcpcb *so_sototcpcb(struct socket *so);
-struct inpcb *so_sotoinpcb(struct socket *so);
-struct sockbuf *so_sockbuf_snd(struct socket *);
-struct sockbuf *so_sockbuf_rcv(struct socket *);
-
-int so_state_get(const struct socket *);
-void so_state_set(struct socket *, int);
-
 int so_options_get(const struct socket *);
 void so_options_set(struct socket *, int);
 
 int so_error_get(const struct socket *);
 void so_error_set(struct socket *, int);
-
-int so_linger_get(const struct socket *);
-void so_linger_set(struct socket *, int);
-
-struct protosw *so_protosw_get(const struct socket *);
-void so_protosw_set(struct socket *, struct protosw *);
-
-void so_sorwakeup_locked(struct socket *so);
-void so_sowwakeup_locked(struct socket *so);
-
-void so_sorwakeup(struct socket *so);
-void so_sowwakeup(struct socket *so);
-
-void so_lock(struct socket *so);
-void so_unlock(struct socket *so);
-
 #endif /* _KERNEL */
 #endif /* !_SYS_SOCKET_H_ */

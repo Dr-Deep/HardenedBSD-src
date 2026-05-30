@@ -25,7 +25,6 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 #
 
 . $(atf_get_srcdir)/../common/vnet.subr
@@ -248,7 +247,7 @@ output6_raw_success_cleanup()
 mpath_check()
 {
 	if [ `sysctl -iW net.route.multipath | wc -l` != "1" ]; then
-		atf_skip "This test requires ROUTE_MPATH enabled"
+		atf_skip "This test requires multipath enabled"
 	fi
 }
 

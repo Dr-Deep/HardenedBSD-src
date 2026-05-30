@@ -1,50 +1,47 @@
 # PUBLIC DOMAIN - NO WARRANTY, see:
 #     <http://creativecommons.org/publicdomain/zero/1.0/>
 #
-# Written in 2021 by Alfonso Sabato Siciliano
+# Written in 2023 by Alfonso Sabato Siciliano
 
-OUTPUT=  bsddialog
-SOURCES= bsddialog.c
-OBJECTS= ${SOURCES:.c=.o}
-LIBPATH= ${.CURDIR}/lib
-LIBBSDDIALOG= ${LIBPATH}/libbsddialog.so
+OUTPUT = bsddialog
+export VERSION=1.1
+.CURDIR ?= ${CURDIR}
+LIBPATH = ${.CURDIR}/lib
+LIBBSDDIALOG = ${LIBPATH}/libbsddialog.so
+UTILITYPATH = ${.CURDIR}/utility
 
-CFLAGS+= -I${LIBPATH} -std=gnu99 -Wall -Wextra -Werror -Wno-unused-parameter
-# `make -DDEBUG`
-.if defined(DEBUG)
-CFLAGS= -g -Wall -I${LIBPATH}
-LIBDEBUG= -DDEBUG
-.endif
-LDFLAGS+= -Wl,-rpath=${LIBPATH} -L${LIBPATH} -lbsddialog
-
-BINDIR= /usr/local/bin
-MAN= ${OUTPUT}.1
-GZIP= gzip -cn
-MANDIR= /usr/local/share/man/man1
-
-INSTALL= install
 RM= rm -f
+LN = ln -s -f
 
-all : ${OUTPUT}
+### command-line options ###
+# FreeBSD port Makefile: 'MAKE_ARGS = -DNORPATH'
+NORPATH ?=
+export DISABLERPATH=${NORPATH}
+# Debug: `make -DDEBUG` or `gmake DEBUG=1`
+DEBUG ?=
+export ENABLEDEBUG=${DEBUG}
+###################
 
-${OUTPUT}: ${LIBBSDDIALOG} ${OBJECTS}
-	${CC} ${LDFLAGS} ${OBJECTS} -o ${.PREFIX}
+all: ${OUTPUT}
+
+install: all
+	${MAKE} -C ${LIBPATH} install
+	${MAKE} -C ${UTILITYPATH} install
+
+uninstall:
+	${MAKE} -C ${UTILITYPATH} uninstall
+	${MAKE} -C ${LIBPATH} uninstall
+
+${OUTPUT}: ${LIBBSDDIALOG}
+	${MAKE} -C ${UTILITYPATH} LIBPATH=${LIBPATH}
+	${LN} ${UTILITYPATH}/${OUTPUT} ${.CURDIR}/${OUTPUT}
 
 ${LIBBSDDIALOG}:
-	make -C ${LIBPATH} ${LIBDEBUG}
-
-.c.o:
-	${CC} ${CFLAGS} -c ${.IMPSRC} -o ${.TARGET}
-
-install:
-	${INSTALL} -s -m 555 ${OUTPUT} ${BINDIR}
-	${GZIP} ${MAN} > ${MAN}.gz
-	${INSTALL} -m 444 ${MAN}.gz ${MANDIR}
-
-unistall:
-	${RM} ${BINDIR}/${OUTPUT}
-	${RM} ${MANDIR}/${MAN}.gz
+	${MAKE} -C ${LIBPATH}
 
 clean:
-	make -C ${LIBPATH} clean
-	${RM} ${OUTPUT} *.o *~ *.core ${MAN}.gz
+	${MAKE} -C ${LIBPATH} clean
+	${MAKE} -C ${UTILITYPATH} clean
+	${RM} ${OUTPUT} *.core
+
+.PHONY: all install uninstall clean

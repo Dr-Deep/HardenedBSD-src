@@ -23,8 +23,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include <stdio.h>
@@ -49,7 +47,7 @@ geliboot_crypt(u_int algo, geli_op_t enc, u_char *data, size_t datasize,
 		err = rijndael_makeKey(&aeskey, !enc, keysize, 
 		    (const char *)key);
 		if (err < 0) {
-			printf("Failed to setup crypo keys: %d\n", err);
+			printf("Failed to setup crypto keys: %d\n", err);
 			return (err);
 		}
 

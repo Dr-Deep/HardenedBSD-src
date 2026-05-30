@@ -86,21 +86,21 @@ llvm::Error CommonOptionsParser::init(
 
   static cl::opt<std::string> BuildPath("p", cl::desc("Build path"),
                                         cl::Optional, cl::cat(Category),
-                                        cl::sub(*cl::AllSubCommands));
+                                        cl::sub(cl::SubCommand::getAll()));
 
   static cl::list<std::string> SourcePaths(
       cl::Positional, cl::desc("<source0> [... <sourceN>]"), OccurrencesFlag,
-      cl::cat(Category), cl::sub(*cl::AllSubCommands));
+      cl::cat(Category), cl::sub(cl::SubCommand::getAll()));
 
   static cl::list<std::string> ArgsAfter(
       "extra-arg",
       cl::desc("Additional argument to append to the compiler command line"),
-      cl::cat(Category), cl::sub(*cl::AllSubCommands));
+      cl::cat(Category), cl::sub(cl::SubCommand::getAll()));
 
   static cl::list<std::string> ArgsBefore(
       "extra-arg-before",
       cl::desc("Additional argument to prepend to the compiler command line"),
-      cl::cat(Category), cl::sub(*cl::AllSubCommands));
+      cl::cat(Category), cl::sub(cl::SubCommand::getAll()));
 
   cl::ResetAllOptionOccurrences();
 
@@ -114,7 +114,6 @@ llvm::Error CommonOptionsParser::init(
   llvm::raw_string_ostream OS(ErrorMessage);
   // Stop initializing if command-line option parsing failed.
   if (!cl::ParseCommandLineOptions(argc, argv, Overview, &OS)) {
-    OS.flush();
     return llvm::make_error<llvm::StringError>(ErrorMessage,
                                                llvm::inconvertibleErrorCode());
   }

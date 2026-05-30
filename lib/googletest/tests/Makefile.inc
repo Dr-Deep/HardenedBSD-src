@@ -1,9 +1,9 @@
-# $FreeBSD$
-
 .include "../Makefile.inc"
 # Keep the existing tests directory structure (with subdirs per component)
 # rather than installing all of them to /usr/tests/lib/googletest
 TESTSDIR=	${TESTSBASE}/lib/googletest/${.CURDIR:T}
+
+PACKAGE=	tests
 
 # Clang's optimizer spends a really long time on these tests at -O2. Changing
 # -O2 to -O1 reduces the -j32 time for lib/googletest/test from 131s to 71s.

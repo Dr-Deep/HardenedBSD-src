@@ -27,19 +27,12 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #ifndef _PTHREAD_NP_H_
 #define _PTHREAD_NP_H_
 
 #include <sys/param.h>
 #include <sys/cpuset.h>
-
-/*
- * Non-POSIX type definitions:
- */
-typedef void	(*pthread_switch_routine_t)(pthread_t, pthread_t);
 
 /*
  * Non-POSIX thread function prototype definitions:
@@ -66,12 +59,13 @@ int pthread_resume_np(pthread_t);
 int pthread_peekjoin_np(pthread_t, void **);
 void pthread_set_name_np(pthread_t, const char *);
 int pthread_setaffinity_np(pthread_t, size_t, const cpuset_t *);
+void pthread_signals_block_np(void);
+void pthread_signals_unblock_np(void);
 int pthread_single_np(void);
 void pthread_suspend_all_np(void);
 int pthread_suspend_np(pthread_t);
-int pthread_switch_add_np(pthread_switch_routine_t);
-int pthread_switch_delete_np(pthread_switch_routine_t);
 int pthread_timedjoin_np(pthread_t, void **, const struct timespec *);
+int pthread_tryjoin_np(pthread_t, void **);
 __END_DECLS
 
 #endif

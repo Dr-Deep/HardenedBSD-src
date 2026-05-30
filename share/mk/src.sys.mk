@@ -1,4 +1,3 @@
-# $FreeBSD$
 
 # Note: This file is also duplicated in the sys/conf/kern.pre.mk so
 # it will always grab SRCCONF, even if it isn't being built in-tree
@@ -7,7 +6,11 @@
 
 .if !defined(_WITHOUT_SRCCONF)
 # Allow user to configure things that only effect src tree builds.
+.if exists(${SRCTOP}/src.conf)
+SRCCONF?=	${SRCTOP}/src.conf
+.else
 SRCCONF?=	/etc/src.conf
+.endif
 .if !empty(SRCCONF) && \
     (exists(${SRCCONF}) || ${SRCCONF} != "/etc/src.conf") && \
     !target(_srcconf_included_)
@@ -39,8 +42,14 @@ __postrcconf_${var}:=	${MK_${var}:U-}${WITHOUT_${var}:Uno:Dyes}${WITH_${var}:Uno
 # default over to -fno-common, making this redundant.
 CFCOMMONFLAG?=	-fno-common
 CFLAGS+=	${CFCOMMONFLAG}
+.if defined(PACKAGE_BUILDING)
+CFLAGS+=	-fmacro-prefix-map=${SRCTOP}=/usr/src -fdebug-prefix-map=${SRCTOP}=/usr/src
+.endif
 
-DEFAULTWARNS=	6
+DEFAULTWARNS?=	6
+
+# ZFS source directory
+ZFSTOP?=	${SRCTOP}/sys/contrib/openzfs
 
 # tempting, but bsd.compiler.mk causes problems this early
 # probably need to remove dependence on bsd.own.mk 

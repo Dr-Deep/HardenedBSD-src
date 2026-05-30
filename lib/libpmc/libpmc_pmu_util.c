@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2018, Matthew Macy
  * Copyright (c) 2021, The FreeBSD Foundation
@@ -27,8 +27,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  *
  */
 
@@ -123,6 +121,24 @@ pmu_events_mfr(void)
 	return (mfr);
 }
 
+static int
+pmu_events_x86_family(void)
+{
+	char buf[PMC_CPUID_LEN];
+	size_t s = sizeof(buf);
+	char *cpuid, *family;
+
+	if (sysctlbyname("kern.hwpmc.cpuid", buf, &s,
+	    (void *)NULL, 0) == -1)
+		return (-1);
+	cpuid = &buf[0];
+
+	strsep(&cpuid, "-");
+	family = strsep(&cpuid, "-");
+
+	return (strtol(family, NULL, 10));
+}
+
 /*
  *  The Intel fixed mode counters are:
  *	"inst_retired.any",
@@ -210,6 +226,10 @@ struct pmu_event_desc {
 	uint64_t ped_offcore_rsp;
 	uint64_t ped_l3_thread;
 	uint64_t ped_l3_slice;
+	uint32_t ped_sourceid;
+	uint32_t ped_coreid;
+	uint32_t ped_allsources;
+	uint32_t ped_allcores;
 	uint32_t ped_event;
 	uint32_t ped_frontend;
 	uint32_t ped_ldlat;
@@ -221,6 +241,7 @@ struct pmu_event_desc {
 	uint8_t	ped_edge;
 	uint8_t	ped_fc_mask;
 	uint8_t	ped_ch_mask;
+	uint8_t ped_pebs;
 };
 
 static const struct pmu_events_map *
@@ -349,6 +370,16 @@ pmu_parse_event(struct pmu_event_desc *ped, const char *eventin)
 			ped->ped_l3_thread = strtol(value, NULL, 16);
 		else if (strcmp(key, "l3_slice_mask") == 0)
 			ped->ped_l3_slice = strtol(value, NULL, 16);
+		else if (strcmp(key, "sourceid") == 0)
+			ped->ped_sourceid = strtol(value, NULL, 16);
+		else if (strcmp(key, "coreid") == 0)
+			ped->ped_coreid = strtol(value, NULL, 16);
+		else if (strcmp(key, "allcores") == 0)
+			ped->ped_allcores = strtol(value, NULL, 10);
+		else if (strcmp(key, "allsources") == 0)
+			ped->ped_allsources = strtol(value, NULL, 10);
+		else if (strcmp(key, "pebs") == 0)
+			ped->ped_pebs = strtol(value, NULL, 10);
 		else {
 			debug = getenv("PMUDEBUG");
 			if (debug != NULL && strcmp(debug, "true") == 0 && value != NULL)
@@ -459,6 +490,8 @@ pmc_pmu_print_counter_full(const char *ev)
 			continue;
 		if (strcasestr(pe->name, ev) == NULL)
 			continue;
+		if (pe != pme->table)
+			printf("\n");
 		printf("name: %s\n", pe->name);
 		if (pe->long_desc != NULL)
 			printf("desc: %s\n", pe->long_desc);
@@ -488,31 +521,23 @@ static int
 pmc_pmu_amd_pmcallocate(const char *event_name, struct pmc_op_pmcallocate *pm,
 	struct pmu_event_desc *ped)
 {
+	int cpu_family;
 	struct pmc_md_amd_op_pmcallocate *amd;
 	const struct pmu_event *pe;
 	int idx = -1;
 
+	cpu_family = pmu_events_x86_family();
+
 	amd = &pm->pm_md.pm_amd;
 	if (ped->ped_umask > 0) {
 		pm->pm_caps |= PMC_CAP_QUALIFIER;
-		amd->pm_amd_config |= AMD_PMC_TO_UNITMASK(ped->ped_umask);
 	}
 	pm->pm_class = PMC_CLASS_K8;
 	pe = pmu_event_get(NULL, event_name, &idx);
 
-	if (strcmp("l3cache", pe->topic) == 0){
+	if (pe->pmu == NULL) {
 		amd->pm_amd_config |= AMD_PMC_TO_EVENTMASK(ped->ped_event);
-		amd->pm_amd_sub_class = PMC_AMD_SUB_CLASS_L3_CACHE;
-		amd->pm_amd_config |= AMD_PMC_TO_L3SLICE(ped->ped_l3_slice);
-		amd->pm_amd_config |= AMD_PMC_TO_L3CORE(ped->ped_l3_thread);
-	}
-	else if (strcmp("data fabric", pe->topic) == 0){
-
-		amd->pm_amd_config |= AMD_PMC_TO_EVENTMASK_DF(ped->ped_event);
-		amd->pm_amd_sub_class = PMC_AMD_SUB_CLASS_DATA_FABRIC;
-	}
-	else{
-		amd->pm_amd_config |= AMD_PMC_TO_EVENTMASK(ped->ped_event);
+		amd->pm_amd_config |= AMD_PMC_TO_UNITMASK(ped->ped_umask);
 		amd->pm_amd_sub_class = PMC_AMD_SUB_CLASS_CORE;
 		if ((pm->pm_caps & (PMC_CAP_USER|PMC_CAP_SYSTEM)) == 0 ||
 			(pm->pm_caps & (PMC_CAP_USER|PMC_CAP_SYSTEM)) ==
@@ -528,7 +553,47 @@ pmc_pmu_amd_pmcallocate(const char *event_name, struct pmc_op_pmcallocate *pm,
 			amd->pm_amd_config |= AMD_PMC_INVERT;
 		if (pm->pm_caps & PMC_CAP_INTERRUPT)
 			amd->pm_amd_config |= AMD_PMC_INT;
+		if (pm->pm_caps & PMC_CAP_PRECISE)
+			amd->pm_amd_config |= AMD_PMC_PRECISERETIRE;
+	} else if (strcmp("amd_l3", pe->pmu) == 0) {
+		amd->pm_amd_config |= AMD_PMC_L3_TO_EVENTMASK(ped->ped_event);
+		amd->pm_amd_config |= AMD_PMC_L3_TO_UNITMASK(ped->ped_umask);
+		amd->pm_amd_sub_class = PMC_AMD_SUB_CLASS_L3_CACHE;
+		if (cpu_family <= 0x17) {
+			amd->pm_amd_config |=
+			    AMD_PMC_L31_TO_SLICE(ped->ped_l3_slice);
+			amd->pm_amd_config |=
+			    AMD_PMC_L31_TO_CORE(ped->ped_l3_thread);
+		} else {
+			amd->pm_amd_config |=
+			    AMD_PMC_L32_TO_THREAD(ped->ped_l3_thread);
+			amd->pm_amd_config |=
+			    AMD_PMC_L32_TO_SOURCEID(ped->ped_sourceid);
+			amd->pm_amd_config |=
+			    AMD_PMC_L32_TO_COREID(ped->ped_coreid);
+			if (ped->ped_allcores)
+				amd->pm_amd_config |= AMD_PMC_L32_ALLCORES;
+			if (ped->ped_allsources)
+				amd->pm_amd_config |= AMD_PMC_L32_ALLSOURCES;
+		}
+	} else if (strcmp("amd_df", pe->pmu) == 0) {
+		amd->pm_amd_sub_class = PMC_AMD_SUB_CLASS_DATA_FABRIC;
+		if (cpu_family <= 19) {
+			amd->pm_amd_config |=
+			    AMD_PMC_DF1_TO_EVENTMASK(ped->ped_event);
+			amd->pm_amd_config |=
+			    AMD_PMC_DF1_TO_UNITMASK(ped->ped_umask);
+		} else {
+			amd->pm_amd_config |=
+			    AMD_PMC_DF2_TO_EVENTMASK(ped->ped_event);
+			amd->pm_amd_config |=
+			    AMD_PMC_DF2_TO_UNITMASK(ped->ped_umask);
+		}
+	} else {
+		printf("PMC pmu '%s' is not supported!\n", pe->pmu);
+		return (EOPNOTSUPP);
 	}
+
 	return (0);
 }
 
@@ -543,6 +608,7 @@ pmc_pmu_intel_pmcallocate(const char *event_name, struct pmc_op_pmcallocate *pm,
 	    strcasestr(event_name, "uncore") != NULL) {
 		pm->pm_class = PMC_CLASS_UCP;
 		pm->pm_caps |= PMC_CAP_QUALIFIER;
+		/* XXX Check and block unsupported uncore counters */
 	} else if (ped->ped_event == 0x0) {
 		pm->pm_class = PMC_CLASS_IAF;
 	} else {
@@ -571,11 +637,24 @@ pmc_pmu_intel_pmcallocate(const char *event_name, struct pmc_op_pmcallocate *pm,
 		iap->pm_iap_config |= IAP_INV;
 	if (pm->pm_caps & PMC_CAP_INTERRUPT)
 		iap->pm_iap_config |= IAP_INT;
+
+	/* XXX Implement alone flag in the kernel module */
+
+	/*
+	 * PEBS counters are not implemented on FreeBSD yet.  Counters labeled
+	 * with PEBS = 2 in the JSON definitions require PEBS.  It seems that
+	 * some of them return bogus counts if you attempt to use them.
+	 */
+	if (ped->ped_pebs == 2) {
+		printf("PEBS only counters are not supported!\n");
+		return (EOPNOTSUPP);
+	}
+
 	return (0);
 }
 
-int
-pmc_pmu_pmcallocate(const char *event_name, struct pmc_op_pmcallocate *pm)
+static int
+pmc_pmu_pmcallocate_md(const char *event_name, struct pmc_op_pmcallocate *pm)
 {
 	const struct pmu_event *pe;
 	struct pmu_event_desc ped;
@@ -606,8 +685,8 @@ pmc_pmu_pmcallocate(const char *event_name, struct pmc_op_pmcallocate *pm)
 
 #elif defined(__powerpc64__)
 
-int
-pmc_pmu_pmcallocate(const char *event_name, struct pmc_op_pmcallocate *pm)
+static int
+pmc_pmu_pmcallocate_md(const char *event_name, struct pmc_op_pmcallocate *pm)
 {
 	const struct pmu_event *pe;
 	struct pmu_event_desc ped;
@@ -624,7 +703,6 @@ pmc_pmu_pmcallocate(const char *event_name, struct pmc_op_pmcallocate *pm)
 	if (pmu_parse_event(&ped, pe->event))
 		return (ENOENT);
 
-	assert(ped.ped_event >= 0);
 	pm->pm_ev = idx;
 	pm->pm_md.pm_event = ped.ped_event;
 	pm->pm_class = PMC_CLASS_POWER8;
@@ -633,8 +711,8 @@ pmc_pmu_pmcallocate(const char *event_name, struct pmc_op_pmcallocate *pm)
 
 #elif defined(__aarch64__)
 
-int
-pmc_pmu_pmcallocate(const char *event_name, struct pmc_op_pmcallocate *pm)
+static int
+pmc_pmu_pmcallocate_md(const char *event_name, struct pmc_op_pmcallocate *pm)
 {
 	const struct pmu_event *pe;
 	struct pmu_event_desc ped;
@@ -651,7 +729,6 @@ pmc_pmu_pmcallocate(const char *event_name, struct pmc_op_pmcallocate *pm)
 	assert(idx >= 0);
 	pm->pm_ev = idx;
 	pm->pm_md.pm_md_config = ped.ped_event;
-	pm->pm_md.pm_md_flags |= PM_MD_RAW_EVENT;
 	pm->pm_class = PMC_CLASS_ARMV8;
 	pm->pm_caps |= (PMC_CAP_READ | PMC_CAP_WRITE);
 
@@ -660,9 +737,28 @@ pmc_pmu_pmcallocate(const char *event_name, struct pmc_op_pmcallocate *pm)
 
 #else
 
-int
-pmc_pmu_pmcallocate(const char *e __unused, struct pmc_op_pmcallocate *p __unused)
+static int
+pmc_pmu_pmcallocate_md(const char *e __unused, struct pmc_op_pmcallocate *p __unused)
 {
 	return (EOPNOTSUPP);
 }
 #endif
+
+int
+pmc_pmu_pmcallocate(const char *event_name, struct pmc_op_pmcallocate *pm)
+{
+	int error;
+
+	error = pmc_pmu_pmcallocate_md(event_name, pm);
+	if (error != 0) {
+		/* Reset any changes. */
+		pm->pm_ev = 0;
+		pm->pm_caps = 0;
+		pm->pm_class = 0;
+
+		return (error);
+	}
+
+	pm->pm_flags |= PMC_F_EV_PMU;
+	return (0);
+}

@@ -32,13 +32,9 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)kern_synch.c	8.9 (Berkeley) 5/19/95
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_ktrace.h"
 #include "opt_sched.h"
 
@@ -49,6 +45,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/kdb.h>
 #include <sys/kernel.h>
 #include <sys/ktr.h>
+#include <sys/ktrace.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
 #include <sys/proc.h>
@@ -64,7 +61,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/vmmeter.h>
 #ifdef KTRACE
 #include <sys/uio.h>
-#include <sys/ktrace.h>
 #endif
 #ifdef EPOCH_TRACE
 #include <sys/epoch.h>
@@ -135,8 +131,9 @@ int
 _sleep(const void *ident, struct lock_object *lock, int priority,
     const char *wmesg, sbintime_t sbt, sbintime_t pr, int flags)
 {
-	struct thread *td;
+	struct thread *td __ktrace_used;
 	struct lock_class *class;
+	struct timespec sw_out_tv __ktrace_used;
 	uintptr_t lock_state;
 	int catch, pri, rval, sleepq_flags;
 	WITNESS_SAVE_DECL(lock_witness);
@@ -145,7 +142,7 @@ _sleep(const void *ident, struct lock_object *lock, int priority,
 	td = curthread;
 #ifdef KTRACE
 	if (KTRPOINT(td, KTR_CSW))
-		ktrcsw(1, 0, wmesg);
+		nanotime(&sw_out_tv);
 #endif
 	WITNESS_WARN(WARN_GIANTOK | WARN_SLEEPOK, lock,
 	    "Sleeping on \"%s\"", wmesg);
@@ -162,7 +159,7 @@ _sleep(const void *ident, struct lock_object *lock, int priority,
 	else
 		class = NULL;
 
-	if (SCHEDULER_STOPPED_TD(td)) {
+	if (SCHEDULER_STOPPED()) {
 		if (lock != NULL && priority & PDROP)
 			class->lc_unlock(lock);
 		return (0);
@@ -226,8 +223,10 @@ _sleep(const void *ident, struct lock_object *lock, int priority,
 		rval = 0;
 	}
 #ifdef KTRACE
-	if (KTRPOINT(td, KTR_CSW))
+	if (KTRPOINT(td, KTR_CSW)) {
+		ktrcsw_out(&sw_out_tv, wmesg);
 		ktrcsw(0, 0, wmesg);
+	}
 #endif
 	PICKUP_GIANT();
 	if (lock != NULL && lock != &Giant.lock_object && !(priority & PDROP)) {
@@ -242,7 +241,8 @@ int
 msleep_spin_sbt(const void *ident, struct mtx *mtx, const char *wmesg,
     sbintime_t sbt, sbintime_t pr, int flags)
 {
-	struct thread *td;
+	struct thread *td __ktrace_used;
+	struct timespec sw_out_tv __ktrace_used;
 	int rval;
 	WITNESS_SAVE_DECL(mtx);
 
@@ -251,7 +251,7 @@ msleep_spin_sbt(const void *ident, struct mtx *mtx, const char *wmesg,
 	KASSERT(ident != NULL, ("msleep_spin_sbt: NULL ident"));
 	KASSERT(TD_IS_RUNNING(td), ("msleep_spin_sbt: curthread not running"));
 
-	if (SCHEDULER_STOPPED_TD(td))
+	if (SCHEDULER_STOPPED())
 		return (0);
 
 	sleepq_lock(ident);
@@ -270,19 +270,9 @@ msleep_spin_sbt(const void *ident, struct mtx *mtx, const char *wmesg,
 	if (sbt != 0)
 		sleepq_set_timeout_sbt(ident, sbt, pr, flags);
 
-	/*
-	 * Can't call ktrace with any spin locks held so it can lock the
-	 * ktrace_mtx lock, and WITNESS_WARN considers it an error to hold
-	 * any spin lock.  Thus, we have to drop the sleepq spin lock while
-	 * we handle those requests.  This is safe since we have placed our
-	 * thread on the sleep queue already.
-	 */
 #ifdef KTRACE
-	if (KTRPOINT(td, KTR_CSW)) {
-		sleepq_release(ident);
-		ktrcsw(1, 0, wmesg);
-		sleepq_lock(ident);
-	}
+	if (KTRPOINT(td, KTR_CSW))
+		nanotime(&sw_out_tv);
 #endif
 #ifdef WITNESS
 	sleepq_release(ident);
@@ -297,8 +287,10 @@ msleep_spin_sbt(const void *ident, struct mtx *mtx, const char *wmesg,
 		rval = 0;
 	}
 #ifdef KTRACE
-	if (KTRPOINT(td, KTR_CSW))
+	if (KTRPOINT(td, KTR_CSW)) {
+		ktrcsw_out(&sw_out_tv, wmesg);
 		ktrcsw(0, 0, wmesg);
+	}
 #endif
 	PICKUP_GIANT();
 	mtx_lock_spin(mtx);
@@ -348,16 +340,9 @@ pause_sbt(const char *wmesg, sbintime_t sbt, sbintime_t pr, int flags)
 void
 wakeup(const void *ident)
 {
-	int wakeup_swapper;
-
 	sleepq_lock(ident);
-	wakeup_swapper = sleepq_broadcast(ident, SLEEPQ_SLEEP, 0, 0);
+	sleepq_broadcast(ident, SLEEPQ_SLEEP, 0, 0);
 	sleepq_release(ident);
-	if (wakeup_swapper) {
-		KASSERT(ident != &proc0,
-		    ("wakeup and wakeup_swapper and proc0"));
-		kick_proc0();
-	}
 }
 
 /*
@@ -368,24 +353,15 @@ wakeup(const void *ident)
 void
 wakeup_one(const void *ident)
 {
-	int wakeup_swapper;
-
 	sleepq_lock(ident);
-	wakeup_swapper = sleepq_signal(ident, SLEEPQ_SLEEP | SLEEPQ_DROP, 0, 0);
-	if (wakeup_swapper)
-		kick_proc0();
+	sleepq_signal(ident, SLEEPQ_SLEEP | SLEEPQ_DROP, 0, 0);
 }
 
 void
 wakeup_any(const void *ident)
 {
-	int wakeup_swapper;
-
 	sleepq_lock(ident);
-	wakeup_swapper = sleepq_signal(ident, SLEEPQ_SLEEP | SLEEPQ_UNFAIR |
-	    SLEEPQ_DROP, 0, 0);
-	if (wakeup_swapper)
-		kick_proc0();
+	sleepq_signal(ident, SLEEPQ_SLEEP | SLEEPQ_UNFAIR | SLEEPQ_DROP, 0, 0);
 }
 
 /*
@@ -483,7 +459,7 @@ kdb_switch(void)
 }
 
 /*
- * The machine independent parts of context switching.
+ * mi_switch(9): The machine-independent parts of context switching.
  *
  * The thread lock is required on entry and is no longer held on return.
  */
@@ -500,17 +476,22 @@ mi_switch(int flags)
 	if (!TD_ON_LOCK(td) && !TD_IS_RUNNING(td))
 		mtx_assert(&Giant, MA_NOTOWNED);
 #endif
+	/* thread_lock() performs spinlock_enter(). */
 	KASSERT(td->td_critnest == 1 || KERNEL_PANICKED(),
-		("mi_switch: switch in a critical section"));
+	    ("mi_switch: switch in a critical section"));
 	KASSERT((flags & (SW_INVOL | SW_VOL)) != 0,
 	    ("mi_switch: switch must be voluntary or involuntary"));
+	KASSERT((flags & SW_TYPE_MASK) != 0,
+	    ("mi_switch: a switch reason (type) must be specified"));
+	KASSERT((flags & SW_TYPE_MASK) < SWT_COUNT,
+	    ("mi_switch: invalid switch reason %d", (flags & SW_TYPE_MASK)));
 
 	/*
 	 * Don't perform context switches from the debugger.
 	 */
 	if (kdb_active)
 		kdb_switch();
-	if (SCHEDULER_STOPPED_TD(td))
+	if (SCHEDULER_STOPPED())
 		return;
 	if (flags & SW_VOL) {
 		td->td_ru.ru_nvcsw++;
@@ -557,25 +538,23 @@ mi_switch(int flags)
 }
 
 /*
- * Change thread state to be runnable, placing it on the run queue if
- * it is in memory.  If it is swapped out, return true so our caller
- * will know to awaken the swapper.
+ * Change thread state to be runnable, placing it on the run queue.
  *
  * Requires the thread lock on entry, drops on exit.
  */
-int
+void
 setrunnable(struct thread *td, int srqflags)
 {
-	int swapin;
-
 	THREAD_LOCK_ASSERT(td, MA_OWNED);
 	KASSERT(td->td_proc->p_state != PRS_ZOMBIE,
 	    ("setrunnable: pid %d is a zombie", td->td_proc->p_pid));
 
-	swapin = 0;
 	switch (TD_GET_STATE(td)) {
 	case TDS_RUNNING:
 	case TDS_RUNQ:
+	case TDS_INHIBITED:
+		if ((srqflags & (SRQ_HOLD | SRQ_HOLDTD)) == 0)
+			thread_unlock(td);
 		break;
 	case TDS_CAN_RUN:
 		KASSERT((td->td_flags & TDF_INMEM) != 0,
@@ -583,25 +562,10 @@ setrunnable(struct thread *td, int srqflags)
 		    td, td->td_flags, td->td_inhibitors));
 		/* unlocks thread lock according to flags */
 		sched_wakeup(td, srqflags);
-		return (0);
-	case TDS_INHIBITED:
-		/*
-		 * If we are only inhibited because we are swapped out
-		 * arrange to swap in this process.
-		 */
-		if (td->td_inhibitors == TDI_SWAPPED &&
-		    (td->td_flags & TDF_SWAPINREQ) == 0) {
-			td->td_flags |= TDF_SWAPINREQ;
-			swapin = 1;
-		}
 		break;
 	default:
 		panic("setrunnable: state 0x%x", TD_GET_STATE(td));
 	}
-	if ((srqflags & (SRQ_HOLD | SRQ_HOLDTD)) == 0)
-		thread_unlock(td);
-
-	return (swapin);
 }
 
 /*
@@ -632,7 +596,7 @@ loadav(void *arg)
 	    loadav, NULL, C_DIRECT_EXEC | C_PREL(32));
 }
 
-static void
+void
 ast_scheduler(struct thread *td, int tda __unused)
 {
 #ifdef KTRACE
@@ -658,7 +622,7 @@ synch_setup(void *dummy __unused)
 	loadav(NULL);
 }
 
-int
+bool
 should_yield(void)
 {
 

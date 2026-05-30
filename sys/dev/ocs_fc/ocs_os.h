@@ -27,8 +27,6 @@
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /**
@@ -58,10 +56,10 @@
 #include <sys/taskqueue.h>
 #include <sys/bitstring.h>
 #include <sys/stack.h>
+#include <sys/stdarg.h>
 
 #include <machine/atomic.h>
 #include <machine/bus.h>
-#include <machine/stdarg.h>
 
 #include <dev/pci/pcivar.h>
 
@@ -713,7 +711,7 @@ typedef struct {
  * @return returns 0 for success, a negative error code value for failure.
  */
 
-extern int ocs_sem_init(ocs_sem_t *sem, int val, const char *name, ...) __attribute__((format(printf, 3, 4)));
+extern int ocs_sem_init(ocs_sem_t *sem, int val, const char *name, ...) __printflike(3, 4);
 
 /**
  * @brief execute a P (decrement) operation

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1994-1995 Søren Schmidt
  * All rights reserved.
@@ -26,28 +26,19 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
-#include "opt_compat.h"
-
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/capsicum.h>
-#include <sys/conf.h>
 #include <sys/dirent.h>
 #include <sys/fcntl.h>
 #include <sys/file.h>
 #include <sys/filedesc.h>
+#include <sys/inotify.h>
 #include <sys/lock.h>
-#include <sys/malloc.h>
 #include <sys/mman.h>
-#include <sys/mount.h>
-#include <sys/mutex.h>
-#include <sys/namei.h>
 #include <sys/selinfo.h>
 #include <sys/pipe.h>
 #include <sys/proc.h>
+#include <sys/specialfd.h>
 #include <sys/stat.h>
 #include <sys/sx.h>
 #include <sys/syscallsubr.h>
@@ -58,6 +49,7 @@ __FBSDID("$FreeBSD$");
 
 #ifdef COMPAT_LINUX32
 #include <compat/freebsd32/freebsd32_misc.h>
+#include <compat/freebsd32/freebsd32_util.h>
 #include <machine/../linux32/linux.h>
 #include <machine/../linux32/linux32_proto.h>
 #else
@@ -108,22 +100,13 @@ static struct bsd_to_linux_bitmap mfd_bitmap[] = {
 int
 linux_creat(struct thread *td, struct linux_creat_args *args)
 {
-	char *path;
-	int error;
 
-	if (!LUSECONVPATH(td)) {
-		return (kern_openat(td, AT_FDCWD, args->path, UIO_USERSPACE,
-		    O_WRONLY | O_CREAT | O_TRUNC, args->mode));
-	}
-	LCONVPATHEXIST(args->path, &path);
-	error = kern_openat(td, AT_FDCWD, path, UIO_SYSSPACE,
-	    O_WRONLY | O_CREAT | O_TRUNC, args->mode);
-	LFREEPATH(path);
-	return (error);
+	return (kern_openat(td, AT_FDCWD, args->path, UIO_USERSPACE,
+	    O_WRONLY | O_CREAT | O_TRUNC, args->mode));
 }
 #endif
 
-static int
+int
 linux_common_openflags(int l_flags)
 {
 	int bsd_flags;
@@ -225,45 +208,20 @@ done:
 int
 linux_openat(struct thread *td, struct linux_openat_args *args)
 {
-	char *path;
-	int dfd, error;
+	int dfd;
 
 	dfd = (args->dfd == LINUX_AT_FDCWD) ? AT_FDCWD : args->dfd;
-	if (!LUSECONVPATH(td)) {
-		return (linux_common_open(td, dfd, args->filename, args->flags,
-		    args->mode, UIO_USERSPACE));
-	}
-	if (args->flags & LINUX_O_CREAT)
-		LCONVPATH_AT(args->filename, &path, 1, dfd);
-	else
-		LCONVPATH_AT(args->filename, &path, 0, dfd);
-
-	error = linux_common_open(td, dfd, path, args->flags, args->mode,
-	    UIO_SYSSPACE);
-	LFREEPATH(path);
-	return (error);
+	return (linux_common_open(td, dfd, args->filename, args->flags,
+	    args->mode, UIO_USERSPACE));
 }
 
 #ifdef LINUX_LEGACY_SYSCALLS
 int
 linux_open(struct thread *td, struct linux_open_args *args)
 {
-	char *path;
-	int error;
 
-	if (!LUSECONVPATH(td)) {
-		return (linux_common_open(td, AT_FDCWD, args->path, args->flags,
-		    args->mode, UIO_USERSPACE));
-	}
-	if (args->flags & LINUX_O_CREAT)
-		LCONVPATHCREAT(args->path, &path);
-	else
-		LCONVPATHEXIST(args->path, &path);
-
-	error = linux_common_open(td, AT_FDCWD, path, args->flags, args->mode,
-	    UIO_SYSSPACE);
-	LFREEPATH(path);
-	return (error);
+	return (linux_common_open(td, AT_FDCWD, args->path, args->flags,
+	    args->mode, UIO_USERSPACE));
 }
 #endif
 
@@ -293,17 +251,8 @@ linux_name_to_handle_at(struct thread *td,
 	if ((args->flags & LINUX_AT_EMPTY_PATH) != 0)
 		bsd_flags |= AT_EMPTY_PATH;
 
-	if (!LUSECONVPATH(td)) {
-		error = kern_getfhat(td, bsd_flags, fd, args->name,
-		    UIO_USERSPACE, &fh, UIO_SYSSPACE);
-	} else {
-		char *path;
-
-		LCONVPATH_AT(args->name, &path, 0, fd);
-		error = kern_getfhat(td, bsd_flags, fd, path, UIO_SYSSPACE,
-		    &fh, UIO_SYSSPACE);
-		LFREEPATH(path);
-	}
+	error = kern_getfhat(td, bsd_flags, fd, args->name,
+	    UIO_USERSPACE, &fh, UIO_SYSSPACE);
 	if (error != 0)
 		return (error);
 
@@ -449,12 +398,50 @@ struct l_dirent64 {
     roundup(offsetof(struct l_dirent64, d_name) + (namlen) + 1,		\
     sizeof(uint64_t))
 
+/*
+ * Do kern_getdirentries() and then skip over any invalid entries.
+ * (Repeat, if there are no valid entries.)
+ * Adjust bufp and lenp.
+ */
+static int
+linux_getdirentries(struct thread *td, int fd, caddr_t *bufp, int buflen,
+    off_t *basep, int *lenp)
+{
+	struct dirent *bdp;
+	caddr_t buf;
+	int error, len;
+
+	/* Loop around until a valid entry is found or at EOF. */
+	for (;;) {
+		error = kern_getdirentries(td, fd, *bufp, buflen,
+		    basep, NULL, UIO_SYSSPACE);
+		if (error != 0)
+			return (error);
+		len = td->td_retval[0];
+		if (len == 0) {
+			*lenp = 0;
+			return (0);
+		}
+		buf = *bufp;
+		while (len > 0) {
+			bdp = (struct dirent *)buf;
+			if (bdp->d_fileno != 0) {
+				*bufp = buf;
+				*lenp = len;
+				return (0);
+			}
+			buf += bdp->d_reclen;
+			len -= bdp->d_reclen;
+		}
+	}
+}
+
 #ifdef LINUX_LEGACY_SYSCALLS
 int
 linux_getdents(struct thread *td, struct linux_getdents_args *args)
 {
 	struct dirent *bdp;
-	caddr_t inp, buf;		/* BSD-format */
+	caddr_t inp, buf, bufsav;	/* BSD-format */
 	int len, reclen;		/* BSD-format */
 	caddr_t outp;			/* Linux-format */
 	int resid, linuxreclen;		/* Linux-format */
@@ -464,19 +451,18 @@ linux_getdents(struct thread *td, struct linux_getdents_args *args)
 	int buflen, error;
 	size_t retval;
 
-	buflen = min(args->count, MAXBSIZE);
-	buf = malloc(buflen, M_TEMP, M_WAITOK);
+	buflen = min(roundup2(args->count, DEV_BSIZE), MAXBSIZE);
+	bufsav = buf = malloc(buflen, M_LINUX, M_WAITOK);
 
-	error = kern_getdirentries(td, args->fd, buf, buflen,
-	    &base, NULL, UIO_SYSSPACE);
+	error = linux_getdirentries(td, args->fd, &buf, buflen,
+	    &base, &len);
 	if (error != 0) {
 		error = linux_getdents_error(td, args->fd, error);
 		goto out1;
 	}
 
-	lbuf = malloc(LINUX_RECLEN(LINUX_NAME_MAX), M_TEMP, M_WAITOK | M_ZERO);
+	lbuf = malloc(LINUX_RECLEN(LINUX_NAME_MAX), M_LINUX, M_WAITOK | M_ZERO);
 
-	len = td->td_retval[0];
 	inp = buf;
 	outp = (caddr_t)args->dent;
 	resid = args->count;
@@ -485,44 +471,47 @@ linux_getdents(struct thread *td, struct linux_getdents_args *args)
 	while (len > 0) {
 		bdp = (struct dirent *) inp;
 		reclen = bdp->d_reclen;
-		linuxreclen = LINUX_RECLEN(bdp->d_namlen);
-		/*
-		 * No more space in the user supplied dirent buffer.
-		 * Return EINVAL.
-		 */
-		if (resid < linuxreclen) {
-			error = EINVAL;
-			goto out;
-		}
+		/* Copy a valid entry out. */
+		if (bdp->d_fileno != 0) {
+			linuxreclen = LINUX_RECLEN(bdp->d_namlen);
+			/*
+			 * No more space in the user supplied dirent buffer.
+			 * Return EINVAL.
+			 */
+			if (resid < linuxreclen) {
+				error = EINVAL;
+				goto out;
+			}
 
-		linux_dirent = (struct l_dirent*)lbuf;
-		linux_dirent->d_ino = bdp->d_fileno;
-		linux_dirent->d_off = bdp->d_off;
-		linux_dirent->d_reclen = linuxreclen;
-		/*
-		 * Copy d_type to last byte of l_dirent buffer
-		 */
-		lbuf[linuxreclen - 1] = bdp->d_type;
-		strlcpy(linux_dirent->d_name, bdp->d_name,
-		    linuxreclen - offsetof(struct l_dirent, d_name)-1);
-		error = copyout(linux_dirent, outp, linuxreclen);
-		if (error != 0)
-			goto out;
+			linux_dirent = (struct l_dirent*)lbuf;
+			linux_dirent->d_ino = bdp->d_fileno;
+			linux_dirent->d_off = bdp->d_off;
+			linux_dirent->d_reclen = linuxreclen;
+			/*
+			 * Copy d_type to last byte of l_dirent buffer
+			 */
+			lbuf[linuxreclen - 1] = bdp->d_type;
+			strlcpy(linux_dirent->d_name, bdp->d_name,
+			    linuxreclen - offsetof(struct l_dirent, d_name)-1);
+			error = copyout(linux_dirent, outp, linuxreclen);
+			if (error != 0)
+				goto out;
+			retval += linuxreclen;
+			outp += linuxreclen;
+			resid -= linuxreclen;
+		}
 
 		inp += reclen;
 		base += reclen;
 		len -= reclen;
 
-		retval += linuxreclen;
-		outp += linuxreclen;
-		resid -= linuxreclen;
 	}
 	td->td_retval[0] = retval;
 
 out:
-	free(lbuf, M_TEMP);
+	free(lbuf, M_LINUX);
 out1:
-	free(buf, M_TEMP);
+	free(bufsav, M_LINUX);
 	return (error);
 }
 #endif
@@ -531,29 +520,28 @@ int
 linux_getdents64(struct thread *td, struct linux_getdents64_args *args)
 {
 	struct dirent *bdp;
-	caddr_t inp, buf;		/* BSD-format */
+	caddr_t inp, buf, bufsav;	/* BSD-format */
 	int len, reclen;		/* BSD-format */
 	caddr_t outp;			/* Linux-format */
 	int resid, linuxreclen;		/* Linux-format */
-	caddr_t lbuf;			/* Linux-format */
 	off_t base;
 	struct l_dirent64 *linux_dirent64;
 	int buflen, error;
 	size_t retval;
 
-	buflen = min(args->count, MAXBSIZE);
-	buf = malloc(buflen, M_TEMP, M_WAITOK);
+	buflen = min(roundup2(args->count, DEV_BSIZE), MAXBSIZE);
+	bufsav = buf = malloc(buflen, M_LINUX, M_WAITOK);
 
-	error = kern_getdirentries(td, args->fd, buf, buflen,
-	    &base, NULL, UIO_SYSSPACE);
+	error = linux_getdirentries(td, args->fd, &buf, buflen,
+	    &base, &len);
 	if (error != 0) {
 		error = linux_getdents_error(td, args->fd, error);
 		goto out1;
 	}
 
-	lbuf = malloc(LINUX_RECLEN64(LINUX_NAME_MAX), M_TEMP, M_WAITOK | M_ZERO);
+	linux_dirent64 = malloc(LINUX_RECLEN64(LINUX_NAME_MAX), M_LINUX,
+	    M_WAITOK | M_ZERO);
 
-	len = td->td_retval[0];
 	inp = buf;
 	outp = (caddr_t)args->dirent;
 	resid = args->count;
@@ -562,41 +550,43 @@ linux_getdents64(struct thread *td, struct linux_getdents64_args *args)
 	while (len > 0) {
 		bdp = (struct dirent *) inp;
 		reclen = bdp->d_reclen;
-		linuxreclen = LINUX_RECLEN64(bdp->d_namlen);
-		/*
-		 * No more space in the user supplied dirent buffer.
-		 * Return EINVAL.
-		 */
-		if (resid < linuxreclen) {
-			error = EINVAL;
-			goto out;
-		}
+		/* Copy a valid entry out. */
+		if (bdp->d_fileno != 0) {
+			linuxreclen = LINUX_RECLEN64(bdp->d_namlen);
+			/*
+			 * No more space in the user supplied dirent buffer.
+			 * Return EINVAL.
+			 */
+			if (resid < linuxreclen) {
+				error = EINVAL;
+				goto out;
+			}
 
-		linux_dirent64 = (struct l_dirent64*)lbuf;
-		linux_dirent64->d_ino = bdp->d_fileno;
-		linux_dirent64->d_off = bdp->d_off;
-		linux_dirent64->d_reclen = linuxreclen;
-		linux_dirent64->d_type = bdp->d_type;
-		strlcpy(linux_dirent64->d_name, bdp->d_name,
-		    linuxreclen - offsetof(struct l_dirent64, d_name));
-		error = copyout(linux_dirent64, outp, linuxreclen);
-		if (error != 0)
-			goto out;
+			linux_dirent64->d_ino = bdp->d_fileno;
+			linux_dirent64->d_off = bdp->d_off;
+			linux_dirent64->d_reclen = linuxreclen;
+			linux_dirent64->d_type = bdp->d_type;
+			strlcpy(linux_dirent64->d_name, bdp->d_name,
+			    linuxreclen - offsetof(struct l_dirent64, d_name));
+			error = copyout(linux_dirent64, outp, linuxreclen);
+			if (error != 0)
+				goto out;
+			retval += linuxreclen;
+			outp += linuxreclen;
+			resid -= linuxreclen;
+		}
 
 		inp += reclen;
 		base += reclen;
 		len -= reclen;
 
-		retval += linuxreclen;
-		outp += linuxreclen;
-		resid -= linuxreclen;
 	}
 	td->td_retval[0] = retval;
 
 out:
-	free(lbuf, M_TEMP);
+	free(linux_dirent64, M_LINUX);
 out1:
-	free(buf, M_TEMP);
+	free(bufsav, M_LINUX);
 	return (error);
 }
 
@@ -605,31 +595,30 @@ int
 linux_readdir(struct thread *td, struct linux_readdir_args *args)
 {
 	struct dirent *bdp;
-	caddr_t buf;			/* BSD-format */
+	caddr_t buf, bufsav;		/* BSD-format */
 	int linuxreclen;		/* Linux-format */
-	caddr_t lbuf;			/* Linux-format */
 	off_t base;
-	struct l_dirent *linux_dirent;
-	int buflen, error;
+	struct l_dirent *linux_dirent;	/* Linux-format */
+	int buflen, error, len;
 
-	buflen = LINUX_RECLEN(LINUX_NAME_MAX);
-	buf = malloc(buflen, M_TEMP, M_WAITOK);
+	buflen = DEV_BSIZE;
+	bufsav = buf = malloc(buflen, M_LINUX, M_WAITOK);
 
-	error = kern_getdirentries(td, args->fd, buf, buflen,
-	    &base, NULL, UIO_SYSSPACE);
+	error = linux_getdirentries(td, args->fd, &buf, buflen,
+	    &base, &len);
 	if (error != 0) {
 		error = linux_getdents_error(td, args->fd, error);
 		goto out;
 	}
-	if (td->td_retval[0] == 0)
+	if (len == 0)
 		goto out;
 
-	lbuf = malloc(LINUX_RECLEN(LINUX_NAME_MAX), M_TEMP, M_WAITOK | M_ZERO);
+	linux_dirent = malloc(LINUX_RECLEN(LINUX_NAME_MAX), M_LINUX,
+	    M_WAITOK | M_ZERO);
 
 	bdp = (struct dirent *) buf;
 	linuxreclen = LINUX_RECLEN(bdp->d_namlen);
 
-	linux_dirent = (struct l_dirent*)lbuf;
 	linux_dirent->d_ino = bdp->d_fileno;
 	linux_dirent->d_off = bdp->d_off;
 	linux_dirent->d_reclen = bdp->d_namlen;
@@ -639,9 +628,9 @@ linux_readdir(struct thread *td, struct linux_readdir_args *args)
 	if (error == 0)
 		td->td_retval[0] = linuxreclen;
 
-	free(lbuf, M_TEMP);
+	free(linux_dirent, M_LINUX);
 out:
-	free(buf, M_TEMP);
+	free(bufsav, M_LINUX);
 	return (error);
 }
 #endif /* __i386__ || (__amd64__ && COMPAT_LINUX32) */
@@ -654,24 +643,13 @@ out:
 int
 linux_access(struct thread *td, struct linux_access_args *args)
 {
-	char *path;
-	int error;
 
 	/* Linux convention. */
 	if (args->amode & ~(F_OK | X_OK | W_OK | R_OK))
 		return (EINVAL);
 
-	if (!LUSECONVPATH(td)) {
-		error = kern_accessat(td, AT_FDCWD, args->path, UIO_USERSPACE, 0,
-		    args->amode);
-	} else {
-		LCONVPATHEXIST(args->path, &path);
-		error = kern_accessat(td, AT_FDCWD, path, UIO_SYSSPACE, 0,
-		    args->amode);
-		LFREEPATH(path);
-	}
-
-	return (error);
+	return (kern_accessat(td, AT_FDCWD, args->path, UIO_USERSPACE, 0,
+	    args->amode));
 }
 #endif
 
@@ -679,23 +657,14 @@ static int
 linux_do_accessat(struct thread *td, int ldfd, const char *filename,
     int amode, int flags)
 {
-	char *path;
-	int error, dfd;
+	int dfd;
 
 	/* Linux convention. */
 	if (amode & ~(F_OK | X_OK | W_OK | R_OK))
 		return (EINVAL);
 
 	dfd = (ldfd == LINUX_AT_FDCWD) ? AT_FDCWD : ldfd;
-	if (!LUSECONVPATH(td)) {
-		error = kern_accessat(td, dfd, filename, UIO_USERSPACE, flags, amode);
-	} else {
-		LCONVPATHEXIST_AT(filename, &path, dfd);
-		error = kern_accessat(td, dfd, path, UIO_SYSSPACE, flags, amode);
-		LFREEPATH(path);
-	}
-
-	return (error);
+	return (kern_accessat(td, dfd, filename, UIO_USERSPACE, flags, amode));
 }
 
 int
@@ -711,8 +680,8 @@ linux_faccessat2(struct thread *td, struct linux_faccessat2_args *args)
 {
 	int flags, unsupported;
 
-	/* XXX. AT_SYMLINK_NOFOLLOW is not supported by kern_accessat */
-	unsupported = args->flags & ~(LINUX_AT_EACCESS | LINUX_AT_EMPTY_PATH);
+	unsupported = args->flags & ~(LINUX_AT_EACCESS | LINUX_AT_EMPTY_PATH  |
+	    LINUX_AT_SYMLINK_NOFOLLOW);
 	if (unsupported != 0) {
 		linux_msg(td, "faccessat2 unsupported flag 0x%x", unsupported);
 		return (EINVAL);
@@ -722,6 +691,8 @@ linux_faccessat2(struct thread *td, struct linux_faccessat2_args *args)
 	    AT_EACCESS;
 	flags |= (args->flags & LINUX_AT_EMPTY_PATH) == 0 ? 0 :
 	    AT_EMPTY_PATH;
+	flags |= (args->flags & LINUX_AT_SYMLINK_NOFOLLOW) == 0 ? 0 :
+	    AT_SYMLINK_NOFOLLOW;
 	return (linux_do_accessat(td, args->dfd, args->filename, args->amode,
 	    flags));
 }
@@ -731,33 +702,18 @@ linux_faccessat2(struct thread *td, struct linux_faccessat2_args *args)
 int
 linux_unlink(struct thread *td, struct linux_unlink_args *args)
 {
-	char *path;
 	int error;
 	struct stat st;
 
-	if (!LUSECONVPATH(td)) {
-		error = kern_funlinkat(td, AT_FDCWD, args->path, FD_NONE,
-		    UIO_USERSPACE, 0, 0);
-		if (error == EPERM) {
-			/* Introduce POSIX noncompliant behaviour of Linux */
-			if (kern_statat(td, 0, AT_FDCWD, args->path,
-			    UIO_USERSPACE, &st, NULL) == 0) {
-				if (S_ISDIR(st.st_mode))
-					error = EISDIR;
-			}
+	error = kern_funlinkat(td, AT_FDCWD, args->path, FD_NONE,
+	    UIO_USERSPACE, 0, 0);
+	if (error == EPERM) {
+		/* Introduce POSIX noncompliant behaviour of Linux */
+		if (kern_statat(td, 0, AT_FDCWD, args->path,
+		    UIO_USERSPACE, &st) == 0) {
+			if (S_ISDIR(st.st_mode))
+				error = EISDIR;
 		}
-	} else {
-		LCONVPATHEXIST(args->path, &path);
-		error = kern_funlinkat(td, AT_FDCWD, path, FD_NONE, UIO_SYSSPACE, 0, 0);
-		if (error == EPERM) {
-			/* Introduce POSIX noncompliant behaviour of Linux */
-			if (kern_statat(td, 0, AT_FDCWD, path, UIO_SYSSPACE, &st,
-			    NULL) == 0) {
-				if (S_ISDIR(st.st_mode))
-					error = EISDIR;
-			}
-		}
-		LFREEPATH(path);
 	}
 
 	return (error);
@@ -778,7 +734,7 @@ linux_unlinkat_impl(struct thread *td, enum uio_seg pathseg, const char *path,
 	if (error == EPERM && !(args->flag & LINUX_AT_REMOVEDIR)) {
 		/* Introduce POSIX noncompliant behaviour of Linux */
 		if (kern_statat(td, AT_SYMLINK_NOFOLLOW, dfd, path,
-		    pathseg, &st, NULL) == 0 && S_ISDIR(st.st_mode))
+		    pathseg, &st) == 0 && S_ISDIR(st.st_mode))
 			error = EISDIR;
 	}
 	return (error);
@@ -787,142 +743,75 @@ linux_unlinkat_impl(struct thread *td, enum uio_seg pathseg, const char *path,
 int
 linux_unlinkat(struct thread *td, struct linux_unlinkat_args *args)
 {
-	char *path;
-	int error, dfd;
+	int dfd;
 
 	if (args->flag & ~LINUX_AT_REMOVEDIR)
 		return (EINVAL);
 	dfd = (args->dfd == LINUX_AT_FDCWD) ? AT_FDCWD : args->dfd;
-	if (!LUSECONVPATH(td)) {
-		return (linux_unlinkat_impl(td, UIO_USERSPACE, args->pathname,
-		    dfd, args));
-	}
-	LCONVPATHEXIST_AT(args->pathname, &path, dfd);
-	error = linux_unlinkat_impl(td, UIO_SYSSPACE, path, dfd, args);
-	LFREEPATH(path);
-	return (error);
+	return (linux_unlinkat_impl(td, UIO_USERSPACE, args->pathname,
+	    dfd, args));
 }
+
 int
 linux_chdir(struct thread *td, struct linux_chdir_args *args)
 {
-	char *path;
-	int error;
 
-	if (!LUSECONVPATH(td)) {
-		return (kern_chdir(td, args->path, UIO_USERSPACE));
-	}
-	LCONVPATHEXIST(args->path, &path);
-	error = kern_chdir(td, path, UIO_SYSSPACE);
-	LFREEPATH(path);
-	return (error);
+	return (kern_chdir(td, args->path, UIO_USERSPACE));
 }
 
 #ifdef LINUX_LEGACY_SYSCALLS
 int
 linux_chmod(struct thread *td, struct linux_chmod_args *args)
 {
-	char *path;
-	int error;
 
-	if (!LUSECONVPATH(td)) {
-		return (kern_fchmodat(td, AT_FDCWD, args->path, UIO_USERSPACE,
-		    args->mode, 0));
-	}
-	LCONVPATHEXIST(args->path, &path);
-	error = kern_fchmodat(td, AT_FDCWD, path, UIO_SYSSPACE, args->mode, 0);
-	LFREEPATH(path);
-	return (error);
+	return (kern_fchmodat(td, AT_FDCWD, args->path, UIO_USERSPACE,
+	    args->mode, 0));
 }
 #endif
 
 int
 linux_fchmodat(struct thread *td, struct linux_fchmodat_args *args)
 {
-	char *path;
-	int error, dfd;
+	int dfd;
 
 	dfd = (args->dfd == LINUX_AT_FDCWD) ? AT_FDCWD : args->dfd;
-	if (!LUSECONVPATH(td)) {
-		return (kern_fchmodat(td, dfd, args->filename, UIO_USERSPACE,
-		    args->mode, 0));
-	}
-	LCONVPATHEXIST_AT(args->filename, &path, dfd);
-	error = kern_fchmodat(td, dfd, path, UIO_SYSSPACE, args->mode, 0);
-	LFREEPATH(path);
-	return (error);
+	return (kern_fchmodat(td, dfd, args->filename, UIO_USERSPACE,
+	    args->mode, 0));
 }
 
 #ifdef LINUX_LEGACY_SYSCALLS
 int
 linux_mkdir(struct thread *td, struct linux_mkdir_args *args)
 {
-	char *path;
-	int error;
 
-	if (!LUSECONVPATH(td)) {
-		return (kern_mkdirat(td, AT_FDCWD, args->path, UIO_USERSPACE, args->mode));
-	}
-	LCONVPATHCREAT(args->path, &path);
-	error = kern_mkdirat(td, AT_FDCWD, path, UIO_SYSSPACE, args->mode);
-	LFREEPATH(path);
-	return (error);
+	return (kern_mkdirat(td, AT_FDCWD, args->path, UIO_USERSPACE, args->mode));
 }
 #endif
 
 int
 linux_mkdirat(struct thread *td, struct linux_mkdirat_args *args)
 {
-	char *path;
-	int error, dfd;
+	int dfd;
 
 	dfd = (args->dfd == LINUX_AT_FDCWD) ? AT_FDCWD : args->dfd;
-	if (!LUSECONVPATH(td)) {
-		return (kern_mkdirat(td, dfd, args->pathname, UIO_USERSPACE, args->mode));
-	}
-	LCONVPATHCREAT_AT(args->pathname, &path, dfd);
-	error = kern_mkdirat(td, dfd, path, UIO_SYSSPACE, args->mode);
-	LFREEPATH(path);
-	return (error);
+	return (kern_mkdirat(td, dfd, args->pathname, UIO_USERSPACE, args->mode));
 }
 
 #ifdef LINUX_LEGACY_SYSCALLS
 int
 linux_rmdir(struct thread *td, struct linux_rmdir_args *args)
 {
-	char *path;
-	int error;
 
-	if (!LUSECONVPATH(td)) {
-		return (kern_frmdirat(td, AT_FDCWD, args->path, FD_NONE,
-		    UIO_USERSPACE, 0));
-	}
-	LCONVPATHEXIST(args->path, &path);
-	error = kern_frmdirat(td, AT_FDCWD, path, FD_NONE, UIO_SYSSPACE, 0);
-	LFREEPATH(path);
-	return (error);
+	return (kern_frmdirat(td, AT_FDCWD, args->path, FD_NONE,
+	    UIO_USERSPACE, 0));
 }
 
 int
 linux_rename(struct thread *td, struct linux_rename_args *args)
 {
-	char *from, *to;
-	int error;
 
-	if (!LUSECONVPATH(td)) {
-		return (kern_renameat(td, AT_FDCWD, args->from, AT_FDCWD,
-		    args->to, UIO_USERSPACE));
-	}
-	LCONVPATHEXIST(args->from, &from);
-	/* Expand LCONVPATHCREATE so that `from' can be freed on errors */
-	error = linux_emul_convpath(args->to, UIO_USERSPACE, &to, 1, AT_FDCWD);
-	if (to == NULL) {
-		LFREEPATH(from);
-		return (error);
-	}
-	error = kern_renameat(td, AT_FDCWD, from, AT_FDCWD, to, UIO_SYSSPACE);
-	LFREEPATH(from);
-	LFREEPATH(to);
-	return (error);
+	return (kern_renameat(td, AT_FDCWD, args->from, AT_FDCWD,
+	    args->to, UIO_USERSPACE, 0));
 }
 #endif
 
@@ -943,25 +832,35 @@ linux_renameat(struct thread *td, struct linux_renameat_args *args)
 int
 linux_renameat2(struct thread *td, struct linux_renameat2_args *args)
 {
-	char *from, *to;
-	int error, olddfd, newdfd;
+	int olddfd, newdfd;
+	u_int atflags;
+
+	atflags = 0;
+	if ((args->flags & ~(LINUX_RENAME_EXCHANGE |
+	    LINUX_RENAME_NOREPLACE | LINUX_RENAME_WHITEOUT)) != 0)
+		return (EINVAL);
+	if ((args->flags & LINUX_RENAME_EXCHANGE) != 0 &&
+	    (args->flags & (LINUX_RENAME_NOREPLACE |
+	    LINUX_RENAME_WHITEOUT)) != 0)
+		return (EINVAL);
+	if ((args->flags & LINUX_RENAME_NOREPLACE) != 0) {
+		if ((args->flags & (LINUX_RENAME_EXCHANGE |
+		    LINUX_RENAME_WHITEOUT)) != 0)
+			return (EINVAL);
+		args->flags &= ~LINUX_RENAME_NOREPLACE;
+		atflags |= AT_RENAME_NOREPLACE;
+	}
 
 	if (args->flags != 0) {
-		if (args->flags & ~(LINUX_RENAME_EXCHANGE |
-		    LINUX_RENAME_NOREPLACE | LINUX_RENAME_WHITEOUT))
-			return (EINVAL);
-		if (args->flags & LINUX_RENAME_EXCHANGE &&
-		    args->flags & (LINUX_RENAME_NOREPLACE |
-		    LINUX_RENAME_WHITEOUT))
-			return (EINVAL);
-#if 0
 		/*
 		 * This spams the console on Ubuntu Focal.
 		 *
-		 * What's needed here is a general mechanism to let users know
-		 * about missing features without hogging the system.
+		 * What's needed here is a general mechanism to let
+		 * users know about missing features without hogging
+		 * the system.
 		 */
-		linux_msg(td, "renameat2 unsupported flags 0x%x",
+#if 0
+		linux_msg(td, "renameat2 unsupported flags %#x",
 		    args->flags);
 #endif
 		return (EINVAL);
@@ -969,137 +868,68 @@ linux_renameat2(struct thread *td, struct linux_renameat2_args *args)
 
 	olddfd = (args->olddfd == LINUX_AT_FDCWD) ? AT_FDCWD : args->olddfd;
 	newdfd = (args->newdfd == LINUX_AT_FDCWD) ? AT_FDCWD : args->newdfd;
-	if (!LUSECONVPATH(td)) {
-		return (kern_renameat(td, olddfd, args->oldname, newdfd,
-		    args->newname, UIO_USERSPACE));
-	}
-	LCONVPATHEXIST_AT(args->oldname, &from, olddfd);
-	/* Expand LCONVPATHCREATE so that `from' can be freed on errors */
-	error = linux_emul_convpath(args->newname, UIO_USERSPACE, &to, 1, newdfd);
-	if (to == NULL) {
-		LFREEPATH(from);
-		return (error);
-	}
-	error = kern_renameat(td, olddfd, from, newdfd, to, UIO_SYSSPACE);
-	LFREEPATH(from);
-	LFREEPATH(to);
-	return (error);
+	return (kern_renameat(td, olddfd, args->oldname, newdfd,
+	    args->newname, UIO_USERSPACE, atflags));
 }
 
 #ifdef LINUX_LEGACY_SYSCALLS
 int
 linux_symlink(struct thread *td, struct linux_symlink_args *args)
 {
-	char *path, *to;
-	int error;
 
-	if (!LUSECONVPATH(td)) {
-		return (kern_symlinkat(td, args->path, AT_FDCWD, args->to,
-		    UIO_USERSPACE));
-	}
-	LCONVPATHEXIST(args->path, &path);
-	/* Expand LCONVPATHCREATE so that `path' can be freed on errors */
-	error = linux_emul_convpath(args->to, UIO_USERSPACE, &to, 1, AT_FDCWD);
-	if (to == NULL) {
-		LFREEPATH(path);
-		return (error);
-	}
-	error = kern_symlinkat(td, path, AT_FDCWD, to, UIO_SYSSPACE);
-	LFREEPATH(path);
-	LFREEPATH(to);
-	return (error);
+	return (kern_symlinkat(td, args->path, AT_FDCWD, args->to,
+	    UIO_USERSPACE));
 }
 #endif
 
 int
 linux_symlinkat(struct thread *td, struct linux_symlinkat_args *args)
 {
-	char *path, *to;
-	int error, dfd;
+	int dfd;
 
 	dfd = (args->newdfd == LINUX_AT_FDCWD) ? AT_FDCWD : args->newdfd;
-	if (!LUSECONVPATH(td)) {
-		return (kern_symlinkat(td, args->oldname, dfd, args->newname,
-		    UIO_USERSPACE));
-	}
-	LCONVPATHEXIST(args->oldname, &path);
-	/* Expand LCONVPATHCREATE so that `path' can be freed on errors */
-	error = linux_emul_convpath(args->newname, UIO_USERSPACE, &to, 1, dfd);
-	if (to == NULL) {
-		LFREEPATH(path);
-		return (error);
-	}
-	error = kern_symlinkat(td, path, dfd, to, UIO_SYSSPACE);
-	LFREEPATH(path);
-	LFREEPATH(to);
-	return (error);
+	return (kern_symlinkat(td, args->oldname, dfd, args->newname,
+	    UIO_USERSPACE));
 }
 
 #ifdef LINUX_LEGACY_SYSCALLS
 int
 linux_readlink(struct thread *td, struct linux_readlink_args *args)
 {
-	char *name;
-	int error;
 
 	if (args->count <= 0)
 		return (EINVAL);
 
-	if (!LUSECONVPATH(td)) {
-		return (kern_readlinkat(td, AT_FDCWD, args->name, UIO_USERSPACE,
-		    args->buf, UIO_USERSPACE, args->count));
-	}
-	LCONVPATHEXIST(args->name, &name);
-	error = kern_readlinkat(td, AT_FDCWD, name, UIO_SYSSPACE,
-	    args->buf, UIO_USERSPACE, args->count);
-	LFREEPATH(name);
-	return (error);
+	return (kern_readlinkat(td, AT_FDCWD, args->name, UIO_USERSPACE,
+	    args->buf, UIO_USERSPACE, args->count));
 }
 #endif
 
 int
 linux_readlinkat(struct thread *td, struct linux_readlinkat_args *args)
 {
-	char *name;
-	int error, dfd;
+	int dfd;
 
 	if (args->bufsiz <= 0)
 		return (EINVAL);
 
 	dfd = (args->dfd == LINUX_AT_FDCWD) ? AT_FDCWD : args->dfd;
-	if (!LUSECONVPATH(td)) {
-		return (kern_readlinkat(td, dfd, args->path, UIO_USERSPACE,
-		    args->buf, UIO_USERSPACE, args->bufsiz));
-	}
-	LCONVPATHEXIST_AT(args->path, &name, dfd);
-	error = kern_readlinkat(td, dfd, name, UIO_SYSSPACE, args->buf,
-	    UIO_USERSPACE, args->bufsiz);
-	LFREEPATH(name);
-	return (error);
+	return (kern_readlinkat(td, dfd, args->path, UIO_USERSPACE,
+	    args->buf, UIO_USERSPACE, args->bufsiz));
 }
 
 int
 linux_truncate(struct thread *td, struct linux_truncate_args *args)
 {
-	char *path;
-	int error;
 
-	if (!LUSECONVPATH(td)) {
-		return (kern_truncate(td, args->path, UIO_USERSPACE, args->length));
-	}
-	LCONVPATHEXIST(args->path, &path);
-	error = kern_truncate(td, path, UIO_SYSSPACE, args->length);
-	LFREEPATH(path);
-	return (error);
+	return (kern_truncate(td, args->path, UIO_USERSPACE, args->length));
 }
 
 #if defined(__i386__) || (defined(__amd64__) && defined(COMPAT_LINUX32))
 int
 linux_truncate64(struct thread *td, struct linux_truncate64_args *args)
 {
-	char *path;
 	off_t length;
-	int error;
 
 #if defined(__amd64__) && defined(COMPAT_LINUX32)
 	length = PAIR32TO64(off_t, args->length);
@@ -1107,13 +937,7 @@ linux_truncate64(struct thread *td, struct linux_truncate64_args *args)
 	length = args->length;
 #endif
 
-	if (!LUSECONVPATH(td)) {
-		return (kern_truncate(td, args->path, UIO_USERSPACE, length));
-	}
-	LCONVPATHEXIST(args->path, &path);
-	error = kern_truncate(td, path, UIO_SYSSPACE, length);
-	LFREEPATH(path);
-	return (error);
+	return (kern_truncate(td, args->path, UIO_USERSPACE, length));
 }
 #endif /* __i386__ || (__amd64__ && COMPAT_LINUX32) */
 
@@ -1144,33 +968,16 @@ linux_ftruncate64(struct thread *td, struct linux_ftruncate64_args *args)
 int
 linux_link(struct thread *td, struct linux_link_args *args)
 {
-	char *path, *to;
-	int error;
 
-	if (!LUSECONVPATH(td)) {
-		return (kern_linkat(td, AT_FDCWD, AT_FDCWD, args->path, args->to,
-		    UIO_USERSPACE, AT_SYMLINK_FOLLOW));
-	}
-	LCONVPATHEXIST(args->path, &path);
-	/* Expand LCONVPATHCREATE so that `path' can be freed on errors */
-	error = linux_emul_convpath(args->to, UIO_USERSPACE, &to, 1, AT_FDCWD);
-	if (to == NULL) {
-		LFREEPATH(path);
-		return (error);
-	}
-	error = kern_linkat(td, AT_FDCWD, AT_FDCWD, path, to, UIO_SYSSPACE,
-	    AT_SYMLINK_FOLLOW);
-	LFREEPATH(path);
-	LFREEPATH(to);
-	return (error);
+	return (kern_linkat(td, AT_FDCWD, AT_FDCWD, args->path, args->to,
+	    UIO_USERSPACE, AT_SYMLINK_FOLLOW));
 }
 #endif
 
 int
 linux_linkat(struct thread *td, struct linux_linkat_args *args)
 {
-	char *path, *to;
-	int error, olddfd, newdfd, flag;
+	int olddfd, newdfd, flag;
 
 	if (args->flag & ~(LINUX_AT_SYMLINK_FOLLOW | LINUX_AT_EMPTY_PATH))
 		return (EINVAL);
@@ -1181,21 +988,8 @@ linux_linkat(struct thread *td, struct linux_linkat_args *args)
 
 	olddfd = (args->olddfd == LINUX_AT_FDCWD) ? AT_FDCWD : args->olddfd;
 	newdfd = (args->newdfd == LINUX_AT_FDCWD) ? AT_FDCWD : args->newdfd;
-	if (!LUSECONVPATH(td)) {
-		return (kern_linkat(td, olddfd, newdfd, args->oldname,
-		    args->newname, UIO_USERSPACE, flag));
-	}
-	LCONVPATHEXIST_AT(args->oldname, &path, olddfd);
-	/* Expand LCONVPATHCREATE so that `path' can be freed on errors */
-	error = linux_emul_convpath(args->newname, UIO_USERSPACE, &to, 1, newdfd);
-	if (to == NULL) {
-		LFREEPATH(path);
-		return (error);
-	}
-	error = kern_linkat(td, olddfd, newdfd, path, to, UIO_SYSSPACE, flag);
-	LFREEPATH(path);
-	LFREEPATH(to);
-	return (error);
+	return (kern_linkat(td, olddfd, newdfd, args->oldname,
+	    args->newname, UIO_USERSPACE, flag));
 }
 
 int
@@ -1265,7 +1059,8 @@ linux_pwrite(struct thread *td, struct linux_pwrite_args *uap)
 	offset = uap->offset;
 #endif
 
-	return (kern_pwrite(td, uap->fd, uap->buf, uap->nbyte, offset));
+	return (linux_enobufs2eagain(td, uap->fd,
+	    kern_pwrite(td, uap->fd, uap->buf, uap->nbyte, offset)));
 }
 
 #define HALF_LONG_BITS ((sizeof(l_long) * NBBY / 2))
@@ -1293,14 +1088,14 @@ linux_preadv(struct thread *td, struct linux_preadv_args *uap)
 	if (offset < 0)
 		return (EINVAL);
 #ifdef COMPAT_LINUX32
-	error = linux32_copyinuio(PTRIN(uap->vec), uap->vlen, &auio);
+	error = freebsd32_copyinuio(PTRIN(uap->vec), uap->vlen, &auio);
 #else
 	error = copyinuio(uap->vec, uap->vlen, &auio);
 #endif
 	if (error != 0)
 		return (error);
 	error = kern_preadv(td, uap->fd, auio, offset);
-	free(auio, M_IOV);
+	freeuio(auio);
 	return (error);
 }
 
@@ -1320,15 +1115,15 @@ linux_pwritev(struct thread *td, struct linux_pwritev_args *uap)
 	if (offset < 0)
 		return (EINVAL);
 #ifdef COMPAT_LINUX32
-	error = linux32_copyinuio(PTRIN(uap->vec), uap->vlen, &auio);
+	error = freebsd32_copyinuio(PTRIN(uap->vec), uap->vlen, &auio);
 #else
 	error = copyinuio(uap->vec, uap->vlen, &auio);
 #endif
 	if (error != 0)
 		return (error);
 	error = kern_pwritev(td, uap->fd, auio, offset);
-	free(auio, M_IOV);
-	return (error);
+	freeuio(auio);
+	return (linux_enobufs2eagain(td, uap->fd, error));
 }
 
 int
@@ -1429,7 +1224,7 @@ linux_oldumount(struct thread *td, struct linux_oldumount_args *args)
 int
 linux_umount(struct thread *td, struct linux_umount_args *args)
 {
-	int flags;
+	uint64_t flags;
 
 	flags = 0;
 	if ((args->flags & LINUX_MNT_FORCE) != 0) {
@@ -1715,6 +1510,14 @@ fcntl_common(struct thread *td, struct linux_fcntl_args *args)
 		fdrop(fp, td);
 		return (0);
 
+	case LINUX_F_DUPFD_QUERY:
+		error = kern_kcmp(td, td->td_proc->p_pid, td->td_proc->p_pid,
+		    KCMP_FILE, args->fd, args->arg);
+		if (error != 0)
+			return (error);
+		td->td_retval[0] = (td->td_retval[0] == 0) ? 1 : 0;
+		return (0);
+
 	default:
 		linux_msg(td, "unsupported fcntl cmd %d", args->cmd);
 		return (EINVAL);
@@ -1781,26 +1584,16 @@ linux_fcntl64(struct thread *td, struct linux_fcntl64_args *args)
 int
 linux_chown(struct thread *td, struct linux_chown_args *args)
 {
-	char *path;
-	int error;
 
-	if (!LUSECONVPATH(td)) {
-		return (kern_fchownat(td, AT_FDCWD, args->path, UIO_USERSPACE,
-		    args->uid, args->gid, 0));
-	}
-	LCONVPATHEXIST(args->path, &path);
-	error = kern_fchownat(td, AT_FDCWD, path, UIO_SYSSPACE, args->uid,
-	    args->gid, 0);
-	LFREEPATH(path);
-	return (error);
+	return (kern_fchownat(td, AT_FDCWD, args->path, UIO_USERSPACE,
+	    args->uid, args->gid, 0));
 }
 #endif
 
 int
 linux_fchownat(struct thread *td, struct linux_fchownat_args *args)
 {
-	char *path;
-	int error, dfd, flag, unsupported;
+	int dfd, flag, unsupported;
 
 	unsupported = args->flag & ~(LINUX_AT_SYMLINK_NOFOLLOW | LINUX_AT_EMPTY_PATH);
 	if (unsupported != 0) {
@@ -1814,33 +1607,17 @@ linux_fchownat(struct thread *td, struct linux_fchownat_args *args)
 	    AT_EMPTY_PATH;
 
 	dfd = (args->dfd == LINUX_AT_FDCWD) ? AT_FDCWD :  args->dfd;
-	if (!LUSECONVPATH(td)) {
-		return (kern_fchownat(td, dfd, args->filename, UIO_USERSPACE,
-		    args->uid, args->gid, flag));
-	}
-	LCONVPATHEXIST_AT(args->filename, &path, dfd);
-	error = kern_fchownat(td, dfd, path, UIO_SYSSPACE, args->uid, args->gid,
-	    flag);
-	LFREEPATH(path);
-	return (error);
+	return (kern_fchownat(td, dfd, args->filename, UIO_USERSPACE,
+	    args->uid, args->gid, flag));
 }
 
 #ifdef LINUX_LEGACY_SYSCALLS
 int
 linux_lchown(struct thread *td, struct linux_lchown_args *args)
 {
-	char *path;
-	int error;
 
-	if (!LUSECONVPATH(td)) {
-		return (kern_fchownat(td, AT_FDCWD, args->path, UIO_USERSPACE, args->uid,
-		    args->gid, AT_SYMLINK_NOFOLLOW));
-	}
-	LCONVPATHEXIST(args->path, &path);
-	error = kern_fchownat(td, AT_FDCWD, path, UIO_SYSSPACE, args->uid, args->gid,
-	    AT_SYMLINK_NOFOLLOW);
-	LFREEPATH(path);
-	return (error);
+	return (kern_fchownat(td, AT_FDCWD, args->path, UIO_USERSPACE, args->uid,
+	    args->gid, AT_SYMLINK_NOFOLLOW));
 }
 #endif
 
@@ -2076,7 +1853,7 @@ linux_memfd_create(struct thread *td, struct linux_memfd_create_args *args)
 	if ((flags & MFD_ALLOW_SEALING) != 0)
 		shmflags |= SHM_ALLOW_SEALING;
 	return (kern_shm_open2(td, SHM_ANON, oflags, 0, shmflags, NULL,
-	    memfd_name));
+	    memfd_name, NULL));
 }
 
 int
@@ -2091,4 +1868,194 @@ linux_splice(struct thread *td, struct linux_splice_args *args)
 	 * instead.
 	 */
 	return (EINVAL);
+}
+
+int
+linux_close_range(struct thread *td, struct linux_close_range_args *args)
+{
+	u_int flags = 0;
+
+	/*
+	 * Implementing close_range(CLOSE_RANGE_UNSHARE) allows Linux to
+	 * unshare filedesc table of the calling thread from others threads
+	 * in a thread group (i.e., process in the FreeBSD) or others processes,
+	 * which shares the same table, before closing the files. FreeBSD does
+	 * not have compatible unsharing mechanism due to the fact that sharing
+	 * process resources, including filedesc table, is at thread level in the
+	 * Linux, while in the FreeBSD it is at the process level.
+	 * Return EINVAL for now if the CLOSE_RANGE_UNSHARE flag is specified
+	 * until this new Linux API stabilizes.
+	 */
+
+	if ((args->flags & ~(LINUX_CLOSE_RANGE_CLOEXEC)) != 0)
+		return (EINVAL);
+	if (args->first > args->last)
+		return (EINVAL);
+	if ((args->flags & LINUX_CLOSE_RANGE_CLOEXEC) != 0)
+		flags |= CLOSE_RANGE_CLOEXEC;
+	return (kern_close_range(td, flags, args->first, args->last));
+}
+
+int
+linux_enobufs2eagain(struct thread *td, int fd, int error)
+{
+	struct file *fp;
+
+	if (error != ENOBUFS)
+		return (error);
+	if (fget(td, fd, &cap_no_rights, &fp) != 0)
+		return (error);
+	if (fp->f_type == DTYPE_SOCKET && (fp->f_flag & FNONBLOCK) != 0)
+		error = EAGAIN;
+	fdrop(fp, td);
+	return (error);
+}
+
+int
+linux_write(struct thread *td, struct linux_write_args *args)
+{
+	struct write_args bargs = {
+		.fd	= args->fd,
+		.buf	= args->buf,
+		.nbyte	= args->nbyte,
+	};
+
+	return (linux_enobufs2eagain(td, args->fd, sys_write(td, &bargs)));
+}
+
+int
+linux_writev(struct thread *td, struct linux_writev_args *args)
+{
+	struct uio *auio;
+	int error;
+
+#ifdef COMPAT_LINUX32
+	error = freebsd32_copyinuio(PTRIN(args->iovp), args->iovcnt, &auio);
+#else
+	error = copyinuio(args->iovp, args->iovcnt, &auio);
+#endif
+	if (error != 0)
+		return (error);
+	error = kern_writev(td, args->fd, auio);
+	freeuio(auio);
+	return (linux_enobufs2eagain(td, args->fd, error));
+}
+
+static int
+linux_inotify_init_flags(int l_flags)
+{
+	int bsd_flags;
+
+	if ((l_flags & ~(LINUX_IN_CLOEXEC | LINUX_IN_NONBLOCK)) != 0)
+		linux_msg(NULL, "inotify_init1 unsupported flags 0x%x",
+		    l_flags);
+
+	bsd_flags = 0;
+	if ((l_flags & LINUX_IN_CLOEXEC) != 0)
+		bsd_flags |= O_CLOEXEC;
+	if ((l_flags & LINUX_IN_NONBLOCK) != 0)
+		bsd_flags |= O_NONBLOCK;
+	return (bsd_flags);
+}
+
+static int
+inotify_init_common(struct thread *td, int flags)
+{
+	struct specialfd_inotify si;
+
+	si.flags = linux_inotify_init_flags(flags);
+	return (kern_specialfd(td, SPECIALFD_INOTIFY, &si));
+}
+
+#if defined(__i386__) || defined(__amd64__)
+int
+linux_inotify_init(struct thread *td, struct linux_inotify_init_args *args)
+{
+	return (inotify_init_common(td, 0));
+}
+#endif
+
+int
+linux_inotify_init1(struct thread *td, struct linux_inotify_init1_args *args)
+{
+	return (inotify_init_common(td, args->flags));
+}
+
+/*
+ * The native implementation uses the same values for inotify events as
+ * libinotify, which gives us binary compatibility with Linux.  This simplifies
+ * the shim implementation a lot, as otherwise we would have to handle read(2)
+ * calls on inotify descriptors and translate events to Linux's ABI.
+ */
+_Static_assert(LINUX_IN_ACCESS == IN_ACCESS,
+    "IN_ACCESS mismatch");
+_Static_assert(LINUX_IN_MODIFY == IN_MODIFY,
+    "IN_MODIFY mismatch");
+_Static_assert(LINUX_IN_ATTRIB == IN_ATTRIB,
+    "IN_ATTRIB mismatch");
+_Static_assert(LINUX_IN_CLOSE_WRITE == IN_CLOSE_WRITE,
+    "IN_CLOSE_WRITE mismatch");
+_Static_assert(LINUX_IN_CLOSE_NOWRITE == IN_CLOSE_NOWRITE,
+    "IN_CLOSE_NOWRITE mismatch");
+_Static_assert(LINUX_IN_OPEN == IN_OPEN,
+    "IN_OPEN mismatch");
+_Static_assert(LINUX_IN_MOVED_FROM == IN_MOVED_FROM,
+    "IN_MOVED_FROM mismatch");
+_Static_assert(LINUX_IN_MOVED_TO == IN_MOVED_TO,
+    "IN_MOVED_TO mismatch");
+_Static_assert(LINUX_IN_CREATE == IN_CREATE,
+    "IN_CREATE mismatch");
+_Static_assert(LINUX_IN_DELETE == IN_DELETE,
+    "IN_DELETE mismatch");
+_Static_assert(LINUX_IN_DELETE_SELF == IN_DELETE_SELF,
+    "IN_DELETE_SELF mismatch");
+_Static_assert(LINUX_IN_MOVE_SELF == IN_MOVE_SELF,
+    "IN_MOVE_SELF mismatch");
+
+_Static_assert(LINUX_IN_UNMOUNT == IN_UNMOUNT,
+    "IN_UNMOUNT mismatch");
+_Static_assert(LINUX_IN_Q_OVERFLOW == IN_Q_OVERFLOW,
+    "IN_Q_OVERFLOW mismatch");
+_Static_assert(LINUX_IN_IGNORED == IN_IGNORED,
+    "IN_IGNORED mismatch");
+
+_Static_assert(LINUX_IN_ISDIR == IN_ISDIR,
+    "IN_ISDIR mismatch");
+_Static_assert(LINUX_IN_ONLYDIR == IN_ONLYDIR,
+    "IN_ONLYDIR mismatch");
+_Static_assert(LINUX_IN_DONT_FOLLOW == IN_DONT_FOLLOW,
+    "IN_DONT_FOLLOW mismatch");
+_Static_assert(LINUX_IN_MASK_CREATE == IN_MASK_CREATE,
+    "IN_MASK_CREATE mismatch");
+_Static_assert(LINUX_IN_MASK_ADD == IN_MASK_ADD,
+    "IN_MASK_ADD mismatch");
+_Static_assert(LINUX_IN_ONESHOT == IN_ONESHOT,
+    "IN_ONESHOT mismatch");
+_Static_assert(LINUX_IN_EXCL_UNLINK == IN_EXCL_UNLINK,
+    "IN_EXCL_UNLINK mismatch");
+
+static int
+linux_inotify_watch_flags(int l_flags)
+{
+	if ((l_flags & ~(LINUX_IN_ALL_EVENTS | LINUX_IN_ALL_FLAGS)) != 0) {
+		linux_msg(NULL, "inotify_add_watch unsupported flags 0x%x",
+		    l_flags);
+	}
+
+	return (l_flags);
+}
+
+int
+linux_inotify_add_watch(struct thread *td,
+    struct linux_inotify_add_watch_args *args)
+{
+	return (kern_inotify_add_watch(args->fd, AT_FDCWD, args->pathname,
+	    linux_inotify_watch_flags(args->mask), td));
+}
+
+int
+linux_inotify_rm_watch(struct thread *td,
+    struct linux_inotify_rm_watch_args *args)
+{
+	return (kern_inotify_rm_watch(args->fd, args->wd, td));
 }

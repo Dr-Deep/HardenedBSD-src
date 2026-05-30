@@ -29,6 +29,7 @@
 #define LLVM_SUPPORT_MD5_H
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Endian.h"
 #include <array>
 #include <cstdint>
@@ -40,26 +41,19 @@ template <typename T> class ArrayRef;
 
 class MD5 {
 public:
-  struct MD5Result {
-    std::array<uint8_t, 16> Bytes;
-
-    operator std::array<uint8_t, 16>() const { return Bytes; }
-
-    const uint8_t &operator[](size_t I) const { return Bytes[I]; }
-    uint8_t &operator[](size_t I) { return Bytes[I]; }
-
-    SmallString<32> digest() const;
+  struct MD5Result : public std::array<uint8_t, 16> {
+    LLVM_ABI SmallString<32> digest() const;
 
     uint64_t low() const {
       // Our MD5 implementation returns the result in little endian, so the low
       // word is first.
       using namespace support;
-      return endian::read<uint64_t, little, unaligned>(Bytes.data());
+      return endian::read<uint64_t, llvm::endianness::little>(data());
     }
 
     uint64_t high() const {
       using namespace support;
-      return endian::read<uint64_t, little, unaligned>(Bytes.data() + 8);
+      return endian::read<uint64_t, llvm::endianness::little>(data() + 8);
     }
     std::pair<uint64_t, uint64_t> words() const {
       using namespace support;
@@ -67,31 +61,32 @@ public:
     }
   };
 
-  MD5();
+  LLVM_ABI MD5();
 
   /// Updates the hash for the byte stream provided.
-  void update(ArrayRef<uint8_t> Data);
+  LLVM_ABI void update(ArrayRef<uint8_t> Data);
 
   /// Updates the hash for the StringRef provided.
-  void update(StringRef Str);
+  LLVM_ABI void update(StringRef Str);
 
   /// Finishes off the hash and puts the result in result.
-  void final(MD5Result &Result);
+  LLVM_ABI void final(MD5Result &Result);
 
-  /// Finishes off the hash, and returns a reference to the 16-byte hash data.
-  StringRef final();
+  /// Finishes off the hash, and returns the 16-byte hash data.
+  LLVM_ABI MD5Result final();
 
-  /// Finishes off the hash, and returns a reference to the 16-byte hash data.
+  /// Finishes off the hash, and returns the 16-byte hash data.
   /// This is suitable for getting the MD5 at any time without invalidating the
   /// internal state, so that more calls can be made into `update`.
-  StringRef result();
+  LLVM_ABI MD5Result result();
 
   /// Translates the bytes in \p Res to a hex string that is
   /// deposited into \p Str. The result will be of length 32.
-  static void stringifyResult(MD5Result &Result, SmallVectorImpl<char> &Str);
+  LLVM_ABI static void stringifyResult(MD5Result &Result,
+                                       SmallVectorImpl<char> &Str);
 
   /// Computes the hash for a given bytes.
-  static std::array<uint8_t, 16> hash(ArrayRef<uint8_t> Data);
+  LLVM_ABI static MD5Result hash(ArrayRef<uint8_t> Data);
 
 private:
   // Any 32-bit or wider unsigned integer data type will do.
@@ -109,14 +104,8 @@ private:
     MD5_u32plus block[16];
   } InternalState;
 
-  MD5Result Result;
-
-  const uint8_t *body(ArrayRef<uint8_t> Data);
+  LLVM_ABI const uint8_t *body(ArrayRef<uint8_t> Data);
 };
-
-inline bool operator==(const MD5::MD5Result &LHS, const MD5::MD5Result &RHS) {
-  return LHS.Bytes == RHS.Bytes;
-}
 
 /// Helper to compute and return lower 64 bits of the given string's MD5 hash.
 inline uint64_t MD5Hash(StringRef Str) {

@@ -1,4 +1,3 @@
-# $FreeBSD$
 .PATH:	${SRCTOP}/sys/compat/linuxkpi/common/src
 
 KMOD=	linuxkpi
@@ -7,7 +6,9 @@ SRCS=	linux_compat.c \
 	linux_devres.c \
 	linux_dmi.c \
 	linux_domain.c \
+	linux_eventfd.c \
 	linux_firmware.c \
+	linux_folio.c \
 	linux_fpu.c \
 	linux_hrtimer.c \
 	linux_idr.c \
@@ -15,6 +16,7 @@ SRCS=	linux_compat.c \
 	linux_i2c.c \
 	linux_i2cbb.c \
 	linux_kmod.c \
+	linux_kobject.c \
 	linux_kthread.c \
 	linux_lock.c \
 	linux_netdev.c \
@@ -22,10 +24,13 @@ SRCS=	linux_compat.c \
 	linux_pci.c \
 	linux_radix.c \
 	linux_rcu.c \
-	linux_seq_file.c \
 	linux_schedule.c \
+	linux_seq_buf.c \
+	linux_seq_file.c \
 	linux_shmemfs.c \
 	linux_shrinker.c \
+	linux_simple_attr.c \
+	linux_siphash.c \
 	linux_skbuff.c \
 	linux_slab.c \
 	linux_tasklet.c \
@@ -38,12 +43,18 @@ SRCS=	linux_compat.c \
 SRCS+=	opt_acpi.h acpi_if.h linux_acpi.c
 .endif
 
+.if ${MACHINE_CPUARCH} == "i386"
+SRCS+=	opt_apic.h
+.endif
+
 SRCS+=	opt_ddb.h
 SRCS+=	${LINUXKPI_GENSRCS}
 
-CFLAGS+= -I${SRCTOP}/sys/compat/linuxkpi/common/include
+CFLAGS+= ${LINUXKPI_INCLUDES}
 CFLAGS+= -I${SRCTOP}/sys/contrib/ck/include
 
 EXPORT_SYMS=	YES
+
+TRIVIAL_VAR_AUTO_INIT_ZERO_SAFE=	yes
 
 .include <bsd.kmod.mk>

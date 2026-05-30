@@ -33,8 +33,6 @@
  */
 
 #include <machine/asm.h>
-__FBSDID("$FreeBSD$");
-
 #include "assym.inc"
 
 #include <machine/trap.h>
@@ -44,9 +42,10 @@ __FBSDID("$FreeBSD$");
 	addi	sp, sp, -(TF_SIZE)
 
 	sd	ra, (TF_RA)(sp)
+	sd	tp, (TF_TP)(sp)
+	sd	gp, (TF_GP)(sp)
 
 .if \mode == 0	/* We came from userspace. */
-	sd	gp, (TF_GP)(sp)
 .option push
 .option norelax
 	/* Load the kernel's global pointer */
@@ -54,8 +53,7 @@ __FBSDID("$FreeBSD$");
 .option pop
 
 	/* Load our pcpu */
-	sd	tp, (TF_TP)(sp)
-	ld	tp, (TF_SIZE)(sp)
+	ld	tp, (TF_SIZE + KF_TP)(sp)
 .endif
 
 	sd	t0, (TF_T + 0 * 8)(sp)
@@ -141,7 +139,7 @@ __FBSDID("$FreeBSD$");
 	csrw	sscratch, t0
 
 	/* Store our pcpu */
-	sd	tp, (TF_SIZE)(sp)
+	sd	tp, (TF_SIZE + KF_TP)(sp)
 	ld	tp, (TF_TP)(sp)
 
 	/* And restore the user's global pointer */

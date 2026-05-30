@@ -31,9 +31,6 @@
  * read in to temporary space and relocate on exec, when btx is stopped.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <stand.h>
 #include <sys/param.h>
 #include <sys/linker.h>
@@ -86,7 +83,7 @@ command_chain(int argc, char *argv[])
 	}
 
 #ifdef LOADER_VERIEXEC_VECTX
-	vctx = vectx_open(fd, argv[1], 0L, NULL, &verror, __func__);
+	vctx = vectx_open(fd, argv[1], VE_MUST, 0L, NULL, &verror, __func__);
 	if (verror) {
 		sprintf(command_errbuf, "can't verify: %s", argv[1]);
 		close(fd);
@@ -130,7 +127,7 @@ command_chain(int argc, char *argv[])
 	}
 	close(fd);
 #ifdef LOADER_VERIEXEC_VECTX
-	verror = vectx_close(vctx, VE_MUST, __func__);
+	verror = vectx_close(vctx, __func__);
 	if (verror) {
 		free(vctx);
 		return (CMD_ERROR);

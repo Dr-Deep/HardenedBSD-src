@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1984-2021  Mark Nudelman
+ * Copyright (C) 1984-2026  Mark Nudelman
  *
  * You may distribute under the terms of either the GNU General Public
  * License or the Less License, as specified in the README file.
@@ -21,18 +21,22 @@
 #include "position.h"
 
 extern int pr_type;
-extern int new_file;
-extern int sc_width;
-extern int so_s_width, so_e_width;
+extern lbool new_file;
 extern int linenums;
 extern int hshift;
+extern int sc_width;
 extern int sc_height;
 extern int jump_sline;
 extern int less_is_more;
+extern int header_lines;
+extern int utf_mode;
 extern IFILE curr_ifile;
+#if OSC8_LINK
+extern char *osc8_path;
+#endif
 #if EDITOR
-extern char *editor;
-extern char *editproto;
+extern constant char *editor;
+extern constant char *editproto;
 #endif
 
 /*
@@ -44,9 +48,9 @@ static constant char s_proto[] =
 static constant char m_proto[] =
   "?n?f%f .?m(%T %i of %m) ..?e(END) ?x- Next\\: %x.:?pB%pB\\%:byte %bB?s/%s...%t";
 static constant char M_proto[] =
-  "?f%f .?n?m(%T %i of %m) ..?ltlines %lt-%lb?L/%L. :byte %bB?s/%s. .?e(END) ?x- Next\\: %x.:?pB%pB\\%..%t";
+  "?f%f .?n?m(%T %i of %m) ..?ltlines %lt-%lb?L/%L. :byte %bB?s/%s. .?e(END) ?x- Next\\: %x.:?pB%pB\\%..?c (column %c).%t";
 static constant char e_proto[] =
-  "?f%f .?m(%T %i of %m) .?ltlines %lt-%lb?L/%L. .byte %bB?s/%s. ?e(END) :?pB%pB\\%..%t";
+  "?f%f .?m(%T %i of %m) .?ltlines %lt-%lb?L/%L. .byte %bB?s/%s. ?e(END) :?pB%pB\\%..?c (column %c).%t";
 static constant char h_proto[] =
   "HELP -- ?eEND -- Press g to see it again:Press RETURN for more., or q when done";
 static constant char w_proto[] =
@@ -61,12 +65,12 @@ public char constant *wproto = w_proto;
 
 static char message[PROMPT_SIZE];
 static char *mp;
+static int longest_line;
 
 /*
  * Initialize the prompt prototype strings.
  */
-	public void
-init_prompt(VOID_PARAM)
+public void init_prompt(void)
 {
 	prproto[0] = save(s_proto);
 	prproto[1] = save(less_is_more ? more_proto : m_proto);
@@ -77,80 +81,104 @@ init_prompt(VOID_PARAM)
 }
 
 /*
- * Append a string to the end of the message.
+ * Get width of longest line currently on screen.
+ * Calling longest_line_width() is expensive, so we cache its value here
+ * in case it is called more than once per prompt expansion.
  */
-	static void
-ap_str(s)
-	char *s;
+static int pr_longest_line(void)
 {
-	int len;
+	if (longest_line < 0)
+		longest_line = longest_line_width();
+	return longest_line;
+}
 
-	len = (int) strlen(s);
-	if (mp + len >= message + PROMPT_SIZE)
-		len = (int) (message + PROMPT_SIZE - mp - 1);
-	strncpy(mp, s, len);
-	mp += len;
+/*
+ * Append a string to the end of the message.
+ * nprt means the character *may* be nonprintable
+ * and should be converted to printable form.
+ */
+static void ap_estr(constant char *s, lbool nprt)
+{
+	constant char *es = s + strlen(s);
+	while (*s != '\0')
+	{
+		LWCHAR ch = step_charc(&s, +1, es);
+		constant char *ps;
+		char ubuf[MAX_UTF_CHAR_LEN+1];
+		size_t plen;
+
+		if (nprt)
+		{
+			ps = utf_mode ? prutfchar(ch) : prchar(ch);
+		} else
+		{
+			char *up = ubuf;
+			put_wchar(&up, ch);
+			*up = '\0';
+			ps = ubuf;
+		}
+		plen = strlen(ps);
+		if (mp + plen >= message + PROMPT_SIZE)
+			break;
+		strcpy(mp, ps);
+		mp += plen;
+	}
 	*mp = '\0';
+}
+
+static void ap_str(constant char *s)
+{
+	ap_estr(s, FALSE);
 }
 
 /*
  * Append a character to the end of the message.
  */
-	static void
-ap_char(c)
-	char c;
+static void ap_char(char c)
 {
-	char buf[2];
-
-	buf[0] = c;
-	buf[1] = '\0';
-	ap_str(buf);
+	if (mp + 1 >= message + PROMPT_SIZE)
+		return;
+	*mp++ = c;
+	*mp = '\0';
 }
 
 /*
  * Append a POSITION (as a decimal integer) to the end of the message.
  */
-	static void
-ap_pos(pos)
-	POSITION pos;
+static void ap_pos(POSITION pos)
 {
 	char buf[INT_STRLEN_BOUND(pos) + 2];
 
-	postoa(pos, buf);
+	postoa(pos, buf, 10);
 	ap_str(buf);
 }
 
 /*
  * Append a line number to the end of the message.
  */
-	static void
-ap_linenum(linenum)
-	LINENUM linenum;
+static void ap_linenum(LINENUM linenum)
 {
 	char buf[INT_STRLEN_BOUND(linenum) + 2];
 
-	linenumtoa(linenum, buf);
+	linenumtoa(linenum, buf, 10);
 	ap_str(buf);
 }
 
 /*
  * Append an integer to the end of the message.
  */
-	static void
-ap_int(num)
-	int num;
+static void ap_int(int num)
 {
 	char buf[INT_STRLEN_BOUND(num) + 2];
 
-	inttoa(num, buf);
+	inttoa(num, buf, 10);
 	ap_str(buf);
 }
 
 /*
  * Append a question mark to the end of the message.
  */
-	static void
-ap_quest(VOID_PARAM)
+static void ap_quest(void)
 {
 	ap_str("?");
 }
@@ -158,9 +186,7 @@ ap_quest(VOID_PARAM)
 /*
  * Return the "current" byte offset in the file.
  */
-	static POSITION
-curr_byte(where)
-	int where;
+static POSITION curr_byte(int where)
 {
 	POSITION pos;
 
@@ -178,10 +204,7 @@ curr_byte(where)
  * question mark followed by a single letter.
  * Here we decode that letter and return the appropriate boolean value.
  */
-	static int
-cond(c, where)
-	char c;
-	int where;
+static lbool cond(char c, int where)
 {
 	POSITION len;
 
@@ -194,14 +217,14 @@ cond(c, where)
 	case 'c':
 		return (hshift != 0);
 	case 'e': /* At end of file? */
-		return (eof_displayed());
+		return (eof_displayed(FALSE));
 	case 'f': /* Filename known? */
 	case 'g':
 		return (strcmp(get_filename(curr_ifile), "-") != 0);
 	case 'l': /* Line number known? */
 	case 'd': /* Same as l */
 		if (!linenums)
-			return 0;
+			return FALSE;
 		return (currline(where) != 0);
 	case 'L': /* Final line number known? */
 	case 'D': /* Final page number known? */
@@ -214,28 +237,29 @@ cond(c, where)
 #endif
 	case 'n': /* First prompt in a new file? */
 #if TAGS
-		return (ntags() ? 1 : new_file);
+		return (ntags() ? TRUE : new_file ? TRUE : FALSE);
 #else
-		return (new_file);
+		return (new_file ? TRUE : FALSE);
 #endif
 	case 'p': /* Percent into file (bytes) known? */
-		return (curr_byte(where) != NULL_POSITION && 
-				ch_length() > 0);
+		return (curr_byte(where) != NULL_POSITION && ch_length() > 0);
 	case 'P': /* Percent into file (lines) known? */
 		return (currline(where) != 0 &&
 				(len = ch_length()) > 0 &&
 				find_linenum(len) != 0);
+	case 'Q': /* Any on-screen line truncated? */
+		return (hshift + sc_width < pr_longest_line());
 	case 's': /* Size of file known? */
 	case 'B':
 		return (ch_length() != NULL_POSITION);
 	case 'x': /* Is there a "next" file? */
 #if TAGS
 		if (ntags())
-			return (0);
+			return (FALSE);
 #endif
 		return (next_ifile(curr_ifile) != NULL_IFILE);
 	}
-	return (0);
+	return (FALSE);
 }
 
 /*
@@ -245,22 +269,17 @@ cond(c, where)
  * Here we decode that letter and take the appropriate action,
  * usually by appending something to the message being built.
  */
-	static void
-protochar(c, where, iseditproto)
-	int c;
-	int where;
-	int iseditproto;
+static void protochar(char c, int where)
 {
 	POSITION pos;
 	POSITION len;
-	int n;
 	LINENUM linenum;
 	LINENUM last_linenum;
 	IFILE h;
 	char *s;
 
 #undef  PAGE_NUM
-#define PAGE_NUM(linenum)  ((((linenum) - 1) / (sc_height - 1)) + 1)
+#define PAGE_NUM(linenum)  ((((linenum) - 1) / (sc_height - header_lines - 1)) + 1)
 
 	switch (c)
 	{
@@ -272,11 +291,14 @@ protochar(c, where, iseditproto)
 			ap_quest();
 		break;
 	case 'c':
-		ap_int(hshift);
+		ap_int(hshift+1);
+		break;
+	case 'C':
+		ap_int(hshift + sc_width);
 		break;
 	case 'd': /* Current page number */
 		linenum = currline(where);
-		if (linenum > 0 && sc_height > 1)
+		if (linenum > 0 && sc_height > header_lines + 1)
 			ap_linenum(PAGE_NUM(linenum));
 		else
 			ap_quest();
@@ -304,10 +326,10 @@ protochar(c, where, iseditproto)
 		break;
 #endif
 	case 'f': /* File name */
-		ap_str(get_filename(curr_ifile));
+		ap_estr(get_filename(curr_ifile), TRUE);
 		break;
 	case 'F': /* Last component of file name */
-		ap_str(last_component(get_filename(curr_ifile)));
+		ap_estr(last_component(get_filename(curr_ifile)), TRUE);
 		break;
 	case 'g': /* Shell-escaped file name */
 		s = shell_quote(get_filename(curr_ifile));
@@ -325,7 +347,7 @@ protochar(c, where, iseditproto)
 	case 'l': /* Current line number */
 		linenum = currline(where);
 		if (linenum != 0)
-			ap_linenum(linenum);
+			ap_linenum(vlinenum(linenum));
 		else
 			ap_quest();
 		break;
@@ -335,16 +357,24 @@ protochar(c, where, iseditproto)
 		    (linenum = find_linenum(len)) <= 0)
 			ap_quest();
 		else
-			ap_linenum(linenum-1);
+			ap_linenum(vlinenum(linenum-1));
 		break;
-	case 'm': /* Number of files */
+	case 'm': { /* Number of files */
 #if TAGS
-		n = ntags();
+		int n = ntags();
 		if (n)
 			ap_int(n);
 		else
 #endif
 			ap_int(nifile());
+		break; }
+	case 'o': /* path (URI without protocol) of selected OSC8 link */
+#if OSC8_LINK
+		if (osc8_path != NULL)
+			ap_str(osc8_path);
+		else
+#endif
+			ap_quest();
 		break;
 	case 'p': /* Percent into file (bytes) */
 		pos = curr_byte(where);
@@ -362,6 +392,9 @@ protochar(c, where, iseditproto)
 			ap_quest();
 		else
 			ap_int(percentage(linenum, last_linenum));
+		break;
+	case 'Q': /* Percent shifted horizontally */
+		ap_int(percentage(hshift + sc_width, pr_longest_line()));
 		break;
 	case 's': /* Size of file */
 	case 'B':
@@ -384,6 +417,9 @@ protochar(c, where, iseditproto)
 #endif
 			ap_str("file");
 		break;
+	case 'W': /* Width of longest line on screen */
+		ap_int(pr_longest_line());
+		break;
 	case 'x': /* Name of next file */
 		h = next_ifile(curr_ifile);
 		if (h != NULL_IFILE)
@@ -401,9 +437,7 @@ protochar(c, where, iseditproto)
  * where to resume parsing the string.
  * We must keep track of nested IFs and skip them properly.
  */
-	static constant char *
-skipcond(p)
-	constant char *p;
+static constant char * skipcond(constant char *p)
 {
 	int iflevel;
 
@@ -443,7 +477,8 @@ skipcond(p)
 		/*
 		 * Backslash escapes the next character.
 		 */
-		++p;
+		if (p[1] != '\0')
+			++p;
 		break;
 	case '\0':
 		/*
@@ -459,10 +494,7 @@ skipcond(p)
 /*
  * Decode a char that represents a position on the screen.
  */
-	static constant char *
-wherechar(p, wp)
-	char constant *p;
-	int *wp;
+static constant char * wherechar(char constant *p, int *wp)
 {
 	switch (*p)
 	{
@@ -483,19 +515,17 @@ wherechar(p, wp)
 /*
  * Construct a message based on a prototype string.
  */
-	public char *
-pr_expand(proto, maxwidth)
-	constant char *proto;
-	int maxwidth;
+public constant char * pr_expand(constant char *proto)
 {
 	constant char *p;
-	int c;
+	char c;
 	int where;
-
-	mp = message;
 
 	if (*proto == '\0')
 		return ("");
+
+	mp = message;
+	longest_line = -1;
 
 	for (p = proto;  *p != '\0';  p++)
 	{
@@ -505,8 +535,8 @@ pr_expand(proto, maxwidth)
 			ap_char(*p);
 			break;
 		case '\\': /* Backslash escapes the next character */
-			p++;
-			ap_char(*p);
+			if (p[1] != '\0')
+				ap_char(*++p);
 			break;
 		case '?': /* Conditional (IF) */
 			if ((c = *++p) == '\0')
@@ -531,13 +561,7 @@ pr_expand(proto, maxwidth)
 			{
 				where = 0;
 				p = wherechar(p, &where);
-				protochar(c, where,
-#if EDITOR
-					(proto == editproto));
-#else
-					0);
-#endif
-
+				protochar(c, where);
 			}
 			break;
 		}
@@ -545,24 +569,15 @@ pr_expand(proto, maxwidth)
 
 	if (mp == message)
 		return ("");
-	if (maxwidth > 0 && mp >= message + maxwidth)
-	{
-		/*
-		 * Message is too long.
-		 * Return just the final portion of it.
-		 */
-		return (mp - maxwidth);
-	}
 	return (message);
 }
 
 /*
  * Return a message suitable for printing by the "=" command.
  */
-	public char *
-eq_message(VOID_PARAM)
+public constant char * eq_message(void)
 {
-	return (pr_expand(eqproto, 0));
+	return (pr_expand(eqproto));
 }
 
 /*
@@ -571,25 +586,22 @@ eq_message(VOID_PARAM)
  * If we can't come up with an appropriate prompt, return NULL
  * and the caller will prompt with a colon.
  */
-	public char *
-pr_string(VOID_PARAM)
+public constant char * pr_string(void)
 {
-	char *prompt;
+	constant char *prompt;
 	int type;
 
 	type = (!less_is_more) ? pr_type : pr_type ? 0 : 1;
 	prompt = pr_expand((ch_getflags() & CH_HELPFILE) ?
-				hproto : prproto[type],
-			sc_width-so_s_width-so_e_width-2);
-	new_file = 0;
+				hproto : prproto[type]);
+	new_file = FALSE;
 	return (prompt);
 }
 
 /*
  * Return a message suitable for printing while waiting in the F command.
  */
-	public char *
-wait_message(VOID_PARAM)
+public constant char * wait_message(void)
 {
-	return (pr_expand(wproto, sc_width-so_s_width-so_e_width-2));
+	return (pr_expand(wproto));
 }

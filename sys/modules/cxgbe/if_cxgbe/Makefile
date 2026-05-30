@@ -1,7 +1,3 @@
-#
-# $FreeBSD$
-#
-
 .include <kmod.opts.mk>
 
 CXGBE=	${SRCTOP}/sys/dev/cxgbe
@@ -23,9 +19,8 @@ SRCS+=	t4_filter.c
 SRCS+=	t4_hw.c
 SRCS+=	t4_if.c t4_if.h
 SRCS+=	t4_iov.c
-.if ${KERN_OPTS:MKERN_TLS} != ""
-SRCS+=	t6_kern_tls.c
-.endif
+SRCS.KERN_TLS+=	t6_kern_tls.c
+SRCS.KERN_TLS+=	t7_kern_tls.c
 SRCS+=	t4_keyctx.c
 SRCS+=	t4_l2t.c
 SRCS+=	t4_main.c
@@ -34,6 +29,7 @@ SRCS+=	t4_netmap.c
 SRCS+=	t4_sched.c
 SRCS+=	t4_sge.c
 SRCS+=	t4_smt.c
+SRCS+=	t4_tpt.c
 SRCS+=	t4_tracer.c
 SRCS+=  cudbg_common.c
 SRCS+=  cudbg_flash_utils.c

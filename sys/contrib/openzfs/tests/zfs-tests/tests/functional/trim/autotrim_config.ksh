@@ -1,4 +1,5 @@
 #!/bin/ksh -p
+# SPDX-License-Identifier: CDDL-1.0
 #
 # CDDL HEADER START
 #
@@ -39,6 +40,12 @@
 
 verify_runnable "global"
 
+# On FreeBSD, autotrim does not reclaim space on file vdevs stored
+# on a ZFS filesystem within the test framework.
+if is_freebsd; then
+	log_unsupported "Autotrim on file vdevs not supported on FreeBSD"
+fi
+
 log_assert "Set 'autotrim=on' verify pool disks were trimmed"
 
 function cleanup
@@ -57,7 +64,7 @@ log_onexit cleanup
 
 # Minimum trim size is decreased to verify all trim sizes.
 typeset trim_extent_bytes_min=$(get_tunable TRIM_EXTENT_BYTES_MIN)
-log_must set_tunable64 TRIM_EXTENT_BYTES_MIN 4096
+log_must set_tunable64 TRIM_EXTENT_BYTES_MIN 512
 
 # Reduced TRIM_TXG_BATCH to make trimming more frequent.
 typeset trim_txg_batch=$(get_tunable TRIM_TXG_BATCH)
@@ -87,7 +94,7 @@ for type in "" "mirror" "raidz2" "draid"; do
 	fi
 
 	log_must truncate -s $((4 * MINVDEVSIZE)) $VDEVS
-	log_must zpool create -f $TESTPOOL $VDEVS
+	log_must zpool create -f $TESTPOOL $type $VDEVS
 	log_must zpool set autotrim=on $TESTPOOL
 
 	typeset availspace=$(get_prop available $TESTPOOL)
@@ -95,6 +102,7 @@ for type in "" "mirror" "raidz2" "draid"; do
 
 	# Fill the pool, verify the vdevs are no longer sparse.
 	file_write -o create -f /$TESTPOOL/file -b 1048576 -c $fill_mb -d R
+	sync_pool $TESTPOOL
 	verify_vdevs "-ge" "$VDEV_MAX_MB" $VDEVS
 
 	# Remove the file, wait for trim, verify the vdevs are now sparse.

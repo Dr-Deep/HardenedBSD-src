@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright 1996-1998 John D. Polstra.
  * All rights reserved.
@@ -23,8 +23,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include "opt_pax.h"
@@ -103,7 +101,6 @@ struct sysentvec elf32_freebsd_sysvec = {
 	.sv_elf_core_osabi = ELFOSABI_FREEBSD,
 	.sv_elf_core_abi_vendor = FREEBSD_ABI_VENDOR,
 	.sv_elf_core_prepare_notes = __elfN(prepare_notes),
-	.sv_imgact_try	= NULL,
 	.sv_minsigstksz	= MINSIGSTKSZ,
 	.sv_minuser	= VM_MIN_ADDRESS,
 	.sv_stackprot	= VM_PROT_ALL,
@@ -128,7 +125,7 @@ struct sysentvec elf32_freebsd_sysvec = {
 #endif
 	.sv_maxssiz	= NULL,
 	.sv_flags	= SV_ABI_FREEBSD | SV_ILP32 | SV_SHP |
-			    SV_TIMEKEEP | SV_RNG_SEED_VER,
+			    SV_TIMEKEEP | SV_RNG_SEED_VER | SV_SIGSYS,
 	.sv_set_syscall_retval = cpu_set_syscall_retval,
 	.sv_fetch_syscall_args = cpu_fetch_syscall_args,
 	.sv_shared_page_base = FREEBSD32_SHAREDPAGE,
@@ -139,6 +136,8 @@ struct sysentvec elf32_freebsd_sysvec = {
 	.sv_pax_aslr_init = pax_aslr_init_vmspace32,
 	.sv_hwcap	= &cpu_features,
 	.sv_hwcap2	= &cpu_features2,
+	.sv_hwcap3	= NULL,
+	.sv_hwcap4	= NULL,
 	.sv_onexec_old	= exec_onexec_old,
 	.sv_onexit	= exit_onexit,
 	.sv_regset_begin = SET_BEGIN(__elfN(regset)),
@@ -146,11 +145,10 @@ struct sysentvec elf32_freebsd_sysvec = {
 };
 INIT_SYSENTVEC(elf32_sysvec, &elf32_freebsd_sysvec);
 
-static Elf32_Brandinfo freebsd_brand_info = {
+static const Elf32_Brandinfo freebsd_brand_info = {
 	.brand		= ELFOSABI_FREEBSD,
 	.machine	= EM_PPC,
 	.compat_3_brand	= "FreeBSD",
-	.emul_path	= NULL,
 	.interp_path	= "/libexec/ld-elf.so.1",
 	.sysvec		= &elf32_freebsd_sysvec,
 #ifdef __powerpc64__
@@ -162,15 +160,14 @@ static Elf32_Brandinfo freebsd_brand_info = {
 	.flags		= BI_CAN_EXEC_DYN | BI_BRAND_NOTE
 };
 
-SYSINIT(elf32, SI_SUB_EXEC, SI_ORDER_FIRST,
+C_SYSINIT(elf32, SI_SUB_EXEC, SI_ORDER_FIRST,
     (sysinit_cfunc_t) elf32_insert_brand_entry,
     &freebsd_brand_info);
 
-static Elf32_Brandinfo freebsd_brand_oinfo = {
+static const Elf32_Brandinfo freebsd_brand_oinfo = {
 	.brand		= ELFOSABI_FREEBSD,
 	.machine	= EM_PPC,
 	.compat_3_brand	= "FreeBSD",
-	.emul_path	= NULL,
 	.interp_path	= "/usr/libexec/ld-elf.so.1",
 	.sysvec		= &elf32_freebsd_sysvec,
 	.interp_newpath	= NULL,
@@ -178,7 +175,7 @@ static Elf32_Brandinfo freebsd_brand_oinfo = {
 	.flags		= BI_CAN_EXEC_DYN | BI_BRAND_NOTE
 };
 
-SYSINIT(oelf32, SI_SUB_EXEC, SI_ORDER_ANY,
+C_SYSINIT(oelf32, SI_SUB_EXEC, SI_ORDER_ANY,
 	(sysinit_cfunc_t) elf32_insert_brand_entry,
 	&freebsd_brand_oinfo);
 
@@ -197,7 +194,6 @@ elf32_dump_thread(struct thread *td, void *dst, size_t *off)
 	pcb = td->td_pcb;
 
 	if (pcb->pcb_flags & PCB_VEC) {
-		save_vec_nodrop(td);
 		if (dst != NULL) {
 			len += elf32_populate_note(NT_PPC_VMX,
 			    &pcb->pcb_vec, (char *)dst + len,
@@ -208,7 +204,6 @@ elf32_dump_thread(struct thread *td, void *dst, size_t *off)
 	}
 
 	if (pcb->pcb_flags & PCB_VSX) {
-		save_fpu_nodrop(td);
 		if (dst != NULL) {
 			/*
 			 * Doubleword 0 of VSR0-VSR31 overlap with FPR0-FPR31 and
@@ -409,7 +404,7 @@ elf_cpu_unload_file(linker_file_t lf __unused)
 }
 
 static void
-ppc32_runtime_resolve()
+ppc32_runtime_resolve(void)
 {
 
 	/*

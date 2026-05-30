@@ -29,20 +29,6 @@
  * SUCH DAMAGE.
  */
 
-#if 0
-#ifndef lint
-static const char copyright[] =
-"@(#) Copyright (c) 1983, 1993\n\
-	The Regents of the University of California.  All rights reserved.\n";
-#endif /* not lint */
-
-#ifndef lint
-static char sccsid[] = "@(#)tunefs.c	8.2 (Berkeley) 4/19/94";
-#endif /* not lint */
-#endif
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * tunefs: change layout parameters to an existing file system.
  */
@@ -58,6 +44,7 @@ __FBSDID("$FreeBSD$");
 #include <ufs/ffs/fs.h>
 #include <ufs/ufs/dir.h>
 
+#include <assert.h>
 #include <ctype.h>
 #include <err.h>
 #include <fcntl.h>
@@ -65,6 +52,7 @@ __FBSDID("$FreeBSD$");
 #include <libufs.h>
 #include <mntopts.h>
 #include <paths.h>
+#include <stdalign.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -80,29 +68,30 @@ static char clrbuf[MAXBSIZE];
 static struct uufsd disk;
 #define	sblock disk.d_fs
 
-static void usage(void);
+static void usage(void) __dead2;
 static void printfs(void);
 static int journal_alloc(int64_t size);
 static void journal_clear(void);
 static void sbdirty(void);
+
+typedef union {
+	char buf[MAXBSIZE];
+	struct direct dir;
+} dirblock;
 
 int
 main(int argc, char *argv[])
 {
 	const char *avalue, *jvalue, *Jvalue, *Lvalue, *lvalue, *Nvalue, *nvalue;
 	const char *tvalue;
-	const char *special, *on;
+	const char *special;
 	const char *name;
-	int active;
+	char *diskname;
 	int Aflag, aflag, eflag, evalue, fflag, fvalue, jflag, Jflag, kflag;
 	int kvalue, Lflag, lflag, mflag, mvalue, Nflag, nflag, oflag, ovalue;
 	int pflag, sflag, svalue, Svalue, tflag;
 	int ch, found_arg, i;
-	int iovlen = 0;
 	const char *chg[2];
-	struct statfs stfs;
-	struct iovec *iov = NULL;
-	char errmsg[255] = {0};
 
 	if (argc < 3)
 		usage();
@@ -110,7 +99,6 @@ main(int argc, char *argv[])
 	lflag = mflag = Nflag = nflag = oflag = pflag = sflag = tflag = 0;
 	avalue = jvalue = Jvalue = Lvalue = lvalue = Nvalue = nvalue = NULL;
 	evalue = fvalue = mvalue = ovalue = svalue = Svalue = 0;
-	active = 0;
 	found_arg = 0;		/* At least one arg is required. */
 	while ((ch = getopt(argc, argv, "Aa:e:f:j:J:k:L:l:m:N:n:o:ps:S:t:"))
 	    != -1)
@@ -309,7 +297,7 @@ main(int argc, char *argv[])
 	if (found_arg == 0 || argc != 1)
 		usage();
 
-	on = special = argv[0];
+	special = argv[0];
 	if (ufs_disk_fillout(&disk, special) == -1)
 		goto err;
 	/*
@@ -319,13 +307,6 @@ main(int argc, char *argv[])
 	    (sblock.fs_flags & (FS_UNCLEAN | FS_NEEDSFSCK)) != 0) &&
 	    (found_arg > 1 || !pflag))
 		errx(1, "%s is not clean - run fsck.\n", special);
-	if (disk.d_name != special) {
-		if (statfs(special, &stfs) != 0)
-			warn("Can't stat %s", special);
-		if (strcmp(special, stfs.f_mntonname) == 0)
-			active = 1;
-	}
-
 	if (pflag) {
 		printfs();
 		exit(0);
@@ -384,6 +365,9 @@ main(int argc, char *argv[])
 			if ((sblock.fs_flags & (FS_DOSOFTDEP | FS_SUJ)) ==
 			    (FS_DOSOFTDEP | FS_SUJ)) {
 				warnx("%s remains unchanged as enabled", name);
+			} else if (sblock.fs_flags & FS_GJOURNAL) {
+				warnx("%s cannot be enabled while GEOM "
+				    "journaling is enabled", name);
 			} else if (sblock.fs_clean == 0) {
 				warnx("%s cannot be enabled until fsck is run",
 				    name);
@@ -412,6 +396,9 @@ main(int argc, char *argv[])
 		if (strcmp(Jvalue, "enable") == 0) {
 			if (sblock.fs_flags & FS_GJOURNAL) {
 				warnx("%s remains unchanged as enabled", name);
+			} if (sblock.fs_flags & FS_DOSOFTDEP) {
+				warnx("%s cannot be enabled while soft "
+				    "updates are enabled", name);
 			} else {
 				sblock.fs_flags |= FS_GJOURNAL;
 				warnx("%s set", name);
@@ -429,9 +416,9 @@ main(int argc, char *argv[])
 	}
 	if (kflag) {
 		name = "space to hold for metadata blocks";
-		if (sblock.fs_metaspace == kvalue)
+		if (sblock.fs_metaspace == kvalue) {
 			warnx("%s remains unchanged as %d", name, kvalue);
-		else {
+		} else {
 			kvalue = blknum(&sblock, kvalue);
 			if (kvalue > sblock.fs_fpg / 2) {
 				kvalue = blknum(&sblock, sblock.fs_fpg / 2);
@@ -503,9 +490,12 @@ main(int argc, char *argv[])
 	if (nflag) {
  		name = "soft updates";
  		if (strcmp(nvalue, "enable") == 0) {
-			if (sblock.fs_flags & FS_DOSOFTDEP)
+			if (sblock.fs_flags & FS_DOSOFTDEP) {
 				warnx("%s remains unchanged as enabled", name);
-			else if (sblock.fs_clean == 0) {
+			} else if (sblock.fs_flags & FS_GJOURNAL) {
+				warnx("%s cannot be enabled while GEOM "
+				    "journaling is enabled", name);
+			} else if (sblock.fs_clean == 0) {
 				warnx("%s cannot be enabled until fsck is run",
 				    name);
 			} else {
@@ -570,20 +560,9 @@ main(int argc, char *argv[])
 
 	if (sbwrite(&disk, Aflag) == -1)
 		goto err;
+	diskname = strdup(disk.d_name);
 	ufs_disk_close(&disk);
-	if (active) {
-		build_iovec_argf(&iov, &iovlen, "fstype", "ufs");
-		build_iovec_argf(&iov, &iovlen, "fspath", "%s", on);
-		build_iovec(&iov, &iovlen, "errmsg", errmsg, sizeof(errmsg));
-		if (nmount(iov, iovlen,
-		    stfs.f_flags | MNT_UPDATE | MNT_RELOAD) < 0) {
-			if (errmsg[0])
-				err(9, "%s: reload: %s", special, errmsg);
-			else
-				err(9, "%s: reload", special);
-		}
-		warnx("file system reloaded");
-	}
+	chkdoreload(getmntpoint(diskname), warnx);
 	exit(0);
 err:
 	if (disk.d_error != NULL)
@@ -659,16 +638,17 @@ journal_balloc(void)
 static ino_t
 dir_search(ufs2_daddr_t blk, int bytes)
 {
-	char block[MAXBSIZE];
+	dirblock block;
 	struct direct *dp;
 	int off;
 
-	if (bread(&disk, fsbtodb(&sblock, blk), block, bytes) <= 0) {
+	if (bread(&disk, fsbtodb(&sblock, blk), &block, bytes) <= 0) {
 		warn("Failed to read dir block");
 		return (-1);
 	}
 	for (off = 0; off < bytes; off += dp->d_reclen) {
-		dp = (struct direct *)&block[off];
+		assert(off % alignof(struct direct) == 0);
+		dp = (struct direct *)(uintptr_t)(block.buf + off);
 		if (dp->d_reclen == 0)
 			break;
 		if (dp->d_ino == 0)
@@ -728,12 +708,13 @@ journal_findfile(void)
 }
 
 static void
-dir_clear_block(const char *block, off_t off)
+dir_clear_block(dirblock *block, off_t off)
 {
 	struct direct *dp;
 
 	for (; off < sblock.fs_bsize; off += DIRBLKSIZ) {
-		dp = (struct direct *)&block[off];
+		assert(off % alignof(struct direct) == 0);
+		dp = (struct direct *)(uintptr_t)(block->buf + off);
 		dp->d_ino = 0;
 		dp->d_reclen = DIRBLKSIZ;
 		dp->d_type = DT_UNKNOWN;
@@ -749,21 +730,23 @@ static int
 dir_insert(ufs2_daddr_t blk, off_t off, ino_t ino)
 {
 	struct direct *dp;
-	char block[MAXBSIZE];
+	dirblock block;
 
-	if (bread(&disk, fsbtodb(&sblock, blk), block, sblock.fs_bsize) <= 0) {
+	assert((size_t)sblock.fs_bsize <= sizeof(block));
+	if (bread(&disk, fsbtodb(&sblock, blk), &block, sblock.fs_bsize) <= 0) {
 		warn("Failed to read dir block");
 		return (-1);
 	}
-	bzero(&block[off], sblock.fs_bsize - off);
-	dp = (struct direct *)&block[off];
+	assert(off % alignof(struct direct) == 0);
+	bzero(block.buf + off, sblock.fs_bsize - off);
+	dp = (struct direct *)(uintptr_t)(block.buf + off);
 	dp->d_ino = ino;
 	dp->d_reclen = DIRBLKSIZ;
 	dp->d_type = DT_REG;
 	dp->d_namlen = strlen(SUJ_FILE);
 	bcopy(SUJ_FILE, &dp->d_name, strlen(SUJ_FILE));
-	dir_clear_block(block, off + DIRBLKSIZ);
-	if (bwrite(&disk, fsbtodb(&sblock, blk), block, sblock.fs_bsize) <= 0) {
+	dir_clear_block(&block, off + DIRBLKSIZ);
+	if (bwrite(&disk, fsbtodb(&sblock, blk), &block, sblock.fs_bsize) <= 0) {
 		warn("Failed to write dir block");
 		return (-1);
 	}
@@ -777,15 +760,16 @@ dir_insert(ufs2_daddr_t blk, off_t off, ino_t ino)
 static int
 dir_extend(ufs2_daddr_t blk, ufs2_daddr_t nblk, off_t size, ino_t ino)
 {
-	char block[MAXBSIZE];
+	dirblock block;
 
-	if (bread(&disk, fsbtodb(&sblock, blk), block,
+	assert((size_t)sblock.fs_bsize <= sizeof(block));
+	if (bread(&disk, fsbtodb(&sblock, blk), &block,
 	    roundup(size, sblock.fs_fsize)) <= 0) {
 		warn("Failed to read dir block");
 		return (-1);
 	}
-	dir_clear_block(block, size);
-	if (bwrite(&disk, fsbtodb(&sblock, nblk), block, sblock.fs_bsize)
+	dir_clear_block(&block, size);
+	if (bwrite(&disk, fsbtodb(&sblock, nblk), &block, sblock.fs_bsize)
 	    <= 0) {
 		warn("Failed to write dir block");
 		return (-1);
@@ -874,19 +858,17 @@ journal_insertfile(ino_t ino)
 static int
 indir_fill(ufs2_daddr_t blk, int level, int *resid)
 {
-	char indirbuf[MAXBSIZE];
-	ufs1_daddr_t *bap1;
-	ufs2_daddr_t *bap2;
+	union {
+		char buf[MAXBSIZE];
+		ufs1_daddr_t ufs1;
+		ufs2_daddr_t ufs2;
+	} indir = { 0 };
+	ufs1_daddr_t *bap1 = &indir.ufs1;
+	ufs2_daddr_t *bap2 = &indir.ufs2;
 	ufs2_daddr_t nblk;
-	int ncnt;
-	int cnt;
-	int i;
+	int cnt = 0, ncnt;
 
-	bzero(indirbuf, sizeof(indirbuf));
-	bap1 = (ufs1_daddr_t *)indirbuf;
-	bap2 = (void *)bap1;
-	cnt = 0;
-	for (i = 0; i < NINDIR(&sblock) && *resid != 0; i++) {
+	for (int i = 0; i < NINDIR(&sblock) && *resid != 0; i++) {
 		nblk = journal_balloc();
 		if (nblk <= 0)
 			return (-1);
@@ -903,7 +885,7 @@ indir_fill(ufs2_daddr_t blk, int level, int *resid)
 		} else 
 			(*resid)--;
 	}
-	if (bwrite(&disk, fsbtodb(&sblock, blk), indirbuf,
+	if (bwrite(&disk, fsbtodb(&sblock, blk), indir.buf,
 	    sblock.fs_bsize) <= 0) {
 		warn("Failed to write indirect");
 		return (-1);
@@ -976,7 +958,6 @@ journal_alloc(int64_t size)
 	 */
 	if (size == 0) {
 		size = (sblock.fs_size * sblock.fs_bsize) / 1024;
-		size = MIN(SUJ_MAX, size);
 		if (size / sblock.fs_fsize > sblock.fs_fpg)
 			size = sblock.fs_fpg * sblock.fs_fsize;
 		size = MAX(SUJ_MIN, size);

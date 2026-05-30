@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2014 Ruslan Bukin <br@bsdpad.com>
  * All rights reserved.
@@ -31,9 +31,6 @@
  * Chapter 51, Vybrid Reference Manual, Rev. 5, 07/2013
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
@@ -46,7 +43,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/watchdog.h>
 
 #include <dev/sound/pcm/sound.h>
-#include <dev/sound/chip.h>
 #include <mixer_if.h>
 
 #include <dev/ofw/openfirm.h>
@@ -142,7 +138,7 @@ struct sc_info {
 	bus_space_tag_t		bst;
 	bus_space_handle_t	bsh;
 	device_t		dev;
-	struct mtx		*lock;
+	struct mtx		lock;
 	uint32_t		speed;
 	uint32_t		period;
 	void			*ih;
@@ -210,10 +206,10 @@ saimixer_init(struct snd_mixer *m)
 
 	mask = SOUND_MASK_PCM;
 
-	snd_mtxlock(sc->lock);
+	mtx_lock(&sc->lock);
 	pcm_setflags(scp->dev, pcm_getflags(scp->dev) | SD_F_SOFTPCMVOL);
 	mix_setdevs(m, mask);
-	snd_mtxunlock(sc->lock);
+	mtx_unlock(&sc->lock);
 
 	return (0);
 }
@@ -256,14 +252,14 @@ saichan_init(kobj_t obj, void *devinfo, struct snd_dbuf *b,
 	scp = (struct sc_pcminfo *)devinfo;
 	sc = scp->sc;
 
-	snd_mtxlock(sc->lock);
+	mtx_lock(&sc->lock);
 	ch = &scp->chan[0];
 	ch->dir = dir;
 	ch->run = 0;
 	ch->buffer = b;
 	ch->channel = c;
 	ch->parent = scp;
-	snd_mtxunlock(sc->lock);
+	mtx_unlock(&sc->lock);
 
 	if (sndbuf_setup(ch->buffer, sc->buf_base, sc->dma_size) != 0) {
 		device_printf(scp->dev, "Can't setup sndbuf.\n");
@@ -284,9 +280,9 @@ saichan_free(kobj_t obj, void *data)
 	device_printf(scp->dev, "saichan_free()\n");
 #endif
 
-	snd_mtxlock(sc->lock);
+	mtx_lock(&sc->lock);
 	/* TODO: free channel buffer */
-	snd_mtxunlock(sc->lock);
+	mtx_unlock(&sc->lock);
 
 	return (0);
 }
@@ -373,7 +369,7 @@ saichan_setblocksize(kobj_t obj, void *data, uint32_t blocksize)
 
 	sndbuf_resize(ch->buffer, sc->dma_size / blocksize, blocksize);
 
-	sc->period = sndbuf_getblksz(ch->buffer);
+	sc->period = ch->buffer->blksz;
 	return (sc->period);
 }
 
@@ -464,7 +460,7 @@ find_edma_controller(struct sc_info *sc)
 	sc->edma_chnum = edma_sc->channel_configure(edma_sc, edma_mux_group,
 	    edma_src_transmit);
 	if (sc->edma_chnum < 0) {
-		/* cant setup eDMA */
+		/* can't setup eDMA */
 		return (ENXIO);
 	}
 
@@ -517,7 +513,7 @@ saichan_trigger(kobj_t obj, void *data, int go)
 	struct sc_pcminfo *scp = ch->parent;
 	struct sc_info *sc = scp->sc;
 
-	snd_mtxlock(sc->lock);
+	mtx_lock(&sc->lock);
 
 	switch (go) {
 	case PCMTRIG_START:
@@ -536,7 +532,7 @@ saichan_trigger(kobj_t obj, void *data, int go)
 		break;
 	}
 
-	snd_mtxunlock(sc->lock);
+	mtx_unlock(&sc->lock);
 
 	return (0);
 }
@@ -695,11 +691,7 @@ sai_attach(device_t dev)
 	sc->sr = &rate_map[0];
 	sc->pos = 0;
 
-	sc->lock = snd_mtxcreate(device_get_nameunit(dev), "sai softc");
-	if (sc->lock == NULL) {
-		device_printf(dev, "Cant create mtx\n");
-		return (ENXIO);
-	}
+	mtx_init(&sc->lock, device_get_nameunit(dev), "sai softc", MTX_DEF);
 
 	if (bus_alloc_resources(dev, sai_spec, sc->res)) {
 		device_printf(dev, "could not allocate resources\n");
@@ -766,18 +758,18 @@ sai_attach(device_t dev)
 
 	pcm_setflags(dev, pcm_getflags(dev) | SD_F_MPSAFE);
 
-	err = pcm_register(dev, scp, 1, 0);
-	if (err) {
-		device_printf(dev, "Can't register pcm.\n");
-		return (ENXIO);
-	}
+	pcm_init(dev, scp);
 
 	scp->chnum = 0;
 	pcm_addchan(dev, PCMDIR_PLAY, &saichan_class, scp);
 	scp->chnum++;
 
 	snprintf(status, SND_STATUSLEN, "at simplebus");
-	pcm_setstatus(dev, status);
+	err = pcm_register(dev, status);
+	if (err) {
+		device_printf(dev, "Can't register pcm.\n");
+		return (ENXIO);
+	}
 
 	mixer_init(dev, &saimixer_class, scp);
 

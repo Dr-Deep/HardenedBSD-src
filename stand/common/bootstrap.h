@@ -22,8 +22,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _BOOTSTRAP_H_
@@ -52,10 +50,12 @@ extern char	command_errbuf[COMMAND_ERRBUFSZ];
 void	interact(void);
 void	interp_emit_prompt(void);
 int	interp_builtin_cmd(int argc, char *argv[]);
+bool	interp_has_builtin_cmd(const char *cmd);
 
 /* Called by interp.c for interp_*.c embedded interpreters */
 int	interp_include(const char *);	/* Execute commands from filename */
-void	interp_init(void);		/* Initialize interpreater */
+void	interp_preinit(void);		/* Initialize interpreater execution engine */
+void	interp_init(void);		/* Initialize interpreater and run main script */
 int	interp_run(const char *);	/* Run a single command */
 
 /* interp_backslash.c */
@@ -181,6 +181,7 @@ extern int isapnp_readport;
  * Version information
  */
 extern char bootprog_info[];
+extern unsigned bootprog_rev;
 
 /*
  * Interpreter information
@@ -200,6 +201,7 @@ struct file_metadata
 {
 	size_t		md_size;
 	uint16_t	md_type;
+	vm_offset_t	md_addr;	/* Valid after copied to kernel space */
 	struct file_metadata *md_next;
 	char		md_data[1];	/* data are immediately appended */
 };
@@ -228,7 +230,7 @@ struct kernel_module
 struct preloaded_file
 {
 	char *f_name;	/* file name */
-	char *f_type; /* verbose file type, eg 'ELF kernel', 'pnptable', etc. */
+	char *f_type; /* verbose file type, eg 'elf kernel', 'pnptable', etc. */
 	char *f_args;	/* arguments for the file */
 	/* metadata that will be placed in the module directory */
 	struct file_metadata *f_metadata;
@@ -237,10 +239,10 @@ struct preloaded_file
 	size_t f_size;		/* file size */
 	struct kernel_module	*f_modules;	/* list of modules if any */
 	struct preloaded_file	*f_next;	/* next file */
-#ifdef __amd64__
+#if defined(__amd64__) || (defined(__i386__) && defined(EFI))
 	bool			f_kernphys_relocatable;
 #endif
-#if defined(__i386__)
+#if defined(__i386__) && !defined(EFI)
 	bool			f_tg_kernel_support;
 #endif
 };
@@ -269,7 +271,7 @@ void unload(void);
 struct preloaded_file *file_alloc(void);
 struct preloaded_file *file_findfile(const char *name, const char *type);
 struct file_metadata *file_findmetadata(struct preloaded_file *fp, int type);
-struct preloaded_file *file_loadraw(const char *name, char *type, int insert);
+struct preloaded_file *file_loadraw(const char *name, const char *type, int insert);
 void file_discard(struct preloaded_file *fp);
 void file_addmetadata(struct preloaded_file *, int, size_t, void *);
 int file_addmodule(struct preloaded_file *, char *, int,
@@ -280,6 +282,9 @@ int tslog_init(void);
 int tslog_publish(void);
 
 vm_offset_t build_font_module(vm_offset_t);
+#define SPLASH_STARTUP	1
+#define SPLASH_SHUTDOWN 2
+vm_offset_t build_splash_module(vm_offset_t, int);
 
 /* MI module loaders */
 #ifdef __elfN
@@ -323,7 +328,8 @@ SET_DECLARE(Xcommand_set, struct bootblk_command);
  * The intention of the architecture switch is to provide a convenient
  * encapsulation of the interface between the bootstrap MI and MD code.
  * MD code may selectively populate the switch at runtime based on the
- * actual configuration of the target system.
+ * actual configuration of the target system, though some routines are
+ * mandatory.
  */
 struct arch_switch
 {
@@ -348,14 +354,6 @@ struct arch_switch
 	void (*arch_isaoutb)(int port, int value);
 
 	/*
-	 * Interface to adjust the load address according to the "object"
-	 * being loaded.
-	 */
-	uint64_t (*arch_loadaddr)(u_int type, void *data, uint64_t addr);
-#define	LOAD_ELF	1	/* data points to the ELF header. */
-#define	LOAD_RAW	2	/* data points to the file name. */
-
-	/*
 	 * Interface to inform MD code about a loaded (ELF) segment. This
 	 * can be used to flush caches and/or set up translations.
 	 */
@@ -370,53 +368,17 @@ struct arch_switch
 
 	/* Return the hypervisor name/type or NULL if not virtualized. */
 	const char *(*arch_hypervisor)(void);
-
-	/* For kexec-type loaders, get ksegment structure */
-	void (*arch_kexec_kseg_get)(int *nseg, void **kseg);
 };
 extern struct arch_switch archsw;
 
 /* This must be provided by the MD code, but should it be in the archsw? */
 void	delay(int delay);
 
-void	dev_cleanup(void);
-
-/*
- * nvstore API.
- */
-typedef int (nvstore_getter_cb_t)(void *, const char *, void **);
-typedef int (nvstore_setter_cb_t)(void *, int, const char *,
-    const void *, size_t);
-typedef int (nvstore_setter_str_cb_t)(void *, const char *, const char *,
-    const char *);
-typedef int (nvstore_unset_cb_t)(void *, const char *);
-typedef int (nvstore_print_cb_t)(void *, void *);
-typedef int (nvstore_iterate_cb_t)(void *, int (*)(void *, void *));
-
-typedef struct nvs_callbacks {
-	nvstore_getter_cb_t	*nvs_getter;
-	nvstore_setter_cb_t	*nvs_setter;
-	nvstore_setter_str_cb_t *nvs_setter_str;
-	nvstore_unset_cb_t	*nvs_unset;
-	nvstore_print_cb_t	*nvs_print;
-	nvstore_iterate_cb_t	*nvs_iterate;
-} nvs_callbacks_t;
-
-int nvstore_init(const char *, nvs_callbacks_t *, void *);
-int nvstore_fini(const char *);
-void *nvstore_get_store(const char *);
-int nvstore_print(void *);
-int nvstore_get_var(void *, const char *, void **);
-int nvstore_set_var(void *, int, const char *, void *, size_t);
-int nvstore_set_var_from_string(void *, const char *, const char *,
-    const char *);
-int nvstore_unset_var(void *, const char *);
+int setprint_delay(struct env_var *ev, int flags, const void *value);
 
 /* common code to set currdev variable. */
-extern int mount_currdev(struct env_var *, int, const void *);
-
-#ifndef CTASSERT
-#define	CTASSERT(x)	_Static_assert(x, "compile-time assertion failed")
-#endif
+int gen_setcurrdev(struct env_var *ev, int flags, const void *value);
+int mount_currdev(struct env_var *, int, const void *);
+void set_currdev(const char *devname);
 
 #endif /* !_BOOTSTRAP_H_ */

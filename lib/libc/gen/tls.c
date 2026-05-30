@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2004 Doug Rabson
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	$FreeBSD$
  */
 
 /*
@@ -34,7 +32,6 @@
  * runtime from ld-elf.so.1.
  */
 
-#include <sys/cdefs.h>
 #include <sys/param.h>
 #include <stdlib.h>
 #include <string.h>
@@ -83,13 +80,13 @@ static void *libc_tls_init;
 void *
 __libc_tls_get_addr(void *vti)
 {
-	uintptr_t *dtv;
+	struct dtv *dtv;
 	tls_index *ti;
 
 	dtv = _tcb_get()->tcb_dtv;
 	ti = vti;
-	return ((char *)(dtv[ti->ti_module + 1] + ti->ti_offset) +
-	    TLS_DTV_OFFSET);
+	return (dtv->dtv_slots[ti->ti_module - 1].dtvs_tls +
+	    (ti->ti_offset + TLS_DTV_OFFSET));
 }
 
 #ifdef __i386__
@@ -116,6 +113,8 @@ libc_malloc_aligned(size_t size, size_t align)
 		align = sizeof(void *);
 
 	mem = __je_bootstrap_malloc(size + sizeof(void *) + align - 1);
+	if (mem == NULL)
+		return (NULL);
 	res = (void *)roundup2((uintptr_t)mem + sizeof(void *), align);
 	*(void **)((uintptr_t)res - sizeof(void *)) = mem;
 	return (res);
@@ -152,7 +151,8 @@ libc_free_aligned(void *ptr)
  *   where TP points (with bias) to TLS and TCB immediately precedes TLS without
  *   any alignment gap[4]. Only TLS should be aligned.  The TCB[0] points to DTV
  *   vector and DTV values are biased by constant value (TLS_DTV_OFFSET) from
- *   real addresses[5].
+ *   real addresses. However, like RTLD, we don't actually bias the DTV values,
+ *   instead we compensate in __tls_get_addr for ti_offset's bias.
  *
  * [1] Ulrich Drepper: ELF Handling for Thread-Local Storage
  *     www.akkadia.org/drepper/tls.pdf
@@ -168,8 +168,6 @@ libc_free_aligned(void *ptr)
  *     but we must follow this rule due to suboptimal _tcb_set()
  *     (aka <ARCH>_SET_TP) implementation. This function doesn't expect TP but
  *     TCB as argument.
- *
- * [5] I'm not able to validate "values are biased" assertions.
  */
 
 /*
@@ -202,11 +200,9 @@ get_tls_block_ptr(void *tcb, size_t tcbsize)
 void
 __libc_free_tls(void *tcb, size_t tcbsize, size_t tcbalign __unused)
 {
-	Elf_Addr *dtv;
-	Elf_Addr **tls;
+	struct dtv *dtv;
 
-	tls = (Elf_Addr **)tcb;
-	dtv = tls[0];
+	dtv = ((struct tcb *)tcb)->tcb_dtv;
 	__je_bootstrap_free(dtv);
 	libc_free_aligned(get_tls_block_ptr(tcb, tcbsize));
 }
@@ -234,7 +230,8 @@ __libc_free_tls(void *tcb, size_t tcbsize, size_t tcbalign __unused)
 void *
 __libc_allocate_tls(void *oldtcb, size_t tcbsize, size_t tcbalign)
 {
-	Elf_Addr *dtv, **tcb;
+	struct dtv *dtv;
+	struct tcb *tcb;
 	char *tls_block, *tls;
 	size_t extra_size, maxalign, post_size, pre_size, tls_block_size;
 
@@ -263,7 +260,7 @@ __libc_allocate_tls(void *oldtcb, size_t tcbsize, size_t tcbalign)
 		abort();
 	}
 	memset(tls_block, 0, tls_block_size);
-	tcb = (Elf_Addr **)(tls_block + pre_size + extra_size);
+	tcb = (struct tcb *)(tls_block + pre_size + extra_size);
 	tls = (char *)tcb + TLS_TCB_SIZE + post_size;
 
 	if (oldtcb != NULL) {
@@ -272,19 +269,20 @@ __libc_allocate_tls(void *oldtcb, size_t tcbsize, size_t tcbalign)
 		libc_free_aligned(oldtcb);
 
 		/* Adjust the DTV. */
-		dtv = tcb[0];
-		dtv[2] = (Elf_Addr)(tls + TLS_DTV_OFFSET);
+		dtv = tcb->tcb_dtv;
+		dtv->dtv_slots[0].dtvs_tls = tls;
 	} else {
-		dtv = __je_bootstrap_malloc(3 * sizeof(Elf_Addr));
+		dtv = __je_bootstrap_malloc(sizeof(struct dtv) +
+		    sizeof(struct dtv_slot));
 		if (dtv == NULL) {
 			tls_msg("__libc_allocate_tls: Out of memory.\n");
 			abort();
 		}
 		/* Build the DTV. */
-		tcb[0] = dtv;
-		dtv[0] = 1;		/* Generation. */
-		dtv[1] = 1;		/* Segments count. */
-		dtv[2] = (Elf_Addr)(tls + TLS_DTV_OFFSET);
+		tcb->tcb_dtv = dtv;
+		dtv->dtv_gen = 1;		/* Generation. */
+		dtv->dtv_size = 1;		/* Segments count. */
+		dtv->dtv_slots[0].dtvs_tls = tls;
 
 		if (libc_tls_init_size > 0)
 			memcpy(tls, libc_tls_init, libc_tls_init_size);
@@ -304,8 +302,8 @@ void
 __libc_free_tls(void *tcb, size_t tcbsize __unused, size_t tcbalign)
 {
 	size_t size;
-	Elf_Addr* dtv;
-	Elf_Addr tlsstart, tlsend;
+	struct dtv *dtv;
+	uintptr_t tlsstart, tlsend;
 
 	/*
 	 * Figure out the size of the initial TLS block so that we can
@@ -314,8 +312,8 @@ __libc_free_tls(void *tcb, size_t tcbsize __unused, size_t tcbalign)
 	tcbalign = MAX(tcbalign, libc_tls_init_align);
 	size = roundup2(libc_tls_static_space, tcbalign);
 
-	dtv = ((Elf_Addr**)tcb)[1];
-	tlsend = (Elf_Addr) tcb;
+	dtv = ((struct tcb *)tcb)->tcb_dtv;
+	tlsend = (uintptr_t)tcb;
 	tlsstart = tlsend - size;
 	libc_free_aligned((void*)tlsstart);
 	__je_bootstrap_free(dtv);
@@ -325,61 +323,60 @@ __libc_free_tls(void *tcb, size_t tcbsize __unused, size_t tcbalign)
  * Allocate Static TLS using the Variant II method.
  */
 void *
-__libc_allocate_tls(void *oldtls, size_t tcbsize, size_t tcbalign)
+__libc_allocate_tls(void *oldtcb, size_t tcbsize, size_t tcbalign)
 {
 	size_t size;
-	char *tls;
-	Elf_Addr *dtv;
-	Elf_Addr segbase, oldsegbase;
+	char *tls_block, *tls;
+	struct dtv *dtv;
+	struct tcb *tcb;
 
 	tcbalign = MAX(tcbalign, libc_tls_init_align);
 	size = roundup2(libc_tls_static_space, tcbalign);
 
-	if (tcbsize < 2 * sizeof(Elf_Addr))
-		tcbsize = 2 * sizeof(Elf_Addr);
-	tls = libc_malloc_aligned(size + tcbsize, tcbalign);
-	if (tls == NULL) {
+	if (tcbsize < 2 * sizeof(uintptr_t))
+		tcbsize = 2 * sizeof(uintptr_t);
+	tls_block = libc_malloc_aligned(size + tcbsize, tcbalign);
+	if (tls_block == NULL) {
 		tls_msg("__libc_allocate_tls: Out of memory.\n");
 		abort();
 	}
-	memset(tls, 0, size + tcbsize);
-	dtv = __je_bootstrap_malloc(3 * sizeof(Elf_Addr));
+	memset(tls_block, 0, size + tcbsize);
+	dtv = __je_bootstrap_malloc(sizeof(struct dtv) +
+	    sizeof(struct dtv_slot));
 	if (dtv == NULL) {
 		tls_msg("__libc_allocate_tls: Out of memory.\n");
 		abort();
 	}
 
-	segbase = (Elf_Addr)(tls + size);
-	((Elf_Addr*)segbase)[0] = segbase;
-	((Elf_Addr*)segbase)[1] = (Elf_Addr) dtv;
+	tcb = (struct tcb *)(tls_block + size);
+	tls = (char *)tcb - libc_tls_static_space;
+	tcb->tcb_self = tcb;
+	tcb->tcb_dtv = dtv;
 
-	dtv[0] = 1;
-	dtv[1] = 1;
-	dtv[2] = segbase - libc_tls_static_space;
+	dtv->dtv_gen = 1;
+	dtv->dtv_size = 1;
+	dtv->dtv_slots[0].dtvs_tls = tls;
 
-	if (oldtls) {
+	if (oldtcb != NULL) {
 		/*
 		 * Copy the static TLS block over whole.
 		 */
-		oldsegbase = (Elf_Addr) oldtls;
-		memcpy((void *)(segbase - libc_tls_static_space),
-		    (const void *)(oldsegbase - libc_tls_static_space),
+		memcpy(tls, (const char *)oldtcb - libc_tls_static_space,
 		    libc_tls_static_space);
 
 		/*
 		 * We assume that this block was the one we created with
 		 * allocate_initial_tls().
 		 */
-		_rtld_free_tls(oldtls, 2*sizeof(Elf_Addr), sizeof(Elf_Addr));
+		_rtld_free_tls(oldtcb, 2 * sizeof(uintptr_t),
+		    sizeof(uintptr_t));
 	} else {
-		memcpy((void *)(segbase - libc_tls_static_space),
-		    libc_tls_init, libc_tls_init_size);
-		memset((void *)(segbase - libc_tls_static_space +
-		    libc_tls_init_size), 0,
+		memcpy(tls, libc_tls_init, libc_tls_init_size);
+		memset(tls + libc_tls_init_size, 0,
 		    libc_tls_static_space - libc_tls_init_size);
 	}
 
-	return (void*) segbase;
+	return (tcb);
 }
 
 #endif /* TLS_VARIANT_II */
@@ -387,7 +384,7 @@ __libc_allocate_tls(void *oldtls, size_t tcbsize, size_t tcbalign)
 #else
 
 void *
-__libc_allocate_tls(void *oldtls __unused, size_t tcbsize __unused,
+__libc_allocate_tls(void *oldtcb __unused, size_t tcbsize __unused,
 	size_t tcbalign __unused)
 {
 	return (0);
@@ -400,8 +397,6 @@ __libc_free_tls(void *tcb __unused, size_t tcbsize __unused,
 }
 
 #endif /* PIC */
-
-extern char **environ;
 
 void
 _init_tls(void)

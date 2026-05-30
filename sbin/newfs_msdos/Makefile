@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 .include <src.opts.mk>
 
 PACKAGE=runtime
@@ -11,7 +9,6 @@ SRCS=	newfs_msdos.c mkfs_msdos.c
 .if ${MACHINE_CPUARCH} == "arm"
 WARNS?= 3
 .endif
-CSTD=	c11
 
 HAS_TESTS=
 SUBDIR.${MK_TESTS}+= tests

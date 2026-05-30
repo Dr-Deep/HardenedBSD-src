@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2020 Vladimir Kondratyev <wulf@FreeBSD.org>
  *
@@ -26,8 +26,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Sony PS4 DualShock 4 driver
  * https://eleccelerator.com/wiki/index.php?title=DualShock_4
@@ -39,10 +37,12 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/bus.h>
+#include <sys/conf.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/module.h>
+#include <sys/stat.h>
 #include <sys/sx.h>
 #include <sys/sysctl.h>
 
@@ -773,17 +773,33 @@ static const struct hidmap_item ps4dsmtp_map[] = {
 static const struct hid_device_id ps4dshock_devs[] = {
 	{ HID_BVP(BUS_USB, USB_VENDOR_SONY, 0x9cc),
 	  HID_TLC(HUP_GENERIC_DESKTOP, HUG_GAME_PAD) },
+	{ HID_BVP(BUS_USB, USB_VENDOR_SONY, 0x5c4),
+	  HID_TLC(HUP_GENERIC_DESKTOP, HUG_GAME_PAD) },
+	{ HID_BVP(BUS_USB, USB_VENDOR_SONY, 0xba0),
+	  HID_TLC(HUP_GENERIC_DESKTOP, HUG_GAME_PAD) },
 };
 static const struct hid_device_id ps4dsacc_devs[] = {
 	{ HID_BVP(BUS_USB, USB_VENDOR_SONY, 0x9cc),
+	  HID_TLC(HUP_GENERIC_DESKTOP, HUG_MULTIAXIS_CNTROLLER) },
+	{ HID_BVP(BUS_USB, USB_VENDOR_SONY, 0x5c4),
+	  HID_TLC(HUP_GENERIC_DESKTOP, HUG_MULTIAXIS_CNTROLLER) },
+	{ HID_BVP(BUS_USB, USB_VENDOR_SONY, 0xba0),
 	  HID_TLC(HUP_GENERIC_DESKTOP, HUG_MULTIAXIS_CNTROLLER) },
 };
 static const struct hid_device_id ps4dshead_devs[] = {
 	{ HID_BVP(BUS_USB, USB_VENDOR_SONY, 0x9cc),
 	  HID_TLC(HUP_CONSUMER, HUC_HEADPHONE) },
+	{ HID_BVP(BUS_USB, USB_VENDOR_SONY, 0x5c4),
+	  HID_TLC(HUP_CONSUMER, HUC_HEADPHONE) },
+	{ HID_BVP(BUS_USB, USB_VENDOR_SONY, 0xba0),
+	  HID_TLC(HUP_CONSUMER, HUC_HEADPHONE) },
 };
 static const struct hid_device_id ps4dsmtp_devs[] = {
 	{ HID_BVP(BUS_USB, USB_VENDOR_SONY, 0x9cc),
+	  HID_TLC(HUP_DIGITIZERS, HUD_TOUCHPAD) },
+	{ HID_BVP(BUS_USB, USB_VENDOR_SONY, 0x5c4),
+	  HID_TLC(HUP_DIGITIZERS, HUD_TOUCHPAD) },
+	{ HID_BVP(BUS_USB, USB_VENDOR_SONY, 0xba0),
 	  HID_TLC(HUP_DIGITIZERS, HUD_TOUCHPAD) },
 };
 
@@ -792,8 +808,11 @@ ps4dshock_final_cb(HIDMAP_CB_ARGS)
 {
 	struct evdev_dev *evdev = HIDMAP_CB_GET_EVDEV();
 
-	if (HIDMAP_CB_GET_STATE() == HIDMAP_CB_IS_ATTACHING)
+	if (HIDMAP_CB_GET_STATE() == HIDMAP_CB_IS_ATTACHING) {
 		evdev_support_prop(evdev, INPUT_PROP_DIRECT);
+		evdev_set_cdev_mode(evdev, UID_ROOT, GID_GAMES,
+		    S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+	}
 
 	/* Do not execute callback at interrupt handler and detach */
 	return (ENOSYS);
@@ -872,6 +891,8 @@ ps4dsacc_final_cb(HIDMAP_CB_ARGS)
 	if (HIDMAP_CB_GET_STATE() == HIDMAP_CB_IS_ATTACHING) {
 		evdev_support_event(evdev, EV_ABS);
 		evdev_support_prop(evdev, INPUT_PROP_ACCELEROMETER);
+		evdev_set_cdev_mode(evdev, UID_ROOT, GID_GAMES,
+		    S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 	}
         /* Do not execute callback at interrupt handler and detach */
         return (ENOSYS);

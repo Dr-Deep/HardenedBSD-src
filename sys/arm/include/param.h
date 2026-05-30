@@ -35,9 +35,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	from: @(#)param.h	5.8 (Berkeley) 6/28/91
- * $FreeBSD$
  */
 
 #ifndef _ARM_INCLUDE_PARAM_H_
@@ -47,22 +44,15 @@
  * Machine dependent constants for StrongARM
  */
 
-#include <machine/_align.h>
+#include <sys/_align.h>
 
 #define STACKALIGNBYTES	(8 - 1)
-#define STACKALIGN(p)	((u_int)(p) & ~STACKALIGNBYTES)
-
-#define __PCI_REROUTE_INTERRUPT
 
 #ifndef MACHINE
 #define	MACHINE		"arm"
 #endif
 #ifndef MACHINE_ARCH
-#if __ARM_ARCH >= 7
 #define	MACHINE_ARCH	"armv7"
-#else
-#define	MACHINE_ARCH	"armv6"
-#endif
 #endif
 
 #ifdef SMP
@@ -77,6 +67,8 @@
 #define	MAXMEMDOM	1
 #endif
 
+#define	__HAVE_STATIC_DEVMAP
+
 #define	ALIGNBYTES	_ALIGNBYTES
 #define	ALIGN(p)	_ALIGN(p)
 /*
@@ -85,8 +77,6 @@
  * This does not reflect the optimal alignment, just the possibility
  * (within reasonable limits).
  *
- * armv4 and v5 require alignment to the type's size.  armv6 requires 8-byte
- * alignment for the ldrd/strd instructions, but otherwise follows armv7 rules.
  * armv7 requires that an 8-byte type be aligned to at least a 4-byte boundary;
  * access to smaller types can be unaligned, except that the compiler may
  * optimize access to adjacent uint32_t values into a single load/store-multiple
@@ -130,17 +120,10 @@
 /*
  * Mach derived conversion macros
  */
-#define	trunc_page(x)		((x) & ~PAGE_MASK)
-#define	round_page(x)		(((x) + PAGE_MASK) & ~PAGE_MASK)
 #define	trunc_1mpage(x)		((unsigned)(x) & ~PDRMASK)
 #define	round_1mpage(x)		((((unsigned)(x)) + PDRMASK) & ~PDRMASK)
 
-#define	atop(x)			((unsigned)(x) >> PAGE_SHIFT)
-#define	ptoa(x)			((unsigned)(x) << PAGE_SHIFT)
-
 #define	arm32_btop(x)		((unsigned)(x) >> PAGE_SHIFT)
 #define	arm32_ptob(x)		((unsigned)(x) << PAGE_SHIFT)
-
-#define	pgtok(x)		((x) * (PAGE_SIZE / 1024))
 
 #endif /* !_ARM_INCLUDE_PARAM_H_ */

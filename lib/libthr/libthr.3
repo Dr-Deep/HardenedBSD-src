@@ -1,5 +1,5 @@
 .\" Copyright (c) 2005 Robert N. M. Watson
-.\" Copyright (c) 2014,2015,2021 The FreeBSD Foundation, Inc.
+.\" Copyright (c) 2014,2015,2021 The FreeBSD Foundation
 .\" All rights reserved.
 .\"
 .\" Part of this documentation was written by
@@ -27,8 +27,6 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
 .Dd October 1, 2021
 .Dt LIBTHR 3
 .Os
@@ -54,6 +52,12 @@ The library is tightly integrated with the run-time link editor
 and
 .Lb libc ;
 all three components must be built from the same source tree.
+Together, they constitute the base C runtime environment of
+.Fx ,
+running on top of the
+.Fx
+kernel.
+.Pp
 Mixing
 .Li libc
 and
@@ -196,6 +200,12 @@ The integer value of the variable specifies how often blocked
 threads are inserted at the head of the sleep queue, instead of its tail.
 Bigger values reduce the frequency of the FIFO discipline.
 The value must be between 0 and 255.
+.It Dv LIBPTHREAD_UMTX_MIN_TIMEOUT
+The minimal amount of time, in nanoseconds, the thread is required to sleep
+for pthread operations specifying a timeout.
+If the operation requests a timeout less than the value provided,
+it is silently increased to the value.
+The value of zero means no minimum (default).
 .Pp
 .El
 The following
@@ -213,7 +223,7 @@ recycle it at any moment, making this sysctl less useful than it sounds.
 .It Dv kern.ipc.umtx_max_robust
 The maximal number of robust mutexes allowed for one thread.
 The kernel will not unlock more mutexes than specified, see
-.Xr _umtx_op
+.Xr _umtx_op 2
 for more details.
 The default value is large enough for most useful applications.
 .It Dv debug.umtx.robust_faults_verbose
@@ -259,6 +269,25 @@ the critical section.
 This should be taken into account when interpreting
 .Xr ktrace 1
 logs.
+.Pp
+The
+.Nm
+library uses the
+.Va SIGTHR
+signal for internal operations, in particular,
+for cancellation requests.
+This signal's masking and disposition is controlled by the library,
+and user programs should not try to modify them.
+The library interposes functions controlling signals to prevent
+inadvertent modifications and to guard portable code against
+exposure to
+.Va SIGTHR .
+.Pp
+Note: similarly, the
+.Va SIGLIBRT
+signal is reserved for use by
+.Lb librt ,
+and should be not modified by users.
 .Sh PROCESS-SHARED SYNCHRONIZATION OBJECTS
 In the
 .Li libthr
@@ -321,15 +350,15 @@ anyway.
 .Sh SEE ALSO
 .Xr ktrace 1 ,
 .Xr ld-elf.so.1 1 ,
-.Xr getrlimit 2 ,
+.Xr _umtx_op 2 ,
 .Xr errno 2 ,
+.Xr getrlimit 2 ,
 .Xr thr_exit 2 ,
 .Xr thr_kill 2 ,
 .Xr thr_kill2 2 ,
 .Xr thr_new 2 ,
 .Xr thr_self 2 ,
 .Xr thr_set_name 2 ,
-.Xr _umtx_op 2 ,
 .Xr dlclose 3 ,
 .Xr dlopen 3 ,
 .Xr getenv 3 ,

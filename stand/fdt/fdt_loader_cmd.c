@@ -26,9 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <stand.h>
 #include <libfdt.h>
 #include <fdt.h>
@@ -113,7 +110,7 @@ static const struct cmdtab commands[] = {
 static char cwd[FDT_CWD_LEN] = "/";
 
 static vm_offset_t
-fdt_find_static_dtb()
+fdt_find_static_dtb(void)
 {
 	Elf_Ehdr *ehdr;
 	Elf_Shdr *shdr;
@@ -430,7 +427,7 @@ fdt_check_overlay_compatible(void *base_fdt, void *overlay_fdt)
  * Returns the number of overlays successfully applied
  */
 int
-fdt_apply_overlays()
+fdt_apply_overlays(void)
 {
 	struct preloaded_file *fp;
 	size_t max_overlay_size, next_fdtp_size;
@@ -553,7 +550,7 @@ fdt_is_setup(void)
 }
 
 int
-fdt_setup_fdtp()
+fdt_setup_fdtp(void)
 {
 	struct preloaded_file *bfp;
 	vm_offset_t va;
@@ -993,10 +990,10 @@ int
 fdt_copy(vm_offset_t va)
 {
 	int err;
-	debugf("fdt_copy va 0x%08x\n", va);
+	debugf("fdt_copy va 0x%08jx\n", (uintmax_t)va);
 	if (fdtp == NULL) {
 		err = fdt_setup_fdtp();
-		if (err) {
+		if (err && (getenv("acpi.revision") == NULL)) {
 			printf("No valid device tree blob found!\n");
 			return (0);
 		}
@@ -1241,13 +1238,6 @@ fdt_cmd_ls(int argc, char *argv[])
 	}
 
 	return (CMD_OK);
-}
-
-static __inline int
-isprint(int c)
-{
-
-	return (c >= ' ' && c <= 0x7e);
 }
 
 static int

@@ -59,7 +59,7 @@
  ******************************************************************************/
 
 /**
- * This is the default DNS64 prefix that is used whent he dns64 module is listed
+ * This is the default DNS64 prefix that is used when the dns64 module is listed
  * in module-config but when the dns64-prefix variable is not present.
  */
 static const char DEFAULT_DNS64_PREFIX[] = "64:ff9b::/96";
@@ -366,22 +366,23 @@ static int
 dns64_apply_cfg(struct dns64_env* dns64_env, struct config_file* cfg)
 {
     struct config_strlist* s;
-    verbose(VERB_ALGO, "dns64-prefix: %s", cfg->dns64_prefix);
-    if (!netblockstrtoaddr(cfg->dns64_prefix ? cfg->dns64_prefix :
-                DEFAULT_DNS64_PREFIX, 0, &dns64_env->prefix_addr,
+    const char* dns64_prefix = cfg->dns64_prefix ?
+	cfg->dns64_prefix : DEFAULT_DNS64_PREFIX;
+    verbose(VERB_ALGO, "dns64-prefix: %s", dns64_prefix);
+    if (!netblockstrtoaddr(dns64_prefix, 0, &dns64_env->prefix_addr,
                 &dns64_env->prefix_addrlen, &dns64_env->prefix_net)) {
-        log_err("cannot parse dns64-prefix netblock: %s", cfg->dns64_prefix);
+        log_err("cannot parse dns64-prefix netblock: %s", dns64_prefix);
         return 0;
     }
     if (!addr_is_ip6(&dns64_env->prefix_addr, dns64_env->prefix_addrlen)) {
-        log_err("dns64_prefix is not IPv6: %s", cfg->dns64_prefix);
+        log_err("dns64_prefix is not IPv6: %s", dns64_prefix);
         return 0;
     }
     if (dns64_env->prefix_net != 32 && dns64_env->prefix_net != 40 &&
             dns64_env->prefix_net != 48 && dns64_env->prefix_net != 56 &&
             dns64_env->prefix_net != 64 && dns64_env->prefix_net != 96 ) {
-        log_err("dns64-prefix length it not 32, 40, 48, 56, 64 or 96: %s",
-                cfg->dns64_prefix);
+        log_err("dns64-prefix length is not 32, 40, 48, 56, 64 or 96: %s",
+                dns64_prefix);
         return 0;
     }
     for(s = cfg->dns64_ignore_aaaa; s; s = s->next) {
@@ -496,8 +497,8 @@ handle_ipv6_ptr(struct module_qstate* qstate, int id)
 
     /* Create the new sub-query. */
     fptr_ok(fptr_whitelist_modenv_attach_sub(qstate->env->attach_sub));
-    if(!(*qstate->env->attach_sub)(qstate, &qinfo, qstate->query_flags, 0, 0,
-                &subq))
+    if(!(*qstate->env->attach_sub)(qstate, &qinfo, qstate->client_info,
+	    qstate->query_flags, 0, 0, &subq))
         return module_error;
     if (subq) {
         subq->curmod = id;
@@ -522,8 +523,8 @@ generate_type_A_query(struct module_qstate* qstate, int id)
 
 	/* Start the sub-query. */
 	fptr_ok(fptr_whitelist_modenv_attach_sub(qstate->env->attach_sub));
-	if(!(*qstate->env->attach_sub)(qstate, &qinfo, qstate->query_flags, 0,
-				       0, &subq))
+	if(!(*qstate->env->attach_sub)(qstate, &qinfo, qstate->client_info,
+		qstate->query_flags, 0, 0, &subq))
 	{
 		verbose(VERB_ALGO, "dns64: sub-query creation failed");
 		return module_error;
@@ -573,28 +574,29 @@ static enum module_ext_state
 handle_event_pass(struct module_qstate* qstate, int id)
 {
 	struct dns64_qstate* iq = (struct dns64_qstate*)qstate->minfo[id];
-	if (iq && iq->state == DNS64_NEW_QUERY
-            && qstate->qinfo.qtype == LDNS_RR_TYPE_PTR
-            && qstate->qinfo.qname_len == 74
-            && !strcmp((char*)&qstate->qinfo.qname[64], "\03ip6\04arpa"))
-        /* Handle PTR queries for IPv6 addresses. */
-        return handle_ipv6_ptr(qstate, id);
+	int synth_all_cfg = qstate->env->cfg->dns64_synthall;
+	int synth_qname = 0;
 
-	if (qstate->env->cfg->dns64_synthall &&
-	    iq && iq->state == DNS64_NEW_QUERY
-	    && qstate->qinfo.qtype == LDNS_RR_TYPE_AAAA)
-		return generate_type_A_query(qstate, id);
+	if(iq && iq->state == DNS64_NEW_QUERY
+		&& qstate->qinfo.qtype == LDNS_RR_TYPE_PTR
+		&& qstate->qinfo.qname_len == 74
+		&& !strcmp((char*)&qstate->qinfo.qname[64], "\03ip6\04arpa")) {
+		/* Handle PTR queries for IPv6 addresses. */
+		return handle_ipv6_ptr(qstate, id);
+	}
 
-	if(dns64_always_synth_for_qname(qstate, id) &&
-	    iq && iq->state == DNS64_NEW_QUERY
-	    && !(qstate->query_flags & BIT_CD)
-	    && qstate->qinfo.qtype == LDNS_RR_TYPE_AAAA) {
-		verbose(VERB_ALGO, "dns64: ignore-aaaa and synthesize anyway");
+	if(iq && iq->state == DNS64_NEW_QUERY &&
+		qstate->qinfo.qtype == LDNS_RR_TYPE_AAAA &&
+		(synth_all_cfg ||
+		(synth_qname=(dns64_always_synth_for_qname(qstate, id)
+			&& !(qstate->query_flags & BIT_CD))))) {
+		if(synth_qname)
+			verbose(VERB_ALGO, "dns64: ignore-aaaa and synthesize anyway");
 		return generate_type_A_query(qstate, id);
 	}
 
 	/* We are finished when our sub-query is finished. */
-	if (iq && iq->state == DNS64_SUBQUERY_FINISHED)
+	if(iq && iq->state == DNS64_SUBQUERY_FINISHED)
 		return module_finished;
 
 	/* Otherwise, pass request to next module. */
@@ -627,32 +629,38 @@ handle_event_moddone(struct module_qstate* qstate, int id)
      *        synthesize in (sec 5.1.2 of RFC6147).
      *   - A successful AAAA query with an answer.
      */
-	if((!iq || iq->state != DNS64_INTERNAL_QUERY)
-            && qstate->qinfo.qtype == LDNS_RR_TYPE_AAAA
-	    && !(qstate->query_flags & BIT_CD)
-	    && !(qstate->return_msg &&
-		    qstate->return_msg->rep &&
-		    reply_find_answer_rrset(&qstate->qinfo,
-			    qstate->return_msg->rep)))
-		/* not internal, type AAAA, not CD, and no answer RRset,
-		 * So, this is a AAAA noerror/nodata answer */
-		return generate_type_A_query(qstate, id);
 
-	if((!iq || iq->state != DNS64_INTERNAL_QUERY)
-	    && qstate->qinfo.qtype == LDNS_RR_TYPE_AAAA
-	    && !(qstate->query_flags & BIT_CD)
-	    && dns64_always_synth_for_qname(qstate, id)) {
-		/* if it is not internal, AAAA, not CD and listed domain,
-		 * generate from A record and ignore AAAA */
-		verbose(VERB_ALGO, "dns64: ignore-aaaa and synthesize anyway");
+	/* When an AAAA query completes check if we want to perform DNS64
+	 * synthesis. We skip queries with DNSSEC enabled (!CD) and
+	 * ones generated by us to retrieve the A/PTR record to use for
+	 * synth. */
+	int could_synth =
+		qstate->qinfo.qtype == LDNS_RR_TYPE_AAAA &&
+		(!iq || iq->state != DNS64_INTERNAL_QUERY) &&
+		!(qstate->query_flags & BIT_CD);
+	int has_data = /* whether query returned non-empty rrset */
+		qstate->return_msg &&
+		qstate->return_msg->rep &&
+		reply_find_answer_rrset(&qstate->qinfo, qstate->return_msg->rep);
+	int synth_qname = 0;
+
+	if(could_synth &&
+		(!has_data ||
+		(synth_qname=dns64_always_synth_for_qname(qstate, id)))) {
+		if(synth_qname)
+			verbose(VERB_ALGO, "dns64: ignore-aaaa and synthesize anyway");
 		return generate_type_A_query(qstate, id);
 	}
 
 	/* Store the response in cache. */
-	if ( (!iq || !iq->started_no_cache_store) &&
-		qstate->return_msg && qstate->return_msg->rep &&
-		!dns_cache_store(qstate->env, &qstate->qinfo, qstate->return_msg->rep,
-		0, 0, 0, NULL, qstate->query_flags, qstate->qstarttime))
+	if( (!iq || !iq->started_no_cache_store) &&
+		qstate->return_msg &&
+		qstate->return_msg->rep &&
+		!dns_cache_store(
+			qstate->env, &qstate->qinfo, qstate->return_msg->rep,
+			0, qstate->prefetch_leeway, 0, NULL,
+			qstate->query_flags, qstate->qstarttime,
+			qstate->is_valrec))
 		log_err("out of memory");
 
 	/* do nothing */
@@ -695,6 +703,7 @@ dns64_operate(struct module_qstate* qstate, enum module_ev event, int id,
 			iq->state = DNS64_NEW_QUERY;
 			iq->started_no_cache_store = qstate->no_cache_store;
 			qstate->no_cache_store = 1;
+			ATTR_FALLTHROUGH
   			/* fallthrough */
 		case module_event_pass:
 			qstate->ext_state[id] = handle_event_pass(qstate, id);
@@ -840,8 +849,9 @@ dns64_adjust_a(int id, struct module_qstate* super, struct module_qstate* qstate
 	 */
 	cp = construct_reply_info_base(super->region, rep->flags, rep->qdcount,
 		rep->ttl, rep->prefetch_ttl, rep->serve_expired_ttl,
+		rep->serve_expired_norec_ttl,
 		rep->an_numrrsets, rep->ns_numrrsets, rep->ar_numrrsets,
-		rep->rrset_count, rep->security);
+		rep->rrset_count, rep->security, LDNS_EDE_NONE);
 	if(!cp)
 		return;
 
@@ -969,10 +979,19 @@ dns64_inform_super(struct module_qstate* qstate, int id,
 	}
 	super_dq->state = DNS64_SUBQUERY_FINISHED;
 
-	/* If there is no successful answer, we're done. */
-	if (qstate->return_rcode != LDNS_RCODE_NOERROR
-	    || !qstate->return_msg
-	    || !qstate->return_msg->rep) {
+	/* If there is no successful answer, we're done.
+	 * Guarantee that we have at least a NOERROR reply further on. */
+	if(qstate->return_rcode != LDNS_RCODE_NOERROR
+		|| !qstate->return_msg
+		|| !qstate->return_msg->rep) {
+		return;
+	}
+
+	/* When no A record is found for synthesis fall back to AAAA again. */
+	if(qstate->qinfo.qtype == LDNS_RR_TYPE_A &&
+		!reply_find_answer_rrset(&qstate->qinfo,
+			qstate->return_msg->rep)) {
+		super_dq->state = DNS64_INTERNAL_QUERY;
 		return;
 	}
 
@@ -991,7 +1010,8 @@ dns64_inform_super(struct module_qstate* qstate, int id,
 	/* Store the generated response in cache. */
 	if ( (!super_dq || !super_dq->started_no_cache_store) &&
 		!dns_cache_store(super->env, &super->qinfo, super->return_msg->rep,
-		0, 0, 0, NULL, super->query_flags, qstate->qstarttime))
+		0, super->prefetch_leeway, 0, NULL, super->query_flags,
+		qstate->qstarttime, qstate->is_valrec))
 		log_err("out of memory");
 }
 
@@ -1029,8 +1049,8 @@ dns64_get_mem(struct module_env* env, int id)
  */
 static struct module_func_block dns64_block = {
 	"dns64",
-	&dns64_init, &dns64_deinit, &dns64_operate, &dns64_inform_super,
-	&dns64_clear, &dns64_get_mem
+	NULL, NULL, &dns64_init, &dns64_deinit, &dns64_operate,
+	&dns64_inform_super, &dns64_clear, &dns64_get_mem
 };
 
 /**

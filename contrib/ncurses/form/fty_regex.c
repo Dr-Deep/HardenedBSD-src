@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright 2018,2020 Thomas E. Dickey                                     *
+ * Copyright 2018-2021,2024 Thomas E. Dickey                                *
  * Copyright 1998-2012,2015 Free Software Foundation, Inc.                  *
  *                                                                          *
  * Permission is hereby granted, free of charge, to any person obtaining a  *
@@ -35,12 +35,43 @@
 
 #include "form.priv.h"
 
-MODULE_ID("$Id: fty_regex.c,v 1.32 2020/12/12 01:15:37 tom Exp $")
+MODULE_ID("$Id: fty_regex.c,v 1.34 2024/12/07 23:02:27 tom Exp $")
 
 #if HAVE_REGEX_H_FUNCS || HAVE_LIB_PCRE2	/* We prefer POSIX regex */
 
 #if HAVE_PCRE2POSIX_H
 #include <pcre2posix.h>
+
+/* pcre2 used to provide its "POSIX" entrypoints using the same names as the
+ * standard ones in the C runtime, but that never worked because the linker
+ * would use the C runtime.  Debian patched the library to fix this symbol
+ * conflict, but overlooked the header file, and Debian's patch was made
+ * obsolete when pcre2 was changed early in 2019 to provide different names.
+ *
+ * Here is a workaround to make the older version of Debian's package work.
+ */
+#if !defined(PCRE2regcomp) && defined(HAVE_PCRE2REGCOMP)
+
+#undef regcomp
+#undef regexec
+#undef regfree
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+  PCRE2POSIX_EXP_DECL int PCRE2regcomp(regex_t *, const char *, int);
+  PCRE2POSIX_EXP_DECL int PCRE2regexec(const regex_t *, const char *, size_t,
+				       regmatch_t *, int);
+  PCRE2POSIX_EXP_DECL void PCRE2regfree(regex_t *);
+#ifdef __cplusplus
+}				/* extern "C" */
+#endif
+#define regcomp(r,s,n)          PCRE2regcomp(r,s,n)
+#define regexec(r,s,n,m,x)      PCRE2regexec(r,s,n,m,x)
+#define regfree(r)              PCRE2regfree(r)
+#endif
+/* end workaround... */
 #elif HAVE_PCREPOSIX_H
 #include <pcreposix.h>
 #else
@@ -126,12 +157,12 @@ Generic_RegularExpression_Type(void *arg MAYBE_UNUSED)
       if (preg)
 	{
 	  T((T_CREATE("RegExp_Arg %p"), (void *)preg));
-	  if (((preg->pRegExp = typeMalloc(regex_t, 1)) != 0)
+	  if (((preg->pRegExp = typeMalloc(regex_t, 1)) != NULL)
 	      && !regcomp(preg->pRegExp, rx,
 			  (REG_EXTENDED | REG_NOSUB | REG_NEWLINE)))
 	    {
 	      T((T_CREATE("regex_t %p"), (void *)preg->pRegExp));
-	      if ((preg->refCount = typeMalloc(unsigned long, 1)) != 0)
+	      if ((preg->refCount = typeMalloc(unsigned long, 1)) != NULL)
 		 *(preg->refCount) = 1;
 	    }
 	  else

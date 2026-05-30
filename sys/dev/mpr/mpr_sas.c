@@ -30,9 +30,6 @@
  *
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /* Communications core for Avago Technologies (LSI) MPT3 */
 
 /* TODO Move headers to mprvar */
@@ -53,12 +50,11 @@ __FBSDID("$FreeBSD$");
 #include <sys/kthread.h>
 #include <sys/taskqueue.h>
 #include <sys/sbuf.h>
+#include <sys/stdarg.h>
 
 #include <machine/bus.h>
 #include <machine/resource.h>
 #include <sys/rman.h>
-
-#include <machine/stdarg.h>
 
 #include <cam/cam.h>
 #include <cam/cam_ccb.h>
@@ -88,6 +84,12 @@ __FBSDID("$FreeBSD$");
 
 #define MPRSAS_DISCOVERY_TIMEOUT	20
 #define MPRSAS_MAX_DISCOVERY_TIMEOUTS	10 /* 200 seconds */
+
+#include <sys/sdt.h>
+
+/* SDT Probes */
+SDT_PROBE_DEFINE4(cam, , mpr, complete, "union ccb *",
+    "struct mpr_command *", "u_int", "u32");
 
 /*
  * static array to check SCSI OpCode for EEDP protection bits
@@ -306,7 +308,6 @@ mprsas_log_command(struct mpr_command *cm, u_int level, const char *fmt, ...)
 	struct sbuf sb;
 	va_list ap;
 	char str[224];
-	char path_str[64];
 
 	if (cm == NULL)
 		return;
@@ -320,9 +321,7 @@ mprsas_log_command(struct mpr_command *cm, u_int level, const char *fmt, ...)
 	va_start(ap, fmt);
 
 	if (cm->cm_ccb != NULL) {
-		xpt_path_string(cm->cm_ccb->csio.ccb_h.path, path_str,
-		    sizeof(path_str));
-		sbuf_cat(&sb, path_str);
+		xpt_path_sbuf(cm->cm_ccb->csio.ccb_h.path, &sb);
 		if (cm->cm_ccb->ccb_h.func_code == XPT_SCSI_IO) {
 			scsi_command_string(&cm->cm_ccb->csio, &sb);
 			sbuf_printf(&sb, "length %d ",
@@ -2546,6 +2545,9 @@ mprsas_scsiio_complete(struct mpr_softc *sc, struct mpr_command *cm)
 		sc->SSU_refcount--;
 	}
 
+	SDT_PROBE4(cam, , mpr, complete, ccb, cm, sassc->flags,
+	    sc->mapping_table[target_id].device_info);
+
 	/* Take the fast path to completion */
 	if (cm->cm_reply == NULL) {
 		if (mprsas_get_ccbstatus(ccb) == CAM_REQ_INPROG) {
@@ -2767,13 +2769,13 @@ mprsas_scsiio_complete(struct mpr_softc *sc, struct mpr_command *cm)
 		 * count by returning CAM_REQUEUE_REQ.  Unfortunately, if
 		 * we hit a persistent drive problem that returns one of
 		 * these error codes, we would retry indefinitely.  So,
-		 * return CAM_REQ_CMP_ERROR so that we decrement the retry
+		 * return CAM_REQ_CMP_ERR so that we decrement the retry
 		 * count and avoid infinite retries.  We're taking the
 		 * potential risk of flagging false failures in the event
 		 * of a topology-related error (e.g. a SAS expander problem
 		 * causes a command addressed to a drive to fail), but
 		 * avoiding getting into an infinite retry loop. However,
-		 * if we get them while were moving a device, we should
+		 * if we get them while were removing a device, we should
 		 * fail the request as 'not there' because the device
 		 * is effectively gone.
 		 */

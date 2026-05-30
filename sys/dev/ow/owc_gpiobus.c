@@ -24,8 +24,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_platform.h"
 
 #include <sys/param.h>
@@ -135,8 +133,9 @@ owc_gpiobus_attach(device_t dev)
 	 * interrupts work, because we can't do IO for them until we can read
 	 * the system timecounter (which initializes after device attachments).
 	 */
-	device_add_child(sc->sc_dev, "ow", -1);
-	return (bus_delayed_attach_children(dev));
+	device_add_child(sc->sc_dev, "ow", DEVICE_UNIT_ANY);
+	bus_delayed_attach_children(dev);
+	return (0);
 }
 
 static int
@@ -147,7 +146,7 @@ owc_gpiobus_detach(device_t dev)
 
 	sc = device_get_softc(dev);
 
-	if ((err = device_delete_children(dev)) != 0)
+	if ((err = bus_generic_detach(dev)) != 0)
 		return (err);
 
 	gpio_pin_release(sc->sc_pin);
@@ -381,7 +380,7 @@ static device_method_t owc_gpiobus_methods[] = {
 	DEVMETHOD(owll_write_zero,	owc_gpiobus_write_zero),
 	DEVMETHOD(owll_read_data,	owc_gpiobus_read_data),
 	DEVMETHOD(owll_reset_and_presence,	owc_gpiobus_reset_and_presence),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t owc_gpiobus_driver = {

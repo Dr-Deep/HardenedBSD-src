@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 .include <src.opts.mk>
 
 KYUA_CONFDIR=	/etc/kyua
@@ -12,10 +10,10 @@ KYUA_VERSION=	0.13
 KYUA_SRCDIR=	${SRCTOP}/contrib/kyua
 .PATH: ${KYUA_SRCDIR}
 
-PACKAGE=	tests
+PACKAGE=	kyua
 PROG_CXX=	kyua
 SRCS=		main.cpp
-LIBADD=		lutok sqlite3
+LIBADD=		lutok sqlite3 util
 
 MAN=		kyua-about.1 \
 		kyua-config.1 \
@@ -34,9 +32,7 @@ MAN=		kyua-about.1 \
 
 CFLAGS+=	-I${KYUA_SRCDIR} -I${.CURDIR}
 CFLAGS+=	-I${SRCTOP}/contrib/lutok/include
-CFLAGS+=	-I${SRCTOP}/contrib/sqlite3
-# kyua uses auto_ptr
-CFLAGS+=	-Wno-deprecated-declarations
+CFLAGS+=	-I${SYSROOT:U${DESTDIR}}/${INCLUDEDIR}/private/sqlite3
 CFLAGS+=	-DHAVE_CONFIG_H
 
 # We compile the kyua libraries as part of the main executable as this saves
@@ -52,6 +48,8 @@ CFLAGS+=	-DGDB=\"/usr/local/bin/gdb\"			\
 		-DPACKAGE_NAME=\"Kyua\"				\
 		-DPACKAGE_VERSION=\"${KYUA_VERSION}\"		\
 		-DVERSION=\"${KYUA_VERSION}\"
+
+CXXWARNFLAGS.gcc+=	-Wno-free-nonheap-object
 
 SRCS+=	utils/datetime.cpp			\
 	utils/env.cpp				\
@@ -128,7 +126,13 @@ SRCS+=	engine/atf.cpp			\
 	engine/scanner.cpp		\
 	engine/tap.cpp			\
 	engine/tap_parser.cpp		\
-	engine/scheduler.cpp
+	engine/scheduler.cpp		\
+	engine/execenv/execenv.cpp	\
+	engine/execenv/execenv_host.cpp
+
+SRCS+=	os/freebsd/execenv_jail_manager.cpp	\
+	os/freebsd/main.cpp			\
+	os/freebsd/reqs_checker_kmods.cpp
 
 SRCS+=	store/dbtypes.cpp		\
 	store/exceptions.cpp		\
@@ -161,6 +165,14 @@ SRCS+=	cli/cmd_about.cpp		\
 	cli/config.cpp			\
 	cli/main.cpp
 
+.if ${MK_JAIL} == "no"
+SRCS+=	os/freebsd/execenv_jail_stub.cpp
+.else
+SRCS+=	os/freebsd/execenv_jail.cpp	\
+	os/freebsd/utils/jail.cpp
+LIBADD+=	jail
+.endif
+
 FILESGROUPS=	DOCS MISC STORE
 
 .if ${MK_EXAMPLES} != "no"
@@ -172,25 +184,25 @@ FILESGROUPS+=	EXAMPLES
 CONFS=		kyua.conf-default
 CONFSDIR=	${KYUA_CONFDIR}
 CONFSNAME=	kyua.conf
-CONFSDIRTAGS=	package=tests
+CONFSDIRTAGS=	package=kyua
 
 DOCS=		AUTHORS CONTRIBUTORS LICENSE
 DOCSDIR=	${KYUA_DOCDIR}
-DOCSTAGS=	package=tests
+DOCSTAGS=	package=kyua
 
 EXAMPLES=	Kyuafile.top kyua.conf
 EXAMPLESDIR=	${KYUA_EGDIR}
-EXAMPLESTAGS=	package=tests
+EXAMPLESTAGS=	package=kyua
 .PATH:		${KYUA_SRCDIR}/examples
 
 MISC=		context.html index.html report.css test_result.html
 MISCDIR=	${KYUA_MISCDIR}
-MISCTAGS=	package=tests
+MISCTAGS=	package=kyua
 .PATH:		${KYUA_SRCDIR}/misc
 
 STORE=		migrate_v1_v2.sql migrate_v2_v3.sql schema_v3.sql
 STOREDIR=	${KYUA_STOREDIR}
-STORETAGS=	package=tests
+STORETAGS=	package=kyua
 .PATH:		${KYUA_SRCDIR}/store
 
 CLEANFILES+=	${MAN}

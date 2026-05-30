@@ -63,13 +63,9 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)ffs_alloc.c	8.19 (Berkeley) 7/13/95
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #if HAVE_NBTOOL_CONFIG_H
 #include "nbtool_config.h"
 #endif
@@ -110,7 +106,7 @@ __FBSDID("$FreeBSD$");
 #undef DIP
 #define DIP(dp, field) \
 	((ffs_opts->version == 1) ? \
-	(dp)->ffs1_din.di_##field : (dp)->ffs2_din.di_##field)
+	(dp)->dp1.di_##field : (dp)->dp2.di_##field)
 
 /*
  * Various file system defaults (cribbed from newfs(8)).
@@ -342,6 +338,9 @@ ffs_validate(const char *dir, fsnode *root, fsinfo_t *fsopts)
 		/* set FFS defaults */
 	if (fsopts->sectorsize == -1)
 		fsopts->sectorsize = DFL_SECSIZE;
+	if (fsopts->sectorsize != DFL_SECSIZE)
+		warnx("sectorsize %d may produce nonfunctional image",
+		    fsopts->sectorsize);
 	if (ffs_opts->fsize == -1)
 		ffs_opts->fsize = MAX(DFL_FRAGSIZE, fsopts->sectorsize);
 	if (ffs_opts->bsize == -1)
@@ -592,6 +591,75 @@ ffs_create_image(const char *image, fsinfo_t *fsopts)
 	return (fsopts->fd);
 }
 
+static void
+ffs_add_size(fsinfo_t *fsopts, size_t file_len)
+{
+	ffs_opt_t	*ffs_opts = fsopts->fs_specific;
+	size_t		blocks, fs_nindir, overhead;
+	int		indir_level;
+
+	blocks = howmany(file_len, ffs_opts->bsize);
+
+	if (blocks <= UFS_NDADDR) {
+		/* Count full blocks. */
+		fsopts->size += rounddown2(file_len, ffs_opts->bsize);
+		/* Calculate fragment size needed. */
+		overhead = howmany(file_len -
+		    rounddown2(file_len, ffs_opts->bsize), ffs_opts->fsize);
+
+		/*
+		 * A file could have just 1 fragment with size 1/8, 1/4 or 1/2
+		 * of bsize.
+		 */
+		switch (overhead) {
+		case 0:
+			break;
+		case 1:
+			fsopts->size += ffs_opts->fsize;
+			break;
+		case 2:
+			fsopts->size += 2 * ffs_opts->fsize;
+			break;
+		case 3:
+		case 4:
+			fsopts->size += 4 * ffs_opts->fsize;
+			break;
+		default:
+			fsopts->size += ffs_opts->bsize;
+			break;
+		}
+		return;
+	}
+
+	/* File does not fit into direct blocks, count indirect blocks. */
+	blocks = howmany(file_len - UFS_NDADDR * (size_t)ffs_opts->bsize,
+	    ffs_opts->bsize);
+	fs_nindir = (size_t)ffs_opts->bsize / ((ffs_opts->version == 1) ?
+	    sizeof(ufs1_daddr_t) : sizeof(ufs2_daddr_t));
+
+	indir_level = overhead = 0;
+	while (blocks > 0 && indir_level < 3) {
+		/* One indirect block is stored in di_ib[] */
+		blocks = howmany(blocks, fs_nindir) - 1;
+		fsopts->size += ffs_opts->bsize * blocks;
+		overhead += blocks + 1;
+		indir_level++;
+	}
+
+	assert(blocks == 0);
+
+	if ((debug & DEBUG_FS_SIZE_DIR_NODE) != 0) {
+		printf("ffs_size_dir: size %jd, using %d levels of indirect "
+		    "blocks, overhead %jd blocks\n", (uintmax_t)file_len,
+		    indir_level, (uintmax_t)overhead);
+	}
+
+	/*
+	 * If the file is big enough to use indirect blocks,
+	 * we allocate bsize block for trailing data.
+	 */
+	fsopts->size += roundup2(file_len, ffs_opts->bsize);
+}
 
 static void
 ffs_size_dir(fsnode *root, fsinfo_t *fsopts)
@@ -623,20 +691,6 @@ ffs_size_dir(fsnode *root, fsinfo_t *fsopts)
 		    e, tmpdir.d_namlen, this, curdirsize);		\
 } while (0);
 
-#define	ADDSIZE(x) do {							\
-	if ((size_t)(x) < UFS_NDADDR * (size_t)ffs_opts->bsize) {	\
-		fsopts->size += roundup((x), ffs_opts->fsize);		\
-	} else {							\
-		/* Count space consumed by indirecttion blocks. */	\
-		fsopts->size +=	ffs_opts->bsize *			\
-		    (howmany((x), UFS_NDADDR * ffs_opts->bsize) - 1);	\
-		/*							\
-		 * If the file is big enough to use indirect blocks,	\
-		 * we allocate bsize block for trailing data.		\
-		 */							\
-		fsopts->size += roundup((x), ffs_opts->bsize);		\
-	}								\
-} while (0);
 
 	curdirsize = 0;
 	for (node = root; node != NULL; node = node->next) {
@@ -647,13 +701,13 @@ ffs_size_dir(fsnode *root, fsinfo_t *fsopts)
 		} else if ((node->inode->flags & FI_SIZED) == 0) {
 				/* don't count duplicate names */
 			node->inode->flags |= FI_SIZED;
-			if (debug & DEBUG_FS_SIZE_DIR_NODE)
+			if ((debug & DEBUG_FS_SIZE_DIR_NODE) != 0)
 				printf("ffs_size_dir: `%s' size %lld\n",
 				    node->name,
 				    (long long)node->inode->st.st_size);
 			fsopts->inodes++;
 			if (node->type == S_IFREG)
-				ADDSIZE(node->inode->st.st_size);
+				ffs_add_size(fsopts, node->inode->st.st_size);
 			if (node->type == S_IFLNK) {
 				size_t slen;
 
@@ -661,13 +715,16 @@ ffs_size_dir(fsnode *root, fsinfo_t *fsopts)
 				if (slen >= (ffs_opts->version == 1 ?
 						UFS1_MAXSYMLINKLEN :
 						UFS2_MAXSYMLINKLEN))
-					ADDSIZE(slen);
+					ffs_add_size(fsopts, slen);
 			}
 		}
 		if (node->type == S_IFDIR)
 			ffs_size_dir(node->child, fsopts);
 	}
-	ADDSIZE(curdirsize);
+	ffs_add_size(fsopts, curdirsize);
+
+	/* Round up to full block to account fragment scattering. */
+	fsopts->size = roundup2(fsopts->size, ffs_opts->bsize);
 
 	if (debug & DEBUG_FS_SIZE_DIR)
 		printf("ffs_size_dir: exit: size %lld inodes %lld\n",
@@ -680,15 +737,14 @@ ffs_build_dinode1(struct ufs1_dinode *dinp, dirbuf_t *dbufp, fsnode *cur,
 {
 	size_t slen;
 	void *membuf;
-	struct stat *st = stampst.st_ino != 0 ? &stampst : &cur->inode->st;
+	struct stat *st;
 
+	st = &cur->inode->st;
 	memset(dinp, 0, sizeof(*dinp));
 	dinp->di_mode = cur->inode->st.st_mode;
 	dinp->di_nlink = cur->inode->nlink;
 	dinp->di_size = cur->inode->st.st_size;
-#if HAVE_STRUCT_STAT_ST_FLAGS
-	dinp->di_flags = cur->inode->st.st_flags;
-#endif
+	dinp->di_flags = FSINODE_ST_FLAGS(*cur->inode);
 	dinp->di_gen = random();
 	dinp->di_uid = cur->inode->st.st_uid;
 	dinp->di_gid = cur->inode->st.st_gid;
@@ -728,15 +784,14 @@ ffs_build_dinode2(struct ufs2_dinode *dinp, dirbuf_t *dbufp, fsnode *cur,
 {
 	size_t slen;
 	void *membuf;
-	struct stat *st = stampst.st_ino != 0 ? &stampst : &cur->inode->st;
+	struct stat *st;
 
+	st = &cur->inode->st;
 	memset(dinp, 0, sizeof(*dinp));
 	dinp->di_mode = cur->inode->st.st_mode;
 	dinp->di_nlink = cur->inode->nlink;
 	dinp->di_size = cur->inode->st.st_size;
-#if HAVE_STRUCT_STAT_ST_FLAGS
-	dinp->di_flags = cur->inode->st.st_flags;
-#endif
+	dinp->di_flags = FSINODE_ST_FLAGS(*cur->inode);
 	dinp->di_gen = random();
 	dinp->di_uid = cur->inode->st.st_uid;
 	dinp->di_gid = cur->inode->st.st_gid;
@@ -854,10 +909,10 @@ ffs_populate_dir(const char *dir, fsnode *root, fsinfo_t *fsopts)
 
 				/* build on-disk inode */
 		if (ffs_opts->version == 1)
-			membuf = ffs_build_dinode1(&din.ffs1_din, &dirbuf, cur,
+			membuf = ffs_build_dinode1(&din.dp1, &dirbuf, cur,
 			    root, fsopts);
 		else
-			membuf = ffs_build_dinode2(&din.ffs2_din, &dirbuf, cur,
+			membuf = ffs_build_dinode2(&din.dp2, &dirbuf, cur,
 			    root, fsopts);
 
 		if (debug & DEBUG_FS_POPULATE_NODE) {
@@ -907,7 +962,7 @@ ffs_populate_dir(const char *dir, fsnode *root, fsinfo_t *fsopts)
 static void
 ffs_write_file(union dinode *din, uint32_t ino, void *buf, fsinfo_t *fsopts)
 {
-	int 	isfile, ffd;
+	int	isfile, ffd;
 	char	*fbuf, *p;
 	off_t	bufleft, chunk, offset;
 	ssize_t nread;
@@ -943,18 +998,18 @@ ffs_write_file(union dinode *din, uint32_t ino, void *buf, fsinfo_t *fsopts)
 	in.i_number = ino;
 	in.i_size = DIP(din, size);
 	if (ffs_opts->version == 1)
-		memcpy(&in.i_din.ffs1_din, &din->ffs1_din,
-		    sizeof(in.i_din.ffs1_din));
+		memcpy(&in.i_din.dp1, &din->dp1,
+		    sizeof(in.i_din.dp1));
 	else
-		memcpy(&in.i_din.ffs2_din, &din->ffs2_din,
-		    sizeof(in.i_din.ffs2_din));
+		memcpy(&in.i_din.dp2, &din->dp2,
+		    sizeof(in.i_din.dp2));
 
 	if (DIP(din, size) == 0)
 		goto write_inode_and_leave;		/* mmm, cheating */
 
 	if (isfile) {
 		fbuf = emalloc(ffs_opts->bsize);
-		if ((ffd = open((char *)buf, O_RDONLY, 0444)) == -1) {
+		if ((ffd = open((char *)buf, O_RDONLY)) == -1) {
 			err(EXIT_FAILURE, "Can't open `%s' for reading", (char *)buf);
 		}
 	} else {
@@ -1002,7 +1057,6 @@ ffs_write_file(union dinode *din, uint32_t ino, void *buf, fsinfo_t *fsopts)
 		errno = bwrite(bp);
 		if (errno != 0)
 			goto bad_ffs_write_file;
-		brelse(bp);
 		if (!isfile)
 			p += chunk;
 	}
@@ -1060,7 +1114,7 @@ ffs_make_dirbuf(dirbuf_t *dbuf, const char *name, fsnode *node, int needswap)
 	reclen = DIRSIZ_SWAP(0, &de, needswap);
 	de.d_reclen = ufs_rw16(reclen, needswap);
 
-	dp = (struct direct *)(dbuf->buf + dbuf->cur);
+	dp = dbuf->buf == NULL ? NULL : (struct direct *)(dbuf->buf + dbuf->cur);
 	llen = 0;
 	if (dp != NULL)
 		llen = DIRSIZ_SWAP(0, dp, needswap);
@@ -1097,7 +1151,7 @@ ffs_make_dirbuf(dirbuf_t *dbuf, const char *name, fsnode *node, int needswap)
 static void
 ffs_write_inode(union dinode *dp, uint32_t ino, const fsinfo_t *fsopts)
 {
-	char 		*buf;
+	char		*buf;
 	struct ufs1_dinode *dp1;
 	struct ufs2_dinode *dp2, *dip;
 	struct cg	*cgp;
@@ -1178,16 +1232,16 @@ ffs_write_inode(union dinode *dp, uint32_t ino, const fsinfo_t *fsopts)
 	ffs_rdfs(d, fs->fs_bsize, buf, fsopts);
 	if (fsopts->needswap) {
 		if (ffs_opts->version == 1)
-			ffs_dinode1_swap(&dp->ffs1_din,
+			ffs_dinode1_swap(&dp->dp1,
 			    &dp1[ino_to_fsbo(fs, ino)]);
 		else
-			ffs_dinode2_swap(&dp->ffs2_din,
+			ffs_dinode2_swap(&dp->dp2,
 			    &dp2[ino_to_fsbo(fs, ino)]);
 	} else {
 		if (ffs_opts->version == 1)
-			dp1[ino_to_fsbo(fs, ino)] = dp->ffs1_din;
+			dp1[ino_to_fsbo(fs, ino)] = dp->dp1;
 		else
-			dp2[ino_to_fsbo(fs, ino)] = dp->ffs2_din;
+			dp2[ino_to_fsbo(fs, ino)] = dp->dp2;
 	}
 	ffs_wtfs(d, fs->fs_bsize, buf, fsopts);
 	free(buf);

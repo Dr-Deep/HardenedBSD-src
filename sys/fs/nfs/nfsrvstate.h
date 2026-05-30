@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2009 Rick Macklem, University of Guelph
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _NFS_NFSRVSTATE_H_
@@ -58,18 +56,18 @@ LIST_HEAD(nfsdontlisthead, nfsdontlist);
 TAILQ_HEAD(nfsuserhashhead, nfsusrgrp);
 
 #define	NFSCLIENTHASH(id)						\
-	(&nfsclienthash[(id).lval[1] % nfsrv_clienthashsize])
+	(&VNET(nfsclienthash)[(id).lval[1] % nfsrv_clienthashsize])
 #define	NFSSTATEHASH(clp, id)						\
 	(&((clp)->lc_stateid[(id).other[2] % nfsrv_statehashsize]))
 #define	NFSUSERHASH(id)							\
-	(&nfsuserhash[(id) % nfsrv_lughashsize])
+	(&VNET(nfsuserhash)[(id) % nfsrv_lughashsize])
 #define	NFSUSERNAMEHASH(p, l)						\
-	(&nfsusernamehash[((l)>=4?(*(p)+*((p)+1)+*((p)+2)+*((p)+3)):*(p)) \
+	(&VNET(nfsusernamehash)[((l)>=4?(*(p)+*((p)+1)+*((p)+2)+*((p)+3)):*(p)) \
 		% nfsrv_lughashsize])
 #define	NFSGROUPHASH(id)						\
-	(&nfsgrouphash[(id) % nfsrv_lughashsize])
+	(&VNET(nfsgrouphash)[(id) % nfsrv_lughashsize])
 #define	NFSGROUPNAMEHASH(p, l)						\
-	(&nfsgroupnamehash[((l)>=4?(*(p)+*((p)+1)+*((p)+2)+*((p)+3)):*(p)) \
+	(&VNET(nfsgroupnamehash)[((l)>=4?(*(p)+*((p)+1)+*((p)+2)+*((p)+3)):*(p)) \
 		% nfsrv_lughashsize])
 
 struct nfssessionhash {
@@ -77,7 +75,8 @@ struct nfssessionhash {
 	struct nfssessionhashhead	list;
 };
 #define	NFSSESSIONHASH(f) 						\
-	(&nfssessionhash[nfsrv_hashsessionid(f) % nfsrv_sessionhashsize])
+	(&VNET(nfssessionhash)[nfsrv_hashsessionid(f) %		\
+	 nfsrv_sessionhashsize])
 
 struct nfslayouthash {
 	struct mtx		mtx;
@@ -104,6 +103,8 @@ struct nfsclient {
 	time_t		lc_delegtime;		/* Old deleg expiry (sec) */
 	nfsquad_t	lc_clientid;		/* 64 bit clientid */
 	nfsquad_t	lc_confirm;		/* 64 bit confirm value */
+	nfsopbit_t	lc_mustops;		/* Must ops SP4_MACH_CRED */
+	nfsopbit_t	lc_allowops;		/* Allowed ops SP4_MACH_CRED */
 	u_int32_t	lc_program;		/* RPC Program # */
 	u_int32_t	lc_callback;		/* Callback id */
 	u_int32_t	lc_stateindex;		/* Current state index# */
@@ -316,6 +317,7 @@ struct nfsusrgrp {
 	} lug_un;
 	struct ucred		*lug_cred;	/* Cred. with groups list */
 	int			lug_namelen;	/* Name length */
+	bool			lug_wired;	/* Wired into cache */
 	u_char			lug_name[1];	/* malloc'd correct length */
 };
 #define	lug_uid		lug_un.un_uid
@@ -332,7 +334,7 @@ struct nfsf_rec {
 	u_int32_t	numboots;		/* Number of boottimes */
 };
 
-void nfsrv_cleanclient(struct nfsclient *, NFSPROC_T *);
+void nfsrv_cleanclient(struct nfsclient *, NFSPROC_T *, bool, SVCXPRT **);
 void nfsrv_freedeleglist(struct nfsstatehead *);
 
 /*

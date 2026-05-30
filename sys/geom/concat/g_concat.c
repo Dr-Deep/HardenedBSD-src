@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2004-2005 Pawel Jakub Dawidek <pjd@FreeBSD.org>
  * All rights reserved.
@@ -25,9 +25,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -593,6 +590,7 @@ g_concat_add_disk(struct g_concat_softc *sc, struct g_provider *pp, u_int no)
 		    strcmp(md.md_name, sc->sc_name) != 0 ||
 		    md.md_id != sc->sc_id) {
 			G_CONCAT_DEBUG(0, "Metadata on %s changed.", pp->name);
+			error = EINVAL;
 			goto fail;
 		}
 
@@ -648,7 +646,7 @@ g_concat_create(struct g_class *mp, const struct g_concat_metadata *md,
 			return (NULL);
 		}
 	}
-	gp = g_new_geomf(mp, "%s", md->md_name);
+	gp = g_new_geom(mp, md->md_name);
 	sc = malloc(sizeof(*sc), M_CONCAT, M_WAITOK | M_ZERO);
 	gp->start = g_concat_start;
 	gp->spoiled = g_concat_orphan;
@@ -755,7 +753,7 @@ g_concat_taste(struct g_class *mp, struct g_provider *pp, int flags __unused)
 
 	G_CONCAT_DEBUG(3, "Tasting %s.", pp->name);
 
-	gp = g_new_geomf(mp, "concat:taste");
+	gp = g_new_geom(mp, "concat:taste");
 	gp->start = g_concat_start;
 	gp->access = g_concat_access;
 	gp->orphan = g_concat_orphan;
@@ -1109,8 +1107,6 @@ g_concat_ctl_append(struct gctl_req *req, struct g_class *mp)
 		gctl_error(req, "No 'arg%u' argument.", 1);
 		goto fail;
 	}
-	if (strncmp(name, "/dev/", strlen("/dev/")) == 0)
-		name += strlen("/dev/");
 	pp = g_provider_by_name(name);
 	if (pp == NULL) {
 		G_CONCAT_DEBUG(1, "Disk %s is invalid.", name);

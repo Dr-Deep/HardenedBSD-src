@@ -28,15 +28,11 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  * from kbdio.h,v 1.8 1998/09/25 11:55:46 yokota Exp
  */
 
 #ifndef _DEV_ATKBDC_ATKBDCREG_H_
 #define	_DEV_ATKBDC_ATKBDCREG_H_
-
-#include "opt_kbd.h"	/* Structures depend on the value if KBDIO_DEBUG */
 
 /* constants */
 
@@ -145,6 +141,8 @@
 
 #ifdef _KERNEL
 
+#include "opt_kbd.h"	/* Structures depend on the value if KBDIO_DEBUG */
+
 #define ATKBDC_DRIVER_NAME	"atkbdc"
 
 /* 
@@ -217,7 +215,7 @@ typedef struct atkbdc_softc {
 } atkbdc_softc_t; 
 
 enum kbdc_device_ivar {
-	KBDC_IVAR_VENDORID,
+	KBDC_IVAR_VENDORID = BUS_IVARS_PRIVATE,
 	KBDC_IVAR_SERIAL,
 	KBDC_IVAR_LOGICALID,
 	KBDC_IVAR_COMPATID, 

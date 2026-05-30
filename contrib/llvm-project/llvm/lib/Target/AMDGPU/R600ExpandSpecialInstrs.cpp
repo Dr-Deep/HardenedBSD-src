@@ -17,6 +17,8 @@
 #include "R600.h"
 #include "R600Defines.h"
 #include "R600Subtarget.h"
+#include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineFunctionPass.h"
 
 using namespace llvm;
 
@@ -29,7 +31,7 @@ private:
   const R600InstrInfo *TII = nullptr;
 
   void SetFlagInNewMI(MachineInstr *NewMI, const MachineInstr *OldMI,
-      unsigned Op);
+                      R600::OpName Op);
 
 public:
   static char ID;
@@ -59,7 +61,8 @@ FunctionPass *llvm::createR600ExpandSpecialInstrsPass() {
 }
 
 void R600ExpandSpecialInstrsPass::SetFlagInNewMI(MachineInstr *NewMI,
-    const MachineInstr *OldMI, unsigned Op) {
+                                                 const MachineInstr *OldMI,
+                                                 R600::OpName Op) {
   int OpIdx = TII->getOperandIdx(*OldMI, Op);
   if (OpIdx > -1) {
     uint64_t Val = OldMI->getOperand(OpIdx).getImm();

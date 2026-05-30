@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -36,6 +37,7 @@
 #include <sys/dmu_zfetch.h>
 #include <sys/zrlock.h>
 #include <sys/multilist.h>
+#include <sys/wmsum.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -119,7 +121,11 @@ extern "C" {
 #define	DN_MAX_LEVELS	(DIV_ROUND_UP(DN_MAX_OFFSET_SHIFT - SPA_MINBLOCKSHIFT, \
 	DN_MIN_INDBLKSHIFT - SPA_BLKPTRSHIFT) + 1)
 
-#define	DN_BONUS(dnp)	((void*)((dnp)->dn_bonus + \
+/*
+ * Use the flexible array instead of the fixed length one dn_bonus
+ * to address memcpy/memmove fortify error
+ */
+#define	DN_BONUS(dnp)	((void*)((dnp)->dn_bonus_flexible + \
 	(((dnp)->dn_nblkptr - 1) * sizeof (blkptr_t))))
 #define	DN_MAX_BONUS_LEN(dnp) \
 	((dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR) ? \
@@ -134,12 +140,6 @@ extern "C" {
 struct dmu_buf_impl;
 struct objset;
 struct zio;
-
-enum dnode_dirtycontext {
-	DN_UNDIRTIED,
-	DN_DIRTY_OPEN,
-	DN_DIRTY_SYNC
-};
 
 /* Is dn_used in bytes?  if not, it's in multiples of SPA_MINBLOCKSIZE */
 #define	DNODE_FLAG_USED_BYTES			(1 << 0)
@@ -265,6 +265,10 @@ typedef struct dnode_phys {
 			    sizeof (blkptr_t)];
 			blkptr_t dn_spill;
 		};
+		struct {
+			blkptr_t __dn_ignore4;
+			uint8_t dn_bonus_flexible[];
+		};
 	};
 } dnode_phys_t;
 
@@ -326,15 +330,13 @@ struct dnode {
 	/* protected by dn_mtx: */
 	kmutex_t dn_mtx;
 	list_t dn_dirty_records[TXG_SIZE];
-	struct range_tree *dn_free_ranges[TXG_SIZE];
+	struct zfs_range_tree *dn_free_ranges[TXG_SIZE];
 	uint64_t dn_allocated_txg;
 	uint64_t dn_free_txg;
 	uint64_t dn_assigned_txg;
-	uint64_t dn_dirty_txg;			/* txg dnode was last dirtied */
+	uint8_t dn_dirtycnt;
 	kcondvar_t dn_notxholds;
 	kcondvar_t dn_nodnholds;
-	enum dnode_dirtycontext dn_dirtyctx;
-	const void *dn_dirtyctx_firstset;	/* dbg: contents meaningless */
 
 	/* protected by own devices */
 	zfs_refcount_t dn_tx_holds;
@@ -371,6 +373,9 @@ struct dnode {
 
 	/* holds prefetch structure */
 	struct zfetch	dn_zfetch;
+
+	/* Not in dn_phys, but should be. set it after taking a hold */
+	dmu_object_type_t dn_storage_type;	/* type for storage class */
 };
 
 /*
@@ -427,7 +432,6 @@ void dnode_rele_and_unlock(dnode_t *dn, const void *tag, boolean_t evicting);
 int dnode_try_claim(objset_t *os, uint64_t object, int slots);
 boolean_t dnode_is_dirty(dnode_t *dn);
 void dnode_setdirty(dnode_t *dn, dmu_tx_t *tx);
-void dnode_set_dirtyctx(dnode_t *dn, dmu_tx_t *tx, const void *tag);
 void dnode_sync(dnode_t *dn, dmu_tx_t *tx);
 void dnode_allocate(dnode_t *dn, dmu_object_type_t ot, int blocksize, int ibs,
     dmu_object_type_t bonustype, int bonuslen, int dn_slots, dmu_tx_t *tx);
@@ -453,17 +457,12 @@ void dnode_evict_dbufs(dnode_t *dn);
 void dnode_evict_bonus(dnode_t *dn);
 void dnode_free_interior_slots(dnode_t *dn);
 
-#define	DNODE_IS_DIRTY(_dn)						\
-	((_dn)->dn_dirty_txg >= spa_syncing_txg((_dn)->dn_objset->os_spa))
+void dnode_set_storage_type(dnode_t *dn, dmu_object_type_t type);
 
-#define	DNODE_IS_CACHEABLE(_dn)						\
+#define	DNODE_LEVEL_IS_CACHEABLE(_dn, _level)				\
 	((_dn)->dn_objset->os_primary_cache == ZFS_CACHE_ALL ||		\
-	(DMU_OT_IS_METADATA((_dn)->dn_type) &&				\
+	(((_level) > 0 || DMU_OT_IS_METADATA((_dn)->dn_type)) &&	\
 	(_dn)->dn_objset->os_primary_cache == ZFS_CACHE_METADATA))
-
-#define	DNODE_META_IS_CACHEABLE(_dn)					\
-	((_dn)->dn_objset->os_primary_cache == ZFS_CACHE_ALL ||		\
-	(_dn)->dn_objset->os_primary_cache == ZFS_CACHE_METADATA)
 
 /*
  * Used for dnodestats kstat.
@@ -587,10 +586,42 @@ typedef struct dnode_stats {
 	kstat_named_t dnode_move_active;
 } dnode_stats_t;
 
+typedef struct dnode_sums {
+	wmsum_t dnode_hold_dbuf_hold;
+	wmsum_t dnode_hold_dbuf_read;
+	wmsum_t dnode_hold_alloc_hits;
+	wmsum_t dnode_hold_alloc_misses;
+	wmsum_t dnode_hold_alloc_interior;
+	wmsum_t dnode_hold_alloc_lock_retry;
+	wmsum_t dnode_hold_alloc_lock_misses;
+	wmsum_t dnode_hold_alloc_type_none;
+	wmsum_t dnode_hold_free_hits;
+	wmsum_t dnode_hold_free_misses;
+	wmsum_t dnode_hold_free_lock_misses;
+	wmsum_t dnode_hold_free_lock_retry;
+	wmsum_t dnode_hold_free_refcount;
+	wmsum_t dnode_hold_free_overflow;
+	wmsum_t dnode_free_interior_lock_retry;
+	wmsum_t dnode_allocate;
+	wmsum_t dnode_reallocate;
+	wmsum_t dnode_buf_evict;
+	wmsum_t dnode_alloc_next_chunk;
+	wmsum_t dnode_alloc_race;
+	wmsum_t dnode_alloc_next_block;
+	wmsum_t dnode_move_invalid;
+	wmsum_t dnode_move_recheck1;
+	wmsum_t dnode_move_recheck2;
+	wmsum_t dnode_move_special;
+	wmsum_t dnode_move_handle;
+	wmsum_t dnode_move_rwlock;
+	wmsum_t dnode_move_active;
+} dnode_sums_t;
+
 extern dnode_stats_t dnode_stats;
+extern dnode_sums_t dnode_sums;
 
 #define	DNODE_STAT_INCR(stat, val) \
-    atomic_add_64(&dnode_stats.stat.value.ui64, (val));
+    wmsum_add(&dnode_sums.stat, (val))
 #define	DNODE_STAT_BUMP(stat) \
     DNODE_STAT_INCR(stat, 1);
 
@@ -620,6 +651,19 @@ extern dnode_stats_t dnode_stats;
 #define	FREE_VERIFY(db, start, end, tx)
 
 #endif
+
+/*
+ * Assert that we are not modifying the range tree for the syncing TXG from
+ * a non-syncing thread. We verify that either the transaction group is
+ * strictly newer than the one currently syncing (meaning it's being modified
+ * in open context), OR the current thread is the sync thread itself. If this
+ * triggers, it indicates a race where dn_free_ranges is being modified while
+ * dnode_sync() may be iterating over it.
+ */
+#define	FREE_RANGE_VERIFY(tx, dn) \
+	ASSERT((tx)->tx_txg > spa_syncing_txg((dn)->dn_objset->os_spa) || \
+	    dmu_objset_pool((dn)->dn_objset)->dp_tx.tx_sync_thread == \
+	    curthread)
 
 #ifdef	__cplusplus
 }

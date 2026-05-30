@@ -23,7 +23,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 #include "test.h"
-__FBSDID("$FreeBSD$");
 
 #include <locale.h>
 
@@ -42,8 +41,7 @@ if [ ! -f ${if} ]; then
   exit 0
 fi
 of=test_archive_string_conversion.txt.Z
-echo "\$FreeBSD\$" > ${of}.uu
-awk -F ';'  '$0 ~/^[0-9A-F]+/ {printf "%s;%s\n", $2, $3}' ${if} | compress | uuencode ${of} >> ${of}.uu
+awk -F ';'  '$0 ~/^[0-9A-F]+/ {printf "%s;%s\n", $2, $3}' ${if} | compress | uuencode ${of} > ${of}.uu
 exit 1
 */
 
@@ -93,7 +91,7 @@ unicode_to_utf16be(char *p, uint32_t uc)
 		archive_be16enc(utf16+2, (uc & 0x3ff) + 0xDC00);
 		return (4);
 	} else {
-		archive_be16enc(utf16, uc);
+		archive_be16enc(utf16, (uint16_t)uc);
 		return (2);
 	}
 }
@@ -120,7 +118,7 @@ unicode_to_utf16le(char *p, uint32_t uc)
 		archive_le16enc(utf16+2, (uc & 0x3ff) + 0xDC00);
 		return (4);
 	} else {
-		archive_le16enc(utf16, uc);
+		archive_le16enc(utf16, (uint16_t)uc);
 		return (2);
 	}
 }
@@ -847,6 +845,7 @@ test_archive_string_set_get(void)
 	assertEqualInt(0, archive_mstring_update_utf8(a, &mstr, "EEEEE---H"));
 	check_string(a, &mstr, sc, "EEEEE---H", L"EEEEE---H");
 
+        archive_mstring_clean(&mstr);
 	assertEqualInt(ARCHIVE_OK, archive_read_free(a));
 
 }
@@ -882,4 +881,284 @@ DEFINE_TEST(test_archive_string_conversion)
 	test_archive_string_normalization_mac_nfd(testdata);
 	test_archive_string_canonicalization();
 	test_archive_string_set_get();
+}
+
+static void
+test_archive_string_conversion_fail_charset(void)
+{
+	/* Conversion error message construction may use the charset name.  */
+	assertEqualString("current locale",
+	    archive_string_conversion_charset_name(NULL));
+}
+
+static void
+test_archive_string_conversion_fail_utf16_mbs(struct archive *a,
+    struct archive_string_conv *sconv)
+{
+	static const wchar_t wcs_string[] = L"\U0000043f\U00000440\U00000438";
+	int r;
+	const char* p;
+	size_t len;
+
+	/* WCS to MBS should fail.  */
+	{
+		struct archive_string str;
+		archive_string_init(&str);
+		r = archive_string_append_from_wcs(
+		    &str, wcs_string, sizeof(wcs_string) / sizeof(*wcs_string) - 1);
+		assertEqualInt(-1, r);
+		archive_string_free(&str);
+	}
+	{
+		struct archive_mstring mstr;
+		memset(&mstr, 0, sizeof(mstr));
+		assertEqualInt(ARCHIVE_OK,
+		    archive_mstring_copy_wcs(&mstr, wcs_string));
+		r = archive_mstring_get_mbs_l(a, &mstr, &p, &len, NULL);
+		assertEqualInt(-1, r);
+		assertEqualInt(0, mstr.aes_set & AES_SET_MBS);
+		archive_mstring_clean(&mstr);
+	}
+	if (sconv) {
+		struct archive_mstring mstr;
+		memset(&mstr, 0, sizeof(mstr));
+		assertEqualInt(ARCHIVE_OK,
+		    archive_mstring_copy_wcs(&mstr, wcs_string));
+		r = archive_mstring_get_mbs_l(a, &mstr, &p, &len, sconv);
+		assertEqualInt(-1, r);
+		assertEqualInt(0, mstr.aes_set & AES_SET_MBS);
+		archive_mstring_clean(&mstr);
+	}
+}
+
+static void
+test_archive_string_conversion_fail_utf8_mbs(struct archive *a,
+    struct archive_string_conv *sconv)
+{
+	static const char utf8_string[] = "\xD0\xBF\xD1\x80\xD0\xB8";
+	int r;
+	const char* p;
+	size_t len;
+
+	/* UTF-8 to MBS should fail.  */
+	{
+		struct archive_mstring mstr;
+		memset(&mstr, 0, sizeof(mstr));
+		assertEqualInt(6,
+		    archive_mstring_copy_utf8(&mstr, utf8_string));
+		r = archive_mstring_get_mbs_l(a, &mstr, &p, &len, NULL);
+		assertEqualInt(-1, r);
+		assertEqualInt(0, mstr.aes_set & AES_SET_MBS);
+		archive_mstring_clean(&mstr);
+	}
+	if (sconv) {
+		struct archive_mstring mstr;
+		memset(&mstr, 0, sizeof(mstr));
+		assertEqualInt(6,
+		    archive_mstring_copy_utf8(&mstr, utf8_string));
+		r = archive_mstring_get_mbs_l(a, &mstr, &p, &len, sconv);
+		assertEqualInt(-1, r);
+		assertEqualInt(0, mstr.aes_set & AES_SET_MBS);
+		archive_mstring_clean(&mstr);
+	}
+}
+
+DEFINE_TEST(test_archive_string_conversion_fail_c)
+{
+	struct archive *a;
+
+	/* Test the C locale by not calling setlocale.  */
+
+	test_archive_string_conversion_fail_charset();
+
+	assert((a = archive_write_new()) != NULL);
+
+	test_archive_string_conversion_fail_utf16_mbs(a, NULL);
+	test_archive_string_conversion_fail_utf8_mbs(a, NULL);
+
+	assertEqualInt(ARCHIVE_OK, archive_write_free(a));
+}
+
+DEFINE_TEST(test_archive_string_conversion_fail_latin1)
+{
+	struct archive *a;
+	struct archive_string_conv *sconv;
+
+	/* Test a Latin-1 locale.  */
+	if (
+#if defined(_WIN32) && !defined(__CYGWIN__)
+	    /* Windows allows ".<code-page>" to change encoding.  */
+	    setlocale(LC_ALL, ".1252") == NULL
+#else
+	    setlocale(LC_ALL, "en_US.ISO8859-1") == NULL
+#endif
+	   ) {
+		skipping("No Latin-1 locale found on this system.");
+		return;
+	}
+
+	test_archive_string_conversion_fail_charset();
+
+	assert((a = archive_write_new()) != NULL);
+
+#if defined(_WIN32) && !defined(__CYGWIN__)
+	assertA(NULL != (sconv =
+	    archive_string_conversion_to_charset(a, "CP1252", 0)));
+	assertEqualString("CP1252",
+	    archive_string_conversion_charset_name(sconv));
+#else
+	assertA(NULL != (sconv =
+	    archive_string_conversion_to_charset(a, "ISO8859-1", 0)));
+	assertEqualString("ISO8859-1",
+	    archive_string_conversion_charset_name(sconv));
+#endif
+	test_archive_string_conversion_fail_utf16_mbs(a, sconv);
+	test_archive_string_conversion_fail_utf8_mbs(a, sconv);
+
+	assertEqualInt(ARCHIVE_OK, archive_write_free(a));
+}
+
+DEFINE_TEST(test_archive_string_conversion_utf16_utf8)
+{
+#if !defined(_WIN32) || defined(__CYGWIN__)
+	skipping("This test is meant to verify unicode string handling on Windows");
+#else
+	struct archive_mstring mstr;
+	const char* utf8_string;
+
+	memset(&mstr, 0, sizeof(mstr));
+
+	assertEqualInt(ARCHIVE_OK,
+	    archive_mstring_copy_wcs(&mstr, L"\U0000043f\U00000440\U00000438"));
+
+	/* Conversion from WCS to UTF-8 should always succeed */
+	assertEqualInt(ARCHIVE_OK,
+	    archive_mstring_get_utf8(NULL, &mstr, &utf8_string));
+	assertEqualString("\xD0\xBF\xD1\x80\xD0\xB8", utf8_string);
+
+	archive_mstring_clean(&mstr);
+#endif
+}
+
+DEFINE_TEST(test_archive_string_conversion_utf8_utf16)
+{
+#if !defined(_WIN32) || defined(__CYGWIN__)
+	skipping("This test is meant to verify unicode string handling on Windows");
+#else
+	struct archive_mstring mstr;
+	const wchar_t* wcs_string;
+
+	memset(&mstr, 0, sizeof(mstr));
+
+	assertEqualInt(6,
+	    archive_mstring_copy_utf8(&mstr, "\xD0\xBF\xD1\x80\xD0\xB8"));
+
+	/* Conversion from UTF-8 to WCS should always succeed */
+	assertEqualInt(ARCHIVE_OK,
+	    archive_mstring_get_wcs(NULL, &mstr, &wcs_string));
+	assertEqualWString(L"\U0000043f\U00000440\U00000438", wcs_string);
+
+	archive_mstring_clean(&mstr);
+#endif
+}
+
+DEFINE_TEST(test_archive_string_update_utf8_win)
+{
+#if !defined(_WIN32) || defined(__CYGWIN__)
+	skipping("This test is meant to verify unicode string handling on Windows"
+	    " with the C locale");
+#else
+	static const char utf8_string[] = "\xD0\xBF\xD1\x80\xD0\xB8";
+	static const wchar_t wcs_string[] = L"\U0000043f\U00000440\U00000438";
+	struct archive_mstring mstr;
+	int r;
+
+	memset(&mstr, 0, sizeof(mstr));
+
+	r = archive_mstring_update_utf8(NULL, &mstr, utf8_string);
+
+	/* On Windows, this should reliably fail with the C locale */
+	assertEqualInt(-1, r);
+	assertEqualInt(0, mstr.aes_set & AES_SET_MBS);
+
+	/* NOTE: We access the internals to validate that they were set by the
+	 *       'archive_mstring_update_utf8' function */
+	/* UTF-8 should always be set */
+	assertEqualInt(AES_SET_UTF8, mstr.aes_set & AES_SET_UTF8);
+	assertEqualString(utf8_string, mstr.aes_utf8.s);
+	/* WCS should always be set as well */
+	assertEqualInt(AES_SET_WCS, mstr.aes_set & AES_SET_WCS);
+	assertEqualWString(wcs_string, mstr.aes_wcs.s);
+
+	archive_mstring_clean(&mstr);
+#endif
+}
+
+DEFINE_TEST(test_archive_string_update_utf8_utf8)
+{
+	static const char utf8_string[] = "\xD0\xBF\xD1\x80\xD0\xB8";
+	static const wchar_t wcs_string[] = L"\U0000043f\U00000440\U00000438";
+	struct archive_mstring mstr;
+	int r;
+
+	memset(&mstr, 0, sizeof(mstr));
+
+	if (setlocale(LC_ALL, "en_US.UTF-8") == NULL) {
+		skipping("UTF-8 not supported on this system.");
+		return;
+	}
+
+	r = archive_mstring_update_utf8(NULL, &mstr, utf8_string);
+
+	/* All conversions should have succeeded */
+	assertEqualInt(0, r);
+	assertEqualInt(AES_SET_MBS | AES_SET_WCS | AES_SET_UTF8, mstr.aes_set);
+	assertEqualString(utf8_string, mstr.aes_utf8.s);
+	assertEqualString(utf8_string, mstr.aes_mbs.s);
+	assertEqualWString(wcs_string, mstr.aes_wcs.s);
+
+	archive_mstring_clean(&mstr);
+}
+
+DEFINE_TEST(test_archive_string_update_utf8_koi8)
+{
+	static const char utf8_string[] = "\xD0\xBF\xD1\x80\xD0\xB8";
+	static const char koi8_string[] = "\xD0\xD2\xC9";
+	static const wchar_t wcs_string[] = L"\U0000043f\U00000440\U00000438";
+	struct archive_mstring mstr;
+	struct archive *a;
+	int r;
+
+	memset(&mstr, 0, sizeof(mstr));
+
+	if (setlocale(LC_ALL, "ru_RU.KOI8-R") == NULL) {
+		skipping("KOI8-R locale not available on this system.");
+		return;
+	}
+	a = archive_write_new();
+	assertEqualInt(ARCHIVE_OK, archive_write_set_format_pax(a));
+	if (archive_write_set_options(a, "hdrcharset=UTF-8") != ARCHIVE_OK) {
+		skipping("This system cannot convert character-set"
+		    " from KOI8-R to UTF-8.");
+		archive_write_free(a);
+		return;
+	}
+	archive_write_free(a);
+
+	r = archive_mstring_update_utf8(NULL, &mstr, utf8_string);
+
+	/* All conversions should have succeeded */
+	assertEqualInt(0, r);
+	assertEqualInt(AES_SET_MBS | AES_SET_WCS | AES_SET_UTF8, mstr.aes_set);
+	assertEqualString(utf8_string, mstr.aes_utf8.s);
+	assertEqualString(koi8_string, mstr.aes_mbs.s);
+#if defined(_WIN32) && !defined(__CYGWIN__)
+	assertEqualWString(wcs_string, mstr.aes_wcs.s);
+#else
+	/* No guarantee of how WCS strings behave, however this test test is
+	 * primarily meant for Windows */
+	(void)wcs_string;
+#endif
+
+	archive_mstring_clean(&mstr);
 }

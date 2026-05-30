@@ -40,12 +40,7 @@
  * SUCH DAMAGE.
  */
 
-#if defined(LIBC_SCCS) && !defined(lint)
-static char sccsid[] = "@(#)euc.c	8.1 (Berkeley) 6/4/93";
-#endif /* LIBC_SCCS and not lint */
 #include <sys/param.h>
-__FBSDID("$FreeBSD$");
-
 #include <errno.h>
 #include <limits.h>
 #include <runetype.h>
@@ -431,7 +426,7 @@ _EUC_wcrtomb_impl(char * __restrict s, wchar_t wc,
 	/* This first check excludes CS1, which is implicitly valid. */
 	if ((wc < 0xa100) || (wc > 0xffff)) {
 		/* Check for valid CS2 or CS3 */
-		nm = (wc >> ((len - 1) * 8));
+		nm = (wc >> ((len - 1) * 8)) & 0xff;
 		if (nm == cs2) {
 			if (len != cs2width) {
 				errno = EILSEQ;

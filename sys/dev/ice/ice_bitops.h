@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/*  Copyright (c) 2021, Intel Corporation
+/*  Copyright (c) 2024, Intel Corporation
  *  All rights reserved.
  *
  *  Redistribution and use in source and binary forms, with or without
@@ -28,20 +28,29 @@
  *  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  *  POSSIBILITY OF SUCH DAMAGE.
  */
-/*$FreeBSD$*/
 
 #ifndef _ICE_BITOPS_H_
 #define _ICE_BITOPS_H_
 
+#include "ice_defs.h"
+#include "ice_osdep.h"
+
 /* Define the size of the bitmap chunk */
 typedef u32 ice_bitmap_t;
+
+/* NOTE!
+ * Do not use any of the functions declared in this file
+ * on memory that was not declared with ice_declare_bitmap.
+ * Not following this rule might cause issues like split
+ * locks.
+ */
 
 /* Number of bits per bitmap chunk */
 #define BITS_PER_CHUNK		(BITS_PER_BYTE * sizeof(ice_bitmap_t))
 /* Determine which chunk a bit belongs in */
 #define BIT_CHUNK(nr)		((nr) / BITS_PER_CHUNK)
 /* How many chunks are required to store this many bits */
-#define BITS_TO_CHUNKS(sz)	DIVIDE_AND_ROUND_UP((sz), BITS_PER_CHUNK)
+#define BITS_TO_CHUNKS(sz)	(((sz) + BITS_PER_CHUNK - 1) / BITS_PER_CHUNK)
 /* Which bit inside a chunk this bit corresponds to */
 #define BIT_IN_CHUNK(nr)	((nr) % BITS_PER_CHUNK)
 /* How many bits are valid in the last chunk, assumes nr > 0 */
@@ -189,7 +198,7 @@ static inline void ice_zero_bitmap(ice_bitmap_t *bmp, u16 size)
  * ice_and_bitmap - bitwise AND 2 bitmaps and store result in dst bitmap
  * @dst: Destination bitmap that receive the result of the operation
  * @bmp1: The first bitmap to intersect
- * @bmp2: The second bitmap to intersect wit the first
+ * @bmp2: The second bitmap to intersect with the first
  * @size: Size of the bitmaps in bits
  *
  * This function performs a bitwise AND on two "source" bitmaps of the same size
@@ -228,7 +237,7 @@ ice_and_bitmap(ice_bitmap_t *dst, const ice_bitmap_t *bmp1,
  * ice_or_bitmap - bitwise OR 2 bitmaps and store result in dst bitmap
  * @dst: Destination bitmap that receive the result of the operation
  * @bmp1: The first bitmap to intersect
- * @bmp2: The second bitmap to intersect wit the first
+ * @bmp2: The second bitmap to intersect with the first
  * @size: Size of the bitmaps in bits
  *
  * This function performs a bitwise OR on two "source" bitmaps of the same size
@@ -393,7 +402,7 @@ static inline bool ice_is_any_bit_set(ice_bitmap_t *bitmap, u16 size)
 }
 
 /**
- * ice_cp_bitmap - copy bitmaps.
+ * ice_cp_bitmap - copy bitmaps
  * @dst: bitmap destination
  * @src: bitmap to copy from
  * @size: Size of the bitmaps in bits
@@ -436,10 +445,10 @@ ice_bitmap_set(ice_bitmap_t *dst, u16 pos, u16 num_bits)
  * Note that this function assumes it is operating on a bitmap declared using
  * ice_declare_bitmap.
  */
-static inline int
+static inline u16
 ice_bitmap_hweight(ice_bitmap_t *bm, u16 size)
 {
-	int count = 0;
+	u16 count = 0;
 	u16 bit = 0;
 
 	while (size > (bit = ice_find_next_bit(bm, size, bit))) {
@@ -451,7 +460,7 @@ ice_bitmap_hweight(ice_bitmap_t *bm, u16 size)
 }
 
 /**
- * ice_cmp_bitmaps - compares two bitmaps.
+ * ice_cmp_bitmap - compares two bitmaps
  * @bmp1: the bitmap to compare
  * @bmp2: the bitmap to compare with bmp1
  * @size: Size of the bitmaps in bits

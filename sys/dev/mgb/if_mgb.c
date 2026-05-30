@@ -1,7 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * Copyright (c) 2019 The FreeBSD Foundation, Inc.
+ * Copyright (c) 2019 The FreeBSD Foundation
  *
  * This driver was written by Gerald ND Aryeetey <gndaryee@uwaterloo.ca>
  * under sponsorship from the FreeBSD Foundation.
@@ -28,8 +28,6 @@
  * SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Microchip LAN7430/LAN7431 PCIe to Gigabit Ethernet Controller driver.
  *
@@ -88,7 +86,7 @@ __FBSDID("$FreeBSD$");
 #include "ifdi_if.h"
 #include "miibus_if.h"
 
-static pci_vendor_info_t mgb_vendor_info_array[] = {
+static const pci_vendor_info_t mgb_vendor_info_array[] = {
 	PVID(MGB_MICROCHIP_VENDOR_ID, MGB_LAN7430_DEVICE_ID,
 	    "Microchip LAN7430 PCIe Gigabit Ethernet Controller"),
 	PVID(MGB_MICROCHIP_VENDOR_ID, MGB_LAN7431_DEVICE_ID,
@@ -253,6 +251,7 @@ static device_method_t mgb_iflib_methods[] = {
 	 */
 	DEVMETHOD(ifdi_vlan_register, mgb_vlan_register),
 	DEVMETHOD(ifdi_vlan_unregister, mgb_vlan_unregister),
+	DEVMETHOD(ifdi_needs_restart, mgb_if_needs_restart),
 
 	/*
 	 * Needed for WOL support
@@ -483,8 +482,7 @@ mgb_detach(if_ctx_t ctx)
 	iflib_irq_free(ctx, &sc->rx_irq);
 	iflib_irq_free(ctx, &sc->admin_irq);
 
-	if (sc->miibus != NULL)
-		device_delete_child(sc->dev, sc->miibus);
+	bus_generic_detach(sc->dev);
 
 	if (sc->pba != NULL)
 		error = bus_release_resource(sc->dev, SYS_RES_MEMORY,
@@ -513,7 +511,7 @@ mgb_media_change(if_t ifp)
 
 	needs_reset = mii_mediachg(miid);
 	if (needs_reset != 0)
-		ifp->if_init(ctx);
+		if_init(ifp, ctx);
 	return (needs_reset);
 }
 
@@ -619,7 +617,7 @@ mgb_init(if_ctx_t ctx)
 		    error);
 }
 
-#ifdef DEBUG
+#if 0
 static void
 mgb_dump_some_stats(struct mgb_softc *sc)
 {
@@ -1437,7 +1435,7 @@ mgb_hw_teardown(struct mgb_softc *sc)
 
 	/* Stop MAC */
 	CSR_CLEAR_REG(sc, MGB_MAC_RX, MGB_MAC_ENBL);
-	CSR_WRITE_REG(sc, MGB_MAC_TX, MGB_MAC_ENBL);
+	CSR_CLEAR_REG(sc, MGB_MAC_TX, MGB_MAC_ENBL);
 	if ((err = mgb_wait_for_bits(sc, MGB_MAC_RX, MGB_MAC_DSBL, 0)))
 		return (err);
 	if ((err = mgb_wait_for_bits(sc, MGB_MAC_TX, MGB_MAC_DSBL, 0)))

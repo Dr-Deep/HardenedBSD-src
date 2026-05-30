@@ -49,9 +49,6 @@
  * October 1992
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/errno.h>
 #include <sys/mman.h>
@@ -97,10 +94,8 @@ static void unix2fattime(const struct timespec *tsp, uint16_t *ddp,
 static void
 msdosfs_times(struct denode *dep, const struct stat *st)
 {
-	if (stampst.st_ino)
-		st = &stampst;
 
-#ifdef HAVE_STRUCT_STAT_BIRTHTIME
+#if HAVE_STRUCT_STAT_BIRTHTIME
 	unix2fattime(&st->st_birthtim, &dep->de_CDate, &dep->de_CTime);
 #else
 	unix2fattime(&st->st_ctim, &dep->de_CDate, &dep->de_CTime);
@@ -116,7 +111,7 @@ unix2fattime(const struct timespec *tsp, uint16_t *ddp, uint16_t *dtp)
 	struct tm lt = {0};
 
 	t1 = tsp->tv_sec;
-	localtime_r(&t1, &lt);
+	gmtime_r(&t1, &lt);
 
 	unsigned long fat_time = ((lt.tm_year - 80) << 25) |
             ((lt.tm_mon + 1) << 21) |

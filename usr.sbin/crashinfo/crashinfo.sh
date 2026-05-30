@@ -29,7 +29,6 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 
 usage()
 {
@@ -45,19 +44,6 @@ cleanup()
 	[ -e $VMCORE ] && rm -f $VMCORE
 }
 
-# Find a gdb binary to use and save the value in GDB.
-find_gdb()
-{
-	local binary
-
-	for binary in /usr/local/bin/gdb /usr/libexec/gdb; do
-		if [ -x ${binary} ]; then
-			GDB=${binary}
-			return
-		fi
-	done
-}
-
 # Run a single gdb command against a kernel file in batch mode.
 # The kernel file is specified as the first argument and the command
 # is given in the remaining arguments.
@@ -67,11 +53,7 @@ gdb_command()
 
 	k=$1 ; shift
 
-	if [ ${GDB} = /usr/local/bin/gdb ]; then
-		${GDB} -batch -ex "$@" $k
-	else
-		echo -e "$@" | ${GDB} -x /dev/stdin -batch $k
-	fi
+	${GDB} -batch -ex "$@" $k
 }
 
 find_kernel()
@@ -167,15 +149,17 @@ fi
 VMCORE=$CRASHDIR/vmcore.$DUMPNR
 INFO=$CRASHDIR/info.$DUMPNR
 FILE=$CRASHDIR/core.txt.$DUMPNR
+LINK=$CRASHDIR/core.txt.last
 HOSTNAME=`hostname`
 
 if $BATCH; then
 	echo "Writing crash summary to $FILE."
 	exec > $FILE 2>&1
+	ln -sf $FILE $LINK
 fi
 
-find_gdb
-if [ -z "$GDB" ]; then
+GDB=/usr/local/bin/gdb
+if [ ! -x "$GDB" ]; then
 	echo "Unable to find a kernel debugger."
 	echo "Please install the devel/gdb port or gdb package."
 	exit 1
@@ -222,6 +206,7 @@ machine=$(gdb_command $KERNEL 'printf "%s", machine')
 if ! $BATCH; then
 	echo "Writing crash summary to $FILE."
 	exec > $FILE 2>&1
+	ln -sf $FILE $LINK
 fi
 
 echo "$HOSTNAME dumped core - see $VMCORE"
@@ -233,13 +218,12 @@ echo
 sed -ne '/^  Panic String: /{s//panic: /;p;}' $INFO
 echo
 
-# XXX: /bin/sh on 7.0+ is broken so we can't simply pipe the commands to
-# kgdb via stdin and have to use a temporary file instead.
 file=`mktemp /tmp/crashinfo.XXXXXX`
 if [ $? -eq 0 ]; then
-	echo "bt" >> $file
+	echo "bt -full" >> $file
+	echo "acttrace" >> $file
 	echo "quit" >> $file
-	${GDB%gdb}kgdb $KERNEL $VMCORE < $file
+	${GDB%gdb}kgdb -q $KERNEL $VMCORE < $file
 	rm -f $file
 	echo
 fi

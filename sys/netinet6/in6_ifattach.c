@@ -31,11 +31,10 @@
  *	$KAME: in6_ifattach.c,v 1.118 2001/05/24 07:44:00 itojun Exp $
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
+#include <sys/eventhandler.h>
 #include <sys/systm.h>
+#include <sys/counter.h>
 #include <sys/malloc.h>
 #include <sys/socket.h>
 #include <sys/sockio.h>
@@ -50,7 +49,9 @@ __FBSDID("$FreeBSD$");
 #include <net/if.h>
 #include <net/if_var.h>
 #include <net/if_dl.h>
+#include <net/if_private.h>
 #include <net/if_types.h>
+#include <net/if_llatbl.h>
 #include <net/route.h>
 #include <net/vnet.h>
 
@@ -72,7 +73,8 @@ __FBSDID("$FreeBSD$");
 #include <netinet6/mld6_var.h>
 #include <netinet6/scope6_var.h>
 
-VNET_DEFINE(unsigned long, in6_maxmtu) = 0;
+#include <crypto/sha2/sha256.h>
+#include <machine/atomic.h>
 
 #ifdef IP6_AUTO_LINKLOCAL
 VNET_DEFINE(int, ip6_auto_linklocal) = IP6_AUTO_LINKLOCAL;
@@ -83,12 +85,12 @@ VNET_DEFINE(int, ip6_auto_linklocal) = 1;	/* enabled by default */
 VNET_DEFINE(struct callout, in6_tmpaddrtimer_ch);
 #define	V_in6_tmpaddrtimer_ch		VNET(in6_tmpaddrtimer_ch)
 
+VNET_DEFINE(int, ip6_stableaddr_netifsource) = IP6_STABLEADDR_NETIFSRC_NAME; /* Use interface name by default */
+
 VNET_DECLARE(struct inpcbinfo, ripcbinfo);
 #define	V_ripcbinfo			VNET(ripcbinfo)
 
 static int get_rand_ifid(struct ifnet *, struct in6_addr *);
-static int generate_tmp_ifid(u_int8_t *, const u_int8_t *, u_int8_t *);
-static int get_ifid(struct ifnet *, struct ifnet *, struct in6_addr *);
 static int in6_ifattach_linklocal(struct ifnet *, struct ifnet *);
 static int in6_ifattach_loopback(struct ifnet *);
 static void in6_purgemaddrs(struct ifnet *);
@@ -103,6 +105,9 @@ static void in6_purgemaddrs(struct ifnet *);
 
 #define IFID_LOCAL(in6)		(!EUI64_LOCAL(in6))
 #define IFID_UNIVERSAL(in6)	(!EUI64_UNIVERSAL(in6))
+
+#define HMAC_IPAD	0x36
+#define HMAC_OPAD	0x5C
 
 /*
  * Generate a last-resort interface identifier, when the machine has no
@@ -152,101 +157,15 @@ get_rand_ifid(struct ifnet *ifp, struct in6_addr *in6)
 	return 0;
 }
 
-static int
-generate_tmp_ifid(u_int8_t *seed0, const u_int8_t *seed1, u_int8_t *ret)
-{
-	MD5_CTX ctxt;
-	u_int8_t seed[16], digest[16], nullbuf[8];
-	u_int32_t val32;
-
-	/* If there's no history, start with a random seed. */
-	bzero(nullbuf, sizeof(nullbuf));
-	if (bcmp(nullbuf, seed0, sizeof(nullbuf)) == 0) {
-		int i;
-
-		for (i = 0; i < 2; i++) {
-			val32 = arc4random();
-			bcopy(&val32, seed + sizeof(val32) * i, sizeof(val32));
-		}
-	} else
-		bcopy(seed0, seed, 8);
-
-	/* copy the right-most 64-bits of the given address */
-	/* XXX assumption on the size of IFID */
-	bcopy(seed1, &seed[8], 8);
-
-	if (0) {		/* for debugging purposes only */
-		int i;
-
-		printf("generate_tmp_ifid: new randomized ID from: ");
-		for (i = 0; i < 16; i++)
-			printf("%02x", seed[i]);
-		printf(" ");
-	}
-
-	/* generate 16 bytes of pseudo-random value. */
-	bzero(&ctxt, sizeof(ctxt));
-	MD5Init(&ctxt);
-	MD5Update(&ctxt, seed, sizeof(seed));
-	MD5Final(digest, &ctxt);
-
-	/*
-	 * RFC 3041 3.2.1. (3)
-	 * Take the left-most 64-bits of the MD5 digest and set bit 6 (the
-	 * left-most bit is numbered 0) to zero.
-	 */
-	bcopy(digest, ret, 8);
-	ret[0] &= ~EUI64_UBIT;
-
-	/*
-	 * XXX: we'd like to ensure that the generated value is not zero
-	 * for simplicity.  If the caclculated digest happens to be zero,
-	 * use a random non-zero value as the last resort.
-	 */
-	if (bcmp(nullbuf, ret, sizeof(nullbuf)) == 0) {
-		nd6log((LOG_INFO,
-		    "generate_tmp_ifid: computed MD5 value is zero.\n"));
-
-		val32 = arc4random();
-		val32 = 1 + (val32 % (0xffffffff - 1));
-	}
-
-	/*
-	 * RFC 3041 3.2.1. (4)
-	 * Take the rightmost 64-bits of the MD5 digest and save them in
-	 * stable storage as the history value to be used in the next
-	 * iteration of the algorithm.
-	 */
-	bcopy(&digest[8], seed0, 8);
-
-	if (0) {		/* for debugging purposes only */
-		int i;
-
-		printf("to: ");
-		for (i = 0; i < 16; i++)
-			printf("%02x", digest[i]);
-		printf("\n");
-	}
-
-	return 0;
-}
 
 /*
- * Get interface identifier for the specified interface.
- * XXX assumes single sockaddr_dl (AF_LINK address) per an interface
- *
- * in6 - upper 64bits are preserved
+ * Get interface link level sockaddr
  */
-int
-in6_get_hw_ifid(struct ifnet *ifp, struct in6_addr *in6)
+static struct sockaddr_dl *
+get_interface_link_level(struct ifnet *ifp)
 {
 	struct ifaddr *ifa;
 	struct sockaddr_dl *sdl;
-	u_int8_t *addr;
-	size_t addrlen;
-	static u_int8_t allzero[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
-	static u_int8_t allone[8] =
-		{ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 
 	NET_EPOCH_ASSERT();
 
@@ -259,14 +178,30 @@ in6_get_hw_ifid(struct ifnet *ifp, struct in6_addr *in6)
 		if (sdl->sdl_alen == 0)
 			continue;
 
-		goto found;
+		return (sdl);
 	}
 
-	return -1;
+	return (NULL);
+}
 
-found:
+/*
+ * Get hwaddr from link interface
+ */
+static uint8_t *
+in6_get_interface_hwaddr(struct ifnet *ifp, size_t *len)
+{
+	struct sockaddr_dl *sdl;
+	u_int8_t *addr;
+	static u_int8_t allzero[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+	static u_int8_t allone[8] =
+		{ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+
+	sdl = get_interface_link_level(ifp);
+	if (sdl == NULL)
+		return (NULL);
+
 	addr = LLADDR(sdl);
-	addrlen = sdl->sdl_alen;
+	*len = sdl->sdl_alen;
 
 	/* get EUI64 */
 	switch (ifp->if_type) {
@@ -277,36 +212,21 @@ found:
 	case IFT_IEEE1394:
 		/* IEEE802/EUI64 cases - what others? */
 		/* IEEE1394 uses 16byte length address starting with EUI64 */
-		if (addrlen > 8)
-			addrlen = 8;
+		if (*len > 8)
+			*len = 8;
 
 		/* look at IEEE802/EUI64 only */
-		if (addrlen != 8 && addrlen != 6)
-			return -1;
+		if (*len != 8 && *len != 6)
+			return (NULL);
 
 		/*
 		 * check for invalid MAC address - on bsdi, we see it a lot
 		 * since wildboar configures all-zero MAC on pccard before
 		 * card insertion.
 		 */
-		if (bcmp(addr, allzero, addrlen) == 0)
-			return -1;
-		if (bcmp(addr, allone, addrlen) == 0)
-			return -1;
+		if (memcmp(addr, allzero, *len) == 0 || memcmp(addr, allone, *len) == 0)
+			return (NULL);
 
-		/* make EUI64 address */
-		if (addrlen == 8)
-			bcopy(addr, &in6->s6_addr[8], 8);
-		else if (addrlen == 6) {
-			in6->s6_addr[8] = addr[0];
-			in6->s6_addr[9] = addr[1];
-			in6->s6_addr[10] = addr[2];
-			in6->s6_addr[11] = 0xff;
-			in6->s6_addr[12] = 0xfe;
-			in6->s6_addr[13] = addr[3];
-			in6->s6_addr[14] = addr[4];
-			in6->s6_addr[15] = addr[5];
-		}
 		break;
 
 	case IFT_GIF:
@@ -317,16 +237,51 @@ found:
 		 * identifier source (can be renumbered).
 		 * we don't do this.
 		 */
-		return -1;
+		return (NULL);
 
 	case IFT_INFINIBAND:
-		if (addrlen != 20)
-			return -1;
-		bcopy(addr + 12, &in6->s6_addr[8], 8);
+		if (*len != 20)
+			return (NULL);
+		*len = 8;
+		addr += 12;
 		break;
 
 	default:
-		return -1;
+		return (NULL);
+	}
+
+	return (addr);
+}
+
+/*
+ * Get interface identifier for the specified interface.
+ * XXX assumes single sockaddr_dl (AF_LINK address) per an interface
+ *
+ * in6 - upper 64bits are preserved
+ */
+int
+in6_get_hw_ifid(struct ifnet *ifp, struct in6_addr *in6)
+{
+	size_t hwaddr_len;
+	uint8_t *hwaddr;
+	static u_int8_t allzero[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+
+	hwaddr = in6_get_interface_hwaddr(ifp, &hwaddr_len);
+	if (hwaddr == NULL || (hwaddr_len != 6 && hwaddr_len != 8))
+		return (-1);
+
+	/* make EUI64 address */
+	if (hwaddr_len == 8)
+		memcpy(&in6->s6_addr[8], hwaddr, 8);
+	else if (hwaddr_len == 6) {
+		in6->s6_addr[8] = hwaddr[0];
+		in6->s6_addr[9] = hwaddr[1];
+		in6->s6_addr[10] = hwaddr[2];
+		in6->s6_addr[11] = 0xff;
+		in6->s6_addr[12] = 0xfe;
+		in6->s6_addr[13] = hwaddr[3];
+		in6->s6_addr[14] = hwaddr[4];
+		in6->s6_addr[15] = hwaddr[5];
 	}
 
 	/* sanity check: g bit must not indicate "group" */
@@ -348,21 +303,171 @@ found:
 }
 
 /*
+ * Validate generated interface id to make sure it does not fall in any reserved range:
+ *
+ * https://www.iana.org/assignments/ipv6-interface-ids/ipv6-interface-ids.xhtml
+ */
+static bool
+validate_ifid(uint8_t *iid)
+{
+	static uint8_t allzero[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+	static uint8_t reserved_eth[5] = { 0x02, 0x00, 0x5E, 0xFF, 0xFE };
+	static uint8_t reserved_anycast[7] = { 0xFD, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+
+	/* Subnet-Router Anycast (RFC 4291) */
+	if (memcmp(iid, allzero, 8) == 0)
+		return (false);
+
+	/*
+	 * Reserved IPv6 Interface Identifiers corresponding to the IANA Ethernet Block (RFC 4291)
+	 * and
+	 * Proxy Mobile IPv6 (RFC 6543)
+	 */
+	if (memcmp(iid, reserved_eth, 5) == 0)
+		return (false);
+
+	/* Reserved Subnet Anycast Addresses (RFC 2526) */
+	if (memcmp(iid, reserved_anycast, 7) == 0 && iid[7] >= 0x80)
+		return (false);
+
+	return (true);
+}
+
+/*
+ * Get interface identifier for the specified interface, according to
+ * RFC 7217 Stable and Opaque IDs with SLAAC, using HMAC-SHA256 digest.
+ *
+ * in6 - upper 64bits are preserved
+ */
+bool
+in6_get_stableifid(struct ifnet *ifp, struct in6_addr *in6, int prefixlen)
+{
+	struct sockaddr_dl *sdl;
+	const uint8_t *netiface;
+	size_t netiface_len, hostuuid_len;
+	uint8_t hostuuid[HOSTUUIDLEN + 1], hmac_key[SHA256_BLOCK_LENGTH],
+		hk_ipad[SHA256_BLOCK_LENGTH], hk_opad[SHA256_BLOCK_LENGTH];
+	uint64_t dad_failures;
+	SHA256_CTX ctxt;
+
+	switch (V_ip6_stableaddr_netifsource) {
+		case IP6_STABLEADDR_NETIFSRC_ID:
+			sdl = get_interface_link_level(ifp);
+			if (sdl == NULL)
+				return (false);
+			netiface = (uint8_t *)&LLINDEX(sdl);
+			netiface_len = sizeof(u_short); /* real return type of LLINDEX */
+			break;
+
+		case IP6_STABLEADDR_NETIFSRC_MAC:
+			netiface = in6_get_interface_hwaddr(ifp, &netiface_len);
+			if (netiface == NULL)
+				return (false);
+			break;
+
+		case IP6_STABLEADDR_NETIFSRC_NAME:
+		default:
+			netiface = (const uint8_t *)if_name(ifp);
+			netiface_len = strlen(netiface);
+			break;
+	}
+
+	/* Use hostuuid as constant "secret" key */
+	getcredhostuuid(curthread->td_ucred, hostuuid, sizeof(hostuuid));
+	if (strncmp(hostuuid, DEFAULT_HOSTUUID, sizeof(hostuuid)) == 0) {
+		/* If hostuuid is not set, use a random value */
+		arc4rand(hostuuid, HOSTUUIDLEN, 0);
+		hostuuid[HOSTUUIDLEN] = '\0';
+	}
+	hostuuid_len = strlen(hostuuid);
+
+	dad_failures = atomic_load_int(&DAD_FAILURES(ifp));
+
+	/* RFC 7217 section 7, default max retries */
+	if (dad_failures > V_ip6_stableaddr_maxretries)
+		return (false);
+
+	/*
+	 * Use hostuuid as basis for HMAC key
+	 */
+	memset(hmac_key, 0, sizeof(hmac_key));
+	if (hostuuid_len <= SHA256_BLOCK_LENGTH) {
+		/* copy to hmac key variable, zero padded */
+		memcpy(hmac_key, hostuuid, hostuuid_len);
+	} else {
+		/* if longer than block length, use hash of the value, zero padded */
+		SHA256_Init(&ctxt);
+		SHA256_Update(&ctxt, hostuuid, hostuuid_len);
+		SHA256_Final(hmac_key, &ctxt);
+	}
+	/* XOR key with ipad and opad values */
+	for (uint16_t i = 0; i < sizeof(hmac_key); i++) {
+		hk_ipad[i] = hmac_key[i] ^ HMAC_IPAD;
+		hk_opad[i] = hmac_key[i] ^ HMAC_OPAD;
+	}
+
+	/*
+	 * Generate interface id in a loop, adding an offset to be factored in the hash function.
+	 * This is necessary, because if the generated interface id happens to be invalid we
+	 * want to force the hash function to generate a different one, otherwise we would end up
+	 * in an infinite loop trying the same invalid interface id over and over again.
+	 *
+	 * Using an uint8 counter for the offset, so limit iteration at UINT8_MAX. This is a safety
+	 * measure, this will never iterate more than once or twice in practice.
+	 */
+	for(uint8_t offset = 0; offset < UINT8_MAX; offset++) {
+		uint8_t digest[SHA256_DIGEST_LENGTH];
+
+		/* Calculate inner hash */
+		SHA256_Init(&ctxt);
+		SHA256_Update(&ctxt, hk_ipad, sizeof(hk_ipad));
+		SHA256_Update(&ctxt, in6->s6_addr, prefixlen / 8);
+		SHA256_Update(&ctxt, netiface, netiface_len);
+		SHA256_Update(&ctxt, (uint8_t *)&dad_failures, 8);
+		SHA256_Update(&ctxt, hostuuid, hostuuid_len);
+		SHA256_Update(&ctxt, &offset, 1);
+		SHA256_Final(digest, &ctxt);
+
+		/* Calculate outer hash */
+		SHA256_Init(&ctxt);
+		SHA256_Update(&ctxt, hk_opad, sizeof(hk_opad));
+		SHA256_Update(&ctxt, digest, sizeof(digest));
+		SHA256_Final(digest, &ctxt);
+
+		if (validate_ifid(digest)) {
+			/* assumes sizeof(digest) > sizeof(ifid) */
+			memcpy(&in6->s6_addr[8], digest, 8);
+
+			return (true);
+		}
+	}
+
+	return (false);
+}
+
+/*
  * Get interface identifier for the specified interface.  If it is not
  * available on ifp0, borrow interface identifier from other information
  * sources.
  *
  * altifp - secondary EUI64 source
  */
-static int
-get_ifid(struct ifnet *ifp0, struct ifnet *altifp,
+int
+in6_get_ifid(struct ifnet *ifp0, struct ifnet *altifp,
     struct in6_addr *in6)
 {
 	struct ifnet *ifp;
 
 	NET_EPOCH_ASSERT();
 
-	/* first, try to get it from the interface itself */
+	/* first, try to get it from the interface itself, with stable algorithm, if configured */
+	if ((ifp0->if_inet6->nd_flags & ND6_IFF_STABLEADDR) && in6_get_stableifid(ifp0, in6, 64) == 0) {
+		nd6log((LOG_DEBUG, "%s: got interface identifier from itself (stable private)\n",
+		    if_name(ifp0)));
+		goto success;
+	}
+
+	/* then/otherwise try to get it from the interface itself */
 	if (in6_get_hw_ifid(ifp0, in6) == 0) {
 		nd6log((LOG_DEBUG, "%s: got interface identifier from itself\n",
 		    if_name(ifp0)));
@@ -439,7 +544,7 @@ in6_ifattach_linklocal(struct ifnet *ifp, struct ifnet *altifp)
 		ifra.ifra_addr.sin6_addr.s6_addr32[3] = htonl(1);
 	} else {
 		NET_EPOCH_ENTER(et);
-		error = get_ifid(ifp, altifp, &ifra.ifra_addr.sin6_addr);
+		error = in6_get_ifid(ifp, altifp, &ifra.ifra_addr.sin6_addr);
 		NET_EPOCH_EXIT(et);
 		if (error != 0) {
 			nd6log((LOG_ERR,
@@ -520,13 +625,13 @@ in6_ifattach_linklocal(struct ifnet *ifp, struct ifnet *altifp)
 	 * valid with referring to the old link-local address.
 	 */
 	if ((pr = nd6_prefix_lookup(&pr0)) == NULL) {
-		if ((error = nd6_prelist_add(&pr0, NULL, &pr)) != 0)
+		if ((error = nd6_prelist_add(&pr0, &pr)) != 0)
 			return (error);
 		/* Reference prefix */
 		ia->ia6_ndpr = pr;
 		pr->ndpr_addrcnt++;
-	} else
-		nd6_prefix_rele(pr);
+	}
+	nd6_prefix_rele(pr);
 
 	return 0;
 }
@@ -676,7 +781,8 @@ in6_ifattach(struct ifnet *ifp, struct ifnet *altifp)
 {
 	struct in6_ifaddr *ia;
 
-	if (ifp->if_afdata[AF_INET6] == NULL)
+	/* XXXGL: can this happen after IFT_PFLOG and IFT_PFSYNC are gone? */
+	if (ifp->if_inet6 == NULL)
 		return;
 	/*
 	 * quirks based on interface type
@@ -689,8 +795,8 @@ in6_ifattach(struct ifnet *ifp, struct ifnet *altifp)
 		 * linklocals for 6to4 interface, but there's no use and
 		 * it is rather harmful to have one.
 		 */
-		ND_IFINFO(ifp)->flags &= ~ND6_IFF_AUTO_LINKLOCAL;
-		ND_IFINFO(ifp)->flags |= ND6_IFF_NO_DAD;
+		ifp->if_inet6->nd_flags &= ~ND6_IFF_AUTO_LINKLOCAL;
+		ifp->if_inet6->nd_flags |= ND6_IFF_NO_DAD;
 		break;
 	default:
 		break;
@@ -721,8 +827,8 @@ in6_ifattach(struct ifnet *ifp, struct ifnet *altifp)
 	/*
 	 * assign a link-local address, if there's none.
 	 */
-	if (!(ND_IFINFO(ifp)->flags & ND6_IFF_IFDISABLED) &&
-	    ND_IFINFO(ifp)->flags & ND6_IFF_AUTO_LINKLOCAL) {
+	if (!(ifp->if_inet6->nd_flags & ND6_IFF_IFDISABLED) &&
+	    ifp->if_inet6->nd_flags & ND6_IFF_AUTO_LINKLOCAL) {
 		struct epoch_tracker et;
 
 		NET_EPOCH_ENTER(et);
@@ -733,10 +839,6 @@ in6_ifattach(struct ifnet *ifp, struct ifnet *altifp)
 		else
 			ifa_free(&ia->ia_ifa);
 	}
-
-	/* update dynamically. */
-	if (V_in6_maxmtu < ifp->if_mtu)
-		V_in6_maxmtu = ifp->if_mtu;
 }
 
 /*
@@ -754,7 +856,8 @@ _in6_ifdetach(struct ifnet *ifp, int purgeulp)
 {
 	struct ifaddr *ifa, *next;
 
-	if (ifp->if_afdata[AF_INET6] == NULL)
+	/* XXXGL: can this happen after IFT_PFLOG and IFT_PFSYNC are gone? */
+	if (ifp->if_inet6 == NULL)
 		return;
 
 	/*
@@ -792,6 +895,50 @@ in6_ifdetach(struct ifnet *ifp)
 	_in6_ifdetach(ifp, 1);
 }
 
+static void
+in6_ifextra_free(epoch_context_t ctx)
+{
+	struct in6_ifextra *ext =
+	     __containerof(ctx, struct in6_ifextra, epoch_ctx);
+
+	COUNTER_ARRAY_FREE(ext->in6_ifstat,
+	    sizeof(struct in6_ifstat) / sizeof(uint64_t));
+	COUNTER_ARRAY_FREE(ext->icmp6_ifstat,
+	    sizeof(struct icmp6_ifstat) / sizeof(uint64_t));
+	free(ext, M_IFADDR);
+}
+
+static void
+in6_ifdeparture(void *arg __unused, struct ifnet *ifp)
+{
+	struct in6_ifextra *ext = ifp->if_inet6;
+
+	/* XXXGL: can this happen after IFT_PFLOG and IFT_PFSYNC are gone? */
+	if (ifp->if_inet6 == NULL)
+		return;
+
+#ifdef VIMAGE
+	/*
+	 * On VNET shutdown abort here as the stack teardown will do all
+	 * the work top-down for us.  XXXGL: see comment in in.c:in_ifdetach().
+	 */
+	if (!VNET_IS_SHUTTING_DOWN(ifp->if_vnet))
+#endif
+		_in6_ifdetach(ifp, 1);
+	/*
+	 * XXXGL: mld and nd bits are left in a consistent state after
+	 * destructors, but I'm not sure if it safe to call lltable_free() here.
+	 * Individual lle entries are epoch(9) protected, but the table itself
+	 * isn't.
+	 */
+	mld_domifdetach(ifp);
+	nd6_ifdetach(ifp);
+	lltable_free(ext->lltable);
+	NET_EPOCH_CALL(in6_ifextra_free, &ext->epoch_ctx);
+}
+EVENTHANDLER_DEFINE(ifnet_departure_event, in6_ifdeparture, NULL,
+    EVENTHANDLER_PRI_ANY);
+
 void
 in6_ifdetach_destroy(struct ifnet *ifp)
 {
@@ -799,60 +946,15 @@ in6_ifdetach_destroy(struct ifnet *ifp)
 	_in6_ifdetach(ifp, 0);
 }
 
-int
-in6_get_tmpifid(struct ifnet *ifp, u_int8_t *retbuf,
-    const u_int8_t *baseid, int generate)
-{
-	u_int8_t nullbuf[8];
-	struct nd_ifinfo *ndi = ND_IFINFO(ifp);
-
-	bzero(nullbuf, sizeof(nullbuf));
-	if (bcmp(ndi->randomid, nullbuf, sizeof(nullbuf)) == 0) {
-		/* we've never created a random ID.  Create a new one. */
-		generate = 1;
-	}
-
-	if (generate) {
-		bcopy(baseid, ndi->randomseed1, sizeof(ndi->randomseed1));
-
-		/* generate_tmp_ifid will update seedn and buf */
-		(void)generate_tmp_ifid(ndi->randomseed0, ndi->randomseed1,
-		    ndi->randomid);
-	}
-	bcopy(ndi->randomid, retbuf, 8);
-
-	return (0);
-}
-
 void
 in6_tmpaddrtimer(void *arg)
 {
 	CURVNET_SET((struct vnet *) arg);
-	struct epoch_tracker et;
-	struct nd_ifinfo *ndi;
-	u_int8_t nullbuf[8];
-	struct ifnet *ifp;
 
 	callout_reset(&V_in6_tmpaddrtimer_ch,
 	    (V_ip6_temp_preferred_lifetime - V_ip6_desync_factor -
 	    V_ip6_temp_regen_advance) * hz, in6_tmpaddrtimer, curvnet);
 
-	bzero(nullbuf, sizeof(nullbuf));
-	NET_EPOCH_ENTER(et);
-	CK_STAILQ_FOREACH(ifp, &V_ifnet, if_link) {
-		if (ifp->if_afdata[AF_INET6] == NULL)
-			continue;
-		ndi = ND_IFINFO(ifp);
-		if (bcmp(ndi->randomid, nullbuf, sizeof(nullbuf)) != 0) {
-			/*
-			 * We've been generating a random ID on this interface.
-			 * Create a new one.
-			 */
-			(void)generate_tmp_ifid(ndi->randomseed0,
-			    ndi->randomseed1, ndi->randomid);
-		}
-	}
-	NET_EPOCH_EXIT(et);
 	CURVNET_RESTORE();
 }
 

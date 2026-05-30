@@ -56,8 +56,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "dhcpd.h"
 #include "privsep.h"
 
@@ -92,7 +90,8 @@ __FBSDID("$FreeBSD$");
 
 cap_channel_t *capsyslog;
 
-time_t cur_time;
+time_t cur_time;	/* Seconds since epoch. */
+struct timespec time_now;	/* CLOCK_MONOTONIC. */
 static time_t default_lease_time = 43200; /* 12 hours... */
 
 const char *path_dhclient_conf = _PATH_DHCLIENT_CONF;
@@ -122,6 +121,8 @@ struct pidfh *pidfile;
  */
 #define TIME_MAX        ((((time_t) 1 << (sizeof(time_t) * CHAR_BIT - 2)) - 1) * 2 + 1)
 
+static struct timespec arp_timeout = { .tv_sec = 0, .tv_nsec = 250 * 1000 * 1000 };
+static const struct timespec zero_timespec = { .tv_sec = 0, .tv_nsec = 0 };
 int		log_priority;
 static int		no_daemon;
 static int		unknown_ok = 1;
@@ -385,7 +386,7 @@ main(int argc, char *argv[])
 	cap_openlog(capsyslog, getprogname(), LOG_PID | LOG_NDELAY, DHCPD_LOG_FACILITY);
 	cap_setlogmask(capsyslog, LOG_UPTO(LOG_DEBUG));
 
-	while ((ch = getopt(argc, argv, "bc:dl:p:qu")) != -1)
+	while ((ch = getopt(argc, argv, "bc:dl:np:qu")) != -1)
 		switch (ch) {
 		case 'b':
 			immediate_daemon = 1;
@@ -398,6 +399,9 @@ main(int argc, char *argv[])
 			break;
 		case 'l':
 			path_dhclient_db = optarg;
+			break;
+		case 'n':
+			arp_timeout = zero_timespec;
 			break;
 		case 'p':
 			path_dhclient_pidfile = optarg;
@@ -445,7 +449,8 @@ main(int argc, char *argv[])
 		log_perror = 0;
 
 	tzset();
-	time(&cur_time);
+	clock_gettime(CLOCK_MONOTONIC, &time_now);
+	cur_time = time(NULL);
 
 	inaddr_broadcast.s_addr = INADDR_BROADCAST;
 	inaddr_any.s_addr = INADDR_ANY;
@@ -534,7 +539,7 @@ main(int argc, char *argv[])
 	setproctitle("%s", ifi->name);
 
 	/* setgroups(2) is not permitted in capability mode. */
-	if (setgroups(1, &pw->pw_gid) != 0)
+	if (setgroups(0, NULL) != 0)
 		error("can't restrict groups: %m");
 
 	if (caph_enter_casper() < 0)
@@ -574,7 +579,7 @@ void
 usage(void)
 {
 
-	fprintf(stderr, "usage: %s [-bdqu] ", getprogname());
+	fprintf(stderr, "usage: %s [-bdnqu] ", getprogname());
 	fprintf(stderr, "[-c conffile] [-l leasefile] interface\n");
 	exit(1);
 }
@@ -798,7 +803,7 @@ dhcpack(struct packet *packet)
             ACTION_SUPERSEDE)
 		ip->client->new->expiry = getULong(
 		    ip->client->config->defaults[DHO_DHCP_LEASE_TIME].data);
-        else if (ip->client->new->options[DHO_DHCP_LEASE_TIME].data)
+        else if (ip->client->new->options[DHO_DHCP_LEASE_TIME].len >= 4)
 		ip->client->new->expiry = getULong(
 		    ip->client->new->options[DHO_DHCP_LEASE_TIME].data);
 	else
@@ -821,7 +826,7 @@ dhcpack(struct packet *packet)
             ACTION_SUPERSEDE)
 		ip->client->new->renewal = getULong(
 		    ip->client->config->defaults[DHO_DHCP_RENEWAL_TIME].data);
-        else if (ip->client->new->options[DHO_DHCP_RENEWAL_TIME].len)
+        else if (ip->client->new->options[DHO_DHCP_RENEWAL_TIME].len >= 4)
 		ip->client->new->renewal = getULong(
 		    ip->client->new->options[DHO_DHCP_RENEWAL_TIME].data);
 	else
@@ -835,7 +840,7 @@ dhcpack(struct packet *packet)
             ACTION_SUPERSEDE)
 		ip->client->new->rebind = getULong(
 		    ip->client->config->defaults[DHO_DHCP_REBINDING_TIME].data);
-        else if (ip->client->new->options[DHO_DHCP_REBINDING_TIME].len)
+        else if (ip->client->new->options[DHO_DHCP_REBINDING_TIME].len >= 4)
 		ip->client->new->rebind = getULong(
 		    ip->client->new->options[DHO_DHCP_REBINDING_TIME].data);
 	else
@@ -1024,9 +1029,13 @@ dhcpoffer(struct packet *packet)
 	struct interface_info *ip = packet->interface;
 	struct client_lease *lease, *lp;
 	int i;
-	int arp_timeout_needed, stop_selecting;
+	struct timespec arp_timeout_needed;
+	time_t stop_selecting;
+	struct timespec stop_time;
 	const char *name = packet->options[DHO_DHCP_MESSAGE_TYPE].len ?
 	    "DHCPOFFER" : "BOOTREPLY";
+
+	clock_gettime(CLOCK_MONOTONIC, &time_now);
 
 	/* If we're not receptive to an offer right now, or if the offer
 	   has an unrecognizable transaction id, then just drop it. */
@@ -1038,7 +1047,6 @@ dhcpoffer(struct packet *packet)
 		return;
 
 	note("%s from %s", name, piaddr(packet->client_addr));
-
 
 	/* If this lease doesn't supply the minimum required parameters,
 	   blow it off. */
@@ -1081,9 +1089,10 @@ dhcpoffer(struct packet *packet)
 	/* If the script can't send an ARP request without waiting,
 	   we'll be waiting when we do the ARPCHECK, so don't wait now. */
 	if (script_go())
-		arp_timeout_needed = 0;
+		arp_timeout_needed = zero_timespec;
+
 	else
-		arp_timeout_needed = 2;
+		arp_timeout_needed = arp_timeout;
 
 	/* Figure out when we're supposed to stop selecting. */
 	stop_selecting =
@@ -1102,9 +1111,13 @@ dhcpoffer(struct packet *packet)
 		   offer would take us past the selection timeout,
 		   then don't extend the timeout - just hope for the
 		   best. */
+
+		struct timespec interm_struct;
+		timespecadd(&time_now, &arp_timeout_needed, &interm_struct);
+
 		if (ip->client->offered_leases &&
-		    (cur_time + arp_timeout_needed) > stop_selecting)
-			arp_timeout_needed = 0;
+		    interm_struct.tv_sec >= stop_selecting)
+			arp_timeout_needed = zero_timespec;
 
 		/* Put the lease at the end of the list. */
 		lease->next = NULL;
@@ -1118,21 +1131,21 @@ dhcpoffer(struct packet *packet)
 		}
 	}
 
-	/* If we're supposed to stop selecting before we've had time
-	   to wait for the ARPREPLY, add some delay to wait for
-	   the ARPREPLY. */
-	if (stop_selecting - cur_time < arp_timeout_needed)
-		stop_selecting = cur_time + arp_timeout_needed;
-
-	/* If the selecting interval has expired, go immediately to
-	   state_selecting().  Otherwise, time out into
-	   state_selecting at the select interval. */
-	if (stop_selecting <= 0)
-		state_selecting(ip);
-	else {
-		add_timeout(stop_selecting, state_selecting, ip);
-		cancel_timeout(send_discover, ip);
+	/*
+	 * Wait until stop_selecting seconds past the epoch, or until
+	 * arp_timeout_needed past now, whichever is longer.  Note that
+	 * the first case only occurs if select-timeout is set to nonzero
+	 * in dhclient.conf.
+	 */
+	struct timespec time_left =
+	    {.tv_sec = stop_selecting - cur_time, .tv_nsec = 0};
+	if (timespeccmp(&time_left, &arp_timeout_needed, <)) {
+		timespecadd(&time_now, &arp_timeout_needed, &stop_time);
+	} else {
+		timespecadd(&time_now, &time_left, &stop_time);
 	}
+	add_timeout_timespec(stop_time, state_selecting, ip);
+	cancel_timeout(send_discover, ip);
 }
 
 /* Allocate a client_lease structure and initialize it from the parameters
@@ -1141,13 +1154,14 @@ dhcpoffer(struct packet *packet)
 struct client_lease *
 packet_to_lease(struct packet *packet)
 {
+	struct interface_info *ip = packet->interface;
 	struct client_lease *lease;
-	int i;
+	int i, j;
 
 	lease = malloc(sizeof(struct client_lease));
 
 	if (!lease) {
-		warning("dhcpoffer: no memory to record lease.");
+		warning("dhcpoffer: no memory to record lease");
 		return (NULL);
 	}
 
@@ -1156,6 +1170,15 @@ packet_to_lease(struct packet *packet)
 	/* Copy the lease options. */
 	for (i = 0; i < 256; i++) {
 		if (packet->options[i].len) {
+			int ignored = 0;
+			for (j = 0; ip->client->config->ignored_options[j]; j++)
+				if (i ==
+				    ip->client->config->ignored_options[j]) {
+					ignored = 1;
+					break;
+				}
+			if (ignored)
+			    continue;
 			lease->options[i].data =
 			    malloc(packet->options[i].len + 1);
 			if (!lease->options[i].data) {
@@ -1188,7 +1211,7 @@ packet_to_lease(struct packet *packet)
 
 	/* If the server name was filled out, copy it.
 	   Do not attempt to validate the server name as a host name.
-	   RFC 2131 merely states that sname is NUL-terminated (which do
+	   RFC 2131 merely states that sname is NUL-terminated (which we
 	   do not assume) and that it is the server's host name.  Since
 	   the ISC client and server allow arbitrary characters, we do
 	   as well. */
@@ -1196,28 +1219,73 @@ packet_to_lease(struct packet *packet)
 	    !(packet->options[DHO_DHCP_OPTION_OVERLOAD].data[0] & 2)) &&
 	    packet->raw->sname[0]) {
 		lease->server_name = malloc(DHCP_SNAME_LEN + 1);
-		if (!lease->server_name) {
-			warning("dhcpoffer: no memory for server name.");
+		if (lease->server_name == NULL) {
+			warning("dhcpoffer: no memory for server name");
 			free_client_lease(lease);
 			return (NULL);
 		}
-		memcpy(lease->server_name, packet->raw->sname, DHCP_SNAME_LEN);
-		lease->server_name[DHCP_SNAME_LEN]='\0';
+		for (i = 0; i < DHCP_SNAME_LEN; i++) {
+			if (packet->raw->sname[i] == '\0') {
+				break;
+			}
+			if (packet->raw->sname[i] < ' ' ||
+			    packet->raw->sname[i] == '"' ||
+			    packet->raw->sname[i] == '\\') {
+				warning("dhcpoffer: server name contains "
+				    "unsafe characters");
+				free(lease->server_name);
+				lease->server_name = NULL;
+				break;
+			}
+			lease->server_name[i] = packet->raw->sname[i];
+		}
+		/* Terminate and zero-pad */
+		if (lease->server_name != NULL) {
+			while (i < DHCP_SNAME_LEN + 1) {
+				lease->server_name[i++] = '\0';
+			}
+		}
 	}
 
-	/* Ditto for the filename. */
+	/* Ditto for the file name. */
 	if ((!packet->options[DHO_DHCP_OPTION_OVERLOAD].len ||
 	    !(packet->options[DHO_DHCP_OPTION_OVERLOAD].data[0] & 1)) &&
 	    packet->raw->file[0]) {
 		/* Don't count on the NUL terminator. */
 		lease->filename = malloc(DHCP_FILE_LEN + 1);
-		if (!lease->filename) {
-			warning("dhcpoffer: no memory for filename.");
+		if (lease->filename == NULL) {
+			warning("dhcpoffer: no memory for file name");
 			free_client_lease(lease);
 			return (NULL);
 		}
-		memcpy(lease->filename, packet->raw->file, DHCP_FILE_LEN);
-		lease->filename[DHCP_FILE_LEN]='\0';
+		for (i = 0; i < DHCP_FILE_LEN; i++) {
+			if (packet->raw->file[i] == '\0') {
+				break;
+			}
+			if (packet->raw->file[i] < ' ' ||
+			    packet->raw->file[i] == '"') {
+				warning("dhcpoffer: file name contains "
+				    "unsafe characters");
+				free(lease->filename);
+				lease->filename = NULL;
+				break;
+			}
+			if (packet->raw->file[i] == '\\') {
+				/*
+				 * This is common in Windows-centric
+				 * environments.  Instead of rejecting,
+				 * silently convert to forward slash.
+				 */
+				packet->raw->file[i] = '/';
+			}
+			lease->filename[i] = packet->raw->file[i];
+		}
+		/* Terminate and zero-pad */
+		if (lease->filename != NULL) {
+			while (i < DHCP_FILE_LEN + 1) {
+				lease->filename[i++] = '\0';
+			}
+		}
 	}
 	return lease;
 }
@@ -2403,8 +2471,8 @@ script_set_env(struct client_state *client, const char *prefix,
 			char **newscriptEnv;
 			int newscriptEnvsize = client->scriptEnvsize + 50;
 
-			newscriptEnv = realloc(client->scriptEnv,
-			    newscriptEnvsize);
+			newscriptEnv = reallocarray(client->scriptEnv,
+			    newscriptEnvsize, sizeof(char *));
 			if (newscriptEnv == NULL) {
 				free(client->scriptEnv);
 				client->scriptEnv = NULL;
@@ -2611,6 +2679,9 @@ check_option(struct client_lease *l, int option)
 	case DHO_BOOTFILE_NAME:
 	case DHO_DHCP_USER_CLASS_ID:
 	case DHO_URL:
+	case DHO_SIP_SERVERS:
+	case DHO_V_I_VENDOR_CLASS:
+	case DHO_V_I_VENDOR_OPTS:
 	case DHO_END:
 		return (1);
 	case DHO_CLASSLESS_ROUTES:

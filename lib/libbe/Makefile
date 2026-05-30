@@ -1,10 +1,9 @@
-# $FreeBSD$
-
 SHLIBDIR?=	/lib
 
 .include <src.opts.mk>
 
-PACKAGE=	runtime
+PACKAGE=	zfs
+LIB_PACKAGE=
 LIB=		be
 SHLIB_MAJOR=	1
 SHLIB_MINOR=	0
@@ -54,15 +53,16 @@ LIBADD+= spl
 LIBADD+= zfsbootenv
 
 CFLAGS+= -DIN_BASE -DHAVE_RPC_TYPES
-CFLAGS+= -I${SRCTOP}/sys/contrib/openzfs/include
-CFLAGS+= -I${SRCTOP}/sys/contrib/openzfs/include/os/freebsd
-CFLAGS+= -I${SRCTOP}/sys/contrib/openzfs/lib/libspl/include
-CFLAGS+= -I${SRCTOP}/sys/contrib/openzfs/lib/libspl/include/os/freebsd
-CFLAGS+= -I${SRCTOP}/sys/contrib/openzfs/lib/libzfs
+CFLAGS+= -I${ZFSTOP}/include
+CFLAGS+= -I${ZFSTOP}/include/os/freebsd
+CFLAGS+= -I${ZFSTOP}/lib/libspl/include
+CFLAGS+= -I${ZFSTOP}/lib/libspl/include/os/freebsd
+CFLAGS+= -I${ZFSTOP}/lib/libzfs
+CFLAGS+= -I${ZFSTOP}/lib/libzpool/include
 CFLAGS+= -I${SRCTOP}/sys
 CFLAGS+= -I${SRCTOP}/cddl/compat/opensolaris/include
-CFLAGS+= -include ${SRCTOP}/sys/contrib/openzfs/include/os/freebsd/spl/sys/ccompile.h
-CFLAGS+= -DHAVE_ISSETUGID
+CFLAGS+= -include ${ZFSTOP}/include/os/freebsd/spl/sys/ccompile.h
+CFLAGS+= -DHAVE_ISSETUGID -DHAVE_STRLCAT -DHAVE_STRLCPY
 CFLAGS.be.c=		-Wno-cast-qual
 CFLAGS.be_access.c=	-Wno-cast-qual
 CFLAGS.be_error.c=	-Wno-cast-qual

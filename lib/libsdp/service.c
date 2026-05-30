@@ -1,7 +1,7 @@
 /*-
  * service.c
  *
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2001-2003 Maksim Yevmenkin <m_evmenkin@yahoo.com>
  * All rights reserved.
@@ -28,7 +28,6 @@
  * SUCH DAMAGE.
  *
  * $Id: service.c,v 1.1 2004/01/13 19:32:36 max Exp $
- * $FreeBSD$
  */
 
 #include <sys/uio.h>
@@ -46,7 +45,7 @@
 static int32_t sdp_receive_error_pdu(sdp_session_p ss);
 
 int32_t
-sdp_register_service(void *xss, uint16_t uuid, bdaddr_p const bdaddr,
+sdp_register_service(void *xss, uint16_t uuid, const bdaddr_t *bdaddr,
 		uint8_t const *data, uint32_t datalen, uint32_t *handle)
 {
 	sdp_session_p	ss = (sdp_session_p) xss;

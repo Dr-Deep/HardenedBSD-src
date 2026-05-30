@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1999 Marcel Moolenaar
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _LINUX_IOCTL_H_
@@ -72,6 +70,30 @@
 
 #define LINUX_IOCTL_HDIO_MIN	LINUX_HDIO_GET_GEO
 #define LINUX_IOCTL_HDIO_MAX	LINUX_HDIO_GET_GEO_BIG
+
+/*
+ * i2c
+ */
+#define	LINUX_I2C_RETRIES	0x0701
+#define	LINUX_I2C_TIMEOUT	0x0702
+#define	LINUX_I2C_SLAVE		0x0703
+#define	LINUX_I2C_TENBIT	0x0704
+#define	LINUX_I2C_FUNCS		0x0705
+#define	LINUX_I2C_SLAVE_FORCE	0x0706
+#define	LINUX_I2C_RDWR		0x0707
+#define	LINUX_I2C_PEC		0x0708
+#define	LINUX_I2C_SMBUS		0x0720
+
+#define	LINUX_IOCTL_I2C_MIN	LINUX_I2C_RETRIES
+#define	LINUX_IOCTL_I2C_MAX	LINUX_I2C_SMBUS
+
+#define	LINUX_I2C_M_RD		0x0001
+#define	LINUX_I2C_M_TEN		0x0010
+#define	LINUX_I2C_M_NOSTART	0x4000
+
+#define	LINUX_I2C_FUNC_I2C		0x00000001UL
+#define	LINUX_I2C_FUNC_10BIT_ADDR	0x00000002UL
+#define	LINUX_I2C_FUNC_NOSTART		0x00000010UL
 
 /*
  * cdrom
@@ -237,6 +259,8 @@
 #define	LINUX_SIOCGIFBRDADDR	0x8919
 #define	LINUX_SIOCGIFNETMASK	0x891b
 #define	LINUX_SIOCSIFNETMASK	0x891c
+#define	LINUX_SIOCGIFMETRIC	0x891d
+#define	LINUX_SIOCSIFMETRIC	0x891e
 #define	LINUX_SIOCGIFMTU	0x8921
 #define	LINUX_SIOCSIFMTU	0x8922
 #define	LINUX_SIOCSIFNAME	0x8923
@@ -383,6 +407,11 @@
 #define	LINUX_TIOCSBRK		0x5427
 #define	LINUX_TIOCCBRK		0x5428
 
+#define LINUX_TCGETS2		0x542A
+#define LINUX_TCSETS2		0x542B
+#define LINUX_TCSETSW2		0x542C
+#define LINUX_TCSETSF2		0x542D
+
 #define LINUX_TIOCGPTN		0x5430
 #define LINUX_TIOCSPTLCK	0x5431
 
@@ -462,6 +491,7 @@
 #define	LINUX_IXOFF		0x0001000
 
 #define	LINUX_IMAXBEL		0x0002000
+#define	LINUX_IUTF8		0x0004000
 
 /* Linux c_oflag masks */
 #define	LINUX_OPOST		0x0000001
@@ -500,6 +530,7 @@
 #define	LINUX_FF1		0x0008000
 
 #define	LINUX_CBAUD		0x0000100f
+#define	LINUX_CIBAUD		(LINUX_CBAUD << LINUX_IBSHIFT)
 
 #define	LINUX_B0		0x00000000
 #define	LINUX_B50		0x00000001
@@ -536,7 +567,11 @@
 #define	LINUX_HUPCL		0x00000400
 #define	LINUX_CLOCAL		0x00000800
 
+#define	LINUX_BOTHER		0x00001000
+
 #define	LINUX_CRTSCTS		0x80000000
+
+#define	LINUX_IBSHIFT		16
 
 /* Linux c_lflag masks */
 #define	LINUX_ISIG		0x00000001
@@ -782,6 +817,39 @@
 #define	LINUX_KCOV_REMOTE_ENABLE	0x6366
 
 /*
+ * NVMe IOCTLs defined by Linux
+ */
+#define LINUX_NVME_IOCTL_ID		0x4e40
+#define LINUX_NVME_IOCTL_ADMIN_CMD	0x4e41
+#define LINUX_NVME_IOCTL_SUBMIT_IO	0x4e42
+#define LINUX_NVME_IOCTL_IO_CMD		0x4e43
+#define LINUX_NVME_IOCTL_RESET		0x4e44
+#define LINUX_NVME_IOCTL_SUBSYS_RESET	0x4e45
+#define LINUX_NVME_IOCTL_RESCAN		0x4e46
+
+#define LINUX_IOCTL_NVME_MIN	LINUX_NVME_IOCTL_ID
+#define LINUX_IOCTL_NVME_MAX	LINUX_NVME_IOCTL_RESCAN
+
+/*
+ * hidraw
+ */
+#define LINUX_HIDIOCGRDESCSIZE	0x4801
+#define LINUX_HIDIOCGRDESC	0x4802
+#define LINUX_HIDIOCGRAWINFO	0x4803
+#define LINUX_HIDIOCGRAWNAME	0x4804
+#define LINUX_HIDIOCGRAWPHYS	0x4805
+#define LINUX_HIDIOCSFEATURE	0x4806
+#define LINUX_HIDIOCGFEATURE	0x4807
+#define LINUX_HIDIOCGRAWUNIQ	0x4808
+#define LINUX_HIDIOCSINPUT	0x4809
+#define LINUX_HIDIOCGINPUT	0x480A
+#define LINUX_HIDIOCSOUTPUT	0x480B
+#define LINUX_HIDIOCGOUTPUT	0x480C
+
+#define LINUX_IOCTL_HIDRAW_MIN	LINUX_HIDIOCGRDESCSIZE
+#define LINUX_IOCTL_HIDRAW_MAX	LINUX_HIDIOCGOUTPUT
+
+/*
  * Pluggable ioctl handlers
  */
 struct linux_ioctl_args;
@@ -807,5 +875,17 @@ int	linux_ioctl_unregister_handler(struct linux_ioctl_handler *h);
 int	linux32_ioctl_register_handler(struct linux_ioctl_handler *h);
 int	linux32_ioctl_unregister_handler(struct linux_ioctl_handler *h);
 #endif
+
+#define LINUX_IOCTL_SET(n, low, high)				\
+static linux_ioctl_function_t n##_linux_ioctl;			\
+static struct linux_ioctl_handler n##_linux_handler = {		\
+	n##_linux_ioctl,					\
+	low,							\
+	high							\
+};								\
+SYSINIT(n##_ioctl_register, SI_SUB_KLD, SI_ORDER_MIDDLE,	\
+    linux_ioctl_register_handler, &n##_linux_handler);		\
+SYSUNINIT(n##_ioctl_unregister, SI_SUB_KLD, SI_ORDER_MIDDLE,	\
+    linux_ioctl_unregister_handler, &n##_linux_handler)
 
 #endif /* !_LINUX_IOCTL_H_ */

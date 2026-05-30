@@ -31,8 +31,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- *	from: @(#)vm_init.c	8.1 (Berkeley) 6/11/93
- *
  *
  * Copyright (c) 1987, 1990 Carnegie-Mellon University.
  * All rights reserved.
@@ -63,9 +61,6 @@
 /*
  *	Initialize the Virtual Memory subsystem.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/domainset.h>
@@ -105,8 +100,26 @@ long physmem;
 static void vm_mem_init(void *);
 SYSINIT(vm_mem, SI_SUB_VM, SI_ORDER_FIRST, vm_mem_init, NULL);
 
+#ifdef INVARIANTS
 /*
- *	vm_init initializes the virtual memory system.
+ * Ensure that pmap_init() correctly initialized pagesizes[].
+ */
+static void
+vm_check_pagesizes(void)
+{
+	int i;
+
+	KASSERT(pagesizes[0] == PAGE_SIZE, ("pagesizes[0] != PAGE_SIZE"));
+	for (i = 1; i < MAXPAGESIZES; i++) {
+		KASSERT((pagesizes[i - 1] != 0 &&
+		    pagesizes[i - 1] < pagesizes[i]) || pagesizes[i] == 0,
+		    ("pagesizes[%d ... %d] are misconfigured", i - 1, i));
+	}
+}
+#endif
+
+/*
+ *	vm_mem_init() initializes the virtual memory system.
  *	This is done only by the first cpu up.
  */
 static void
@@ -145,18 +158,30 @@ vm_mem_init(void *dummy)
 	kmem_init_zero_region();
 	pmap_init();
 	vm_pager_init();
+
+	/*
+	 * Now we can properly handle calls into vm_fault() from
+	 * kernel page faults during initialization, typically to
+	 * panic.  Clear the nofaulting flag set for thread0 in the
+	 * image, see kern/init_main.c
+	 */
+	curthread->td_pflags &= ~TDP_NOFAULTING;
+
+#ifdef INVARIANTS
+	vm_check_pagesizes();
+#endif
 }
 
 void
 vm_ksubmap_init(struct kva_md_info *kmi)
 {
-	vm_offset_t firstaddr;
-	caddr_t v;
+	caddr_t firstaddr, v;
 	vm_size_t size = 0;
 	long physmem_est;
 	vm_offset_t minaddr;
 	vm_offset_t maxaddr;
 
+	TSENTER();
 	/*
 	 * Allocate space for system data structures.
 	 * The first available kernel virtual address is in "v".
@@ -170,9 +195,9 @@ vm_ksubmap_init(struct kva_md_info *kmi)
 	 * needed and allocates it.  The second pass assigns virtual
 	 * addresses to the various data structures.
 	 */
-	firstaddr = 0;
+	firstaddr = NULL;
 again:
-	v = (caddr_t)firstaddr;
+	v = firstaddr;
 
 	/*
 	 * Discount the physical memory larger than the size of kernel_map
@@ -186,7 +211,7 @@ again:
 	/*
 	 * End of first pass, size has been calculated so allocate memory
 	 */
-	if (firstaddr == 0) {
+	if (firstaddr == NULL) {
 		size = (vm_size_t)v;
 #ifdef VM_FREELIST_DMA32
 		/*
@@ -195,10 +220,10 @@ again:
 		 */
 		firstaddr = kmem_alloc_attr(size, M_ZERO | M_NOWAIT,
 		    (vm_paddr_t)1 << 32, ~(vm_paddr_t)0, VM_MEMATTR_DEFAULT);
-		if (firstaddr == 0)
+		if (firstaddr == NULL)
 #endif
 			firstaddr = kmem_malloc(size, M_ZERO | M_WAITOK);
-		if (firstaddr == 0)
+		if (firstaddr == NULL)
 			panic("startup: no room for tables");
 		goto again;
 	}
@@ -206,15 +231,15 @@ again:
 	/*
 	 * End of second pass, addresses have been assigned
 	 */
-	if ((vm_size_t)((char *)v - firstaddr) != size)
+	if ((vm_size_t)(v - firstaddr) != size)
 		panic("startup: table size inconsistency");
 
 	/*
 	 * Allocate the clean map to hold all of I/O virtual memory.
 	 */
 	size = (long)nbuf * BKVASIZE + (long)bio_transient_maxcnt * maxphys;
-	kmi->clean_sva = firstaddr = kva_alloc(size);
-	kmi->clean_eva = firstaddr + size;
+	kmi->clean_sva = (vm_offset_t)kva_alloc(size);
+	kmi->clean_eva = kmi->clean_sva + size;
 
 	/*
 	 * Allocate the buffer arena.
@@ -223,11 +248,10 @@ again:
 	 * avoids lock contention at the expense of some fragmentation.
 	 */
 	size = (long)nbuf * BKVASIZE;
-	kmi->buffer_sva = firstaddr;
+	kmi->buffer_sva = kmi->clean_sva;
 	kmi->buffer_eva = kmi->buffer_sva + size;
 	vmem_init(buffer_arena, "buffer arena", kmi->buffer_sva, size,
 	    PAGE_SIZE, (mp_ncpus > 4) ? BKVASIZE * 8 : 0, M_WAITOK);
-	firstaddr += size;
 
 	/*
 	 * And optionally transient bio space.
@@ -235,11 +259,8 @@ again:
 	if (bio_transient_maxcnt != 0) {
 		size = (long)bio_transient_maxcnt * maxphys;
 		vmem_init(transient_arena, "transient arena",
-		    firstaddr, size, PAGE_SIZE, 0, M_WAITOK);
-		firstaddr += size;
+		    kmi->buffer_eva, size, PAGE_SIZE, 0, M_WAITOK);
 	}
-	if (firstaddr != kmi->clean_eva)
-		panic("Clean map calculation incorrect");
 
 	/*
 	 * Allocate the pageable submaps.  We may cache an exec map entry per
@@ -253,8 +274,13 @@ again:
 	exec_map_entries = 2 * mp_ncpus + 4;
 #endif
 	exec_map_entry_size = round_page(PATH_MAX + ARG_MAX);
-	kmem_subinit(exec_map, kernel_map, &minaddr, &maxaddr,
-	    exec_map_entries * exec_map_entry_size + 64 * PAGE_SIZE, false);
+	exec_map_guard_pages = 1;
+	TUNABLE_INT_FETCH("vm.exec_map_guard_pages", &exec_map_guard_pages);
+	size = exec_map_entries *
+	    (exec_map_entry_size + 2 * ptoa(exec_map_guard_pages)) +
+	    64 * PAGE_SIZE;
+	kmem_subinit(exec_map, kernel_map, &minaddr, &maxaddr, size, false);
 	kmem_subinit(pipe_map, kernel_map, &minaddr, &maxaddr, maxpipekva,
 	    false);
+	TSEXIT();
 }

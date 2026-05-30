@@ -3,7 +3,7 @@
 #endif
 
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1998, 1999 Matthew R. Green
  * All rights reserved.
@@ -40,8 +40,6 @@
  */
 
 #include <sys/types.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/stat.h>
 
 #include <err.h>
@@ -982,9 +980,11 @@ do_file(filenode *fnode, strnodelist *stack_ptr)
 		fnode->last->next = fnode->next;
 	}
 
-	if (fnode->issues_count)
-		warnx("`%s' was seen in circular dependencies for %d times.",
-		    fnode->filename, fnode->issues_count);
+	if (fnode->issues_count) {
+		warnx("`%s' was seen in circular dependencies %d time%s.",
+		    fnode->filename, fnode->issues_count,
+		    fnode->issues_count > 1 ? "s" : "");
+	}
 
 	DPRINTF((stderr, "nuking %s\n", fnode->filename));
 }

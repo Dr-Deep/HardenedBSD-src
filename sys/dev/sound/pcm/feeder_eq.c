@@ -1,8 +1,12 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008-2009 Ariff Abdullah <ariff@FreeBSD.org>
  * All rights reserved.
+ * Copyright (c) 2024-2026 The FreeBSD Foundation
+ *
+ * Portions of this software were developed by Christos Margiolis
+ * <christos@FreeBSD.org> under sponsorship from the FreeBSD Foundation.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -45,8 +49,6 @@
 
 #define SND_USE_FXDIV
 #include "snd_fxdiv_gen.h"
-
-SND_DECLARE_FILE("$FreeBSD$");
 #endif
 
 #include "feeder_eq_gen.h"
@@ -103,10 +105,6 @@ SYSCTL_INT(_hw_snd, OID_AUTO, feeder_eq_exact_rate, CTLFLAG_RWTUN,
     &feeder_eq_exact_rate, 0, "force exact rate validation");
 #endif
 
-struct feed_eq_info;
-
-typedef void (*feed_eq_t)(struct feed_eq_info *, uint8_t *, uint32_t);
-
 struct feed_eq_tone {
 	intpcm_t o1[SND_CHN_MAX];
 	intpcm_t o2[SND_CHN_MAX];
@@ -119,12 +117,11 @@ struct feed_eq_info {
 	struct feed_eq_tone treble;
 	struct feed_eq_tone bass;
 	struct feed_eq_coeff *coeff;
-	feed_eq_t biquad;
+	uint32_t fmt;
 	uint32_t channels;
 	uint32_t rate;
 	uint32_t align;
 	int32_t preamp;
-	int state;
 };
 
 #if !defined(_KERNEL) && defined(FEEDEQ_ERR_CLIP)
@@ -137,137 +134,61 @@ struct feed_eq_info {
 #define FEEDEQ_ERR_CLIP_CHECK(...)
 #endif
 
-#define FEEDEQ_CLAMP(v)		(((v) > PCM_S32_MAX) ? PCM_S32_MAX :	\
-				(((v) < PCM_S32_MIN) ? PCM_S32_MIN :	\
-				  (v)))
+__always_inline static void
+feed_eq_biquad(struct feed_eq_info *info, uint8_t *dst, uint32_t count,
+    const uint32_t fmt)
+{
+	struct feed_eq_coeff_tone *treble, *bass;
+	intpcm64_t w;
+	intpcm_t v;
+	uint32_t i, j;
+	int32_t pmul, pshift;
 
-#define FEEDEQ_DECLARE(SIGN, BIT, ENDIAN)					\
-static void									\
-feed_eq_biquad_##SIGN##BIT##ENDIAN(struct feed_eq_info *info,			\
-    uint8_t *dst, uint32_t count)						\
-{										\
-	struct feed_eq_coeff_tone *treble, *bass;				\
-	intpcm64_t w;								\
-	intpcm_t v;								\
-	uint32_t i, j;								\
-	int32_t pmul, pshift;							\
-										\
-	pmul = feed_eq_preamp[info->preamp].mul;				\
-	pshift = feed_eq_preamp[info->preamp].shift;				\
-										\
-	if (info->state == FEEDEQ_DISABLE) {					\
-		j = count * info->channels;					\
-		dst += j * PCM_##BIT##_BPS;					\
-		do {								\
-			dst -= PCM_##BIT##_BPS;					\
-			v = _PCM_READ_##SIGN##BIT##_##ENDIAN(dst);		\
-			v = ((intpcm64_t)pmul * v) >> pshift;			\
-			_PCM_WRITE_##SIGN##BIT##_##ENDIAN(dst, v);		\
-		} while (--j != 0);						\
-										\
-		return;								\
-	}									\
-										\
-	treble = &(info->coeff[info->treble.gain].treble);			\
-	bass   = &(info->coeff[info->bass.gain].bass);				\
-										\
-	do {									\
-		i = 0;								\
-		j = info->channels;						\
-		do {								\
-			v = _PCM_READ_##SIGN##BIT##_##ENDIAN(dst);		\
-			v <<= 32 - BIT;						\
-			v = ((intpcm64_t)pmul * v) >> pshift;			\
-										\
-			w  = (intpcm64_t)v * treble->b0;			\
-			w += (intpcm64_t)info->treble.i1[i] * treble->b1;	\
-			w += (intpcm64_t)info->treble.i2[i] * treble->b2;	\
-			w -= (intpcm64_t)info->treble.o1[i] * treble->a1;	\
-			w -= (intpcm64_t)info->treble.o2[i] * treble->a2;	\
-			info->treble.i2[i] = info->treble.i1[i];		\
-			info->treble.i1[i] = v;					\
-			info->treble.o2[i] = info->treble.o1[i];		\
-			w >>= FEEDEQ_COEFF_SHIFT;				\
-			FEEDEQ_ERR_CLIP_CHECK(treble, w);			\
-			v = FEEDEQ_CLAMP(w);					\
-			info->treble.o1[i] = v;					\
-										\
-			w  = (intpcm64_t)v * bass->b0;				\
-			w += (intpcm64_t)info->bass.i1[i] * bass->b1;		\
-			w += (intpcm64_t)info->bass.i2[i] * bass->b2;		\
-			w -= (intpcm64_t)info->bass.o1[i] * bass->a1;		\
-			w -= (intpcm64_t)info->bass.o2[i] * bass->a2;		\
-			info->bass.i2[i] = info->bass.i1[i];			\
-			info->bass.i1[i] = v;					\
-			info->bass.o2[i] = info->bass.o1[i];			\
-			w >>= FEEDEQ_COEFF_SHIFT;				\
-			FEEDEQ_ERR_CLIP_CHECK(bass, w);				\
-			v = FEEDEQ_CLAMP(w);					\
-			info->bass.o1[i] = v;					\
-										\
-			v >>= 32 - BIT;						\
-			_PCM_WRITE_##SIGN##BIT##_##ENDIAN(dst, v);		\
-			dst += PCM_##BIT##_BPS;					\
-			i++;							\
-		} while (--j != 0);						\
-	} while (--count != 0);							\
+	pmul = feed_eq_preamp[info->preamp].mul;
+	pshift = feed_eq_preamp[info->preamp].shift;
+
+	treble = &(info->coeff[info->treble.gain].treble);
+	bass   = &(info->coeff[info->bass.gain].bass);
+
+	do {
+		i = 0;
+		j = info->channels;
+		do {
+			v = pcm_sample_read_norm(dst, fmt);
+			v = ((intpcm64_t)pmul * v) >> pshift;
+
+			w  = (intpcm64_t)v * treble->b0;
+			w += (intpcm64_t)info->treble.i1[i] * treble->b1;
+			w += (intpcm64_t)info->treble.i2[i] * treble->b2;
+			w -= (intpcm64_t)info->treble.o1[i] * treble->a1;
+			w -= (intpcm64_t)info->treble.o2[i] * treble->a2;
+			info->treble.i2[i] = info->treble.i1[i];
+			info->treble.i1[i] = v;
+			info->treble.o2[i] = info->treble.o1[i];
+			w >>= FEEDEQ_COEFF_SHIFT;
+			FEEDEQ_ERR_CLIP_CHECK(treble, w);
+			v = pcm_clamp(w, AFMT_S32_NE);
+			info->treble.o1[i] = v;
+
+			w  = (intpcm64_t)v * bass->b0;
+			w += (intpcm64_t)info->bass.i1[i] * bass->b1;
+			w += (intpcm64_t)info->bass.i2[i] * bass->b2;
+			w -= (intpcm64_t)info->bass.o1[i] * bass->a1;
+			w -= (intpcm64_t)info->bass.o2[i] * bass->a2;
+			info->bass.i2[i] = info->bass.i1[i];
+			info->bass.i1[i] = v;
+			info->bass.o2[i] = info->bass.o1[i];
+			w >>= FEEDEQ_COEFF_SHIFT;
+			FEEDEQ_ERR_CLIP_CHECK(bass, w);
+			v = pcm_clamp(w, AFMT_S32_NE);
+			info->bass.o1[i] = v;
+
+			pcm_sample_write_norm(dst, v, fmt);
+			dst += AFMT_BPS(fmt);
+			i++;
+		} while (--j != 0);
+	} while (--count != 0);
 }
-
-#if BYTE_ORDER == LITTLE_ENDIAN || defined(SND_FEEDER_MULTIFORMAT)
-FEEDEQ_DECLARE(S, 16, LE)
-FEEDEQ_DECLARE(S, 32, LE)
-#endif
-#if BYTE_ORDER == BIG_ENDIAN || defined(SND_FEEDER_MULTIFORMAT)
-FEEDEQ_DECLARE(S, 16, BE)
-FEEDEQ_DECLARE(S, 32, BE)
-#endif
-#ifdef SND_FEEDER_MULTIFORMAT
-FEEDEQ_DECLARE(S,  8, NE)
-FEEDEQ_DECLARE(S, 24, LE)
-FEEDEQ_DECLARE(S, 24, BE)
-FEEDEQ_DECLARE(U,  8, NE)
-FEEDEQ_DECLARE(U, 16, LE)
-FEEDEQ_DECLARE(U, 24, LE)
-FEEDEQ_DECLARE(U, 32, LE)
-FEEDEQ_DECLARE(U, 16, BE)
-FEEDEQ_DECLARE(U, 24, BE)
-FEEDEQ_DECLARE(U, 32, BE)
-#endif
-
-#define FEEDEQ_ENTRY(SIGN, BIT, ENDIAN)					\
-	{								\
-		AFMT_##SIGN##BIT##_##ENDIAN,				\
-		feed_eq_biquad_##SIGN##BIT##ENDIAN			\
-	}
-
-static const struct {
-	uint32_t format;
-	feed_eq_t biquad;
-} feed_eq_biquad_tab[] = {
-#if BYTE_ORDER == LITTLE_ENDIAN || defined(SND_FEEDER_MULTIFORMAT)
-	FEEDEQ_ENTRY(S, 16, LE),
-	FEEDEQ_ENTRY(S, 32, LE),
-#endif
-#if BYTE_ORDER == BIG_ENDIAN || defined(SND_FEEDER_MULTIFORMAT)
-	FEEDEQ_ENTRY(S, 16, BE),
-	FEEDEQ_ENTRY(S, 32, BE),
-#endif
-#ifdef SND_FEEDER_MULTIFORMAT
-	FEEDEQ_ENTRY(S,  8, NE),
-	FEEDEQ_ENTRY(S, 24, LE),
-	FEEDEQ_ENTRY(S, 24, BE),
-	FEEDEQ_ENTRY(U,  8, NE),
-	FEEDEQ_ENTRY(U, 16, LE),
-	FEEDEQ_ENTRY(U, 24, LE),
-	FEEDEQ_ENTRY(U, 32, LE),
-	FEEDEQ_ENTRY(U, 16, BE),
-	FEEDEQ_ENTRY(U, 24, BE),
-	FEEDEQ_ENTRY(U, 32, BE)
-#endif
-};
-
-#define FEEDEQ_BIQUAD_TAB_SIZE						\
-	((int32_t)(sizeof(feed_eq_biquad_tab) / sizeof(feed_eq_biquad_tab[0])))
 
 static struct feed_eq_coeff *
 feed_eq_coeff_rate(uint32_t rate)
@@ -339,36 +260,22 @@ static int
 feed_eq_init(struct pcm_feeder *f)
 {
 	struct feed_eq_info *info;
-	feed_eq_t biquad_op;
-	int i;
 
-	if (f->desc->in != f->desc->out)
-		return (EINVAL);
-
-	biquad_op = NULL;
-
-	for (i = 0; i < FEEDEQ_BIQUAD_TAB_SIZE && biquad_op == NULL; i++) {
-		if (AFMT_ENCODING(f->desc->in) == feed_eq_biquad_tab[i].format)
-			biquad_op = feed_eq_biquad_tab[i].biquad;
-	}
-
-	if (biquad_op == NULL)
+	if (f->desc.in != f->desc.out)
 		return (EINVAL);
 
 	info = malloc(sizeof(*info), M_DEVBUF, M_NOWAIT | M_ZERO);
 	if (info == NULL)
 		return (ENOMEM);
 
-	info->channels = AFMT_CHANNEL(f->desc->in);
-	info->align = info->channels * AFMT_BPS(f->desc->in);
+	info->fmt = AFMT_ENCODING(f->desc.in);
+	info->channels = AFMT_CHANNEL(f->desc.in);
+	info->align = info->channels * AFMT_BPS(f->desc.in);
 
 	info->rate = FEEDEQ_RATE_MIN;
 	info->treble.gain = FEEDEQ_L2GAIN(50);
 	info->bass.gain = FEEDEQ_L2GAIN(50);
 	info->preamp = FEEDEQ_PREAMP2IDX(FEEDEQ_PREAMP_DEFAULT);
-	info->state = FEEDEQ_UNKNOWN;
-
-	info->biquad = biquad_op;
 
 	f->data = info;
 
@@ -387,17 +294,14 @@ feed_eq_set(struct pcm_feeder *f, int what, int value)
 		if (value < SND_CHN_MIN || value > SND_CHN_MAX)
 			return (EINVAL);
 		info->channels = (uint32_t)value;
-		info->align = info->channels * AFMT_BPS(f->desc->in);
+		info->align = info->channels * AFMT_BPS(f->desc.in);
 		feed_eq_reset(info);
 		break;
 	case FEEDEQ_RATE:
 		if (feeder_eq_validrate(value) == 0)
 			return (EINVAL);
 		info->rate = (uint32_t)value;
-		if (info->state == FEEDEQ_UNKNOWN)
-			info->state = FEEDEQ_ENABLE;
 		return (feed_eq_setup(info));
-		break;
 	case FEEDEQ_TREBLE:
 	case FEEDEQ_BASS:
 		if (value < 0 || value > 100)
@@ -412,16 +316,8 @@ feed_eq_set(struct pcm_feeder *f, int what, int value)
 			return (EINVAL);
 		info->preamp = FEEDEQ_PREAMP2IDX(value);
 		break;
-	case FEEDEQ_STATE:
-		if (!(value == FEEDEQ_BYPASS || value == FEEDEQ_ENABLE ||
-		    value == FEEDEQ_DISABLE))
-			return (EINVAL);
-		info->state = value;
-		feed_eq_reset(info);
-		break;
 	default:
 		return (EINVAL);
-		break;
 	}
 
 	return (0);
@@ -433,8 +329,7 @@ feed_eq_free(struct pcm_feeder *f)
 	struct feed_eq_info *info;
 
 	info = f->data;
-	if (info != NULL)
-		free(info, M_DEVBUF);
+	free(info, M_DEVBUF);
 
 	f->data = NULL;
 
@@ -451,15 +346,6 @@ feed_eq_feed(struct pcm_feeder *f, struct pcm_channel *c, uint8_t *b,
 
 	info = f->data;
 
-	/*
-	 * 3 major states:
-	 * 	FEEDEQ_BYPASS  - Bypass entirely, nothing happened.
-	 *      FEEDEQ_ENABLE  - Preamp+biquad filtering.
-	 *      FEEDEQ_DISABLE - Preamp only.
-	 */
-	if (info->state == FEEDEQ_BYPASS)
-		return (FEEDER_FEED(f->source, c, b, count, source));
-
 	dst = b;
 	count = SND_FXROUND(count, info->align);
 
@@ -472,7 +358,21 @@ feed_eq_feed(struct pcm_feeder *f, struct pcm_channel *c, uint8_t *b,
 		if (j == 0)
 			break;
 
-		info->biquad(info, dst, j);
+		/* Optimize some common formats. */
+		switch (info->fmt) {
+		case AFMT_S16_NE:
+			feed_eq_biquad(info, dst, j, AFMT_S16_NE);
+			break;
+		case AFMT_S24_NE:
+			feed_eq_biquad(info, dst, j, AFMT_S24_NE);
+			break;
+		case AFMT_S32_NE:
+			feed_eq_biquad(info, dst, j, AFMT_S32_NE);
+			break;
+		default:
+			feed_eq_biquad(info, dst, j, info->fmt);
+			break;
+		}
 
 		j *= info->align;
 		dst += j;
@@ -483,11 +383,6 @@ feed_eq_feed(struct pcm_feeder *f, struct pcm_channel *c, uint8_t *b,
 	return (dst - b);
 }
 
-static struct pcm_feederdesc feeder_eq_desc[] = {
-	{ FEEDER_EQ, 0, 0, 0, 0 },
-	{ 0, 0, 0, 0, 0 }
-};
-
 static kobj_method_t feeder_eq_methods[] = {
 	KOBJMETHOD(feeder_init,		feed_eq_init),
 	KOBJMETHOD(feeder_free,		feed_eq_free),
@@ -496,7 +391,7 @@ static kobj_method_t feeder_eq_methods[] = {
 	KOBJMETHOD_END
 };
 
-FEEDER_DECLARE(feeder_eq, NULL);
+FEEDER_DECLARE(feeder_eq, FEEDER_EQ);
 
 static int32_t
 feed_eq_scan_preamp_arg(const char *s)
@@ -544,8 +439,6 @@ static int
 sysctl_dev_pcm_eq(SYSCTL_HANDLER_ARGS)
 {
 	struct snddev_info *d;
-	struct pcm_channel *c;
-	struct pcm_feeder *f;
 	int err, val, oval;
 
 	d = oidp->oid_arg1;
@@ -554,9 +447,7 @@ sysctl_dev_pcm_eq(SYSCTL_HANDLER_ARGS)
 
 	PCM_LOCK(d);
 	PCM_WAIT(d);
-	if (d->flags & SD_F_EQ_BYPASSED)
-		val = 2;
-	else if (d->flags & SD_F_EQ_ENABLED)
+	if (d->flags & SD_F_EQ_ENABLED)
 		val = 1;
 	else
 		val = 0;
@@ -567,30 +458,17 @@ sysctl_dev_pcm_eq(SYSCTL_HANDLER_ARGS)
 	err = sysctl_handle_int(oidp, &val, 0, req);
 
 	if (err == 0 && req->newptr != NULL && val != oval) {
-		if (!(val == 0 || val == 1 || val == 2)) {
+		if (!(val == 0 || val == 1)) {
 			PCM_RELEASE_QUICK(d);
 			return (EINVAL);
 		}
 
 		PCM_LOCK(d);
 
-		d->flags &= ~(SD_F_EQ_ENABLED | SD_F_EQ_BYPASSED);
-		if (val == 2) {
-			val = FEEDEQ_BYPASS;
-			d->flags |= SD_F_EQ_BYPASSED;
-		} else if (val == 1) {
-			val = FEEDEQ_ENABLE;
+		if (val == 1)
 			d->flags |= SD_F_EQ_ENABLED;
-		} else
-			val = FEEDEQ_DISABLE;
-
-		CHN_FOREACH(c, d, channels.pcm.busy) {
-			CHN_LOCK(c);
-			f = chn_findfeeder(c, FEEDER_EQ);
-			if (f != NULL)
-				(void)FEEDER_SET(f, FEEDEQ_STATE, val);
-			CHN_UNLOCK(c);
-		}
+		else
+			d->flags &= ~SD_F_EQ_ENABLED;
 
 		PCM_RELEASE(d);
 		PCM_UNLOCK(d);
@@ -645,7 +523,7 @@ sysctl_dev_pcm_eq_preamp(SYSCTL_HANDLER_ARGS)
 
 			CHN_FOREACH(c, d, channels.pcm.busy) {
 				CHN_LOCK(c);
-				f = chn_findfeeder(c, FEEDER_EQ);
+				f = feeder_find(c, FEEDER_EQ);
 				if (f != NULL)
 					(void)FEEDER_SET(f, FEEDEQ_PREAMP, val);
 				CHN_UNLOCK(c);
@@ -664,17 +542,11 @@ void
 feeder_eq_initsys(device_t dev)
 {
 	struct snddev_info *d;
-	const char *preamp;
 	char buf[64];
 
 	d = device_get_softc(dev);
 
-	if (!(resource_string_value(device_get_name(dev), device_get_unit(dev),
-	    "eq_preamp", &preamp) == 0 &&
-	    (d->eqpreamp = feed_eq_scan_preamp_arg(preamp)) !=
-	    FEEDEQ_PREAMP_INVALID))
-		d->eqpreamp = FEEDEQ_PREAMP_DEFAULT;
-
+	d->eqpreamp = FEEDEQ_PREAMP_DEFAULT;
 	if (d->eqpreamp < FEEDEQ_PREAMP_MIN)
 		d->eqpreamp = FEEDEQ_PREAMP_MIN;
 	else if (d->eqpreamp > FEEDEQ_PREAMP_MAX)
@@ -684,7 +556,7 @@ feeder_eq_initsys(device_t dev)
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "eq", CTLTYPE_INT | CTLFLAG_RWTUN | CTLFLAG_MPSAFE, d,
 	    sizeof(d), sysctl_dev_pcm_eq, "I",
-	    "Bass/Treble Equalizer (0=disable, 1=enable, 2=bypass)");
+	    "Bass/Treble Equalizer (0=disable, 1=enable)");
 
 	(void)snprintf(buf, sizeof(buf), "Bass/Treble Equalizer Preamp "
 	    "(-/+ %d.0dB , %d.%ddB step)",

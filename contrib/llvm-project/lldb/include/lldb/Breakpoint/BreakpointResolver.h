@@ -16,6 +16,7 @@
 #include "lldb/Utility/FileSpec.h"
 #include "lldb/Utility/RegularExpression.h"
 #include "lldb/lldb-private.h"
+#include <optional>
 
 namespace lldb_private {
 
@@ -147,8 +148,7 @@ public:
   enum ResolverTy GetResolverTy() {
     if (SubclassID > ResolverTy::LastKnownResolverType)
       return ResolverTy::UnknownResolver;
-    else
-      return (enum ResolverTy)SubclassID;
+    return (enum ResolverTy)SubclassID;
   }
 
   const char *GetResolverName() { return ResolverTyToName(GetResolverTy()); }
@@ -205,7 +205,7 @@ protected:
   void SetSCMatchesByLine(SearchFilter &filter, SymbolContextList &sc_list,
                           bool skip_prologue, llvm::StringRef log_ident,
                           uint32_t line = 0,
-                          llvm::Optional<uint16_t> column = llvm::None);
+                          std::optional<uint16_t> column = std::nullopt);
   void SetSCMatchesByLine(SearchFilter &, SymbolContextList &, bool,
                           const char *) = delete;
 

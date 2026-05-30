@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008, Pyun YongHyeon <yongari@FreeBSD.org>
  * All rights reserved.
@@ -25,8 +25,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef	_IF_JMEVAR_H
@@ -172,7 +170,7 @@ struct jme_hw_stats {
  * Software state per device.
  */
 struct jme_softc {
-	struct ifnet 		*jme_ifp;
+	if_t			jme_ifp;
 	device_t		jme_dev;
 	device_t		jme_miibus;
 	struct resource		*jme_res[1];
@@ -192,7 +190,6 @@ struct jme_softc {
 #define	JME_FLAG_PCIX		0x00000004
 #define	JME_FLAG_MSI		0x00000008
 #define	JME_FLAG_MSIX		0x00000010
-#define	JME_FLAG_PMCAP		0x00000020
 #define	JME_FLAG_FASTETH	0x00000040
 #define	JME_FLAG_NOJUMBO	0x00000080
 #define	JME_FLAG_RXCLK		0x00000100

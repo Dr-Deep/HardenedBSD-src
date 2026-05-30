@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2005 Peter Grehan
  * All rights reserved.
@@ -28,8 +28,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Dispatch MI pmap calls to the appropriate MMU implementation
  * through a previously registered kernel object.
@@ -56,6 +54,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm.h>
 #include <vm/vm_extern.h>
 #include <vm/vm_page.h>
+#include <vm/vm_param.h>
 
 #include <machine/dump.h>
 #include <machine/ifunc.h>
@@ -86,6 +85,11 @@ SYSCTL_NODE(_vm, OID_AUTO, pmap, CTLFLAG_RD, 0, "VM/pmap parameters");
 int superpages_enabled = 1;
 SYSCTL_INT(_vm_pmap, OID_AUTO, superpages_enabled, CTLFLAG_RDTUN,
     &superpages_enabled, 0, "Enable support for transparent superpages");
+
+static int pmap_growkernel_panic = 0;
+SYSCTL_INT(_vm_pmap, OID_AUTO, growkernel_panic, CTLFLAG_RDTUN,
+    &pmap_growkernel_panic, 0,
+    "panic on failure to allocate kernel page table page");
 
 #ifdef AIM
 int
@@ -137,20 +141,20 @@ DEFINE_PMAP_IFUNC(vm_paddr_t, kextract, (vm_offset_t));
 DEFINE_PMAP_IFUNC(void, kremove, (vm_offset_t));
 DEFINE_PMAP_IFUNC(void, object_init_pt, (pmap_t, vm_offset_t, vm_object_t, vm_pindex_t,
 	vm_size_t));
-DEFINE_PMAP_IFUNC(boolean_t, is_modified, (vm_page_t));
-DEFINE_PMAP_IFUNC(boolean_t, is_prefaultable, (pmap_t, vm_offset_t));
-DEFINE_PMAP_IFUNC(boolean_t, is_referenced, (vm_page_t));
-DEFINE_PMAP_IFUNC(boolean_t, page_exists_quick, (pmap_t, vm_page_t));
+DEFINE_PMAP_IFUNC(bool, is_modified, (vm_page_t));
+DEFINE_PMAP_IFUNC(bool, is_prefaultable, (pmap_t, vm_offset_t));
+DEFINE_PMAP_IFUNC(bool, is_referenced, (vm_page_t));
+DEFINE_PMAP_IFUNC(bool, page_exists_quick, (pmap_t, vm_page_t));
 DEFINE_PMAP_IFUNC(void, page_init, (vm_page_t));
-DEFINE_PMAP_IFUNC(boolean_t, page_is_mapped, (vm_page_t));
+DEFINE_PMAP_IFUNC(bool, page_is_mapped, (vm_page_t));
 DEFINE_PMAP_IFUNC(int, page_wired_mappings, (vm_page_t));
 DEFINE_PMAP_IFUNC(void, protect, (pmap_t, vm_offset_t, vm_offset_t, vm_prot_t));
 DEFINE_PMAP_IFUNC(bool, ps_enabled, (pmap_t));
-DEFINE_PMAP_IFUNC(void, qenter, (vm_offset_t, vm_page_t *, int));
-DEFINE_PMAP_IFUNC(void, qremove, (vm_offset_t, int));
-DEFINE_PMAP_IFUNC(vm_offset_t, quick_enter_page, (vm_page_t));
-DEFINE_PMAP_IFUNC(void, quick_remove_page, (vm_offset_t));
-DEFINE_PMAP_IFUNC(boolean_t, ts_referenced, (vm_page_t));
+DEFINE_PMAP_IFUNC(void, qenter, (void *, vm_page_t *, int));
+DEFINE_PMAP_IFUNC(void, qremove, (void *, int));
+DEFINE_PMAP_IFUNC(void *, quick_enter_page, (vm_page_t));
+DEFINE_PMAP_IFUNC(void, quick_remove_page, (void *));
+DEFINE_PMAP_IFUNC(int, ts_referenced, (vm_page_t));
 DEFINE_PMAP_IFUNC(void, release, (pmap_t));
 DEFINE_PMAP_IFUNC(void, remove, (pmap_t, vm_offset_t, vm_offset_t));
 DEFINE_PMAP_IFUNC(void, remove_all, (vm_page_t));
@@ -163,9 +167,9 @@ DEFINE_PMAP_IFUNC(void, copy_page, (vm_page_t, vm_page_t));
 DEFINE_PMAP_IFUNC(void, copy_pages,
     (vm_page_t ma[], vm_offset_t a_offset, vm_page_t mb[],
     vm_offset_t b_offset, int xfersize));
-DEFINE_PMAP_IFUNC(void, growkernel, (vm_offset_t));
+DEFINE_PMAP_IFUNC(int, growkernel_nopanic, (vm_offset_t));
 DEFINE_PMAP_IFUNC(void, init, (void));
-DEFINE_PMAP_IFUNC(vm_offset_t, map, (vm_offset_t *, vm_paddr_t, vm_paddr_t, int));
+DEFINE_PMAP_IFUNC(void *, map, (vm_offset_t *, vm_paddr_t, vm_paddr_t, int));
 DEFINE_PMAP_IFUNC(int, pinit, (pmap_t));
 DEFINE_PMAP_IFUNC(void, pinit0, (pmap_t));
 DEFINE_PMAP_IFUNC(int, mincore, (pmap_t, vm_offset_t, vm_paddr_t *));
@@ -175,13 +179,13 @@ DEFINE_PMAP_IFUNC(void, cpu_bootstrap, (int));
 DEFINE_PMAP_IFUNC(void *, mapdev, (vm_paddr_t, vm_size_t));
 DEFINE_PMAP_IFUNC(void *, mapdev_attr, (vm_paddr_t, vm_size_t, vm_memattr_t));
 DEFINE_PMAP_IFUNC(void, page_set_memattr, (vm_page_t, vm_memattr_t));
-DEFINE_PMAP_IFUNC(void, unmapdev, (vm_offset_t, vm_size_t));
+DEFINE_PMAP_IFUNC(void, unmapdev, (void *, vm_size_t));
 DEFINE_PMAP_IFUNC(int, map_user_ptr,
     (pmap_t, volatile const void *, void **, size_t, size_t *));
 DEFINE_PMAP_IFUNC(int, decode_kernel_ptr, (vm_offset_t, int *, vm_offset_t *));
-DEFINE_PMAP_IFUNC(boolean_t, dev_direct_mapped, (vm_paddr_t, vm_size_t));
+DEFINE_PMAP_IFUNC(int, dev_direct_mapped, (vm_paddr_t, vm_size_t));
 DEFINE_PMAP_IFUNC(void, sync_icache, (pmap_t, vm_offset_t, vm_size_t));
-DEFINE_PMAP_IFUNC(int, change_attr, (vm_offset_t, vm_size_t, vm_memattr_t));
+DEFINE_PMAP_IFUNC(int, change_attr, (void *, vm_size_t, vm_memattr_t));
 DEFINE_PMAP_IFUNC(void, page_array_startup, (long));
 DEFINE_PMAP_IFUNC(void, tlbie_all, (void));
 
@@ -198,7 +202,7 @@ DEFINE_DUMPSYS_IFUNC(void *, dump_pmap, (void *, void *, u_long *));
  */
 SET_DECLARE(mmu_set, struct mmu_kobj);
 
-boolean_t
+bool
 pmap_mmu_install(char *name, int prio)
 {
 	mmu_t	*mmupp, mmup;
@@ -215,16 +219,16 @@ pmap_mmu_install(char *name, int prio)
 		    (prio >= curr_prio || mmu_obj == NULL)) {
 			curr_prio = prio;
 			mmu_obj = mmup;
-			return (TRUE);
+			return (true);
 		}
 	}
 
-	return (FALSE);
+	return (false);
 }
 
 /* MMU "pre-bootstrap" init, used to install extra resolvers, etc. */
 void
-pmap_mmu_init()
+pmap_mmu_init(void)
 {
 	if (mmu_obj->funcs->install != NULL)
 		(mmu_obj->funcs->install)();
@@ -238,7 +242,7 @@ pmap_mmu_name(void)
 
 int unmapped_buf_allowed;
 
-boolean_t
+bool
 pmap_is_valid_memattr(pmap_t pmap __unused, vm_memattr_t mode)
 {
 
@@ -250,8 +254,25 @@ pmap_is_valid_memattr(pmap_t pmap __unused, vm_memattr_t mode)
 	case VM_MEMATTR_WRITE_BACK:
 	case VM_MEMATTR_WRITE_THROUGH:
 	case VM_MEMATTR_PREFETCHABLE:
-		return (TRUE);
+		return (true);
 	default:
-		return (FALSE);
+		return (false);
 	}
+}
+
+void
+pmap_active_cpus(pmap_t pmap, cpuset_t *res)
+{
+	*res = pmap->pm_active;
+}
+
+int
+pmap_growkernel(vm_offset_t addr)
+{
+	int rv;
+
+	rv = pmap_growkernel_nopanic(addr);
+	if (rv != KERN_SUCCESS && pmap_growkernel_panic)
+		panic("pmap_growkernel: no memory to grow kernel");
+	return (rv);
 }

@@ -37,9 +37,6 @@
   $Id: authgss_prot.c,v 1.18 2000/09/01 04:14:03 dugsong Exp $
 */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kobj.h>
@@ -324,7 +321,7 @@ xdr_rpc_gss_unwrap_data(struct mbuf **resultsp,
 }
 
 #ifdef DEBUG
-#include <machine/stdarg.h>
+#include <sys/stdarg.h>
 
 void
 rpc_gss_log_debug(const char *fmt, ...)

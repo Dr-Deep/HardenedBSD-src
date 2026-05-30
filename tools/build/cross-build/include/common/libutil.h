@@ -32,8 +32,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #pragma once
 
@@ -41,4 +39,4 @@
 #include_next <libutil.h>
 #endif
 
-int expand_number(const char *_buf, uint64_t *_num);
+int expand_number(const char *_buf, int64_t *_num);

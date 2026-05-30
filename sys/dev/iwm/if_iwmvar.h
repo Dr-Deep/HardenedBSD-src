@@ -1,5 +1,4 @@
 /*	$OpenBSD: if_iwmvar.h,v 1.7 2015/03/02 13:51:10 jsg Exp $	*/
-/*	$FreeBSD$ */
 
 /*
  * Copyright (c) 2014 genua mbh <info@genua.de>
@@ -201,6 +200,7 @@ struct iwm_nvm_data {
 	int sku_cap_11n_enable;
 	int sku_cap_amt_enable;
 	int sku_cap_ipan_enable;
+	int sku_cap_mimo_disable;
 
 	uint8_t radio_cfg_type;
 	uint8_t radio_cfg_step;

@@ -23,8 +23,6 @@
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #ifndef __IFLIB_H_
 #define __IFLIB_H_
@@ -35,8 +33,6 @@
 #include <machine/bus.h>
 #include <sys/nv.h>
 #include <sys/gtaskqueue.h>
-
-struct if_clone;
 
 /*
  * The value type for indexing, limits max descriptors
@@ -52,8 +48,6 @@ struct if_shared_ctx;
 typedef const struct if_shared_ctx *if_shared_ctx_t;
 struct if_int_delay_info;
 typedef struct if_int_delay_info  *if_int_delay_info_t;
-struct if_pseudo;
-typedef struct if_pseudo *if_pseudo_t;
 
 /*
  * File organization:
@@ -127,11 +121,14 @@ typedef struct if_pkt_info {
 	uint16_t		ipi_tso_segsz;	/* tso segment size */
 	uint16_t		ipi_vtag;	/* VLAN tag */
 	uint16_t		ipi_etype;	/* ether header type */
-	uint8_t			ipi_tcp_hflags;	/* tcp header flags */
-	uint8_t			ipi_mflags;	/* packet mbuf flags */
+	uint16_t		ipi_tcp_hflags;	/* tcp header flags */
 
 	uint32_t		ipi_tcp_seq;	/* tcp seqno */
-	uint32_t		__spare0__;
+	uint8_t			ipi_ip_tos;	/* IP ToS field data */
+	uint8_t			ipi_mflags;	/* packet mbuf flags */
+	uint8_t			__spare0__;
+	uint8_t			__spare1__;
+	struct mbuf		*ipi_mbuf;		/* mbuf for ktls */
 } *if_pkt_info_t;
 
 typedef struct if_irq {
@@ -188,13 +185,14 @@ typedef struct if_txrx {
 	void (*ift_rxd_flush) (void *, uint16_t qsidx, uint8_t flidx, qidx_t pidx);
 	int (*ift_legacy_intr) (void *);
 	qidx_t (*ift_txq_select) (void *, struct mbuf *);
+	qidx_t (*ift_txq_select_v2) (void *, struct mbuf *, if_pkt_info_t);
 } *if_txrx_t;
 
 typedef struct if_softc_ctx {
 	int isc_vectors;
 	int isc_nrxqsets;
 	int isc_ntxqsets;
-	uint16_t __spare0__;
+	uint16_t isc_tx_pad;
 	uint32_t __spare1__;
 	int isc_msix_bar;		/* can be model specific - initialize in attach_pre */
 	int isc_tx_nsegments;		/* can be model specific - initialize in attach_pre */
@@ -275,9 +273,8 @@ struct if_shared_ctx {
 	int isc_ntxqs;			/* # of tx queues per tx qset - usually 1 */
 	int isc_nrxqs;			/* # of rx queues per rx qset - intel 1, chelsio 2, broadcom 3 */
 	int __spare0__;
-	int isc_tx_reclaim_thresh;
+	int __spare1__;
 	int isc_flags;
-	const char *isc_name;
 };
 
 typedef struct iflib_dma_info {
@@ -352,34 +349,15 @@ typedef enum {
  */
 #define IFLIB_NEED_ETHER_PAD	0x100
 /*
- * Packets can be freed immediately after encap
+ * Driver understands page/bank i2c reads
  */
-#define IFLIB_TXD_ENCAP_PIO	0x00200
-/*
- * Use RX completion handler
- */
-#define IFLIB_RX_COMPLETION	0x00400
-/*
- * Skip refilling cluster free lists
- */
-#define IFLIB_SKIP_CLREFILL	0x00800
-/*
- * Don't reset on hang
- */
-#define IFLIB_NO_HANG_RESET	0x01000
-/*
- * Don't need/want most of the niceties of
- * queue management
- */
-#define IFLIB_PSEUDO	0x02000
-/*
- * No DMA support needed / wanted
- */
-#define IFLIB_VIRTUAL	0x04000
-/*
- * autogenerate a MAC address
- */
-#define IFLIB_GEN_MAC	0x08000
+#define	IFLIB_I2C_PAGE_BANK	0x200
+#define	IFLIB_SPARE6		0x400
+#define	IFLIB_SPARE5		0x800
+#define	IFLIB_SPARE4		0x1000
+#define	IFLIB_SPARE3		0x2000
+#define	IFLIB_SPARE2		0x4000
+#define	IFLIB_SPARE1		0x8000
 /*
  * Interface needs admin task to ignore interface up/down status
  */
@@ -393,11 +371,7 @@ typedef enum {
  * interrupts instead of doing combined RX/TX processing.
  */
 #define	IFLIB_SINGLE_IRQ_RX_ONLY	0x40000
-/*
- * Don't need/want most of the niceties of
- * emulating ethernet
- */
-#define IFLIB_PSEUDO_ETHER	0x80000
+#define	IFLIB_SPARE0		0x80000
 /*
  * Interface has an admin completion queue
  */
@@ -416,6 +390,18 @@ typedef enum {
  * as ift_txq_select in struct if_txrx
  */
 #define IFLIB_FEATURE_QUEUE_SELECT	1400050
+/*
+ * Driver can set its own TX queue selection function
+ * as ift_txq_select_v2 in struct if_txrx. This includes
+ * having iflib send L3+ extra header information to the
+ * function.
+ */
+#define IFLIB_FEATURE_QUEUE_SELECT_V2	1400073
+/*
+ * Driver can create subinterfaces with their own Tx/Rx queues
+ * that all share a single device (or commonly, port)
+ */
+#define IFLIB_FEATURE_SUB_INTERFACES	1500014
 
 /*
  * These enum values are used in iflib_needs_restart to indicate to iflib
@@ -474,20 +460,23 @@ int iflib_device_iov_add_vf(device_t, uint16_t, const nvlist_t *);
 int iflib_device_register(device_t dev, void *softc, if_shared_ctx_t sctx, if_ctx_t *ctxp);
 int iflib_device_deregister(if_ctx_t);
 
-int iflib_irq_alloc(if_ctx_t, if_irq_t, int, driver_filter_t, void *filter_arg, driver_intr_t, void *arg, const char *name);
+int iflib_irq_alloc(if_ctx_t, if_irq_t, int, driver_filter_t, void *filter_arg,
+		    driver_intr_t, void *arg, const char *name);
 int iflib_irq_alloc_generic(if_ctx_t ctx, if_irq_t irq, int rid,
 			    iflib_intr_type_t type, driver_filter_t *filter,
 			    void *filter_arg, int qid, const char *name);
-void iflib_softirq_alloc_generic(if_ctx_t ctx, if_irq_t irq, iflib_intr_type_t type,  void *arg, int qid, const char *name);
+void iflib_softirq_alloc_generic(if_ctx_t ctx, if_irq_t irq,
+				 iflib_intr_type_t type,  void *arg, int qid,
+				 const char *name);
 
 void iflib_irq_free(if_ctx_t ctx, if_irq_t irq);
 
 void iflib_io_tqg_attach(struct grouptask *gt, void *uniq, int cpu,
     const char *name);
 
-void iflib_config_gtask_init(void *ctx, struct grouptask *gtask,
-			     gtask_fn_t *fn, const char *name);
-void iflib_config_gtask_deinit(struct grouptask *gtask);
+void iflib_config_task_init(if_ctx_t ctx, struct task *config_task,
+    task_fn_t *fn);
+void iflib_config_task_enqueue(if_ctx_t ctx, struct task *config_task);
 
 void iflib_tx_intr_deferred(if_ctx_t ctx, int txqid);
 void iflib_rx_intr_deferred(if_ctx_t ctx, int rxqid);
@@ -509,11 +498,13 @@ void iflib_led_create(if_ctx_t ctx);
 
 void iflib_add_int_delay_sysctl(if_ctx_t, const char *, const char *,
 								if_int_delay_info_t, int, int);
+uint16_t iflib_get_extra_msix_vectors_sysctl(if_ctx_t ctx);
 
 /*
- * Pseudo device support
+ * Sub-interface support
  */
-if_pseudo_t iflib_clone_register(if_shared_ctx_t);
-void iflib_clone_deregister(if_pseudo_t);
-
+int iflib_irq_alloc_generic_subctx(if_ctx_t ctx, if_ctx_t subctx, if_irq_t irq,
+				   int rid, iflib_intr_type_t type,
+				   driver_filter_t *filter, void *filter_arg,
+				   int qid, const char *name);
 #endif /*  __IFLIB_H_ */

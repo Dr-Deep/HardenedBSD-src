@@ -1,16 +1,11 @@
-#	From: @(#)Makefile	8.3 (Berkeley) 1/7/94
-# $FreeBSD$
-
 .include <src.opts.mk>
 
-SUBDIR=	alias \
-	apply \
+SUBDIR=	apply \
 	asa \
 	awk \
 	backlight \
 	banner \
 	basename \
-	beep \
 	bintrans \
 	brandelf \
 	bsdcat \
@@ -27,13 +22,16 @@ SUBDIR=	alias \
 	colrm \
 	column \
 	comm \
+	command \
 	compress \
-	cpuset \
+	cpio \
 	csplit \
 	ctlstat \
 	cut \
 	diff \
+	diff3 \
 	dirname \
+	dtc \
 	du \
 	elfctl \
 	elfdump \
@@ -64,8 +62,6 @@ SUBDIR=	alias \
 	ipcs \
 	join \
 	jot \
-	keylogin \
-	keylogout \
 	killall \
 	ktrace \
 	ktrdump \
@@ -85,11 +81,11 @@ SUBDIR=	alias \
 	logins \
 	logname \
 	look \
-	lorder \
 	lsvfs \
 	lzmainfo \
 	m4 \
 	mandoc \
+	mdo \
 	mesg \
 	ministat \
 	mkdep \
@@ -106,15 +102,13 @@ SUBDIR=	alias \
 	nice \
 	nl \
 	nohup \
-	opieinfo \
-	opiekey \
-	opiepasswd \
 	pagesize \
 	passwd \
 	paste \
 	patch \
 	pathchk \
 	perror \
+	posixmqcontrol \
 	posixshmcontrol \
 	pr \
 	printenv \
@@ -129,6 +123,7 @@ SUBDIR=	alias \
 	revoke \
 	rpcinfo \
 	rs \
+	runat \
 	rup \
 	ruptime \
 	rusers \
@@ -138,7 +133,6 @@ SUBDIR=	alias \
 	sdiff \
 	sed \
 	seq \
-	shar \
 	showmount \
 	sockstat \
 	soelim \
@@ -154,13 +148,13 @@ SUBDIR=	alias \
 	tcopy \
 	tee \
 	time \
-	timeout \
 	tip \
 	top \
 	touch \
 	tr \
 	true \
 	truncate \
+	ts \
 	tsort \
 	tty \
 	uname \
@@ -174,6 +168,7 @@ SUBDIR=	alias \
 	w \
 	wall \
 	wc \
+	wg \
 	what \
 	whereis \
 	which \
@@ -191,9 +186,7 @@ SUBDIR=	alias \
 
 SUBDIR.${MK_ACCT}+=	lastcomm
 SUBDIR.${MK_AT}+=	at
-SUBDIR.${MK_ATM}+=	atm
 SUBDIR.${MK_BLUETOOTH}+=	bluetooth
-SUBDIR.${MK_BSD_CPIO}+=	cpio
 SUBDIR.${MK_CALENDAR}+=	calendar
 .if ${MK_CLANG} != "no" || ${MK_LLVM_BINUTILS} != "no" || \
     ${MK_LLD} != "no" || ${MK_LLDB} != "no"
@@ -213,13 +206,7 @@ SUBDIR.${MK_GAMES}+=	number
 SUBDIR.${MK_GAMES}+=	pom
 SUBDIR.${MK_GAMES}+=	primes
 SUBDIR.${MK_GAMES}+=	random
-SUBDIR.${MK_CXX}+=	dtc
-.if ${MK_GH_BC} == "yes"
 SUBDIR+=		gh-bc
-.else
-SUBDIR.${MK_OPENSSL}+=	bc
-SUBDIR.${MK_OPENSSL}+=	dc
-.endif
 SUBDIR.${MK_HESIOD}+=	hesinfo
 SUBDIR.${MK_ICONV}+=	iconv
 SUBDIR.${MK_ICONV}+=	mkcsmapper
@@ -227,7 +214,9 @@ SUBDIR.${MK_ICONV}+=	mkesdb
 SUBDIR.${MK_ISCSI}+=	iscsictl
 SUBDIR.${MK_KDUMP}+=	kdump
 SUBDIR.${MK_KDUMP}+=	truss
-SUBDIR.${MK_KERBEROS_SUPPORT}+=	compile_et
+.if ${MK_MITKRB5} == "no"
+SUBDIR.${MK_KERBEROS}+=	compile_et
+.endif
 SUBDIR.${MK_LDNS_UTILS}+=	drill
 SUBDIR.${MK_LDNS_UTILS}+=	host
 #SUBDIR.${MK_LIB32}+=	ldd32
@@ -240,40 +229,44 @@ SUBDIR.${MK_MAIL}+=	msgs
 SUBDIR.${MK_MAKE}+=	bmake
 SUBDIR.${MK_MAN_UTILS}+=	man
 SUBDIR.${MK_NETCAT}+=	nc
+SUBDIR.${MK_NETLINK}+=	genl
 SUBDIR.${MK_NIS}+=	ypcat
 SUBDIR.${MK_NIS}+=	ypmatch
 SUBDIR.${MK_NIS}+=	ypwhich
 SUBDIR.${MK_OPENSSH}+=	ssh-copy-id
-SUBDIR.${MK_OPENSSL}+=	chkey
-SUBDIR.${MK_OPENSSL}+=	newkey
+SUBDIR.${MK_PKGCONF}+=	bomtool
+SUBDIR.${MK_PKGCONF}+=	pkgconf
 SUBDIR.${MK_QUOTAS}+=	quota
 SUBDIR.${MK_SENDMAIL}+=	vacation
+SUBDIR.${MK_SOUND}+=	beep
+SUBDIR.${MK_SOUND}+=	mididump
 SUBDIR.${MK_TALK}+=	talk
 SUBDIR.${MK_TELNET}+=	telnet
-SUBDIR.${MK_TESTS_SUPPORT}.${MK_CXX}+=	kyua
+SUBDIR.${MK_TESTS_SUPPORT}+=	kyua
 SUBDIR.${MK_TESTS}+=	tests
 SUBDIR.${MK_TEXTPROC}+=	ul
 SUBDIR.${MK_TFTP}+=	tftp
 .if ${MK_LLVM_BINUTILS} == "no"
 # Only build the elftoolchain tools if we aren't using the LLVM ones.
 SUBDIR.${MK_TOOLCHAIN}+=	addr2line
-SUBDIR.${MK_TOOLCHAIN}+=	ar
+SUBDIR.${MK_TOOLCHAIN}+=	cxxfilt
 SUBDIR.${MK_TOOLCHAIN}+=	nm
-SUBDIR.${MK_TOOLCHAIN}+=	objcopy
+SUBDIR.${MK_TOOLCHAIN}+=	readelf
 SUBDIR.${MK_TOOLCHAIN}+=	size
 .endif
 SUBDIR.${MK_TOOLCHAIN}+=	c89
 SUBDIR.${MK_TOOLCHAIN}+=	c99
 SUBDIR.${MK_TOOLCHAIN}+=	ctags
-.if ${MK_LLVM_CXXFILT} == "no"
-SUBDIR.${MK_TOOLCHAIN}+=	cxxfilt
-.endif
+SUBDIR.${MK_TOOLCHAIN}+=	ar
+# ELF Tool Chain elfcopy required for EFI objects (PR280771)
+SUBDIR.${MK_TOOLCHAIN}+=	elfcopy
 SUBDIR.${MK_TOOLCHAIN}+=	file2c
 SUBDIR.${MK_TOOLCHAIN}+=	gprof
 SUBDIR.${MK_TOOLCHAIN}+=	indent
 SUBDIR.${MK_TOOLCHAIN}+=	lex
+SUBDIR.${MK_TOOLCHAIN}+=	lorder
 SUBDIR.${MK_TOOLCHAIN}+=	mkstr
-SUBDIR.${MK_TOOLCHAIN}+=	readelf
+SUBDIR.${MK_TOOLCHAIN}+=	nm
 SUBDIR.${MK_TOOLCHAIN}+=	rpcgen
 SUBDIR.${MK_TOOLCHAIN}+=	unifdef
 SUBDIR.${MK_TOOLCHAIN}+=	xstr
@@ -283,9 +276,7 @@ SUBDIR.${MK_VT}+=	vtfontcvt
 SUBDIR.${MK_USB}+=	usbhidaction
 SUBDIR.${MK_USB}+=	usbhidctl
 SUBDIR.${MK_UTMPX}+=	last
-.if ${MK_CXX} != "no"
 SUBDIR.${MK_UTMPX}+=	users
-.endif
 SUBDIR.${MK_UTMPX}+=	who
 SUBDIR.${MK_OFED}+=	ofed
 

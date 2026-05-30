@@ -1,8 +1,4 @@
-# $FreeBSD$
-
 SYSDIR?=${SRCTOP}/sys
-.include "${SYSDIR}/conf/kern.opts.mk"
-
 .PATH: ${SYSDIR}/net
 
 KMOD=	if_enc

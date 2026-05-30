@@ -4,9 +4,6 @@
  * SPDX-License-Identifier: (BSD-2-Clause OR GPL-2.0)
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/bus.h>
 #include <sys/errno.h>
@@ -1412,7 +1409,7 @@ finish_ccb:
 		cpi->hba_misc = PIM_NOBUSRESET | PIM_UNMAPPED;
 		cpi->hba_eng_cnt = 0;
 		/* cpi->vuhba_flags = 0; */
-		cpi->max_target = sc->max_targets;
+		cpi->max_target = sc->max_targets - 1;
 		cpi->max_lun = 0;
 		cpi->async_flags = 0;
 		cpi->hpath_id = 0;
@@ -1446,6 +1443,10 @@ finish_ccb:
 
 		cts->proto_specific.scsi.flags = CTS_SCSI_FLAGS_TAG_ENB;
 		cts->proto_specific.scsi.valid = CTS_SCSI_VALID_TQ;
+
+		/* Prefer connection speed over sas port speed */
+		cts->xport_specific.sas.valid &= ~CTS_SAS_VALID_SPEED;
+		cts->xport_specific.sas.bitrate = 0;
 
 		ccb_h->status = CAM_REQ_CMP;
 		xpt_done(ccb);
@@ -1684,6 +1685,7 @@ pvscsi_attach(device_t dev)
 	    PVSCSI_MAX_REQ_QUEUE_DEPTH);
 
 	device_printf(sc->dev, "Use Msg: %d\n", sc->use_msg);
+	device_printf(sc->dev, "Max targets: %d\n", sc->max_targets);
 	device_printf(sc->dev, "REQ num pages: %d\n", sc->req_ring_num_pages);
 	device_printf(sc->dev, "CMP num pages: %d\n", sc->cmp_ring_num_pages);
 	device_printf(sc->dev, "MSG num pages: %d\n", sc->msg_ring_num_pages);

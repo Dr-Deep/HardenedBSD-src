@@ -23,9 +23,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/ucred.h>
 #include <sys/mount.h>
@@ -42,10 +39,7 @@ __FBSDID("$FreeBSD$");
 #include <string.h>
 
 #include "efichar.h"
-
-#include "efi-osdep.h"
 #include "efivar-dp.h"
-
 #include "uefi-dplib.h"
 
 #define MAX_DP_SANITY	4096		/* Biggest device path in bytes */
@@ -134,12 +128,15 @@ efi_hd_to_unix(struct gmesh *mesh, const_efidp dp, char **dev, char **relpath, c
 	const_efidp media, file, walker;
 	size_t len, mntlen;
 	char buf[MAX_DP_TEXT_LEN];
-	char *pwalk;
+	char *pwalk, *newdev = NULL;
 	struct gprovider *pp, *provider;
-	struct gconsumer *cp;
 	struct statfs *mnt;
+	struct gclass *glabel;
+	struct ggeom *gp;
 
 	walker = media = dp;
+	*dev = NULL;
+	*relpath = NULL;
 
 	/*
 	 * Now, we can either have a filepath node next, or the end.
@@ -171,12 +168,6 @@ efi_hd_to_unix(struct gmesh *mesh, const_efidp dp, char **dev, char **relpath, c
 	pp = find_provider_by_efimedia(mesh, buf);
 	if (pp == NULL) {
 		rv = ENOENT;
-		goto errout;
-	}
-
-	*dev = strdup(pp->lg_name);
-	if (*dev == NULL) {
-		rv = ENOMEM;
 		goto errout;
 	}
 
@@ -217,37 +208,70 @@ efi_hd_to_unix(struct gmesh *mesh, const_efidp dp, char **dev, char **relpath, c
 		rv = errno;
 		goto errout;
 	}
+
+	/*
+	 * Find glabel, if it exists. It's OK if not: we'll skip searching for
+	 * labels.
+	 */
+	LIST_FOREACH(glabel, &mesh->lg_class, lg_class) {
+		if (strcmp(glabel->lg_name, G_LABEL) == 0)
+			break;
+	}
+
 	provider = pp;
 	for (i = 0; i < n; i++) {
 		/*
-		 * Skip all pseudo filesystems. This also skips the real filesytsem
+		 * Skip all pseudo filesystems. This also skips the real filesystem
 		 * of ZFS. There's no EFI designator for ZFS in the standard, so
 		 * we'll need to invent one, but its decoding will be handled in
 		 * a separate function.
 		 */
-		if (mnt[i].f_mntfromname[0] != '/')
+		if (strncmp(mnt[i].f_mntfromname, "/dev/", 5) != 0)
 			continue;
 
 		/*
 		 * First see if it is directly attached
 		 */
-		if (strcmp(provider->lg_name, mnt[i].f_mntfromname + 5) == 0)
+		if (strcmp(provider->lg_name, mnt[i].f_mntfromname + 5) == 0) {
+			newdev = provider->lg_name;
 			break;
+		}
 
 		/*
-		 * Next see if it is attached via one of the physical disk's
-		 * labels.
+		 * Next see if it is attached via one of the physical disk's labels.
+		 * We can't search directly from the pointers we have for the
+		 * provider, so we have to cast a wider net for all labels and
+		 * filter those down to geoms whose name matches the PART provider
+		 * we found the efimedia attribute on.
 		 */
-		LIST_FOREACH(cp, &provider->lg_consumers, lg_consumer) {
-			pp = cp->lg_provider;
-			if (strcmp(pp->lg_geom->lg_class->lg_name, G_LABEL) != 0)
+		if (glabel == NULL)
+			continue;
+		LIST_FOREACH(gp, &glabel->lg_geom, lg_geom) {
+			if (strcmp(gp->lg_name, provider->lg_name) != 0) {
 				continue;
-			if (strcmp(g_device_path(pp->lg_name), mnt[i].f_mntfromname) == 0)
-				goto break2;
+			}
+			LIST_FOREACH(pp, &gp->lg_provider, lg_provider) {
+				if (strcmp(pp->lg_name, mnt[i].f_mntfromname + 5) == 0) {
+					newdev = pp->lg_name;
+					goto break2;
+				}
+			}
 		}
 		/* Not the one, try the next mount point */
 	}
 break2:
+
+	/*
+	 * If nothing better was mounted, then use the provider we found as
+	 * is. It's the most correct thing we can return in that acse.
+	 */
+	if (newdev == NULL)
+		newdev = provider->lg_name;
+	*dev = strdup(newdev);
+	if (*dev == NULL) {
+		rv = ENOMEM;
+		goto errout;
+	}
 
 	/*
 	 * No mountpoint found, no absolute path possible
@@ -304,7 +328,7 @@ errout:
  *
  * Extract the path from the File path node(s). translate any \ file separators
  * to /. Append the result to the mount point. Copy the resulting path into
- * *path.  Stat that path. If it is not found, return the errorr from stat.
+ * *path.  Stat that path. If it is not found, return the error from stat.
  *
  * Finally, check to make sure the resulting path is still on the same
  * device. If not, return ENODEV.
@@ -409,7 +433,7 @@ efivar_device_path_to_unix_path(const_efidp dp, char **dev, char **relpath, char
  * For paths of the first form:
  *	find where the filesystem is mount (either the file directly, or
  *		its parent directory).
- *	translate any logical device name (eg lable) to a physical one
+ *	translate any logical device name (eg label) to a physical one
  *	If not possible, return ENXIO
  *	If the physical path is unsupported (Eg not on a GPT or MBR disk),
  *		return ENXIO
@@ -418,7 +442,7 @@ efivar_device_path_to_unix_path(const_efidp dp, char **dev, char **relpath, char
  * 		as a file path.
  *
  * For paths matching the second form:
- *	find the EFI partition corresponding to the root fileystem.
+ *	find the EFI partition corresponding to the root filesystem.
  *	If none found, return ENXIO
  *	Create a media device path node for the found partition
  *	Append a File Path to the end for the rest of the file.
@@ -527,6 +551,15 @@ find_geom_efimedia(struct gmesh *mesh, const char *dev)
 	if (pp == NULL)
 		return (NULL);
 	efimedia = geom_pp_attr(mesh, pp, "efimedia");
+
+	/*
+	 * If this device doesn't have an efimedia attribute, see if it is a
+	 * glabel node, and if so look for the underlying provider to get the
+	 * efimedia attribute from.
+	 */
+	if (efimedia == NULL &&
+	    strcmp(pp->lg_geom->lg_class->lg_name, G_LABEL) == 0)
+		efimedia = find_geom_efimedia(mesh, pp->lg_geom->lg_name);
 	if (efimedia == NULL)
 		return (NULL);
 	return strdup(efimedia);
@@ -535,23 +568,25 @@ find_geom_efimedia(struct gmesh *mesh, const char *dev)
 static int
 build_dp(const char *efimedia, const char *relpath, efidp *dp)
 {
-	char *fp, *dptxt = NULL, *cp, *rp;
+	char *fp = NULL, *dptxt = NULL, *cp, *rp = NULL;
 	int rv = 0;
 	efidp out = NULL;
 	size_t len;
 
-	rp = strdup(relpath);
-	for (cp = rp; *cp; cp++)
-		if (*cp == '/')
-			*cp = '\\';
-	fp = path_to_file_dp(rp);
-	free(rp);
-	if (fp == NULL) {
-		rv = ENOMEM;
-		goto errout;
+	if (relpath != NULL) {
+		rp = strdup(relpath);
+		for (cp = rp; *cp; cp++)
+			if (*cp == '/')
+				*cp = '\\';
+		fp = path_to_file_dp(rp);
+		free(rp);
+		if (fp == NULL) {
+			rv = ENOMEM;
+			goto errout;
+		}
 	}
 
-	asprintf(&dptxt, "%s/%s", efimedia, fp);
+	asprintf(&dptxt, "%s/%s", efimedia, fp == NULL ? "" : fp);
 	out = malloc(8192);
 	len = efidp_parse_device_path(dptxt, out, 8192);
 	if (len > 8192) {
@@ -637,6 +672,7 @@ errout:
 }
 
 /* Handles /path/to/file */
+/* Handles /dev/foo/bar */
 static int
 path_to_dp(struct gmesh *mesh, char *path, efidp *dp)
 {
@@ -656,9 +692,19 @@ path_to_dp(struct gmesh *mesh, char *path, efidp *dp)
 	}
 
 	dev = buf.f_mntfromname;
-	if (strncmp(dev, _PATH_DEV, sizeof(_PATH_DEV) - 1) == 0)
-		dev += sizeof(_PATH_DEV) -1;
-	ep = rp + strlen(buf.f_mntonname);
+	/*
+	 * If we're fed a raw /dev/foo/bar, then devfs is returned from the
+	 * statfs call. In that case, use that dev and assume we have a path
+	 * of nothing.
+	 */
+	if (strcmp(dev, "devfs") == 0) {
+		dev = rp + sizeof(_PATH_DEV) - 1;
+		ep = NULL;
+	} else {
+		if (strncmp(dev, _PATH_DEV, sizeof(_PATH_DEV) - 1) == 0)
+			dev += sizeof(_PATH_DEV) - 1;
+		ep = rp + strlen(buf.f_mntonname);
+	}
 
 	efimedia = find_geom_efimedia(mesh, dev);
 #ifdef notyet

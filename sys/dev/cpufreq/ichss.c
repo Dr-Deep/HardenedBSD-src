@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2004-2005 Nate Lawson (SDG)
  * All rights reserved.
@@ -25,9 +25,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -150,7 +147,7 @@ ichss_identify(driver_t *driver, device_t parent)
 		return;
 
 	/* Avoid duplicates. */
-	if (device_find_child(parent, "ichss", -1))
+	if (device_find_child(parent, "ichss", DEVICE_UNIT_ANY))
 		return;
 
 	/*
@@ -221,13 +218,15 @@ ichss_probe(device_t dev)
 	 * info, let it manage things.  Also, if Enhanced SpeedStep is
 	 * available, don't attach.
 	 */
-	perf_dev = device_find_child(device_get_parent(dev), "acpi_perf", -1);
+	perf_dev = device_find_child(device_get_parent(dev), "acpi_perf",
+	    DEVICE_UNIT_ANY);
 	if (perf_dev && device_is_attached(perf_dev)) {
 		error = CPUFREQ_DRV_TYPE(perf_dev, &type);
 		if (error == 0 && (type & CPUFREQ_FLAG_INFO_ONLY) == 0)
 			return (ENXIO);
 	}
-	est_dev = device_find_child(device_get_parent(dev), "est", -1);
+	est_dev = device_find_child(device_get_parent(dev), "est",
+	    DEVICE_UNIT_ANY);
 	if (est_dev && device_is_attached(est_dev))
 		return (ENXIO);
 

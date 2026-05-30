@@ -29,20 +29,6 @@
  * SUCH DAMAGE.
  */
 
-#if 0
-#ifndef lint
-static const char copyright[] =
-"@(#) Copyright (c) 1980, 1993\n\
-	The Regents of the University of California.  All rights reserved.\n";
-#endif /* not lint */
-
-#ifndef lint
-static char sccsid[] = "@(#)swapon.c	8.1 (Berkeley) 6/5/93";
-#endif /* not lint */
-#endif
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/disk.h>
 #include <sys/disklabel.h>
@@ -68,9 +54,10 @@ __FBSDID("$FreeBSD$");
 #include <string.h>
 #include <unistd.h>
 
-static void usage(void);
+#define DOT_ELI ".eli"
+
+static void usage(void) __dead2;
 static const char *swap_on_off(const char *, int, char *);
-static const char *swap_on_off_gbde(const char *, int);
 static const char *swap_on_off_geli(const char *, char *, int);
 static const char *swap_on_off_md(const char *, char *, int);
 static const char *swap_on_off_sfile(const char *, int);
@@ -245,21 +232,18 @@ swap_on_off(const char *name, int doingall, char *mntops)
 	    (fnmatch(_PATH_DEV MD_NAME "[0-9]*", name, 0) == 0 ||
 	     fnmatch(MD_NAME "[0-9]*", name, 0) == 0 ||
 	     strncmp(_PATH_DEV MD_NAME, name,
-		sizeof(_PATH_DEV) + sizeof(MD_NAME)) == 0 ||
-	     strncmp(MD_NAME, name, sizeof(MD_NAME)) == 0))
+		sizeof(_PATH_DEV MD_NAME)) == 0 ||
+	     strncmp(MD_NAME, name, sizeof(MD_NAME)) == 0 ||
+	     strncmp(_PATH_DEV MD_NAME DOT_ELI, name,
+		sizeof(_PATH_DEV MD_NAME DOT_ELI)) == 0 ||
+	     strncmp(MD_NAME DOT_ELI, name, sizeof(MD_NAME DOT_ELI)) == 0))
 		return (swap_on_off_md(name, mntops, doingall));
 
 	basebuf = strdup(name);
 	base = basename(basebuf);
 
-	/* Swap on encrypted device by GEOM_BDE. */
-	if (fnmatch("*.bde", base, 0) == 0) {
-		free(basebuf);
-		return (swap_on_off_gbde(name, doingall));
-	}
-
 	/* Swap on encrypted device by GEOM_ELI. */
-	if (fnmatch("*.eli", base, 0) == 0) {
+	if (fnmatch("*" DOT_ELI, base, 0) == 0) {
 		free(basebuf);
 		return (swap_on_off_geli(name, mntops, doingall));
 	}
@@ -281,59 +265,6 @@ swap_basename(const char *name)
 	*p = '\0';
 
 	return (dname);
-}
-
-static const char *
-swap_on_off_gbde(const char *name, int doingall)
-{
-	const char *ret;
-	char pass[64 * 2 + 1];
-	unsigned char bpass[64];
-	char *dname;
-	int i, error;
-
-	dname = swap_basename(name);
-	if (dname == NULL)
-		return (NULL);
-
-	if (which_prog == SWAPON) {
-		arc4random_buf(bpass, sizeof(bpass));
-		for (i = 0; i < (int)sizeof(bpass); i++)
-			sprintf(&pass[2 * i], "%02x", bpass[i]);
-		pass[sizeof(pass) - 1] = '\0';
-
-		error = run_cmd(NULL, "%s init %s -P %s", _PATH_GBDE,
-		    dname, pass);
-		if (error) {
-			/* bde device found.  Ignore it. */
-			free(dname);
-			if (qflag == 0)
-				warnx("%s: Device already in use", name);
-			return (NULL);
-		}
-		error = run_cmd(NULL, "%s attach %s -p %s", _PATH_GBDE,
-		    dname, pass);
-		free(dname);
-		if (error) {
-			warnx("gbde (attach) error: %s", name);
-			return (NULL);
-		}
-	}
-
-	ret = swap_on_off_sfile(name, doingall);
-
-	if (which_prog == SWAPOFF) {
-		error = run_cmd(NULL, "%s detach %s", _PATH_GBDE, dname);
-		free(dname);
-		if (error) {
-			/* bde device not found.  Ignore it. */
-			if (qflag == 0)
-				warnx("%s: Device not found", name);
-			return (NULL);
-		}
-	}
-
-	return (ret);
 }
 
 /* Build geli(8) arguments from mntops */
@@ -401,6 +332,8 @@ swap_on_geli_args(const char *mntops)
 					return (NULL);
 				}
 				Tflag = " -T ";
+			} else if ((p = strstr(token, "file=")) == token) {
+				/* ignore known option */
 			} else if (strcmp(token, "late") == 0) {
 				/* ignore known option */
 			} else if (strcmp(token, "noauto") == 0) {
@@ -490,24 +423,38 @@ swap_on_off_md(const char *name, char *mntops, int doingall)
 	char *p, *vnodefile;
 	size_t linelen;
 	u_long ul;
+	const char *suffix;
+	char *devbuf, *dname;
+	int name_len;
 
 	fd = -1;
 	sfd = NULL;
-	if (strlen(name) == (sizeof(MD_NAME) - 1))
+	devbuf = strdup(name);
+	name_len = strlen(name) - strlen(DOT_ELI);
+	if (name_len > 0 && strcmp(suffix = &name[name_len], DOT_ELI) == 0) {
+		suffix++;
+		devbuf[name_len] = '\0';
+	} else
+		suffix = NULL;
+	/* dname will be name without /dev/ prefix and .eli suffix */
+	dname = basename(devbuf);
+	if (strlen(dname) == (sizeof(MD_NAME) - 1))
 		mdunit = -1;
 	else {
 		errno = 0;
-		ul = strtoul(name + 2, &p, 10);
+		ul = strtoul(dname + 2, &p, 10);
 		if (errno == 0) {
 			if (*p != '\0' || ul > INT_MAX)
 				errno = EINVAL;
 		}
 		if (errno) {
-			warn("Bad device unit: %s", name);
+			warn("Bad device unit: %s", dname);
+			free(devbuf);
 			return (NULL);
 		}
 		mdunit = (int)ul;
 	}
+	free(devbuf);
 
 	vnodefile = NULL;
 	if ((p = strstr(mntops, "file=")) != NULL) {
@@ -647,10 +594,19 @@ swap_on_off_md(const char *name, char *mntops, int doingall)
 			}
 		}
 	}
-	snprintf(mdpath, sizeof(mdpath), "%s%s%d", _PATH_DEV,
-	    MD_NAME, mdunit);
-	mdpath[sizeof(mdpath) - 1] = '\0';
-	ret = swap_on_off_sfile(mdpath, doingall);
+
+	if (suffix != NULL && strcmp("eli", suffix) == 0) {
+		/* Swap on encrypted device by GEOM_ELI. */
+		snprintf(mdpath, sizeof(mdpath), "%s%s%d" DOT_ELI, _PATH_DEV,
+		    MD_NAME, mdunit);
+		mdpath[sizeof(mdpath) - 1] = '\0';
+		ret = swap_on_off_geli(mdpath, mntops, doingall);
+	} else {
+		snprintf(mdpath, sizeof(mdpath), "%s%s%d", _PATH_DEV,
+		    MD_NAME, mdunit);
+		mdpath[sizeof(mdpath) - 1] = '\0';
+		ret = swap_on_off_sfile(mdpath, doingall);
+	}
 
 	if (which_prog == SWAPOFF) {
 		if (ret != NULL) {

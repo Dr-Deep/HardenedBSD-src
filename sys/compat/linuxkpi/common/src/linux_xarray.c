@@ -25,11 +25,21 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <linux/xarray.h>
 
 #include <vm/vm_pageout.h>
+
+/*
+ * Linux' XArray allows to store a NULL pointer as a value. xa_load() would
+ * return NULL for both an unused index and an index set to NULL. But it
+ * impacts xa_alloc() which needs to find the next available index.
+ *
+ * However, our implementation relies on a radix tree (see `linux_radix.c`)
+ * which does not accept NULL pointers as values. I'm not sure this is a
+ * limitation or a feature, so to work around this, a NULL value is replaced by
+ * `NULL_VALUE`, an unlikely address, when we pass it to linux_radix.
+ */
+#define	NULL_VALUE	(void *)0x1
 
 /*
  * This function removes the element at the given index and returns
@@ -38,9 +48,15 @@ __FBSDID("$FreeBSD$");
 void *
 __xa_erase(struct xarray *xa, uint32_t index)
 {
+	void *retval;
+
 	XA_ASSERT_LOCKED(xa);
 
-	return (radix_tree_delete(&xa->root, index));
+	retval = radix_tree_delete(&xa->xa_head, index);
+	if (retval == NULL_VALUE)
+		retval = NULL;
+
+	return (retval);
 }
 
 void *
@@ -65,8 +81,11 @@ xa_load(struct xarray *xa, uint32_t index)
 	void *retval;
 
 	xa_lock(xa);
-	retval = radix_tree_lookup(&xa->root, index);
+	retval = radix_tree_lookup(&xa->xa_head, index);
 	xa_unlock(xa);
+
+	if (retval == NULL_VALUE)
+		retval = NULL;
 
 	return (retval);
 }
@@ -96,25 +115,24 @@ xa_vm_wait_locked(struct xarray *xa)
  * available to complete the radix tree insertion.
  */
 int
-__xa_alloc(struct xarray *xa, uint32_t *pindex, void *ptr, uint32_t mask, gfp_t gfp)
+__xa_alloc(struct xarray *xa, uint32_t *pindex, void *ptr, struct xa_limit limit, gfp_t gfp)
 {
 	int retval;
 
 	XA_ASSERT_LOCKED(xa);
 
-	/* mask should allow to allocate at least one item */
-	MPASS(mask > ((xa->flags & XA_FLAGS_ALLOC1) != 0 ? 1 : 0));
+	MPASS(limit.max > limit.min);
 
-	/* mask can be any power of two value minus one */
-	MPASS((mask & (mask + 1)) == 0);
-
-	*pindex = (xa->flags & XA_FLAGS_ALLOC1) != 0 ? 1 : 0;
+	*pindex = (xa->xa_flags & XA_FLAGS_ALLOC1) != 0 ? 1 : 0;
+	*pindex = MAX(*pindex, limit.min);
+	if (ptr == NULL)
+		ptr = NULL_VALUE;
 retry:
-	retval = radix_tree_insert(&xa->root, *pindex, ptr);
+	retval = radix_tree_insert(&xa->xa_head, *pindex, ptr);
 
 	switch (retval) {
 	case -EEXIST:
-		if (likely(*pindex != mask)) {
+		if (likely(*pindex < limit.max)) {
 			(*pindex)++;
 			goto retry;
 		}
@@ -133,12 +151,15 @@ retry:
 }
 
 int
-xa_alloc(struct xarray *xa, uint32_t *pindex, void *ptr, uint32_t mask, gfp_t gfp)
+xa_alloc(struct xarray *xa, uint32_t *pindex, void *ptr, struct xa_limit limit, gfp_t gfp)
 {
 	int retval;
 
+	if (ptr == NULL)
+		ptr = NULL_VALUE;
+
 	xa_lock(xa);
-	retval = __xa_alloc(xa, pindex, ptr, mask, gfp);
+	retval = __xa_alloc(xa, pindex, ptr, limit, gfp);
 	xa_unlock(xa);
 
 	return (retval);
@@ -151,7 +172,7 @@ xa_alloc(struct xarray *xa, uint32_t *pindex, void *ptr, uint32_t mask, gfp_t gf
  * beginning of the array. If the xarray is full -ENOMEM is returned.
  */
 int
-__xa_alloc_cyclic(struct xarray *xa, uint32_t *pindex, void *ptr, uint32_t mask,
+__xa_alloc_cyclic(struct xarray *xa, uint32_t *pindex, void *ptr, struct xa_limit limit,
     uint32_t *pnext_index, gfp_t gfp)
 {
 	int retval;
@@ -159,26 +180,26 @@ __xa_alloc_cyclic(struct xarray *xa, uint32_t *pindex, void *ptr, uint32_t mask,
 
 	XA_ASSERT_LOCKED(xa);
 
-	/* mask should allow to allocate at least one item */
-	MPASS(mask > ((xa->flags & XA_FLAGS_ALLOC1) != 0 ? 1 : 0));
+	MPASS(limit.max > limit.min);
 
-	/* mask can be any power of two value minus one */
-	MPASS((mask & (mask + 1)) == 0);
-
-	*pnext_index = (xa->flags & XA_FLAGS_ALLOC1) != 0 ? 1 : 0;
+	*pnext_index = (xa->xa_flags & XA_FLAGS_ALLOC1) != 0 ? 1 : 0;
+	*pnext_index = MAX(*pnext_index, limit.min);
+	if (ptr == NULL)
+		ptr = NULL_VALUE;
 retry:
-	retval = radix_tree_insert(&xa->root, *pnext_index, ptr);
+	retval = radix_tree_insert(&xa->xa_head, *pnext_index, ptr);
 
 	switch (retval) {
 	case -EEXIST:
-		if (unlikely(*pnext_index == mask) && !timeout--) {
+		if (unlikely(*pnext_index == limit.max) && !timeout--) {
 			retval = -ENOMEM;
 			break;
 		}
 		(*pnext_index)++;
-		(*pnext_index) &= mask;
-		if (*pnext_index == 0 && (xa->flags & XA_FLAGS_ALLOC1) != 0)
-			(*pnext_index)++;
+		if (*pnext_index > limit.max) {
+			*pnext_index = (xa->xa_flags & XA_FLAGS_ALLOC1) != 0 ? 1 : 0;
+			*pnext_index = MAX(*pnext_index, limit.min);
+		}
 		goto retry;
 	case -ENOMEM:
 		if (likely(gfp & M_WAITOK)) {
@@ -195,14 +216,27 @@ retry:
 }
 
 int
-xa_alloc_cyclic(struct xarray *xa, uint32_t *pindex, void *ptr, uint32_t mask,
+xa_alloc_cyclic(struct xarray *xa, uint32_t *pindex, void *ptr, struct xa_limit limit,
     uint32_t *pnext_index, gfp_t gfp)
 {
 	int retval;
 
 	xa_lock(xa);
-	retval = __xa_alloc_cyclic(xa, pindex, ptr, mask, pnext_index, gfp);
+	retval = __xa_alloc_cyclic(xa, pindex, ptr, limit, pnext_index, gfp);
 	xa_unlock(xa);
+
+	return (retval);
+}
+
+int
+xa_alloc_cyclic_irq(struct xarray *xa, uint32_t *pindex, void *ptr,
+    struct xa_limit limit, uint32_t *pnext_index, gfp_t gfp)
+{
+	int retval;
+
+	xa_lock_irq(xa);
+	retval = __xa_alloc_cyclic(xa, pindex, ptr, limit, pnext_index, gfp);
+	xa_unlock_irq(xa);
 
 	return (retval);
 }
@@ -220,8 +254,10 @@ __xa_insert(struct xarray *xa, uint32_t index, void *ptr, gfp_t gfp)
 	int retval;
 
 	XA_ASSERT_LOCKED(xa);
+	if (ptr == NULL)
+		ptr = NULL_VALUE;
 retry:
-	retval = radix_tree_insert(&xa->root, index, ptr);
+	retval = radix_tree_insert(&xa->xa_head, index, ptr);
 
 	switch (retval) {
 	case -ENOMEM:
@@ -262,11 +298,15 @@ __xa_store(struct xarray *xa, uint32_t index, void *ptr, gfp_t gfp)
 	int retval;
 
 	XA_ASSERT_LOCKED(xa);
+	if (ptr == NULL)
+		ptr = NULL_VALUE;
 retry:
-	retval = radix_tree_store(&xa->root, index, &ptr);
+	retval = radix_tree_store(&xa->xa_head, index, &ptr);
 
 	switch (retval) {
 	case 0:
+		if (ptr == NULL_VALUE)
+			ptr = NULL;
 		break;
 	case -ENOMEM:
 		if (likely(gfp & M_WAITOK)) {
@@ -302,9 +342,9 @@ xa_init_flags(struct xarray *xa, uint32_t flags)
 {
 	memset(xa, 0, sizeof(*xa));
 
-	mtx_init(&xa->mtx, "lkpi-xarray", NULL, MTX_DEF | MTX_RECURSE);
-	xa->root.gfp_mask = GFP_NOWAIT;
-	xa->flags = flags;
+	mtx_init(&xa->xa_lock, "lkpi-xarray", NULL, MTX_DEF | MTX_RECURSE);
+	xa->xa_head.gfp_mask = GFP_NOWAIT;
+	xa->xa_flags = flags;
 }
 
 /*
@@ -317,9 +357,19 @@ xa_destroy(struct xarray *xa)
 	struct radix_tree_iter iter;
 	void **ppslot;
 
-	radix_tree_for_each_slot(ppslot, &xa->root, &iter, 0)
-		radix_tree_iter_delete(&xa->root, &iter, ppslot);
-	mtx_destroy(&xa->mtx);
+	xa_lock(xa);
+	radix_tree_for_each_slot(ppslot, &xa->xa_head, &iter, 0)
+		radix_tree_iter_delete(&xa->xa_head, &iter, ppslot);
+	xa_unlock(xa);
+
+	/*
+	 * The mutex initialized in `xa_init_flags()` is not destroyed here on
+	 * purpose. The reason is that on Linux, the xarray remains usable
+	 * after a call to `xa_destroy()`. For instance the i915 DRM driver
+	 * relies on that during the initialixation of its GuC. Basically,
+	 * `xa_destroy()` "resets" the structure to zero but doesn't really
+	 * destroy it.
+	 */
 }
 
 /*
@@ -334,7 +384,7 @@ __xa_empty(struct xarray *xa)
 
 	XA_ASSERT_LOCKED(xa);
 
-	return (!radix_tree_iter_find(&xa->root, &iter, &temp));
+	return (!radix_tree_iter_find(&xa->xa_head, &iter, &temp, 0));
 }
 
 bool
@@ -371,9 +421,11 @@ __xa_next(struct xarray *xa, unsigned long *pindex, bool not_first)
 			return (NULL);
 	}
 
-	found = radix_tree_iter_find(&xa->root, &iter, &ppslot);
+	found = radix_tree_iter_find(&xa->xa_head, &iter, &ppslot, 0);
 	if (likely(found)) {
 		retval = *ppslot;
+		if (retval == NULL_VALUE)
+			retval = NULL;
 		*pindex = iter.index;
 	} else {
 		retval = NULL;

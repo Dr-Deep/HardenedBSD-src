@@ -32,12 +32,6 @@
  * SUCH DAMAGE.
  */
 
-#if defined(LIBC_SCCS) && !defined(lint)
-static char sccsid[] = "@(#)fdopen.c	8.1 (Berkeley) 6/4/93";
-#endif /* LIBC_SCCS and not lint */
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "namespace.h"
 #include <sys/types.h>
 #include <fcntl.h>
@@ -52,7 +46,7 @@ FILE *
 fdopen(int fd, const char *mode)
 {
 	FILE *fp;
-	int flags, oflags, fdflags, tmp;
+	int flags, oflags, fdflags, rc, tmp;
 
 	/*
 	 * File descriptors are a full int, but _file is only a short.
@@ -82,9 +76,19 @@ fdopen(int fd, const char *mode)
 	if ((fp = __sfp()) == NULL)
 		return (NULL);
 
-	if ((oflags & O_CLOEXEC) && _fcntl(fd, F_SETFD, FD_CLOEXEC) == -1) {
-		fp->_flags = 0;
-		return (NULL);
+	if ((oflags & O_CLOEXEC) != 0) {
+		tmp = _fcntl(fd, F_GETFD, 0);
+		if (tmp == -1) {
+			fp->_flags = 0;
+			return (NULL);
+		}
+		if ((tmp & FD_CLOEXEC) == 0) {
+			rc = _fcntl(fd, F_SETFD, tmp | FD_CLOEXEC);
+			if (rc == -1) {
+				fp->_flags = 0;
+				return (NULL);
+			}
+		}
 	}
 
 	fp->_flags = flags;

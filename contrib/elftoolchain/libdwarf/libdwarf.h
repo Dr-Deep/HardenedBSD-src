@@ -442,6 +442,7 @@ enum Dwarf_ISA {
 	DW_ISA_X86_64,
 	DW_ISA_AARCH64,
 	DW_ISA_RISCV,
+	DW_ISA_LOONGARCH,
 	DW_ISA_MAX
 };
 
@@ -600,6 +601,7 @@ int		dwarf_get_MACINFO_name(unsigned, const char **);
 int		dwarf_get_OP_name(unsigned, const char **);
 int		dwarf_get_ORD_name(unsigned, const char **);
 int		dwarf_get_TAG_name(unsigned, const char **);
+int		dwarf_get_UT_name(unsigned, const char **);
 int		dwarf_get_VIRTUALITY_name(unsigned, const char **);
 int		dwarf_get_VIS_name(unsigned, const char **);
 int		dwarf_get_abbrev(Dwarf_Debug, Dwarf_Unsigned, Dwarf_Abbrev *,

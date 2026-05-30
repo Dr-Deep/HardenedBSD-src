@@ -1,5 +1,4 @@
 #
-# $FreeBSD$
 #
 # PAM configuration for the "cron" service
 #
@@ -7,3 +6,6 @@
 # account
 account		required	pam_nologin.so
 account		required	pam_unix.so
+
+# session
+session		required	pam_permit.so

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2012 Chelsio Communications, Inc.
  * All rights reserved.
@@ -27,9 +27,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_inet.h"
 #include "opt_inet6.h"
 
@@ -48,6 +45,7 @@ __FBSDID("$FreeBSD$");
 #include <net/ethernet.h>
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_private.h>
 #include <net/if_types.h>
 #include <net/if_vlan_var.h>
 #include <net/if_llatbl.h>
@@ -184,7 +182,7 @@ toedev_ctloutput(struct toedev *tod __unused, struct tcpcb *tp __unused,
 }
 
 static void
-toedev_tcp_info(struct toedev *tod __unused, struct tcpcb *tp __unused,
+toedev_tcp_info(struct toedev *tod __unused, const struct tcpcb *tp __unused,
     struct tcp_info *ti __unused)
 {
 
@@ -214,16 +212,15 @@ static void
 toe_listen_start(struct inpcb *inp, void *arg)
 {
 	struct toedev *t, *tod;
-	struct tcpcb *tp;
+	struct tcpcb *tp = intotcpcb(inp);
 
 	INP_WLOCK_ASSERT(inp);
 	KASSERT(inp->inp_pcbinfo == &V_tcbinfo,
 	    ("%s: inp is not a TCP inp", __func__));
 
-	if (inp->inp_flags & (INP_DROPPED | INP_TIMEWAIT))
+	if (tp->t_flags & TF_DISCONNECTED)
 		return;
 
-	tp = intotcpcb(inp);
 	if (tp->t_state != TCPS_LISTEN)
 		return;
 
@@ -239,7 +236,7 @@ toe_listen_start(struct inpcb *inp, void *arg)
 static void
 toe_listen_start_event(void *arg __unused, struct tcpcb *tp)
 {
-	struct inpcb *inp = tp->t_inpcb;
+	struct inpcb *inp = tptoinpcb(tp);
 
 	INP_WLOCK_ASSERT(inp);
 	KASSERT(tp->t_state == TCPS_LISTEN,
@@ -253,7 +250,7 @@ toe_listen_stop_event(void *arg __unused, struct tcpcb *tp)
 {
 	struct toedev *tod;
 #ifdef INVARIANTS
-	struct inpcb *inp = tp->t_inpcb;
+	struct inpcb *inp = tptoinpcb(tp);
 #endif
 
 	INP_WLOCK_ASSERT(inp);
@@ -322,7 +319,7 @@ register_toedev(struct toedev *tod)
 	registered_toedevs++;
 	mtx_unlock(&toedev_lock);
 
-	inp_apply_all(toe_listen_start, tod);
+	inp_apply_all(&V_tcbinfo, toe_listen_start, tod);
 
 	return (0);
 }
@@ -386,6 +383,7 @@ int
 toe_4tuple_check(struct in_conninfo *inc, struct tcphdr *th, struct ifnet *ifp)
 {
 	struct inpcb *inp;
+	struct tcpcb *tp;
 
 	if (inc->inc_flags & INC_ISIPV6) {
 		inp = in6_pcblookup(&V_tcbinfo, &inc->inc6_faddr,
@@ -398,7 +396,8 @@ toe_4tuple_check(struct in_conninfo *inc, struct tcphdr *th, struct ifnet *ifp)
 	if (inp != NULL) {
 		INP_RLOCK_ASSERT(inp);
 
-		if ((inp->inp_flags & INP_TIMEWAIT) && th != NULL) {
+		tp = intotcpcb(inp);
+		if (tp->t_state == TCPS_TIME_WAIT && th != NULL) {
 			if (!tcp_twcheck(inp, NULL, th, NULL, 0))
 				return (EADDRINUSE);
 		} else {
@@ -510,13 +509,12 @@ toe_l2_resolve(struct toedev *tod, struct ifnet *ifp, struct sockaddr *sa,
 void
 toe_connect_failed(struct toedev *tod, struct inpcb *inp, int err)
 {
+	struct tcpcb *tp = intotcpcb(inp);
 
 	NET_EPOCH_ASSERT();
 	INP_WLOCK_ASSERT(inp);
 
-	if (!(inp->inp_flags & INP_DROPPED)) {
-		struct tcpcb *tp = intotcpcb(inp);
-
+	if (!(tp->t_flags & TF_DISCONNECTED)) {
 		KASSERT(tp->t_flags & TF_TOE,
 		    ("%s: tp %p not offloaded.", __func__, tp));
 
@@ -524,7 +522,7 @@ toe_connect_failed(struct toedev *tod, struct inpcb *inp, int err)
 			/*
 			 * Temporary failure during offload, take this PCB back.
 			 * Detach from the TOE driver and do the rest of what
-			 * TCP's pru_connect would have done if the connection
+			 * TCP's pr_connect() would have done if the connection
 			 * wasn't offloaded.
 			 */
 

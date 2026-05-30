@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Guides my forgetful self through the release process.
-# Usage release.sh VERSION
+# Usage: release.sh 0.42.0
 
 set -e
 
@@ -17,12 +17,19 @@ function prompt() {
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 OUTDIR=$(mktemp -d)
 TAG_NAME="v$1"
+BRANCH_NAME="release-$1"
 
+
+echo ">>>>> Bumping version"
 cd $DIR
+git checkout -b "$BRANCH_NAME"
 python3 misc/update_version.py "$1"
+git commit -a -m "Bump version to $1"
+git log -2
+prompt "Check the repository state, everything looks good?"
 
 echo ">>>>> Checking changelog"
-grep -A 5 -F "$1" CHANGELOG.md || true
+grep -A 10 -F "$1" CHANGELOG.md || true
 prompt "Is the changelog correct and complete?"
 
 echo ">>>>> Checking Doxyfile"
@@ -30,8 +37,12 @@ grep PROJECT_NUMBER Doxyfile
 prompt "Is the Doxyfile version correct?"
 
 echo ">>>>> Checking CMakeLists"
-grep -A 2 'SET(CBOR_VERSION_MAJOR' CMakeLists.txt
+grep -A 2 'set(CBOR_VERSION_MAJOR' CMakeLists.txt
 prompt "Is the CMake version correct?"
+
+echo ">>>>> Checking Bazel build"
+grep -A 2 'CBOR_MAJOR_VERSION' examples/bazel/third_party/libcbor/cbor/configuration.h
+prompt "Is the version correct?"
 
 echo ">>>>> Checking docs"
 grep 'version =\|release =' doc/source/conf.py
@@ -60,8 +71,17 @@ make
 ctest
 popd
 
+echo ">>>>> Pushing version bump branch"
+git push --set-upstream origin $(git rev-parse --abbrev-ref HEAD)
+echo "Open and merge PR: https://github.com/PJK/libcbor/pull/new/${BRANCH_NAME}"
+prompt "Did you merge the PR?"
+
+git checkout master
+git pull
+
 prompt "Will proceed to tag the release with $TAG_NAME."
 git tag "$TAG_NAME"
+git push --set-upstream origin $(git rev-parse --abbrev-ref HEAD)
 git push --tags
 
 set +x

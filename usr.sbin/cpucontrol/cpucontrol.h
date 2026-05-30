@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008 Stanislav Sedov <stas@FreeBSD.org>.
  * All rights reserved.
@@ -23,8 +23,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef CPUCONTROL_H
@@ -45,6 +43,7 @@ typedef void ucode_update_t(const struct ucode_update_params *params);
 extern int verbosity_level;
 
 #ifdef DEBUG
+#include <stdio.h>
 # define WARNX(level, ...)					\
 	if ((level) <= verbosity_level) {			\
 		fprintf(stderr, "%s:%d ", __FILE__, __LINE__);	\

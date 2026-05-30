@@ -24,8 +24,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_platform.h"
 
 #include <sys/param.h>
@@ -44,7 +42,7 @@ __FBSDID("$FreeBSD$");
 
 #include <machine/bus.h>
 
-#include <dev/extres/clk/clk.h>
+#include <dev/clk/clk.h>
 #include <dev/fdt/fdt_common.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
@@ -331,20 +329,20 @@ flex_spi_write_txfifo(struct flex_spi_softc *sc, uint8_t *buf, uint8_t size)
 	int i, ret, reg;
 
 	/* invalid the TXFIFO */
-	write_reg(sc, FSPI_IPRXFCR, FSPI_IPTXFCR_CLR);
+	write_reg(sc, FSPI_IPTXFCR, FSPI_IPTXFCR_CLR);
 
 	/*
 	 * Default value of water mark level is 8 bytes, hence in single
 	 * read request controller can read max 8 bytes of data.
 	 */
 	for (i = 0; i < size; i += 4) {
-		/* Wait for RXFIFO available */
+		/* Wait for TXFIFO available */
 		if (i % 8 == 0) {
 			ret = reg_read_poll_tout(sc, FSPI_INTR, FSPI_INTR_IPTXWE,
 			    1, 50000, 1);
 			if (ret)
 				device_printf(sc->dev,
-				    "timed out waiting for FSPI_INTR_IPRXWA\n");
+				    "timed out waiting for FSPI_INTR_IPTXWE\n");
 		}
 
 		if (size  >= (i + 4))
@@ -783,12 +781,6 @@ flex_spi_attach(device_t dev)
 	}
 
 	sc->buf = malloc(sc->erasesize, SECTOR_BUFFER, M_WAITOK);
-	if (sc->buf == NULL) {
-		device_printf(sc->dev, "Unable to set up allocate internal buffer\n");
-		flex_spi_detach(dev);
-		return (ENOMEM);
-	}
-
 	/* Move it to per-flash */
 	sc->disk = disk_alloc();
 	sc->disk->d_open = flex_spi_open;
@@ -978,7 +970,7 @@ static device_method_t flex_spi_methods[] = {
 	DEVMETHOD(device_attach,	flex_spi_attach),
 	DEVMETHOD(device_detach,	flex_spi_detach),
 
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t flex_spi_driver = {

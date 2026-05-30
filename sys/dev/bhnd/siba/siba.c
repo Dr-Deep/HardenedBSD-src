@@ -31,9 +31,6 @@
  * THE POSSIBILITY OF SUCH DAMAGES.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/bus.h>
 #include <sys/kernel.h>
@@ -88,7 +85,6 @@ siba_attach(device_t dev)
 
 	/* Enumerate children */
 	if ((error = siba_add_children(dev))) {
-		device_delete_children(dev);
 		SIBA_LOCK_DESTROY(sc);
 		return (error);
 	}
@@ -1186,7 +1182,7 @@ siba_map_cfg_resources(device_t dev, struct siba_devinfo *dinfo)
 	struct siba_addrspace	*addrspace;
 	rman_res_t		 r_start, r_count, r_end;
 	uint8_t			 num_cfg;
-	int			 rid;
+	int			 cfg_rid, rid;
 
 	num_cfg = dinfo->core_id.num_cfg_blocks;
 	if (num_cfg > SIBA_MAX_CFG) {
@@ -1222,9 +1218,9 @@ siba_map_cfg_resources(device_t dev, struct siba_devinfo *dinfo)
 		});
 
 		/* Map the config resource for bus-level access */
-		dinfo->cfg_rid[i] = SIBA_CFG_RID(dinfo, i);
+		cfg_rid = SIBA_CFG_RID(dinfo, i);
 		dinfo->cfg_res[i] = BHND_BUS_ALLOC_RESOURCE(dev, dev,
-		    SYS_RES_MEMORY, &dinfo->cfg_rid[i], r_start, r_end,
+		    SYS_RES_MEMORY, cfg_rid, r_start, r_end,
 		    r_count, RF_ACTIVE|RF_SHAREABLE);
 
 		if (dinfo->cfg_res[i] == NULL) {
@@ -1321,7 +1317,7 @@ siba_add_children(device_t dev)
 			goto failed;
 
 		/* Add the child device */
-		child = BUS_ADD_CHILD(dev, 0, NULL, -1);
+		child = BUS_ADD_CHILD(dev, 0, NULL, DEVICE_UNIT_ANY);
 		if (child == NULL) {
 			error = ENXIO;
 			goto failed;
@@ -1376,12 +1372,7 @@ siba_add_children(device_t dev)
 	return (0);
 
 failed:
-	for (u_int i = 0; i < cid->ncores; i++) {
-		if (children[i] == NULL)
-			continue;
-
-		device_delete_child(dev, children[i]);
-	}
+	device_delete_children(dev);
 
 	free(cores, M_BHND);
 	free(children, M_BHND);

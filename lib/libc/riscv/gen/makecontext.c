@@ -32,9 +32,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 
 #include <machine/riscvreg.h>
@@ -83,7 +80,8 @@ __makecontext(ucontext_t *ucp, void (*func)(void), int argc, ...)
 	va_end(ap);
 
 	/* Set the stack */
-	gp->gp_sp = STACKALIGN(ucp->uc_stack.ss_sp + ucp->uc_stack.ss_size);
+	gp->gp_sp = STACKALIGN((uintptr_t)ucp->uc_stack.ss_sp +
+	    ucp->uc_stack.ss_size);
 	/* Arrange for return via the trampoline code. */
 	gp->gp_sepc = (__register_t)_ctx_start;
 	gp->gp_s[0] = (__register_t)func;

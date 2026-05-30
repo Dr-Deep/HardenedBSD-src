@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/* Copyright(c) 2007-2022 Intel Corporation */
-/* $FreeBSD$ */
+/* Copyright(c) 2007-2025 Intel Corporation */
 
 /**
  ***************************************************************************
@@ -91,7 +90,6 @@ LacSymAlgChain_CheckCCMData(Cpa8U *pAdditionalAuthData,
 
 	return CPA_STATUS_SUCCESS;
 }
-
 
 /**
  * @ingroup LacAuthEnc

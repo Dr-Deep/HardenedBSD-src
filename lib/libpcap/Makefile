@@ -1,5 +1,4 @@
 # Makefile for libpcap
-# $FreeBSD$
 
 SHLIBDIR?= /lib
 
@@ -20,6 +19,7 @@ SRCS=	bpf_dump.c \
 	pcap-bpf.c \
 	pcap-common.c \
 	pcap-netmap.c \
+	pcap-util.c \
 	pcap.c \
 	savefile.c \
 	scanner.l \
@@ -28,8 +28,7 @@ SRCS=	bpf_dump.c \
 	tokdefs.h
 
 # Old compatibility headers
-INCS=	fmtutils.h \
-	pcap-bpf.h \
+INCS=	pcap-bpf.h \
 	pcap-namedb.h \
 	pcap-netmap.h \
 	pcap.h
@@ -78,6 +77,7 @@ MAN=	pcap.3 \
 	pcap_get_selectable_fd.3 \
 	pcap_get_tstamp_precision.3 \
 	pcap_geterr.3 \
+	pcap_init.3 \
 	pcap_inject.3 \
 	pcap_is_swapped.3 \
 	pcap_lib_version.3 \
@@ -109,10 +109,11 @@ MAN=	pcap.3 \
 	pcap_strerror.3 \
 	pcap_tstamp_type_name_to_val.3 \
 	pcap_tstamp_type_val_to_name.3 \
-	pcap-savefile.5 \
-	pcap-filter.7 \
-	pcap-linktype.7 \
-	pcap-tstamp.7
+	pcap-savefile.5
+
+MANNODEV=	pcap-filter.7 \
+		pcap-linktype.7 \
+		pcap-tstamp.7
 
 MLINKS= \
 	pcap_datalink_val_to_name.3 pcap_datalink_val_to_description.3 \
@@ -129,14 +130,13 @@ MLINKS= \
 	pcap_setnonblock.3 pcap_getnonblock.3
 
 # Our man pages are a special copy from the distdir. See below.
-CLEANFILES+=${MAN}
-CLEANFILES+=tokdefs.h scanner.h 
+CLEANFILES+=${MAN} ${MANNODEV}
+CLEANFILES+=grammar.y scanner.h tokdefs.h
 
 YFLAGS+=-p pcap_
 LFLAGS+=-Ppcap_ --header-file=${.OBJDIR}/scanner.h --nounput
 CFLAGS+=-DHAVE_CONFIG_H -I${.CURDIR} -I${.OBJDIR}
 CFLAGS+=-D_U_="__attribute__((unused))"
-CFLAGS+=-DHAVE_SNPRINTF -DHAVE_VSNPRINTF
 CFLAGS+=-DBUILDING_PCAP
 .if ${MK_INET6_SUPPORT} != "no"
 CFLAGS+=-DINET6
@@ -150,6 +150,7 @@ CFLAGS+= -DPCAP_SUPPORT_NETMAP
 .if ${MK_OFED} != "no"
 SRCS+= pcap-rdmasniff.c
 LIBADD+= ibverbs
+LIBADD+= bnxtre
 LIBADD+= mlx5
 CFLAGS+= -DPCAP_SUPPORT_RDMASNIFF
 .endif
@@ -166,13 +167,16 @@ CFLAGS+=-I${PCAP_DISTDIR}
 .PATH:	${PCAP_DISTDIR}
 .PATH:	${PCAP_DISTDIR}/bpf/net
 
+grammar.y: grammar.y.in
+	sed  -e 's/@REENTRANT_PARSER@/%pure-parser/' < ${.ALLSRC} > ${.TARGET}
+
 tokdefs.h: grammar.h .NOMETA
 	ln -sf ${.ALLSRC} ${.TARGET}
 
 #
 # Magic to convert the man pages to something non Solarish
 #
-.for _page in ${MAN}
+.for _page in ${MAN} ${MANNODEV}
 ${_page}:
 	if [ -f ${PCAP_DISTDIR}/${_page:S/3$/3pcap/} ]; then		\
 		F=${_page:S/3$/3pcap/}; 				\

@@ -23,13 +23,11 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <stand.h>
 #include <efi.h>
 #include <efichar.h>
 #include <efilib.h>
+#include <Guid/GlobalVariable.h>
 
 static EFI_GUID FreeBSDBootVarGUID = FREEBSD_BOOT_VAR_GUID;
 static EFI_GUID GlobalBootVarGUID = EFI_GLOBAL_VARIABLE;

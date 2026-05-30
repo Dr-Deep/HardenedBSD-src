@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (C) 2008 John Birrell <jb@freebsd.org>
  * 
@@ -23,11 +23,8 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
-#include <sys/cdefs.h>
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/conf.h>
@@ -66,16 +63,21 @@ MODULE_VERSION(dtraceall, 1);
 /* All the DTrace modules should be dependencies here: */
 MODULE_DEPEND(dtraceall, opensolaris, 1, 1, 1);
 MODULE_DEPEND(dtraceall, dtrace, 1, 1, 1);
+#if defined(AUDIT)
+MODULE_DEPEND(dtraceall, dtaudit, 1, 1, 1);
+#endif
 MODULE_DEPEND(dtraceall, dtmalloc, 1, 1, 1);
 #if defined(NFSCL)
 MODULE_DEPEND(dtraceall, dtnfscl, 1, 1, 1);
 #endif
 #if defined(__aarch64__) || defined(__amd64__) || defined(__arm__) || \
-    defined(__i386__) || defined(__mips__) || \
-    defined(__powerpc__) || defined(__riscv)
+    defined(__i386__) || defined(__powerpc__) || defined(__riscv)
 MODULE_DEPEND(dtraceall, fbt, 1, 1, 1);
 #endif
-#if defined(__amd64__) || defined(__i386__)
+#if defined(__amd64__) || defined(__aarch64__) || defined(__riscv)
+MODULE_DEPEND(dtraceall, kinst, 1, 1, 1);
+#endif
+#if defined(__amd64__) || defined(__i386__) || defined(__powerpc__)
 MODULE_DEPEND(dtraceall, fasttrap, 1, 1, 1);
 #endif
 MODULE_DEPEND(dtraceall, sdt, 1, 1, 1);

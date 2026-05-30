@@ -24,7 +24,6 @@
  */
 
 #include "test.h"
-__FBSDID("$FreeBSD$");
 
 #include <errno.h>
 #include <stdlib.h>
@@ -168,7 +167,7 @@ memory_read_skip(struct archive *a, void *client_data, int64_t skip)
 
 	(void)a; /* UNUSED */
 	/* We can't skip by more than is available. */
-	if ((off_t)skip > (off_t)(mine->end - mine->p))
+	if (skip > mine->end - mine->p)
 		skip = mine->end - mine->p;
 	/* Always do small skips by prime amounts. */
 	if (skip > 71)

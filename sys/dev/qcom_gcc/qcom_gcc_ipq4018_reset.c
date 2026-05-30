@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2021, Adrian Chadd <adrian@FreeBSD.org>
  *
@@ -27,9 +27,6 @@
 
 /* Driver for Qualcomm IPQ4018 clock and reset device */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
@@ -41,22 +38,23 @@ __FBSDID("$FreeBSD$");
 
 #include <machine/bus.h>
 #include <machine/resource.h>
+#include <sys/rman.h>
 #include <sys/bus.h>
 
 #include <dev/fdt/fdt_common.h>
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
-#include <dev/extres/hwreset/hwreset.h>
+#include <dev/hwreset/hwreset.h>
 
 #include "hwreset_if.h"
 
 #include <dt-bindings/clock/qcom,gcc-ipq4019.h>
 
-#include "qcom_gcc_ipq4018_var.h"
+#include "qcom_gcc_var.h"
+#include "qcom_gcc_ipq4018.h"
 
-
-static const struct qcom_gcc_ipq4018_reset_entry gcc_ipq4019_reset_list[] = {
+static const struct qcom_gcc_reset_entry gcc_ipq4019_reset_list[] = {
 	[WIFI0_CPU_INIT_RESET] = { 0x1f008, 5 },
 	[WIFI0_RADIO_SRIF_RESET] = { 0x1f008, 4 },
 	[WIFI0_RADIO_WARM_RESET] = { 0x1f008, 3 },
@@ -130,16 +128,17 @@ static const struct qcom_gcc_ipq4018_reset_entry gcc_ipq4019_reset_list[] = {
 	[GCC_SPDM_BCR] = {0x25000, 0},
 };
 
-int
+static int
 qcom_gcc_ipq4018_hwreset_assert(device_t dev, intptr_t id, bool reset)
 {
-	struct qcom_gcc_ipq4018_softc *sc;
+	struct qcom_gcc_softc *sc;
 	uint32_t reg;
 
 	sc = device_get_softc(dev);
 
 	if (id > nitems(gcc_ipq4019_reset_list)) {
-		device_printf(dev, "%s: invalid id (%d)\n", __func__, id);
+		device_printf(dev, "%s: invalid id (%d)\n", __func__,
+		    (uint32_t) id);
 		return (EINVAL);
 	}
 
@@ -154,16 +153,17 @@ qcom_gcc_ipq4018_hwreset_assert(device_t dev, intptr_t id, bool reset)
 	return (0);
 }
 
-int
+static int
 qcom_gcc_ipq4018_hwreset_is_asserted(device_t dev, intptr_t id, bool *reset)
 {
-	struct qcom_gcc_ipq4018_softc *sc;
+	struct qcom_gcc_softc *sc;
 	uint32_t reg;
 
 	sc = device_get_softc(dev);
 
 	if (id > nitems(gcc_ipq4019_reset_list)) {
-		device_printf(dev, "%s: invalid id (%d)\n", __func__, id);
+		device_printf(dev, "%s: invalid id (%d)\n", __func__,
+		    (uint32_t) id);
 		return (EINVAL);
 	}
 	mtx_lock(&sc->mtx);
@@ -174,7 +174,13 @@ qcom_gcc_ipq4018_hwreset_is_asserted(device_t dev, intptr_t id, bool *reset)
 		*reset = false;
 	mtx_unlock(&sc->mtx);
 
-	device_printf(dev, "called; id=%d\n", id);
+	device_printf(dev, "called; id=%d\n", (uint32_t) id);
 	return (0);
 }
 
+void
+qcom_gcc_ipq4018_hwreset_init(struct qcom_gcc_softc *sc)
+{
+	sc->sc_cb.hw_reset_assert = qcom_gcc_ipq4018_hwreset_assert;
+	sc->sc_cb.hw_reset_is_asserted = qcom_gcc_ipq4018_hwreset_is_asserted;
+}

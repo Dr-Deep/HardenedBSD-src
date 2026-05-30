@@ -1,5 +1,4 @@
 #
-# $FreeBSD$
 #
 # Copyright (c) 2013 Hans Petter Selasky. All rights reserved.
 #
@@ -36,6 +35,7 @@ PROG=	usbloader
 SRCS= 
 
 CFLAGS+= -Wall
+CFLAGS+= -Wno-error=missing-prototypes -Wno-error=unused-parameter
 CFLAGS+= -g
 
 .if ${MACHINE_CPUARCH} == "amd64"

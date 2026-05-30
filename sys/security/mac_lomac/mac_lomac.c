@@ -34,8 +34,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -91,8 +89,6 @@ struct mac_lomac_proc {
 	struct mtx mtx;
 };
 
-SYSCTL_DECL(_security_mac);
-
 static SYSCTL_NODE(_security_mac, OID_AUTO, lomac,
     CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "TrustedBSD mac_lomac policy controls");
@@ -115,7 +111,8 @@ SYSCTL_INT(_security_mac_lomac, OID_AUTO, trust_all_interfaces, CTLFLAG_RDTUN,
 
 static char	trusted_interfaces[128];
 SYSCTL_STRING(_security_mac_lomac, OID_AUTO, trusted_interfaces, CTLFLAG_RDTUN,
-    trusted_interfaces, 0, "Interfaces considered 'trusted' by MAC/LOMAC");
+    trusted_interfaces, sizeof(trusted_interfaces),
+    "Interfaces considered 'trusted' by MAC/LOMAC");
 
 static int	ptys_equal = 0;
 SYSCTL_INT(_security_mac_lomac, OID_AUTO, ptys_equal, CTLFLAG_RWTUN,
@@ -1011,7 +1008,7 @@ lomac_cred_create_init(struct ucred *cred)
 }
 
 static void
-lomac_cred_create_swapper(struct ucred *cred)
+lomac_cred_create_kproc0(struct ucred *cred)
 {
 	struct mac_lomac *dest;
 
@@ -1188,7 +1185,7 @@ lomac_ifnet_create(struct ifnet *ifp, struct label *ifplabel)
 
 	dest = SLOT(ifplabel);
 
-	if (ifp->if_type == IFT_LOOP) {
+	if (if_gettype(ifp) == IFT_LOOP) {
 		grade = MAC_LOMAC_TYPE_EQUAL;
 		goto set;
 	}
@@ -1215,7 +1212,7 @@ lomac_ifnet_create(struct ifnet *ifp, struct label *ifplabel)
 			if (len < IFNAMSIZ) {
 				bzero(tifname, sizeof(tifname));
 				bcopy(q, tifname, len);
-				if (strcmp(tifname, ifp->if_xname) == 0) {
+				if (strcmp(tifname, if_name(ifp)) == 0) {
 					grade = MAC_LOMAC_TYPE_HIGH;
 					break;
 				}
@@ -1704,6 +1701,7 @@ lomac_priv_check(struct ucred *cred, int priv)
 	 */
 	case PRIV_SEEOTHERGIDS:
 	case PRIV_SEEOTHERUIDS:
+	case PRIV_SEEJAILPROC:
 		break;
 
 	/*
@@ -2248,12 +2246,6 @@ lomac_thread_userret(struct thread *td)
 		dodrop = 0;
 		mtx_unlock(&subj->mtx);
 		newcred = crget();
-		/*
-		 * Prevent a lock order reversal in mac_proc_vm_revoke;
-		 * ideally, the other user of subj->mtx wouldn't be holding
-		 * Giant.
-		 */
-		mtx_lock(&Giant);
 		PROC_LOCK(p);
 		mtx_lock(&subj->mtx);
 		/*
@@ -2275,7 +2267,6 @@ lomac_thread_userret(struct thread *td)
 		PROC_UNLOCK(p);
 		if (dodrop)
 			mac_proc_vm_revoke(curthread);
-		mtx_unlock(&Giant);
 	} else {
 		mtx_unlock(&subj->mtx);
 	}
@@ -2919,7 +2910,7 @@ static struct mac_policy_ops lomac_ops =
 	.mpo_cred_check_relabel = lomac_cred_check_relabel,
 	.mpo_cred_check_visible = lomac_cred_check_visible,
 	.mpo_cred_copy_label = lomac_copy_label,
-	.mpo_cred_create_swapper = lomac_cred_create_swapper,
+	.mpo_cred_create_kproc0 = lomac_cred_create_kproc0,
 	.mpo_cred_create_init = lomac_cred_create_init,
 	.mpo_cred_destroy_label = lomac_destroy_label,
 	.mpo_cred_externalize_label = lomac_externalize_label,

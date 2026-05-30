@@ -27,7 +27,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd July 10, 2020
+.Dd May 14, 2025
 .Dt NC 1
 .Os
 .Sh NAME
@@ -40,13 +40,16 @@
 .Op Fl e Ar IPsec_policy
 .Op Fl I Ar length
 .Op Fl i Ar interval
+.Op Fl -lb
 .Op Fl -no-tcpopt
 .Op Fl -sctp
+.Op Fl -crlf
 .Op Fl O Ar length
 .Op Fl P Ar proxy_username
 .Op Fl p Ar source_port
 .Op Fl s Ar source
 .Op Fl T Ar toskeyword
+.Op Fl -tun Ar tundev
 .Op Fl V Ar rtable
 .Op Fl w Ar timeout
 .Op Fl X Ar proxy_protocol
@@ -103,6 +106,8 @@ to use IPv4 addresses only.
 Forces
 .Nm
 to use IPv6 addresses only.
+.It Fl -crlf
+Convert LF into CRLF when sending data over the network.
 .It Fl D
 Enable debugging on the socket.
 .It Fl d
@@ -171,6 +176,12 @@ options.
 Additionally, any timeouts specified with the
 .Fl w
 option are ignored.
+.It Fl -lb
+When using
+.Fl l ,
+put the socket in load-balancing mode.
+In this mode, multiple sockets can bind to the same address and port,
+and incoming connections are distributed among them.
 .It Fl M
 Collect per-connection TCP statistics using the
 .Xr stats 3
@@ -240,6 +251,12 @@ to send RFC 854 DON'T and WON'T responses to RFC 854 DO and WILL requests.
 This makes it possible to use
 .Nm
 to script telnet sessions.
+.It Fl -tun Ar tundev
+Causes
+.Nm
+to use the provided
+.Xr tun 4
+for input and output rather than the default of stdin and stdout.
 .It Fl U
 Specifies to use
 .Ux Ns -domain
@@ -334,8 +351,8 @@ sockets, a destination is required and is the socket path to connect to
 option is given).
 .Pp
 .Ar port
-can be a single integer or a range of ports.
-Ranges are in the form nn-mm.
+can be a specified as a numeric port number, or as a service name.
+Ports may be specified in a range of the form nn-mm.
 In general,
 a destination port must be specified,
 unless the

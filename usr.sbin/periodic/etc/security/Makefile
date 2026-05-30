@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 .include <src.opts.mk>
 
 PACKAGE=	periodic
@@ -8,6 +6,7 @@ CONFGROUPS=	CONFS DATA
 
 CONFS=	100.chksetuid \
 	110.neggrpperm \
+	120.hardenedmtree \
 	200.chkmounts \
 	300.chkuid0 \
 	400.passwdless \
@@ -25,7 +24,7 @@ DATAPACKAGE=	periodic
 CONFGROUPS+=		IPFILTER
 IPFILTER+=		510.ipfdenied
 IPFILTER+=		610.ipf6denied
-IPFILTERPACKAGE=	ipfilter
+IPFILTERPACKAGE=	ipf
 .endif
 
 .if ${MK_IPFW} != "no"
@@ -42,7 +41,9 @@ PFPACKAGE=	pf
 .endif
 
 .if ${MK_INETD} != "no" && ${MK_TCP_WRAPPERS} != "no"
-CONFS+=	900.tcpwrap
+CONFGROUPS+=	TCPWRAP
+TCPWRAP+=	900.tcpwrap
+TCPWRAPPACKAGE=	tcpd
 .endif
 
 .include <bsd.prog.mk>

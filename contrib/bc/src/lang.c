@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * Copyright (c) 2018-2021 Gavin D. Howard and contributors.
+ * Copyright (c) 2018-2025 Gavin D. Howard and contributors.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -73,9 +73,10 @@ bc_func_insert(BcFunc* f, BcProgram* p, char* name, BcType type, size_t line)
 		BcAuto* aptr = bc_vec_item(&f->autos, i);
 
 		// If they match, barf.
-		if (BC_ERR(idx == aptr->idx && type == aptr->type))
+		if (BC_ERR(idx == aptr->idx &&
+		           BC_IS_ARRAY(type) == BC_IS_ARRAY(aptr->type)))
 		{
-			const char* array = type == BC_TYPE_ARRAY ? "[]" : "";
+			const char* array = BC_IS_ARRAY(type) ? "[]" : "";
 
 			bc_error(BC_ERR_PARSE_DUP_LOCAL, line, name, array);
 		}
@@ -98,10 +99,6 @@ bc_func_init(BcFunc* f, const char* name)
 	assert(f != NULL && name != NULL);
 
 	bc_vec_init(&f->code, sizeof(uchar), BC_DTOR_NONE);
-
-	bc_vec_init(&f->consts, sizeof(BcConst), BC_DTOR_CONST);
-
-	bc_vec_init(&f->strs, sizeof(char*), BC_DTOR_NONE);
 
 #if BC_ENABLED
 
@@ -128,10 +125,6 @@ bc_func_reset(BcFunc* f)
 
 	bc_vec_popAll(&f->code);
 
-	bc_vec_popAll(&f->consts);
-
-	bc_vec_popAll(&f->strs);
-
 #if BC_ENABLED
 	if (BC_IS_BC)
 	{
@@ -144,7 +137,7 @@ bc_func_reset(BcFunc* f)
 #endif // BC_ENABLED
 }
 
-#ifndef NDEBUG
+#if BC_DEBUG || BC_ENABLE_MEMCHECK
 void
 bc_func_free(void* func)
 {
@@ -155,10 +148,6 @@ bc_func_free(void* func)
 
 	bc_vec_free(&f->code);
 
-	bc_vec_free(&f->consts);
-
-	bc_vec_free(&f->strs);
-
 #if BC_ENABLED
 	if (BC_IS_BC)
 	{
@@ -167,7 +156,7 @@ bc_func_free(void* func)
 	}
 #endif // BC_ENABLED
 }
-#endif // NDEBUG
+#endif // BC_DEBUG || BC_ENABLE_MEMCHECK
 
 void
 bc_array_init(BcVec* a, bool nums)
@@ -314,10 +303,10 @@ bc_result_copy(BcResult* d, BcResult* src)
 		case BC_RESULT_VOID:
 		case BC_RESULT_LAST:
 		{
-#ifndef NDEBUG
+#if BC_DEBUG
 			// We should *never* try copying either of these.
 			abort();
-#endif // NDEBUG
+#endif // BC_DEBUG
 		}
 #endif // BC_ENABLED
 	}

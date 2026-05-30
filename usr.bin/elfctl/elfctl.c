@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2019 The FreeBSD Foundation.
  *
@@ -48,15 +48,12 @@
 #include <unistd.h>
 
 #include "_elftc.h"
-
-__FBSDID("$FreeBSD$");
-
 static bool convert_to_feature_val(const char *, uint32_t *);
 static bool edit_file_features(Elf *, int, int, char *, bool);
 static bool get_file_features(Elf *, int, int, uint32_t *, uint64_t *, bool);
 static void print_features(void);
 static bool print_file_features(Elf *, int, int, char *, bool);
-static void usage(void);
+static void usage(void) __dead2;
 
 struct ControlFeatures {
 	const char *alias;
@@ -70,7 +67,10 @@ static struct ControlFeatures featurelist[] = {
 	    "Disable implicit PROT_MAX" },
 	{ "nostackgap",	NT_FREEBSD_FCTL_STKGAP_DISABLE, "Disable stack gap" },
 	{ "wxneeded",	NT_FREEBSD_FCTL_WXNEEDED, "Requires W+X mappings" },
-	{ "la48",	NT_FREEBSD_FCTL_LA48, "amd64: Limit user VA to 48bit" },
+	{ "la48",	NT_FREEBSD_FCTL_LA48,
+	    "amd64: Limit user virtual addresses to 48 bits" },
+	{ "la57",	NT_FREEBSD_FCTL_LA57,
+	    "amd64: Allow the use of 57-bit virtual addresses when available" },
 };
 
 static struct option long_opts[] = {

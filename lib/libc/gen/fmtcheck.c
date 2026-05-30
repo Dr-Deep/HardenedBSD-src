@@ -1,7 +1,7 @@
 /*	$NetBSD: fmtcheck.c,v 1.8 2008/04/28 20:22:59 martin Exp $	*/
 
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2000 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -30,9 +30,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
@@ -58,10 +55,8 @@ enum __e_fmtcheck_types {
 	FMTCHECK_INTMAXTPOINTER,
 	FMTCHECK_PTRDIFFTPOINTER,
 	FMTCHECK_SIZETPOINTER,
-#ifndef NO_FLOATING_POINT
 	FMTCHECK_DOUBLE,
 	FMTCHECK_LONGDOUBLE,
-#endif
 	FMTCHECK_STRING,
 	FMTCHECK_WSTRING,
 	FMTCHECK_WIDTH,
@@ -188,7 +183,6 @@ get_next_format_from_precision(const char **pf)
 			RETURN(pf,f,FMTCHECK_UNKNOWN);
 		RETURN(pf,f,FMTCHECK_LONG);
 	}
-#ifndef NO_FLOATING_POINT
 	if (strchr("aAeEfFgG", *f)) {
 		switch (modifier) {
 		case MOD_LONGDOUBLE:
@@ -200,7 +194,6 @@ get_next_format_from_precision(const char **pf)
 			RETURN(pf,f,FMTCHECK_UNKNOWN);
 		}
 	}
-#endif
 	if (*f == 'c') {
 		switch (modifier) {
 		case MOD_LONG:

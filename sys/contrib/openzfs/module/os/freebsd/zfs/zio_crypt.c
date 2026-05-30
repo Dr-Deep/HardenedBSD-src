@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -370,9 +371,6 @@ error:
 	return (ret);
 }
 
-void *failed_decrypt_buf;
-int failed_decrypt_size;
-
 /*
  * This function handles all encryption and decryption in zfs. When
  * encrypting it expects puio to reference the plaintext and cuio to
@@ -436,6 +434,7 @@ zio_crypt_key_wrap(crypto_key_t *cwkey, zio_crypt_key_t *key, uint8_t *iv,
 
 	ASSERT3U(crypt, <, ZIO_CRYPT_FUNCTIONS);
 
+	memset(&cuio_s, 0, sizeof (cuio_s));
 	zfs_uio_init(&cuio, &cuio_s);
 
 	keydata_len = zio_crypt_table[crypt].ci_keylen;
@@ -518,6 +517,7 @@ zio_crypt_key_unwrap(crypto_key_t *cwkey, uint64_t crypt, uint64_t version,
 	keydata_len = zio_crypt_table[crypt].ci_keylen;
 	rw_init(&key->zk_salt_lock, NULL, RW_DEFAULT, NULL);
 
+	memset(&cuio_s, 0, sizeof (cuio_s));
 	zfs_uio_init(&cuio, &cuio_s);
 
 	/*
@@ -1251,7 +1251,7 @@ zio_crypt_init_uios_zil(boolean_t encrypt, uint8_t *plainbuf,
 	iovec_t *dst_iovecs;
 	zil_chain_t *zilc;
 	lr_t *lr;
-	uint64_t txtype, lr_len;
+	uint64_t txtype, lr_len, nused;
 	uint_t crypt_len, nr_iovecs, vec;
 	uint_t aad_len = 0, total_len = 0;
 
@@ -1268,7 +1268,10 @@ zio_crypt_init_uios_zil(boolean_t encrypt, uint8_t *plainbuf,
 	zilc = (zil_chain_t *)src;
 	slrp = src + sizeof (zil_chain_t);
 	aadp = aadbuf;
-	blkend = src + ((byteswap) ? BSWAP_64(zilc->zc_nused) : zilc->zc_nused);
+	nused = ((byteswap) ? BSWAP_64(zilc->zc_nused) : zilc->zc_nused);
+	ASSERT3U(nused, >=, sizeof (zil_chain_t));
+	ASSERT3U(nused, <=, datalen);
+	blkend = src + nused;
 
 	/*
 	 * Calculate the number of encrypted iovecs we will need.
@@ -1287,6 +1290,8 @@ zio_crypt_init_uios_zil(boolean_t encrypt, uint8_t *plainbuf,
 			txtype = lr->lrc_txtype;
 			lr_len = lr->lrc_reclen;
 		}
+		ASSERT3U(lr_len, >=, sizeof (lr_t));
+		ASSERT3U(lr_len, <=, blkend - slrp);
 
 		nr_iovecs++;
 		if (txtype == TX_WRITE && lr_len != sizeof (lr_write_t))
@@ -1338,19 +1343,14 @@ zio_crypt_init_uios_zil(boolean_t encrypt, uint8_t *plainbuf,
 		 * authenticate it.
 		 */
 		if (txtype == TX_WRITE) {
-			crypt_len = sizeof (lr_write_t) -
-			    sizeof (lr_t) - sizeof (blkptr_t);
-			dst_iovecs[vec].iov_base = (char *)dlrp +
-			    sizeof (lr_t);
+			const size_t o = offsetof(lr_write_t, lr_blkptr);
+			crypt_len = o - sizeof (lr_t);
+			dst_iovecs[vec].iov_base = (char *)dlrp + sizeof (lr_t);
 			dst_iovecs[vec].iov_len = crypt_len;
 
 			/* copy the bp now since it will not be encrypted */
-			memcpy(dlrp + sizeof (lr_write_t) - sizeof (blkptr_t),
-			    slrp + sizeof (lr_write_t) - sizeof (blkptr_t),
-			    sizeof (blkptr_t));
-			memcpy(aadp,
-			    slrp + sizeof (lr_write_t) - sizeof (blkptr_t),
-			    sizeof (blkptr_t));
+			memcpy(dlrp + o, slrp + o, sizeof (blkptr_t));
+			memcpy(aadp, slrp + o, sizeof (blkptr_t));
 			aadp += sizeof (blkptr_t);
 			aad_len += sizeof (blkptr_t);
 			vec++;
@@ -1364,10 +1364,22 @@ zio_crypt_init_uios_zil(boolean_t encrypt, uint8_t *plainbuf,
 				vec++;
 				total_len += crypt_len;
 			}
+		} else if (txtype == TX_CLONE_RANGE) {
+			const size_t o = offsetof(lr_clone_range_t, lr_nbps);
+			crypt_len = o - sizeof (lr_t);
+			dst_iovecs[vec].iov_base = (char *)dlrp + sizeof (lr_t);
+			dst_iovecs[vec].iov_len = crypt_len;
+
+			/* copy the bps now since they will not be encrypted */
+			memcpy(dlrp + o, slrp + o, lr_len - o);
+			memcpy(aadp, slrp + o, lr_len - o);
+			aadp += lr_len - o;
+			aad_len += lr_len - o;
+			vec++;
+			total_len += crypt_len;
 		} else {
 			crypt_len = lr_len - sizeof (lr_t);
-			dst_iovecs[vec].iov_base = (char *)dlrp +
-			    sizeof (lr_t);
+			dst_iovecs[vec].iov_base = (char *)dlrp + sizeof (lr_t);
 			dst_iovecs[vec].iov_len = crypt_len;
 			vec++;
 			total_len += crypt_len;
@@ -1555,13 +1567,12 @@ zio_crypt_init_uios_normal(boolean_t encrypt, uint8_t *plainbuf,
 	iovec_t *plain_iovecs = NULL, *cipher_iovecs = NULL;
 	void *src, *dst;
 
-	cipher_iovecs = kmem_alloc(nr_cipher * sizeof (iovec_t),
+	cipher_iovecs = kmem_zalloc(nr_cipher * sizeof (iovec_t),
 	    KM_SLEEP);
 	if (!cipher_iovecs) {
 		ret = SET_ERROR(ENOMEM);
 		goto error;
 	}
-	memset(cipher_iovecs, 0, nr_cipher * sizeof (iovec_t));
 
 	if (encrypt) {
 		src = plainbuf;
@@ -1651,9 +1662,6 @@ error:
 	return (ret);
 }
 
-void *failed_decrypt_buf;
-int faile_decrypt_size;
-
 /*
  * Primary encryption / decryption entrypoint for zio data.
  */
@@ -1675,11 +1683,10 @@ zio_do_crypt_data(boolean_t encrypt, zio_crypt_key_t *key,
 	freebsd_crypt_session_t *tmpl = NULL;
 	uint8_t *authbuf = NULL;
 
-
+	memset(&puio_s, 0, sizeof (puio_s));
+	memset(&cuio_s, 0, sizeof (cuio_s));
 	zfs_uio_init(&puio, &puio_s);
 	zfs_uio_init(&cuio, &cuio_s);
-	memset(GET_UIO_STRUCT(&puio), 0, sizeof (struct uio));
-	memset(GET_UIO_STRUCT(&cuio), 0, sizeof (struct uio));
 
 #ifdef FCRYPTO_DEBUG
 	printf("%s(%s, %p, %p, %d, %p, %p, %u, %s, %p, %p, %p)\n",
@@ -1735,7 +1742,6 @@ zio_do_crypt_data(boolean_t encrypt, zio_crypt_key_t *key,
 		goto error;
 	if (locked) {
 		rw_exit(&key->zk_salt_lock);
-		locked = B_FALSE;
 	}
 
 	if (authbuf != NULL)
@@ -1748,13 +1754,6 @@ zio_do_crypt_data(boolean_t encrypt, zio_crypt_key_t *key,
 	return (0);
 
 error:
-	if (!encrypt) {
-		if (failed_decrypt_buf != NULL)
-			kmem_free(failed_decrypt_buf, failed_decrypt_size);
-		failed_decrypt_buf = kmem_alloc(datalen, KM_SLEEP);
-		failed_decrypt_size = datalen;
-		memcpy(failed_decrypt_buf, cipherbuf, datalen);
-	}
 	if (locked)
 		rw_exit(&key->zk_salt_lock);
 	if (authbuf != NULL)
@@ -1812,10 +1811,3 @@ error:
 
 	return (SET_ERROR(ret));
 }
-
-#if defined(_KERNEL) && defined(HAVE_SPL)
-/* CSTYLED */
-module_param(zfs_key_max_salt_uses, ulong, 0644);
-MODULE_PARM_DESC(zfs_key_max_salt_uses, "Max number of times a salt value "
-	"can be used for generating encryption keys before it is rotated");
-#endif

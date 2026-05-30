@@ -1,6 +1,4 @@
 #
-# $FreeBSD$
-#
 # Makefile for the FreeBSD specific LibUSB 2.0
 #
 
@@ -12,7 +10,8 @@ SRCS+=		libusb20_desc.c
 SRCS+=		libusb20_ugen20.c
 INCS+=		libusb20.h
 INCS+=		libusb20_desc.h
-MAN=		libusb.3 libusb20.3
+MAN=		libusb.3 libusb20.3 libusb20_be_device_foreach.3 \
+		libusb20_dev_open.3
 MKLINT=		no
 NOGCCERROR=
 PTHREAD_LIBS?=	-lpthread
@@ -68,6 +67,7 @@ CFLAGS+=	-I ../../sys
 # LibUSB v1.0
 MLINKS += libusb.3 libusb_get_version.3
 MLINKS += libusb.3 libusb_init.3
+MLINKS += libusb.3 libusb_init_context.3
 MLINKS += libusb.3 libusb_exit.3
 MLINKS += libusb.3 libusb_has_capability.3
 MLINKS += libusb.3 libusb_strerror.3
@@ -137,6 +137,7 @@ MLINKS += libusb.3 libusb_lock_events.3
 MLINKS += libusb.3 libusb_unlock_events.3
 MLINKS += libusb.3 libusb_event_handling_ok.3
 MLINKS += libusb.3 libusb_event_handler_active.3
+MLINKS += libusb.3 libusb_interrupt_event_handler.3
 MLINKS += libusb.3 libusb_lock_event_waiters.3
 MLINKS += libusb.3 libusb_unlock_event_waiters.3
 MLINKS += libusb.3 libusb_wait_for_event.3
@@ -228,7 +229,6 @@ MLINKS += libusb20.3 libusb20_dev_set_config_index.3
 MLINKS += libusb20.3 libusb20_dev_get_debug.3
 MLINKS += libusb20.3 libusb20_dev_get_fd.3
 MLINKS += libusb20.3 libusb20_dev_kernel_driver_active.3
-MLINKS += libusb20.3 libusb20_dev_open.3
 MLINKS += libusb20.3 libusb20_dev_process.3
 MLINKS += libusb20.3 libusb20_dev_request_sync.3
 MLINKS += libusb20.3 libusb20_dev_req_string_sync.3
@@ -260,7 +260,6 @@ MLINKS += libusb20.3 libusb20_be_get_quirk_name.3
 MLINKS += libusb20.3 libusb20_be_add_dev_quirk.3
 MLINKS += libusb20.3 libusb20_be_remove_dev_quirk.3
 MLINKS += libusb20.3 libusb20_be_alloc_default.3
-MLINKS += libusb20.3 libusb20_be_device_foreach.3
 MLINKS += libusb20.3 libusb20_be_dequeue_device.3
 MLINKS += libusb20.3 libusb20_be_enqueue_device.3
 MLINKS += libusb20.3 libusb20_be_free.3

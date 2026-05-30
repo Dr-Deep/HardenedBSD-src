@@ -35,9 +35,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/condvar.h>
 #include <sys/conf.h>
@@ -282,7 +279,7 @@ audit_record_ctor(void *mem, int size, void *arg, int flags)
 	cru2x(cred, &ar->k_ar.ar_subj_cred);
 	ar->k_ar.ar_subj_ruid = cred->cr_ruid;
 	ar->k_ar.ar_subj_rgid = cred->cr_rgid;
-	ar->k_ar.ar_subj_egid = cred->cr_groups[0];
+	ar->k_ar.ar_subj_egid = cred->cr_gid;
 	ar->k_ar.ar_subj_auid = cred->cr_audit.ai_auid;
 	ar->k_ar.ar_subj_asid = cred->cr_audit.ai_asid;
 	ar->k_ar.ar_subj_pid = td->td_proc->p_pid;
@@ -332,7 +329,7 @@ audit_record_dtor(void *mem, int size, void *arg)
  * call into the BSM assembly code to initialize it.
  */
 static void
-audit_init(void)
+audit_init(void *dummy __unused)
 {
 
 	audit_trail_enabled = 0;
@@ -399,7 +396,8 @@ SYSINIT(audit_init, SI_SUB_AUDIT, SI_ORDER_FIRST, audit_init, NULL);
 void
 audit_shutdown(void *arg, int howto)
 {
-
+	if (KERNEL_PANICKED())
+		return;
 	audit_rotate_vnode(NULL, NULL);
 }
 
@@ -413,14 +411,21 @@ currecord(void)
 	return (curthread->td_ar);
 }
 
-/*
- * XXXAUDIT: Shouldn't there be logic here to sleep waiting on available
- * pre_q space, suspending the system call until there is room?
- */
 struct kaudit_record *
 audit_new(int event, struct thread *td)
 {
 	struct kaudit_record *ar;
+
+	mtx_lock(&audit_mtx);
+	audit_pre_q_len++;
+
+	/*
+	 * Constrain the number of committed audit records based on
+	 * the configurable parameter.
+	 */
+	while (audit_q_len >= audit_qctrl.aq_hiwater)
+		cv_wait(&audit_watermark_cv, &audit_mtx);
+	mtx_unlock(&audit_mtx);
 
 	/*
 	 * Note: the number of outstanding uncommitted audit records is
@@ -429,11 +434,6 @@ audit_new(int event, struct thread *td)
 	 */
 	ar = uma_zalloc_arg(audit_record_zone, td, M_WAITOK);
 	ar->k_ar.ar_event = event;
-
-	mtx_lock(&audit_mtx);
-	audit_pre_q_len++;
-	mtx_unlock(&audit_mtx);
-
 	return (ar);
 }
 
@@ -566,13 +566,6 @@ audit_commit(struct kaudit_record *ar, int error, int retval)
 		audit_free(ar);
 		return;
 	}
-
-	/*
-	 * Constrain the number of committed audit records based on the
-	 * configurable parameter.
-	 */
-	while (audit_q_len >= audit_qctrl.aq_hiwater)
-		cv_wait(&audit_watermark_cv, &audit_mtx);
 
 	TAILQ_INSERT_TAIL(&audit_q, ar, k_q);
 	audit_q_len++;

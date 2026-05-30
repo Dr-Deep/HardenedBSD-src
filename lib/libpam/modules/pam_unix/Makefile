@@ -32,16 +32,13 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 
 .include <src.opts.mk>
 .include <bsd.init.mk>
 
-PACKAGE=	runtime
-
-LIB=	pam_unix
-SRCS=	pam_unix.c
-MAN=	pam_unix.8
+LIB=		pam_unix
+SRCS=		pam_unix.c
+MANNODEV=	pam_unix.8
 
 LIBADD+=	util crypt
 

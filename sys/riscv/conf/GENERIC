@@ -16,7 +16,6 @@
 # If you are in doubt as to the purpose or necessity of a line, check first
 # in NOTES.
 #
-# $FreeBSD$
 
 cpu		RISCV
 ident		GENERIC
@@ -31,9 +30,12 @@ options 	INET			# InterNETworking
 options 	INET6			# IPv6 communications protocols
 options 	TCP_HHOOK		# hhook(9) framework for TCP
 options 	IPSEC_SUPPORT		# Allow kldload of ipsec and tcpmd5
-options		ROUTE_MPATH		# Multipath routing support
+options		FIB_ALGO		# Modular fib lookups
 options 	TCP_OFFLOAD		# TCP offload
+options 	TCP_BLACKBOX		# Enhanced TCP event logging
+options 	TCP_RFC7413		# TCP Fast Open
 options 	SCTP_SUPPORT		# Allow kldload of SCTP
+options 	KERN_TLS		# TLS transmit & receive offload
 options 	FFS			# Berkeley Fast Filesystem
 options 	SOFTUPDATES		# Enable FFS soft updates support
 options 	UFS_ACL			# Support for access control lists
@@ -49,11 +51,11 @@ options 	CD9660			# ISO 9660 Filesystem
 options 	PROCFS			# Process filesystem (requires PSEUDOFS)
 options 	PSEUDOFS		# Pseudo-filesystem framework
 options 	TMPFS			# Efficient memory filesystem
-options 	GEOM_PART_GPT		# GUID Partition Tables.
 options 	GEOM_RAID		# Soft RAID functionality.
 options 	GEOM_LABEL		# Provides labelization
 options 	COMPAT_FREEBSD12	# Compatible with FreeBSD12
 options 	COMPAT_FREEBSD13	# Compatible with FreeBSD13
+options 	COMPAT_FREEBSD14	# Compatible with FreeBSD14
 options 	SCSI_DELAY=5000		# Delay (in ms) before probing SCSI
 options 	KTRACE			# ktrace(1) support
 options 	STACK			# stack(9) support
@@ -71,12 +73,11 @@ options 	MAC			# TrustedBSD MAC Framework
 options 	KDTRACE_FRAME		# Ensure frames are compiled in
 options 	KDTRACE_HOOKS		# Kernel DTrace hooks
 options 	DDB_CTF			# Kernel ELF linker loads CTF data
-options 	FPE			# Floating-point extension support
 options 	RACCT			# Resource accounting framework
 options 	RACCT_DEFAULT_TO_DISABLED # Set kern.racct.enable=0 by default
 options 	RCTL			# Resource limits
 options 	SMP
-options 	INTRNG
+options 	IOMMU
 
 # RISC-V SBI console
 device		rcons
@@ -84,14 +85,22 @@ device		rcons
 # pseudo devices
 device		clk
 device		hwreset
+device		nvmem
+device		phy
+device		regulator
 device		syscon
 device		syscon_power
 device		riscv_syscon
 
+# CPU frequency control
+device		cpufreq
+
 # Bus drivers
 device		pci
+device		xlnx_pcib		# Xilinx PCIe Controller
 
 # Block devices
+device		ahci
 device		scbus
 device		da
 
@@ -101,6 +110,9 @@ device		virtio_pci		# VirtIO PCI device
 device		vtnet			# VirtIO Ethernet device
 device		virtio_blk		# VirtIO Block device
 device		virtio_mmio		# VirtIO MMIO bus
+
+# ATA/SCSI peripherals
+device		pass			# Passthrough device (direct ATA/SCSI access)
 
 # NVM Express (NVMe) support
 device		nvme		# base NVMe driver
@@ -114,21 +126,15 @@ device		uhci			# UHCI USB interface
 device		ehci			# EHCI USB interface (USB 2.0)
 device		xhci			# XHCI USB interface (USB 3.0)
 device		usb			# USB Bus (required)
+device		usbhid			# USB HID Transport
+device		hkbd			# Keyboard
 device		ukbd			# Keyboard
 device		umass			# Disks/Mass storage - Requires scbus and da
 
 # HID support
 options 	HID_DEBUG	# enable debug msgs
 device		hid		# Generic HID support
-
-# DTrace support
-# device	dtrace
-# device	dtrace_profile
-# device	dtrace_sdt
-# device	dtrace_fbt
-# device	dtrace_systrace
-# device	dtrace_prototype
-# device	dtraceall
+device		hidbus		# Generic HID Bus
 
 # Serial (COM) ports
 device		uart		# Generic UART driver
@@ -137,13 +143,13 @@ device		uart_ns8250	# ns8250-type UART driver
 
 # Console
 device		vt
+device		vt_efifb
 device		kbdmux
 
 # RTC
 device		goldfish_rtc	# QEMU RTC
 
 # Ethernet drivers
-device		cgem		# Cadence GEM Gigabit Ethernet device
 device		miibus		# MII bus support
 device		xae		# Xilinx AXI Ethernet MAC
 
@@ -153,38 +159,28 @@ device		axidma		# Xilinx AXI DMA Controller
 
 # GPIO
 device		gpio
+device		fdt_pinctrl
 
 # SPI
 device		spibus
 device		spigen
-
-# Uncomment for memory disk
-# options 	MD_ROOT
-# options 	MD_ROOT_SIZE=32768	# 32MB ram disk
-# makeoptions	MFS_IMAGE=/path/to/img
-# options 	ROOTDEVNAME=\"ufs:/dev/md0\"
-
-# Uncomment for virtio block device
-# options 	ROOTDEVNAME=\"ufs:/dev/vtbd0\"
+device		xilinx_spi	# Xilinx AXI SPI Controller
 
 # Debugging support.  Always need this:
 options 	KDB			# Enable kernel debugger support.
 options 	KDB_TRACE		# Print a stack trace for a panic.
 # For full debugger support use (turn off in stable branch):
-options 	DDB			# Support DDB.
-options 	GDB			# Support remote GDB.
-options 	DEADLKRES		# Enable the deadlock resolver
-options 	INVARIANTS		# Enable calls of extra sanity checking
-options 	INVARIANT_SUPPORT	# Extra sanity checks of internal structures, required by INVARIANTS
-options 	WITNESS			# Enable checks to detect deadlocks and cycles
-options 	WITNESS_SKIPSPIN	# Don't run witness on spinlocks for speed
-options 	MALLOC_DEBUG_MAXZONES=8	# Separate malloc(9) zones
-options 	ALT_BREAK_TO_DEBUGGER	# Enter debugger on keyboard escape sequence
-# options 	EARLY_PRINTF
-options 	VERBOSE_SYSINIT=0	# Support debug.verbose_sysinit, off by default
+include "std.debug"
+# options 	EARLY_PRINTF=sbi
+
+# Compression support
+options 	GZIO			# gzip (dumps)
+options 	ZSTDIO			# zstd (dumps, tarfs, uzip, zfs)
 
 # Kernel dump features.
-options		ZSTDIO			# zstd-compressed kernel and user dumps
+options 	EKCD			# Support for encrypted kernel dumps
+options 	DEBUGNET		# debugnet networking
+options 	NETDUMP			# netdump(4) client support
 
 # Pseudo devices.
 device		crypto		# core crypto support
@@ -196,25 +192,34 @@ device		md		# Memory "disks"
 device		gif		# IPv6 and IPv4 tunneling
 device		firmware	# firmware assist module
 
+# MMC/SD/SDIO Card slot support
+device		sdhci
+device		mmc			# MMC/SD bus
+device		mmcsd			# MMC/SD flash cards
+
 # The `bpf' device enables the Berkeley Packet Filter.
 # Be aware of the administrative consequences of enabling this!
 # Note that 'bpf' is required for DHCP.
 device		bpf		# Berkeley packet filter
 
+# random(4)
+options 	RANDOM_ENABLE_KBD
+options 	RANDOM_ENABLE_MOUSE
+
 # Flattened Device Tree
 options 	FDT
-makeoptions	MODULES_EXTRA+="dtb/sifive"
 
 # I2C support
 device		iicbus		# Bus support, required for iicoc below.
 device		iicoc		# OpenCores I2C controller support
 
-# Allwinner device drivers
-device		aw_wdog		# Allwinner Watchdog
-files		"../allwinner/files.allwinner"
+# random(4)
+device		tpm			# Trusted Platform Module
+options 	RANDOM_ENABLE_TPM	# enable entropy from TPM 2.0
 
-# SiFive device drivers
-device		fu740_pci_dw
-device		sifive_gpio
-device		sifive_spi
-include		"../sifive/std.sifive"
+# Include SoC specific configuration
+include		"std.allwinner"
+include		"std.cvitek"
+include		"std.eswin"
+include		"std.sifive"
+include		"std.starfive"

@@ -1,6 +1,5 @@
 /*-
  * Copyright (c) 2014 The FreeBSD Foundation
- * All rights reserved.
  *
  * This software was developed by Andrew Turner under
  * sponsorship from the FreeBSD Foundation.
@@ -28,23 +27,23 @@
  */
 
 #include <machine/asm.h>
-__FBSDID("$FreeBSD$");
+#include <sys/elf_common.h>
 
 ENTRY(.rtld_start)
+	.cfi_undefined	x30
 	mov	x19, x0		/* Put ps_strings in a callee-saved register */
-	mov	x20, sp		/* And the stack pointer */
 
 	sub	sp, sp, #16	/* Make room for obj_main & exit proc */
+	.cfi_adjust_cfa_offset	16
 
 	mov	x1, sp		/* exit_proc */
 	add	x2, x1, #8	/* obj_main */
 	bl	_rtld		/* Call the loader */
 	mov	x8, x0		/* Backup the entry point */
+	ldp	x2, x1, [sp], #16 /* Load cleanup, obj_main */
+	.cfi_adjust_cfa_offset	0
 
-	ldr	x2, [sp]	/* Load cleanup */
-	ldr	x1, [sp, #8]	/* Load obj_main */
 	mov	x0, x19		/* Restore ps_strings */
-	mov	sp, x20		/* Restore the stack pointer */
 	br	x8		/* Jump to the entry point */
 END(.rtld_start)
 
@@ -190,11 +189,11 @@ ENTRY(_rtld_tlsdesc_dynamic)
 	/*
 	 * Slow path
 	  * return(
-	 *    tls_get_addr_common(tp, tlsdesc->tls_index, tlsdesc->tls_offs));
+	 *    tls_get_addr_common(tcb, tlsdesc->tls_index, tlsdesc->tls_offs));
 	 *
 	 */
 1:
-	/* Save all interger registers */
+	/* Save all integer registers */
 	stp	x29, x30, [sp, #-(8 * 16)]!
 	.cfi_adjust_cfa_offset	8 * 16
 	.cfi_rel_offset		x29, 0
@@ -224,7 +223,7 @@ ENTRY(_rtld_tlsdesc_dynamic)
 	.cfi_rel_offset		x18, 120
 
 	/* Find the tls offset */
-	mov	x0, x4			/* tp */
+	mov	x0, x4			/* tcb */
 	mov	x3, x1			/* tlsdesc ptr */
 	ldr	w1, [x3, #8]		/* tlsdec->tls_index */
 	ldr	x2, [x3, #16]		/* tlsdec->tls_offs */
@@ -251,3 +250,5 @@ ENTRY(_rtld_tlsdesc_dynamic)
 	.cfi_adjust_cfa_offset	-2 * 16
 	ret
 END(_rtld_tlsdesc_dynamic)
+
+GNU_PROPERTY_AARCH64_FEATURE_1_NOTE(GNU_PROPERTY_AARCH64_FEATURE_1_VAL)

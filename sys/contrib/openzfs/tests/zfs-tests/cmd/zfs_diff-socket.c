@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * This file and its contents are supplied under the terms of the
  * Common Development and Distribution License ("CDDL"), version 1.0.
@@ -37,8 +38,7 @@ main(int argc, char *argv[])
 	}
 	path = argv[1];
 	size =  sizeof (sock.sun_path);
-	strncpy(sock.sun_path, (char *)path, size - 1);
-	sock.sun_path[size - 1] = '\0';
+	(void) snprintf(sock.sun_path, size, "%s", path);
 
 	sock.sun_family = AF_UNIX;
 	if ((fd = socket(AF_UNIX, SOCK_DGRAM, 0)) == -1) {

@@ -1,5 +1,4 @@
-#	@(#)Makefile	8.1 (Berkeley) 6/9/93
-
+PACKAGE= toolchain
 PROG=	xstr
 
 .include <bsd.prog.mk>

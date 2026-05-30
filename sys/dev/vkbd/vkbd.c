@@ -3,7 +3,7 @@
  */
 
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2004 Maksim Yevmenkin <m_evmenkin@yahoo.com>
  * All rights reserved.
@@ -30,7 +30,6 @@
  * SUCH DAMAGE.
  *
  * $Id: vkbd.c,v 1.20 2004/11/15 23:53:30 max Exp $
- * $FreeBSD$
  */
 
 #include "opt_kbd.h"
@@ -83,7 +82,7 @@ MALLOC_DEFINE(M_VKBD, KEYBOARD_NAME, "Virtual AT keyboard");
 #define VKBD_UNLOCK(s)		mtx_unlock(&(s)->ks_lock)
 #define VKBD_LOCK_ASSERT(s, w)	mtx_assert(&(s)->ks_lock, w)
 #define VKBD_SLEEP(s, f, d, t) \
-	msleep(&(s)->f, &(s)->ks_lock, PCATCH | (PZERO + 1), d, t)
+	msleep(&(s)->f, &(s)->ks_lock, PCATCH | PZERO, d, t)
 #else
 #define VKBD_LOCK_DECL
 #define VKBD_LOCK_INIT(s)
@@ -91,7 +90,7 @@ MALLOC_DEFINE(M_VKBD, KEYBOARD_NAME, "Virtual AT keyboard");
 #define VKBD_LOCK(s)
 #define VKBD_UNLOCK(s)
 #define VKBD_LOCK_ASSERT(s, w)
-#define VKBD_SLEEP(s, f, d, t)	tsleep(&(s)->f, PCATCH | (PZERO + 1), d, t)
+#define VKBD_SLEEP(s, f, d, t)	tsleep(&(s)->f, PCATCH | PZERO, d, t)
 #endif
 
 #define VKBD_KEYBOARD(d) \
@@ -192,6 +191,8 @@ vkbd_dev_clone(void *arg, struct ucred *cred, char *name, int namelen,
 		*dev = make_dev_credf(MAKEDEV_REF, &vkbd_dev_cdevsw, unit,
 			cred, UID_ROOT, GID_WHEEL, 0600, DEVICE_NAME "%d",
 			unit);
+	else
+		dev_ref(*dev);
 }
 
 /* Open device */
@@ -267,8 +268,8 @@ vkbd_dev_close(struct cdev *dev, int foo, int bar, struct thread *td)
 		VKBD_SLEEP(state, ks_task, "vkbdc", 0);
 
 	/* wakeup poll()ers */
-	selwakeuppri(&state->ks_rsel, PZERO + 1);
-	selwakeuppri(&state->ks_wsel, PZERO + 1);
+	selwakeuppri(&state->ks_rsel, PZERO);
+	selwakeuppri(&state->ks_wsel, PZERO);
 
 	state->ks_flags &= ~OPEN;
 	state->ks_dev = NULL;
@@ -497,7 +498,7 @@ vkbd_status_changed(vkbd_state_t *state)
 
 	if (!(state->ks_flags & STATUS)) {
 		state->ks_flags |= STATUS;
-		selwakeuppri(&state->ks_rsel, PZERO + 1);
+		selwakeuppri(&state->ks_rsel, PZERO);
 		wakeup(&state->ks_flags);
 	}
 }
@@ -530,7 +531,7 @@ vkbd_data_read(vkbd_state_t *state, int wait)
 		q->head = 0;
 
 	/* wakeup ks_inq writers/poll()ers */
-	selwakeuppri(&state->ks_wsel, PZERO + 1);
+	selwakeuppri(&state->ks_wsel, PZERO);
 	wakeup(q);
 
 	return (c);
@@ -1204,9 +1205,12 @@ vkbd_ioctl(keyboard_t *kbd, u_long cmd, caddr_t arg)
 		break;
 
 	case PIO_KEYMAP:	/* set keyboard translation table */
-	case OPIO_KEYMAP:	/* set keyboard translation table (compat) */
 	case PIO_KEYMAPENT:	/* set keyboard translation table entry */
 	case PIO_DEADKEYMAP:	/* set accent key translation table */
+#ifdef COMPAT_FREEBSD13
+	case OPIO_KEYMAP:	/* set keyboard translation table (compat) */
+	case OPIO_DEADKEYMAP:	/* set accent key translation table (compat) */
+#endif /* COMPAT_FREEBSD13 */
 		state->ks_accents = 0;
 		/* FALLTHROUGH */
 
@@ -1242,7 +1246,7 @@ vkbd_clear_state_locked(vkbd_state_t *state)
 
 	/* flush ks_inq and wakeup writers/poll()ers */
 	state->ks_inq.head = state->ks_inq.tail = state->ks_inq.cc = 0;
-	selwakeuppri(&state->ks_wsel, PZERO + 1);
+	selwakeuppri(&state->ks_wsel, PZERO);
 	wakeup(&state->ks_inq);
 }
 
@@ -1302,22 +1306,16 @@ vkbd_poll(keyboard_t *kbd, int on)
  * Local functions
  */
 
-static int delays[] = { 250, 500, 750, 1000 };
-static int rates[] = {	34,  38,  42,  46,  50,  55,  59,  63,
-			68,  76,  84,  92, 100, 110, 118, 126,
-			136, 152, 168, 184, 200, 220, 236, 252,
-			272, 304, 336, 368, 400, 440, 472, 504 };
-
 static int
 typematic_delay(int i)
 {
-	return (delays[(i >> 5) & 3]);
+	return (kbdelays[(i >> 5) & 3]);
 }
 
 static int
 typematic_rate(int i)
 {
-	return (rates[i & 0x1f]);
+	return (kbrates[i & 0x1f]);
 }
 
 static int
@@ -1326,13 +1324,13 @@ typematic(int delay, int rate)
 	int value;
 	int i;
 
-	for (i = nitems(delays) - 1; i > 0; i --) {
-		if (delay >= delays[i])
+	for (i = nitems(kbdelays) - 1; i > 0; i--) {
+		if (delay >= kbdelays[i])
 			break;
 	}
 	value = i << 5;
-	for (i = nitems(rates) - 1; i > 0; i --) {
-		if (rate >= rates[i])
+	for (i = nitems(kbrates) - 1; i > 0; i--) {
+		if (rate >= kbrates[i])
 			break;
 	}
 	value |= i;

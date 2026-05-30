@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008 Ed Schouten <ed@FreeBSD.org>
  * All rights reserved.
@@ -26,11 +26,10 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "namespace.h"
 #include <sys/param.h>
+#include <sys/procctl.h>
+#include <sys/procdesc.h>
 #include <sys/queue.h>
 #include <sys/wait.h>
 
@@ -39,13 +38,12 @@ __FBSDID("$FreeBSD$");
 #include <sched.h>
 #include <spawn.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include "un-namespace.h"
 #include "libc_private.h"
-
-extern char **environ;
 
 struct __posix_spawnattr {
 	short			sa_flags;
@@ -54,6 +52,9 @@ struct __posix_spawnattr {
 	int			sa_schedpolicy;
 	sigset_t		sa_sigdefault;
 	sigset_t		sa_sigmask;
+	int			sa_execfd;
+	int			*sa_pdrfork_fdp;
+	int			sa_pdflags;
 };
 
 struct __posix_spawn_file_actions {
@@ -96,7 +97,7 @@ static int
 process_spawnattr(const posix_spawnattr_t sa)
 {
 	struct sigaction sigact = { .sa_flags = 0, .sa_handler = SIG_DFL };
-	int i;
+	int aslr, i;
 
 	/*
 	 * POSIX doesn't really describe in which order everything
@@ -142,6 +143,13 @@ process_spawnattr(const posix_spawnattr_t sa)
 				if (__sys_sigaction(i, &sigact, NULL) != 0)
 					return (errno);
 		}
+	}
+
+	/* Disable ASLR. */
+	if ((sa->sa_flags & POSIX_SPAWN_DISABLE_ASLR_NP) != 0) {
+		aslr = PROC_ASLR_FORCE_DISABLE;
+		if (procctl(P_PID, 0, PROC_ASLR_CTL, &aslr) != 0)
+			return (errno);
 	}
 
 	return (0);
@@ -228,22 +236,21 @@ struct posix_spawn_args {
 #define	PSPAWN_STACK_ALIGN(sz) \
 	(((sz) + PSPAWN_STACK_ALIGNBYTES) & ~PSPAWN_STACK_ALIGNBYTES)
 
-#if defined(__i386__) || defined(__amd64__)
 /*
  * Below we'll assume that _RFORK_THREAD_STACK_SIZE is appropriately aligned for
- * the posix_spawn() case where we do not end up calling _execvpe and won't ever
+ * the posix_spawn() case where we do not end up calling execvpe and won't ever
  * try to allocate space on the stack for argv[].
  */
 #define	_RFORK_THREAD_STACK_SIZE	4096
 _Static_assert((_RFORK_THREAD_STACK_SIZE % PSPAWN_STACK_ALIGNMENT) == 0,
     "Inappropriate stack size alignment");
-#endif
 
 static int
 _posix_spawn_thr(void *data)
 {
 	struct posix_spawn_args *psa;
-	char * const *envp;
+	char *fake_envp[1] = {NULL};
+	char * const * envp;
 
 	psa = data;
 	if (psa->sa != NULL) {
@@ -256,11 +263,17 @@ _posix_spawn_thr(void *data)
 		if (psa->error)
 			_exit(127);
 	}
-	envp = psa->envp != NULL ? psa->envp : environ;
-	if (psa->use_env_path)
-		_execvpe(psa->path, psa->argv, envp);
+	if (psa->envp == NULL) {
+		psa->envp = fake_envp;
+	}
+
+	envp = psa->envp;
+	if (psa->sa != NULL && (*(psa->sa))->sa_execfd != -1)
+		fexecve((*(psa->sa))->sa_execfd, psa->argv, envp);
+	else if (psa->use_env_path)
+		__libc_execvpe(psa->path, psa->argv, envp);
 	else
-		_execve(psa->path, psa->argv, envp);
+		_execve(psa->path, psa->argv, psa->envp);
 	psa->error = errno;
 
 	/* This is called in such a way that it must not exit. */
@@ -275,12 +288,16 @@ do_posix_spawn(pid_t *pid, const char *path,
 {
 	struct posix_spawn_args psa;
 	pid_t p;
-#ifdef _RFORK_THREAD_STACK_SIZE
+	int pfd;
+	bool do_pfd;
 	char *stack;
-	size_t cnt, stacksz;
+	size_t stacksz;
 
+#if defined(__i386__) || defined(__amd64__)
 	stacksz = _RFORK_THREAD_STACK_SIZE;
 	if (use_env_path) {
+		size_t cnt;
+
 		/*
 		 * We need to make sure we have enough room on the stack for the
 		 * potential alloca() in execvPe if it gets kicked back an
@@ -307,6 +324,9 @@ do_posix_spawn(pid_t *pid, const char *path,
 		return (ENOMEM);
 	stacksz = (((uintptr_t)stack + stacksz) & ~PSPAWN_STACK_ALIGNBYTES) -
 	    (uintptr_t)stack;
+#else
+	stack = NULL;
+	stacksz = 0;
 #endif
 	psa.path = path;
 	psa.fa = fa;
@@ -316,28 +336,39 @@ do_posix_spawn(pid_t *pid, const char *path,
 	psa.use_env_path = use_env_path;
 	psa.error = 0;
 
+	do_pfd = sa != NULL && (*sa)->sa_pdrfork_fdp != NULL;
+
 	/*
 	 * Passing RFSPAWN to rfork(2) gives us effectively a vfork that drops
 	 * non-ignored signal handlers.  We'll fall back to the slightly less
 	 * ideal vfork(2) if we get an EINVAL from rfork -- this should only
 	 * happen with newer libc on older kernel that doesn't accept
 	 * RFSPAWN.
+	 *
+	 * Combination of vfork() (or its equivalent rfork() form) and
+	 * a special property of the libthr rtld locks ensure that
+	 * rtld is operational in the child.  In particular, libthr
+	 * rtld locks do not store owner' tid into the lock word.
+	 *
+	 * x86 stores the return address on the stack, so rfork(2)
+	 * cannot work as-is because the child would clobber the
+	 * return address of the parent.  Because of this, we must use
+	 * rfork_thread instead.
+	 *
+	 * Every other architecture stores the return address in a
+	 * register, the trivial rfork_thread() wrapper is provided
+	 * for them.  The only minor drawback is that the stack is
+	 * temporarily allocated.
 	 */
-#ifdef _RFORK_THREAD_STACK_SIZE
-	/*
-	 * x86 stores the return address on the stack, so rfork(2) cannot work
-	 * as-is because the child would clobber the return address om the
-	 * parent.  Because of this, we must use rfork_thread instead while
-	 * almost every other arch stores the return address in a register.
-	 */
-	p = rfork_thread(RFSPAWN, stack + stacksz, _posix_spawn_thr, &psa);
+	if (do_pfd) {
+		p = pdrfork_thread(&pfd, PD_CLOEXEC | (*sa)->sa_pdflags,
+		    RFSPAWN, stack + stacksz, _posix_spawn_thr, &psa);
+	} else {
+		p = rfork_thread(RFSPAWN, stack + stacksz, _posix_spawn_thr,
+		    &psa);
+	}
 	free(stack);
-#else
-	p = rfork(RFSPAWN);
-	if (p == 0)
-		/* _posix_spawn_thr does not return */
-		_posix_spawn_thr(&psa);
-#endif
+
 	/*
 	 * The above block should leave us in a state where we've either
 	 * succeeded and we're ready to process the results, or we need to
@@ -345,6 +376,8 @@ do_posix_spawn(pid_t *pid, const char *path,
 	 */
 
 	if (p == -1 && errno == EINVAL) {
+		if (do_pfd)
+			return (EOPNOTSUPP);
 		p = vfork();
 		if (p == 0)
 			/* _posix_spawn_thr does not return */
@@ -352,12 +385,18 @@ do_posix_spawn(pid_t *pid, const char *path,
 	}
 	if (p == -1)
 		return (errno);
-	if (psa.error != 0)
+	if (psa.error != 0) {
 		/* Failed; ready to reap */
-		_waitpid(p, NULL, WNOHANG);
-	else if (pid != NULL)
+		if (do_pfd)
+			(void)_close(pfd);
+		else
+			_waitpid(p, NULL, WNOHANG);
+	} else if (pid != NULL) {
 		/* exec succeeded */
 		*pid = p;
+		if (do_pfd)
+			*((*sa)->sa_pdrfork_fdp) = pfd;
+	}
 	return (psa.error);
 }
 
@@ -390,7 +429,7 @@ posix_spawn_file_actions_init(posix_spawn_file_actions_t *ret)
 
 	fa = malloc(sizeof(struct __posix_spawn_file_actions));
 	if (fa == NULL)
-		return (-1);
+		return (errno);
 
 	STAILQ_INIT(&fa->fa_list);
 	*ret = fa;
@@ -515,6 +554,8 @@ posix_spawn_file_actions_addchdir_np(posix_spawn_file_actions_t *
 	STAILQ_INSERT_TAIL(&(*fa)->fa_list, fae, fae_list);
 	return (0);
 }
+__weak_reference(posix_spawn_file_actions_addchdir_np,
+    posix_spawn_file_actions_addchdir);
 
 int
 posix_spawn_file_actions_addfchdir_np(posix_spawn_file_actions_t *__restrict fa,
@@ -536,6 +577,9 @@ posix_spawn_file_actions_addfchdir_np(posix_spawn_file_actions_t *__restrict fa,
 	STAILQ_INSERT_TAIL(&(*fa)->fa_list, fae, fae_list);
 	return (0);
 }
+
+__weak_reference(posix_spawn_file_actions_addfchdir_np,
+    posix_spawn_file_actions_addfchdir);
 
 int
 posix_spawn_file_actions_addclosefrom_np (posix_spawn_file_actions_t *
@@ -570,6 +614,7 @@ posix_spawnattr_init(posix_spawnattr_t *ret)
 	sa = calloc(1, sizeof(struct __posix_spawnattr));
 	if (sa == NULL)
 		return (errno);
+	sa->sa_execfd = -1;
 
 	/* Set defaults as specified by POSIX, cleared above */
 	*ret = sa;
@@ -632,8 +677,30 @@ posix_spawnattr_getsigmask(const posix_spawnattr_t * __restrict sa,
 }
 
 int
+posix_spawnattr_getexecfd_np(const posix_spawnattr_t * __restrict sa,
+    int * __restrict fdp)
+{
+	*fdp = (*sa)->sa_execfd;
+	return (0);
+}
+
+int
+posix_spawnattr_getprocdescp_np(const posix_spawnattr_t * __restrict sa,
+    int ** __restrict fdpp, int * __restrict pdrflagsp)
+{
+	*fdpp = (*sa)->sa_pdrfork_fdp;
+	*pdrflagsp = (*sa)->sa_pdflags;
+	return (0);
+}
+
+int
 posix_spawnattr_setflags(posix_spawnattr_t *sa, short flags)
 {
+	if ((flags & ~(POSIX_SPAWN_RESETIDS | POSIX_SPAWN_SETPGROUP |
+	    POSIX_SPAWN_SETSCHEDPARAM | POSIX_SPAWN_SETSCHEDULER |
+	    POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK |
+	    POSIX_SPAWN_DISABLE_ASLR_NP)) != 0)
+		return (EINVAL);
 	(*sa)->sa_flags = flags;
 	return (0);
 }
@@ -673,5 +740,22 @@ posix_spawnattr_setsigmask(posix_spawnattr_t * __restrict sa,
     const sigset_t * __restrict sigmask)
 {
 	(*sa)->sa_sigmask = *sigmask;
+	return (0);
+}
+
+int
+posix_spawnattr_setexecfd_np(posix_spawnattr_t * __restrict sa,
+    int execfd)
+{
+	(*sa)->sa_execfd = execfd;
+	return (0);
+}
+
+int
+posix_spawnattr_setprocdescp_np(const posix_spawnattr_t * __restrict sa,
+    int * __restrict fdp, int pdrflags)
+{
+	(*sa)->sa_pdrfork_fdp = fdp;
+	(*sa)->sa_pdflags = pdrflags;
 	return (0);
 }

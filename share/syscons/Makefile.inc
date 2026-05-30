@@ -1,3 +1,1 @@
-# $FreeBSD$
-
-FILESPACKAGE=	syscons
+FILESPACKAGE=	syscons-data

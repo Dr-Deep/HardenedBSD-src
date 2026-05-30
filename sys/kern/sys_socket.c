@@ -27,12 +27,7 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)sys_socket.c	8.1 (Berkeley) 6/10/93
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -92,15 +87,17 @@ static fo_rdwr_t soo_read;
 static fo_rdwr_t soo_write;
 static fo_ioctl_t soo_ioctl;
 static fo_poll_t soo_poll;
-extern fo_kqfilter_t soo_kqfilter;
+static fo_kqfilter_t soo_kqfilter;
 static fo_stat_t soo_stat;
 static fo_close_t soo_close;
+static fo_fdclose_t soo_fdclose;
+static fo_chmod_t soo_chmod;
 static fo_fill_kinfo_t soo_fill_kinfo;
 static fo_aio_queue_t soo_aio_queue;
 
 static void	soo_aio_cancel(struct kaiocb *job);
 
-struct fileops	socketops = {
+const struct fileops socketops = {
 	.fo_read = soo_read,
 	.fo_write = soo_write,
 	.fo_truncate = invfo_truncate,
@@ -109,11 +106,13 @@ struct fileops	socketops = {
 	.fo_kqfilter = soo_kqfilter,
 	.fo_stat = soo_stat,
 	.fo_close = soo_close,
-	.fo_chmod = invfo_chmod,
+	.fo_fdclose = soo_fdclose,
+	.fo_chmod = soo_chmod,
 	.fo_chown = invfo_chown,
 	.fo_sendfile = invfo_sendfile,
 	.fo_fill_kinfo = soo_fill_kinfo,
 	.fo_aio_queue = soo_aio_queue,
+	.fo_cmp = file_kcmp_generic,
 	.fo_flags = DFLAG_PASSABLE
 };
 
@@ -145,12 +144,7 @@ soo_write(struct file *fp, struct uio *uio, struct ucred *active_cred,
 	if (error)
 		return (error);
 #endif
-	error = sosend(so, 0, uio, 0, 0, 0, uio->uio_td);
-	if (error == EPIPE && (so->so_options & SO_NOSIGPIPE) == 0) {
-		PROC_LOCK(uio->uio_td->td_proc);
-		tdsignal(uio->uio_td, SIGPIPE);
-		PROC_UNLOCK(uio->uio_td->td_proc);
-	}
+	error = sousrsend(so, NULL, uio, NULL, 0, NULL);
 	return (error);
 }
 
@@ -296,7 +290,15 @@ soo_poll(struct file *fp, int events, struct ucred *active_cred,
 	if (error)
 		return (error);
 #endif
-	return (sopoll(so, events, fp->f_cred, td));
+	return (so->so_proto->pr_sopoll(so, events, td));
+}
+
+static int
+soo_kqfilter(struct file *fp, struct knote *kn)
+{
+	struct socket *so = fp->f_data;
+
+	return (so->so_proto->pr_kqfilter(so, kn));
 }
 
 static int
@@ -362,11 +364,34 @@ soo_close(struct file *fp, struct thread *td)
 	return (error);
 }
 
+static void
+soo_fdclose(struct file *fp, int fd __unused, struct thread *td)
+{
+	struct socket *so;
+
+	so = fp->f_data;
+	if (so->so_proto->pr_fdclose != NULL)
+		so->so_proto->pr_fdclose(so);
+}
+
+static int
+soo_chmod(struct file *fp, mode_t mode, struct ucred *cred, struct thread *td)
+{
+	struct socket *so;
+	int error;
+
+	so = fp->f_data;
+	if (so->so_proto->pr_chmod != NULL)
+		error = so->so_proto->pr_chmod(so, mode, cred, td);
+	else
+		error = EINVAL;
+	return (error);
+}
+
 static int
 soo_fill_kinfo(struct file *fp, struct kinfo_file *kif, struct filedesc *fdp)
 {
-	struct sockaddr *sa;
-	struct inpcb *inpcb;
+	struct sockaddr_storage ss = { .ss_len = sizeof(ss) };
 	struct unpcb *unpcb;
 	struct socket *so;
 	int error;
@@ -382,11 +407,8 @@ soo_fill_kinfo(struct file *fp, struct kinfo_file *kif, struct filedesc *fdp)
 	switch (kif->kf_un.kf_sock.kf_sock_domain0) {
 	case AF_INET:
 	case AF_INET6:
-		if (so->so_pcb != NULL) {
-			inpcb = (struct inpcb *)(so->so_pcb);
-			kif->kf_un.kf_sock.kf_sock_inpcb =
-			    (uintptr_t)inpcb->inp_ppcb;
-		}
+		/* XXX: kf_sock_inpcb is obsolete.  It may be removed. */
+		kif->kf_un.kf_sock.kf_sock_inpcb = (uintptr_t)so->so_pcb;
 		kif->kf_un.kf_sock.kf_sock_rcv_sb_state =
 		    so->so_rcv.sb_state;
 		kif->kf_un.kf_sock.kf_sock_snd_sb_state =
@@ -414,17 +436,16 @@ soo_fill_kinfo(struct file *fp, struct kinfo_file *kif, struct filedesc *fdp)
 		}
 		break;
 	}
-	error = so->so_proto->pr_sockaddr(so, &sa);
+	error = sosockaddr(so, (struct sockaddr *)&ss);
 	if (error == 0 &&
-	    sa->sa_len <= sizeof(kif->kf_un.kf_sock.kf_sa_local)) {
-		bcopy(sa, &kif->kf_un.kf_sock.kf_sa_local, sa->sa_len);
-		free(sa, M_SONAME);
+	    ss.ss_len <= sizeof(kif->kf_un.kf_sock.kf_sa_local)) {
+		bcopy(&ss, &kif->kf_un.kf_sock.kf_sa_local, ss.ss_len);
 	}
-	error = so->so_proto->pr_peeraddr(so, &sa);
+	ss.ss_len = sizeof(ss);
+	error = sopeeraddr(so, (struct sockaddr *)&ss);
 	if (error == 0 &&
-	    sa->sa_len <= sizeof(kif->kf_un.kf_sock.kf_sa_peer)) {
-		bcopy(sa, &kif->kf_un.kf_sock.kf_sa_peer, sa->sa_len);
-		free(sa, M_SONAME);
+	    ss.ss_len <= sizeof(kif->kf_un.kf_sock.kf_sa_peer)) {
+		bcopy(&ss, &kif->kf_un.kf_sock.kf_sa_peer, ss.ss_len);
 	}
 	strncpy(kif->kf_path, so->so_proto->pr_domain->dom_name,
 	    sizeof(kif->kf_path));
@@ -577,7 +598,7 @@ soaio_enqueue(struct task *task)
 }
 
 static void
-soaio_init(void)
+soaio_init(void *dummy __unused)
 {
 
 	soaio_lifetime = AIOD_LIFETIME_DEFAULT;
@@ -646,15 +667,10 @@ retry:
 		error = mac_socket_check_send(fp->f_cred, so);
 		if (error == 0)
 #endif
-			error = sosend(so, NULL, job->uiop, NULL, NULL, flags,
-			    td);
+			error = sousrsend(so, NULL, job->uiop, NULL, flags,
+			    job->userproc);
 		if (td->td_ru.ru_msgsnd != ru_before)
 			job->msgsnd = 1;
-		if (error == EPIPE && (so->so_options & SO_NOSIGPIPE) == 0) {
-			PROC_LOCK(job->userproc);
-			kern_psignal(job->userproc, SIGPIPE);
-			PROC_UNLOCK(job->userproc);
-		}
 	}
 
 	done += cnt - job->uiop->uio_resid;
@@ -806,15 +822,16 @@ soo_aio_cancel(struct kaiocb *job)
 static int
 soo_aio_queue(struct file *fp, struct kaiocb *job)
 {
-	struct socket *so;
+	struct socket *so = fp->f_data;
+
+	return (so->so_proto->pr_aio_queue(so, job));
+}
+
+int
+soaio_queue_generic(struct socket *so, struct kaiocb *job)
+{
 	struct sockbuf *sb;
 	sb_which which;
-	int error;
-
-	so = fp->f_data;
-	error = so->so_proto->pr_aio_queue(so, job);
-	if (error == 0)
-		return (0);
 
 	/* Lock through the socket, since this may be a listening socket. */
 	switch (job->uaiocb.aio_lio_opcode & (LIO_WRITE | LIO_READ)) {

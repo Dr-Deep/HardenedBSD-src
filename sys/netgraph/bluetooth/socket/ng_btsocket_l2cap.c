@@ -3,7 +3,7 @@
  */
 
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2001-2002 Maksim Yevmenkin <m_evmenkin@yahoo.com>
  * All rights reserved.
@@ -30,7 +30,6 @@
  * SUCH DAMAGE.
  *
  * $Id: ng_btsocket_l2cap.c,v 1.16 2003/09/14 23:29:06 max Exp $
- * $FreeBSD$
  */
 
 #include <sys/param.h>
@@ -790,7 +789,7 @@ ng_btsocket_l2cap_process_l2ca_cfg_req_rsp(struct ng_mesg *msg,
 	if (op->result == NG_L2CAP_SUCCESS) {
 		/*
 		 * XXX FIXME Actually set flush and link timeout.
-		 * Set QoS here if required. Resolve conficts (flush_timo). 
+		 * Set QoS here if required. Resolve conflicts (flush_timo). 
 		 * Save incoming MTU (peer's outgoing MTU) and outgoing flow 
 		 * spec.
 		 */
@@ -992,7 +991,7 @@ ng_btsocket_l2cap_process_l2ca_cfg_ind(struct ng_mesg *msg,
 
 	/*
 	 * XXX FIXME Actually set flush and link timeout. Set QoS here if
-	 * required. Resolve conficts (flush_timo). Note outgoing MTU (peer's 
+	 * required. Resolve conflicts (flush_timo). Note outgoing MTU (peer's 
 	 * incoming MTU) and incoming flow spec.
 	 */
 
@@ -1969,20 +1968,6 @@ ng_btsocket_l2cap_close(struct socket *so)
 } /* ng_btsocket_l2cap_close */
 
 /*
- * Accept connection on socket. Nothing to do here, socket must be connected
- * and ready, so just return peer address and be done with it.
- */
-
-int
-ng_btsocket_l2cap_accept(struct socket *so, struct sockaddr **nam)
-{
-	if (ng_btsocket_l2cap_node == NULL) 
-		return (EINVAL);
-
-	return (ng_btsocket_l2cap_peeraddr(so, nam));
-} /* ng_btsocket_l2cap_accept */
-
-/*
  * Create and attach new socket
  */
 
@@ -1999,7 +1984,7 @@ ng_btsocket_l2cap_attach(struct socket *so, int proto, struct thread *td)
 	if (so->so_type != SOCK_SEQPACKET)
 		return (ESOCKTNOSUPPORT);
 
-#if 0 /* XXX sonewconn() calls "pru_attach" with proto == 0 */
+#if 0 /* XXX sonewconn() calls pr_attach() with proto == 0 */
 	if (proto != 0) 
 		if (proto != BLUETOOTH_PROTO_L2CAP)
 			return (EPROTONOSUPPORT);
@@ -2070,7 +2055,7 @@ ng_btsocket_l2cap_attach(struct socket *so, int proto, struct thread *td)
 	 * In the second case we hold ng_btsocket_l2cap_sockets_mtx already.
 	 * So we now need to distinguish between these cases. From reading
 	 * /sys/kern/uipc_socket.c we can find out that sonewconn() calls
-	 * pru_attach with proto == 0 and td == NULL. For now use this fact
+	 * pr_attach() with proto == 0 and td == NULL. For now use this fact
 	 * to figure out if we were called from socket() or from sonewconn().
 	 */
 
@@ -2525,40 +2510,41 @@ out:
 } /* ng_btsocket_listen */
 
 /*
- * Get peer address
+ * Return peer address for getpeername(2) or for accept(2).  For the latter
+ * case no extra work to do here, socket must be connected and ready.
  */
-
 int
-ng_btsocket_l2cap_peeraddr(struct socket *so, struct sockaddr **nam)
+ng_btsocket_l2cap_peeraddr(struct socket *so, struct sockaddr *sa)
 {
 	ng_btsocket_l2cap_pcb_p	pcb = so2l2cap_pcb(so);
-	struct sockaddr_l2cap	sa;
+	struct sockaddr_l2cap *l2cap = (struct sockaddr_l2cap *)sa;
 
 	if (pcb == NULL)
 		return (EINVAL);
 	if (ng_btsocket_l2cap_node == NULL) 
 		return (EINVAL);
 
-	bcopy(&pcb->dst, &sa.l2cap_bdaddr, sizeof(sa.l2cap_bdaddr));
-	sa.l2cap_psm = htole16(pcb->psm);
-	sa.l2cap_len = sizeof(sa);
-	sa.l2cap_family = AF_BLUETOOTH;
+	*l2cap = (struct sockaddr_l2cap ){
+		.l2cap_len = sizeof(struct sockaddr_l2cap),
+		.l2cap_family = AF_BLUETOOTH,
+		.l2cap_psm = htole16(pcb->psm),
+	};
+	bcopy(&pcb->dst, &l2cap->l2cap_bdaddr, sizeof(l2cap->l2cap_bdaddr));
 	switch(pcb->idtype){
 	case NG_L2CAP_L2CA_IDTYPE_ATT:
-		sa.l2cap_cid = NG_L2CAP_ATT_CID;
+		l2cap->l2cap_cid = NG_L2CAP_ATT_CID;
 		break;
 	case NG_L2CAP_L2CA_IDTYPE_SMP:
-		sa.l2cap_cid = NG_L2CAP_SMP_CID;
+		l2cap->l2cap_cid = NG_L2CAP_SMP_CID;
 		break;
 	default:
-		sa.l2cap_cid = 0;
+		l2cap->l2cap_cid = 0;
 		break;
 	}
-	sa.l2cap_bdaddr_type = pcb->dsttype;
-	*nam = sodupsockaddr((struct sockaddr *) &sa, M_NOWAIT);
+	l2cap->l2cap_bdaddr_type = pcb->dsttype;
 
-	return ((*nam == NULL)? ENOMEM : 0);
-} /* ng_btsocket_l2cap_peeraddr */
+	return (0);
+}
 
 /*
  * Send data to socket
@@ -2691,29 +2677,27 @@ ng_btsocket_l2cap_send2(ng_btsocket_l2cap_pcb_p pcb)
 /*
  * Get socket address
  */
-
 int
-ng_btsocket_l2cap_sockaddr(struct socket *so, struct sockaddr **nam)
+ng_btsocket_l2cap_sockaddr(struct socket *so, struct sockaddr *sa)
 {
 	ng_btsocket_l2cap_pcb_p	pcb = so2l2cap_pcb(so);
-	struct sockaddr_l2cap	sa;
+	struct sockaddr_l2cap *l2cap = (struct sockaddr_l2cap *)sa;
 
 	if (pcb == NULL)
 		return (EINVAL);
 	if (ng_btsocket_l2cap_node == NULL) 
 		return (EINVAL);
 
-	bcopy(&pcb->src, &sa.l2cap_bdaddr, sizeof(sa.l2cap_bdaddr));
-	sa.l2cap_psm = htole16(pcb->psm);
-	sa.l2cap_len = sizeof(sa);
-	sa.l2cap_family = AF_BLUETOOTH;
-	sa.l2cap_cid = 0;
-	sa.l2cap_bdaddr_type = pcb->srctype;
+	*l2cap = (struct sockaddr_l2cap ){
+		.l2cap_len = sizeof(struct sockaddr_l2cap),
+		.l2cap_family = AF_BLUETOOTH,
+		.l2cap_psm = htole16(pcb->psm),
+		.l2cap_bdaddr_type = pcb->srctype,
+	};
+	bcopy(&pcb->src, &l2cap->l2cap_bdaddr, sizeof(l2cap->l2cap_bdaddr));
 
-	*nam = sodupsockaddr((struct sockaddr *) &sa, M_NOWAIT);
-
-	return ((*nam == NULL)? ENOMEM : 0);
-} /* ng_btsocket_l2cap_sockaddr */
+	return (0);
+}
 
 /*****************************************************************************
  *****************************************************************************

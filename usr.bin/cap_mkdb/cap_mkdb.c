@@ -29,21 +29,6 @@
  * SUCH DAMAGE.
  */
 
-#ifndef lint
-static const char copyright[] =
-"@(#) Copyright (c) 1992, 1993\n\
-	The Regents of the University of California.  All rights reserved.\n";
-#endif
-
-#if 0
-#ifndef lint
-static char sccsid[] = "@(#)cap_mkdb.c	8.2 (Berkeley) 4/27/95";
-#endif
-#endif
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/stat.h>
 
@@ -132,6 +117,7 @@ main(int argc, char *argv[])
 
 	if (capdbp->close(capdbp) < 0)
 		err(1, "%s", capname);
+	free(capname);
 	capname = NULL;
 	exit(0);
 }
@@ -166,7 +152,7 @@ db_build(char **ifiles)
 
 	data.data = NULL;
 	key.data = NULL;
-	for (reccnt = 0, bplen = 0; (st = cgetnext(&bp, ifiles)) > 0;) {
+	for (reccnt = 0, bplen = 0; (st = cgetnext(&bp, ifiles)) > 0; free(bp)) {
 
 		/*
 		 * Allocate enough memory to store record, terminating

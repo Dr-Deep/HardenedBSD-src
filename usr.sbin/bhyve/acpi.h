@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2012 NetApp, Inc.
  * All rights reserved.
@@ -24,12 +24,12 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _ACPI_H_
 #define _ACPI_H_
+
+#include "acpi_device.h"
 
 #define	SCI_INT			9
 
@@ -55,7 +55,9 @@ struct vmctx;
 
 int	acpi_build(struct vmctx *ctx, int ncpu);
 void	acpi_raise_gpe(struct vmctx *ctx, unsigned bit);
-void	dsdt_line(const char *fmt, ...);
+int 	acpi_tables_add_device(const struct acpi_device *const dev);
+int	acpi_add_vcpu_affinity(int vcpuid, int domain);
+void	dsdt_line(const char *fmt, ...) __printflike(1, 2);
 void	dsdt_fixed_ioport(uint16_t iobase, uint16_t length);
 void	dsdt_fixed_irq(uint8_t irq);
 void	dsdt_fixed_mem32(uint32_t base, uint32_t length);

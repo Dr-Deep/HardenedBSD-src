@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (C) 2020 Justin Hibbits
  * Copyright (C) 2007-2009 Semihalf, Rafal Jaworowski <raj@semihalf.com>
@@ -46,8 +46,6 @@
   */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_ddb.h"
 #include "opt_kstack_pages.h"
 
@@ -118,7 +116,6 @@ static unsigned int kernel_ptbls;	/* Number of KVA ptbls. */
 #define	VM_MAPDEV_BASE	((vm_offset_t)VM_MAXUSER_ADDRESS + PAGE_SIZE)
 
 static void tid_flush(tlbtid_t tid);
-static unsigned long ilog2(unsigned long);
 
 /**************************************************************************/
 /* Page table management */
@@ -130,13 +127,13 @@ static struct ptbl_buf *ptbl_buf_alloc(void);
 static void ptbl_buf_free(struct ptbl_buf *);
 static void ptbl_free_pmap_ptbl(pmap_t, pte_t *);
 
-static pte_t *ptbl_alloc(pmap_t, unsigned int, boolean_t);
+static pte_t *ptbl_alloc(pmap_t, unsigned int, bool);
 static void ptbl_free(pmap_t, unsigned int);
 static void ptbl_hold(pmap_t, unsigned int);
 static int ptbl_unhold(pmap_t, unsigned int);
 
 static vm_paddr_t pte_vatopa(pmap_t, vm_offset_t);
-static int pte_enter(pmap_t, vm_page_t, vm_offset_t, uint32_t, boolean_t);
+static int pte_enter(pmap_t, vm_page_t, vm_offset_t, uint32_t, bool);
 static int pte_remove(pmap_t, vm_offset_t, uint8_t);
 static pte_t *pte_find(pmap_t, vm_offset_t);
 
@@ -237,7 +234,7 @@ ptbl_free_pmap_ptbl(pmap_t pmap, pte_t *ptbl)
 
 /* Allocate page table. */
 static pte_t *
-ptbl_alloc(pmap_t pmap, unsigned int pdir_idx, boolean_t nosleep)
+ptbl_alloc(pmap_t pmap, unsigned int pdir_idx, bool nosleep)
 {
 	vm_page_t mtbl[PTBL_PAGES];
 	vm_page_t m;
@@ -500,7 +497,7 @@ pte_remove(pmap_t pmap, vm_offset_t va, uint8_t flags)
  */
 static int
 pte_enter(pmap_t pmap, vm_page_t m, vm_offset_t va, uint32_t flags,
-    boolean_t nosleep)
+    bool nosleep)
 {
 	unsigned int pdir_idx = PDIR_IDX(va);
 	unsigned int ptbl_idx = PTBL_IDX(va);
@@ -762,7 +759,7 @@ mmu_booke_sync_icache(pmap_t pm, vm_offset_t va, vm_size_t sz)
 				m = PHYS_TO_VM_PAGE(pa);
 				PMAP_LOCK(pmap);
 				pte_enter(pmap, m, addr,
-				    PTE_SR | PTE_VALID, FALSE);
+				    PTE_SR | PTE_VALID, false);
 				__syncicache((void *)(addr + (va & PAGE_MASK)),
 				    sync_sz);
 				pte_remove(pmap, addr, PTBL_UNHOLD);
@@ -806,15 +803,14 @@ mmu_booke_zero_page_area(vm_page_t m, int off, int size)
 static void
 mmu_booke_zero_page(vm_page_t m)
 {
-	vm_offset_t off, va;
+	vm_offset_t va;
 
 	va = zero_page_va;
 	mtx_lock(&zero_page_mutex);
 
 	mmu_booke_kenter(va, VM_PAGE_TO_PHYS(m));
 
-	for (off = 0; off < PAGE_SIZE; off += cacheline_size)
-		__asm __volatile("dcbz 0,%0" :: "r"(va + off));
+	bzero((void *)va, PAGE_SIZE);
 
 	mmu_booke_kremove(va);
 
@@ -875,11 +871,11 @@ mmu_booke_copy_pages(vm_page_t *ma, vm_offset_t a_offset,
 	mtx_unlock(&copy_page_mutex);
 }
 
-static vm_offset_t
+static void *
 mmu_booke_quick_enter_page(vm_page_t m)
 {
 	vm_paddr_t paddr;
-	vm_offset_t qaddr;
+	void *qaddr;
 	uint32_t flags;
 	pte_t *pte;
 
@@ -892,7 +888,7 @@ mmu_booke_quick_enter_page(vm_page_t m)
 	critical_enter();
 	qaddr = PCPU_GET(qmap_addr);
 
-	pte = pte_find(kernel_pmap, qaddr);
+	pte = pte_find(kernel_pmap, (vm_offset_t)qaddr);
 
 	KASSERT(*pte == 0, ("mmu_booke_quick_enter_page: PTE busy"));
 
@@ -901,24 +897,25 @@ mmu_booke_quick_enter_page(vm_page_t m)
  	 * not be present in other TLBs.  Is there a better instruction
 	 * sequence to use? Or just forget it & use mmu_booke_kenter()... 
 	 */
-	__asm __volatile("tlbivax 0, %0" :: "r"(qaddr & MAS2_EPN_MASK));
+	__asm __volatile("tlbivax 0, %0" ::
+			 "r" ((vm_offset_t)qaddr & MAS2_EPN_MASK));
 	__asm __volatile("isync; msync");
 
 	*pte = PTE_RPN_FROM_PA(paddr) | flags;
 
 	/* Flush the real memory from the instruction cache. */
 	if ((flags & (PTE_I | PTE_G)) == 0)
-		__syncicache((void *)qaddr, PAGE_SIZE);
+		__syncicache(qaddr, PAGE_SIZE);
 
 	return (qaddr);
 }
 
 static void
-mmu_booke_quick_remove_page(vm_offset_t addr)
+mmu_booke_quick_remove_page(void *addr)
 {
 	pte_t *pte;
 
-	pte = pte_find(kernel_pmap, addr);
+	pte = pte_find(kernel_pmap, (vm_offset_t)addr);
 
 	KASSERT(PCPU_GET(qmap_addr) == addr,
 	    ("mmu_booke_quick_remove_page: invalid address"));
@@ -932,18 +929,6 @@ mmu_booke_quick_remove_page(vm_offset_t addr)
 /**************************************************************************/
 /* TID handling */
 /**************************************************************************/
-
-/*
- * Return the largest uint value log such that 2^log <= num.
- */
-static unsigned long
-ilog2(unsigned long num)
-{
-	long lz;
-
-	__asm ("cntlzw %0, %1" : "=r" (lz) : "r" (num));
-	return (31 - lz);
-}
 
 /*
  * Invalidate all TLB0 entries which match the given TID. Note this is

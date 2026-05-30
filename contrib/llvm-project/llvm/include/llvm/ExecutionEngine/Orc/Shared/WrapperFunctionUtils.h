@@ -503,8 +503,10 @@ public:
 
       SPSInputBuffer IB(R.data(), R.size());
       if (auto Err = detail::ResultDeserializer<SPSRetTagT, RetT>::deserialize(
-              RetVal, R.data(), R.size()))
+              RetVal, R.data(), R.size())) {
         SDR(std::move(Err), std::move(RetVal));
+        return;
+      }
 
       SDR(Error::success(), std::move(RetVal));
     };
@@ -525,7 +527,7 @@ public:
   /// Handle a call to an async wrapper function.
   template <typename HandlerT, typename SendResultT>
   static void handleAsync(const char *ArgData, size_t ArgSize,
-                          HandlerT &&Handler, SendResultT &&SendResult) {
+                          SendResultT &&SendResult, HandlerT &&Handler) {
     using WFAHH = detail::WrapperFunctionAsyncHandlerHelper<
         std::remove_reference_t<HandlerT>, ResultSerializer, SPSTagTs...>;
     WFAHH::applyAsync(std::forward<HandlerT>(Handler),
@@ -584,12 +586,12 @@ public:
 ///   @code{.cpp}
 ///   class MyClass {
 ///   public:
-///     void myMethod(uint32_t, bool) { ... }
+///     std::string myMethod(uint32_t, bool) { ... }
 ///   };
 ///
 ///   // SPS Method signature -- note MyClass object address as first argument.
 ///   using SPSMyMethodWrapperSignature =
-///     SPSTuple<SPSExecutorAddr, uint32_t, bool>;
+///     SPSString(SPSExecutorAddr, uint32_t, bool);
 ///
 ///   WrapperFunctionResult
 ///   myMethodCallWrapper(const char *ArgData, size_t ArgSize) {
@@ -636,7 +638,8 @@ public:
                                               const ArgTs &...Args) {
     ArgDataBufferType ArgData;
     ArgData.resize(SPSSerializer::size(Args...));
-    SPSOutputBuffer OB(&ArgData[0], ArgData.size());
+    SPSOutputBuffer OB(ArgData.empty() ? nullptr : ArgData.data(),
+                       ArgData.size());
     if (SPSSerializer::serialize(OB, Args...))
       return WrapperFunctionCall(FnAddr, std::move(ArgData));
     return make_error<StringError>("Cannot serialize arguments for "

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -211,7 +212,7 @@ aes_alloc_keysched(size_t *size, int kmflag)
 {
 	aes_key_t *keysched;
 
-	keysched = (aes_key_t *)kmem_alloc(sizeof (aes_key_t), kmflag);
+	keysched = kmem_alloc(sizeof (aes_key_t), kmflag);
 	if (keysched != NULL) {
 		*size = sizeof (aes_key_t);
 		return (keysched);
@@ -230,7 +231,7 @@ static const aes_impl_ops_t *aes_all_impl[] = {
 #if defined(__x86_64)
 	&aes_x86_64_impl,
 #endif
-#if defined(__x86_64) && defined(HAVE_AES)
+#if defined(__x86_64) && HAVE_SIMD(AES)
 	&aes_aesni_impl,
 #endif
 };
@@ -314,7 +315,7 @@ aes_impl_init(void)
 	 * hardware accelerated version is the fastest.
 	 */
 #if defined(__x86_64)
-#if defined(HAVE_AES)
+#if HAVE_SIMD(AES)
 	if (aes_aesni_impl.is_supported()) {
 		memcpy(&aes_fastest_impl, &aes_aesni_impl,
 		    sizeof (aes_fastest_impl));
@@ -419,18 +420,18 @@ icp_aes_impl_get(char *buffer, zfs_kernel_param_t *kp)
 	char *fmt;
 	const uint32_t impl = AES_IMPL_READ(icp_aes_impl);
 
-	ASSERT(aes_impl_initialized);
-
 	/* list mandatory options */
 	for (i = 0; i < ARRAY_SIZE(aes_impl_opts); i++) {
 		fmt = (impl == aes_impl_opts[i].sel) ? "[%s] " : "%s ";
-		cnt += sprintf(buffer + cnt, fmt, aes_impl_opts[i].name);
+		cnt += kmem_scnprintf(buffer + cnt, PAGE_SIZE - cnt, fmt,
+		    aes_impl_opts[i].name);
 	}
 
 	/* list all supported implementations */
 	for (i = 0; i < aes_supp_impl_cnt; i++) {
 		fmt = (i == impl) ? "[%s] " : "%s ";
-		cnt += sprintf(buffer + cnt, fmt, aes_supp_impl[i]->name);
+		cnt += kmem_scnprintf(buffer + cnt, PAGE_SIZE - cnt, fmt,
+		    aes_supp_impl[i]->name);
 	}
 
 	return (cnt);

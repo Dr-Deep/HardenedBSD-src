@@ -25,7 +25,6 @@
  */
 
 #include "test.h"
-__FBSDID("$FreeBSD: head/lib/libarchive/test/test_write_compress_gzip.c 191183 2009-04-17 01:06:31Z kientzle $");
 
 /*
  * A basic exercise of gzip reading and writing.
@@ -45,12 +44,12 @@ DEFINE_TEST(test_write_filter_gzip)
 	int i, r, use_prog = 0;
 
 	buffsize = 2000000;
-	assert(NULL != (buff = (char *)malloc(buffsize)));
+	assert(NULL != (buff = malloc(buffsize)));
 	if (buff == NULL)
 		return;
 
 	datasize = 10000;
-	assert(NULL != (data = (char *)malloc(datasize)));
+	assert(NULL != (data = malloc(datasize)));
 	if (data == NULL) {
 		free(buff);
 		return;
@@ -85,7 +84,7 @@ DEFINE_TEST(test_write_filter_gzip)
 	archive_entry_set_filetype(ae, AE_IFREG);
 	archive_entry_set_size(ae, datasize);
 	for (i = 0; i < 100; i++) {
-		sprintf(path, "file%03d", i);
+		snprintf(path, sizeof(path), "file%03d", i);
 		archive_entry_copy_pathname(ae, path);
 		assertEqualIntA(a, ARCHIVE_OK, archive_write_header(a, ae));
 		assertA(datasize
@@ -113,7 +112,7 @@ DEFINE_TEST(test_write_filter_gzip)
 		assertEqualIntA(a, ARCHIVE_OK,
 		    archive_read_open_memory(a, buff, used1));
 		for (i = 0; i < 100; i++) {
-			sprintf(path, "file%03d", i);
+			snprintf(path, sizeof(path), "file%03d", i);
 			if (!assertEqualInt(ARCHIVE_OK,
 				archive_read_next_header(a, &ae)))
 				break;
@@ -146,9 +145,11 @@ DEFINE_TEST(test_write_filter_gzip)
 	    archive_write_set_filter_option(a, NULL, "compression-level", "99"));
 	assertEqualIntA(a, ARCHIVE_OK,
 	    archive_write_set_options(a, "gzip:compression-level=9"));
+	assertEqualIntA(a, ARCHIVE_OK,
+		archive_write_set_options(a, "gzip:original-filename=testorgfilename"));
 	assertEqualIntA(a, ARCHIVE_OK, archive_write_open_memory(a, buff, buffsize, &used2));
 	for (i = 0; i < 100; i++) {
-		sprintf(path, "file%03d", i);
+		snprintf(path, sizeof(path), "file%03d", i);
 		assert((ae = archive_entry_new()) != NULL);
 		archive_entry_copy_pathname(ae, path);
 		archive_entry_set_size(ae, datasize);
@@ -165,8 +166,15 @@ DEFINE_TEST(test_write_filter_gzip)
 	assertEqualInt(rbuff[0], 0x1f);
 	assertEqualInt(rbuff[1], 0x8b);
 	assertEqualInt(rbuff[2], 0x08);
-	assertEqualInt(rbuff[3], 0x00);
-	assertEqualInt(rbuff[8], 2); /* RFC 1952 flag for compression level 9 */
+	/* RFC 1952 flag for compression level 9 */
+	assertEqualInt(rbuff[8], 2);
+	/* External gzip program might not save filename */
+	if (!use_prog || rbuff[3] == 0x08) {
+		assertEqualInt(rbuff[3], 0x08);
+		assertEqualString((const char*)rbuff+10, "testorgfilename");
+	} else {
+		assertEqualInt(rbuff[3], 0x00);
+	}
 
 	/* Curiously, this test fails; the test data above compresses
 	 * better at default compression than at level 9. */
@@ -187,7 +195,7 @@ DEFINE_TEST(test_write_filter_gzip)
 		assertEqualIntA(a, ARCHIVE_OK,
 		    archive_read_open_memory(a, buff, used2));
 		for (i = 0; i < 100; i++) {
-			sprintf(path, "file%03d", i);
+			snprintf(path, sizeof(path), "file%03d", i);
 			if (!assertEqualInt(ARCHIVE_OK,
 				archive_read_next_header(a, &ae)))
 				break;
@@ -212,7 +220,7 @@ DEFINE_TEST(test_write_filter_gzip)
 	assertEqualIntA(a, ARCHIVE_OK,
 	    archive_write_open_memory(a, buff, buffsize, &used2));
 	for (i = 0; i < 100; i++) {
-		sprintf(path, "file%03d", i);
+		snprintf(path, sizeof(path), "file%03d", i);
 		assert((ae = archive_entry_new()) != NULL);
 		archive_entry_copy_pathname(ae, path);
 		archive_entry_set_size(ae, datasize);
@@ -249,7 +257,7 @@ DEFINE_TEST(test_write_filter_gzip)
 		assertEqualIntA(a, ARCHIVE_OK,
 		    archive_read_open_memory(a, buff, used2));
 		for (i = 0; i < 100; i++) {
-			sprintf(path, "file%03d", i);
+			snprintf(path, sizeof(path), "file%03d", i);
 			if (!assertEqualInt(ARCHIVE_OK,
 				archive_read_next_header(a, &ae)))
 				break;

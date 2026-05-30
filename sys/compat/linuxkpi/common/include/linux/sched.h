@@ -25,8 +25,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #ifndef	_LINUXKPI_LINUX_SCHED_H_
 #define	_LINUXKPI_LINUX_SCHED_H_
@@ -44,15 +42,18 @@
 #include <linux/completion.h>
 #include <linux/hrtimer.h>
 #include <linux/mm_types.h>
+#include <linux/nodemask.h>
 #include <linux/pid.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/spinlock.h>
 #include <linux/time.h>
 
+#include <linux/sched/mm.h>
+
 #include <asm/atomic.h>
 
-#define	MAX_SCHEDULE_TIMEOUT	INT_MAX
+#define	MAX_SCHEDULE_TIMEOUT	LONG_MAX
 
 #define	TASK_RUNNING		0x0000
 #define	TASK_INTERRUPTIBLE	0x0001
@@ -159,7 +160,7 @@ void linux_send_sig(int signo, struct task_struct *task);
 	linux_send_sig(signo, task);			\
 } while (0)
 
-int linux_schedule_timeout(int timeout);
+long linux_schedule_timeout(long timeout);
 
 static inline void
 linux_schedule_save_interrupt_value(struct task_struct *task, int value)

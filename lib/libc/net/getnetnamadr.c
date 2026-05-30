@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1994, Garrett Wollman
  *
@@ -24,9 +24,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include "namespace.h"
 #include "reentrant.h"
@@ -252,9 +249,9 @@ net_unmarshal_func(char *buffer, size_t buffer_size, void *retval, va_list ap,
 
 	orig_buf = (char *)_ALIGN(orig_buf);
 	memcpy(orig_buf, buffer + sizeof(struct netent) + sizeof(char *) +
-	    _ALIGN(p) - (size_t)p,
+	    __nss_buf_misalignment(p),
 	    buffer_size - sizeof(struct netent) - sizeof(char *) -
-	    _ALIGN(p) + (size_t)p);
+	    __nss_buf_misalignment(p));
 	p = (char *)_ALIGN(p);
 
 	NS_APPLY_OFFSET(ne->n_name, orig_buf, p, char *);

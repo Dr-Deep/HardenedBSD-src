@@ -22,8 +22,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef R12A_VAR_H
@@ -101,6 +99,7 @@ struct r12a_softc {
 	int		ac_usb_dma_size;
 	int		ac_usb_dma_time;
 	int		ampdu_max_time;
+	int		ampdu_max_size;
 };
 #define	R12A_SOFTC(_sc)	((struct r12a_softc *)((_sc)->sc_priv))
 

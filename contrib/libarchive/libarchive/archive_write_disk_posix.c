@@ -26,7 +26,6 @@
  */
 
 #include "archive_platform.h"
-__FBSDID("$FreeBSD$");
 
 #if !defined(_WIN32) || defined(__CYGWIN__)
 
@@ -397,6 +396,7 @@ static int	set_times_from_entry(struct archive_write_disk *);
 static struct fixup_entry *sort_dir_list(struct fixup_entry *p);
 static ssize_t	write_data_block(struct archive_write_disk *,
 		    const char *, size_t);
+static void close_file_descriptor(struct archive_write_disk *);
 
 static int	_archive_write_disk_close(struct archive *);
 static int	_archive_write_disk_free(struct archive *);
@@ -412,12 +412,14 @@ static ssize_t	_archive_write_disk_data_block(struct archive *, const void *,
 static int
 la_mktemp(struct archive_write_disk *a)
 {
+	struct archive_string *tmp = &a->_tmpname_data;
 	int oerrno, fd;
 	mode_t mode;
 
-	archive_string_empty(&a->_tmpname_data);
-	archive_string_sprintf(&a->_tmpname_data, "%s.XXXXXX", a->name);
-	a->tmpname = a->_tmpname_data.s;
+	archive_strcpy(tmp, a->name);
+	archive_string_dirname(tmp);
+	archive_strcat(tmp, "/tar.XXXXXXXX");
+	a->tmpname = tmp->s;
 
 	fd = __archive_mkstemp(a->tmpname);
 	if (fd == -1)
@@ -478,9 +480,11 @@ la_verify_filetype(mode_t mode, __LA_MODE_T filetype) {
 	case AE_IFLNK:
 		ret = (S_ISLNK(mode));
 		break;
+#ifdef S_ISSOCK
 	case AE_IFSOCK:
 		ret = (S_ISSOCK(mode));
 		break;
+#endif
 	case AE_IFCHR:
 		ret = (S_ISCHR(mode));
 		break;
@@ -514,7 +518,12 @@ lazy_stat(struct archive_write_disk *a)
 	 * XXX At this point, symlinks should not be hit, otherwise
 	 * XXX a race occurred.  Do we want to check explicitly for that?
 	 */
-	if (lstat(a->name, &a->st) == 0) {
+#ifdef HAVE_LSTAT
+	if (lstat(a->name, &a->st) == 0)
+#else
+	if (la_stat(a->name, &a->st) == 0)
+#endif
+	{
 		a->pst = &a->st;
 		return (ARCHIVE_OK);
 	}
@@ -1605,12 +1614,12 @@ hfs_write_data_block(struct archive_write_disk *a, const char *buff,
 			    "Seek failed");
 			return (ARCHIVE_FATAL);
 		} else if (a->offset > a->fd_offset) {
-			int64_t skip = a->offset - a->fd_offset;
+			uint64_t skip = a->offset - a->fd_offset;
 			char nullblock[1024];
 
 			memset(nullblock, 0, sizeof(nullblock));
 			while (skip > 0) {
-				if (skip > (int64_t)sizeof(nullblock))
+				if (skip > sizeof(nullblock))
 					bytes_written = hfs_write_decmpfs_block(
 					    a, nullblock, sizeof(nullblock));
 				else
@@ -1725,8 +1734,10 @@ _archive_write_disk_finish_entry(struct archive *_a)
 			else
 				r = hfs_write_data_block(
 				    a, null_d, a->file_remaining_bytes);
-			if (r < 0)
+			if (r < 0) {
+				close_file_descriptor(a);
 				return ((int)r);
+			}
 		}
 #endif
 	} else {
@@ -1735,6 +1746,7 @@ _archive_write_disk_finish_entry(struct archive *_a)
 		    a->filesize == 0) {
 			archive_set_error(&a->archive, errno,
 			    "File size could not be restored");
+			close_file_descriptor(a);
 			return (ARCHIVE_FAILED);
 		}
 #endif
@@ -1744,8 +1756,10 @@ _archive_write_disk_finish_entry(struct archive *_a)
 		 * to see what happened.
 		 */
 		a->pst = NULL;
-		if ((ret = lazy_stat(a)) != ARCHIVE_OK)
-			return (ret);
+        if ((ret = lazy_stat(a)) != ARCHIVE_OK) {
+            close_file_descriptor(a);
+            return (ret);
+        }
 		/* We can use lseek()/write() to extend the file if
 		 * ftruncate didn't work or isn't available. */
 		if (a->st.st_size < a->filesize) {
@@ -1753,11 +1767,13 @@ _archive_write_disk_finish_entry(struct archive *_a)
 			if (lseek(a->fd, a->filesize - 1, SEEK_SET) < 0) {
 				archive_set_error(&a->archive, errno,
 				    "Seek failed");
+				close_file_descriptor(a);
 				return (ARCHIVE_FATAL);
 			}
 			if (write(a->fd, &nul, 1) < 0) {
 				archive_set_error(&a->archive, errno,
 				    "Write to restore size failed");
+				close_file_descriptor(a);
 				return (ARCHIVE_FATAL);
 			}
 			a->pst = NULL;
@@ -1959,7 +1975,7 @@ archive_write_disk_gid(struct archive *_a, const char *name, la_int64_t id)
                return (a->lookup_gid)(a->lookup_gid_data, name, id);
        return (id);
 }
- 
+
 int64_t
 archive_write_disk_uid(struct archive *_a, const char *name, la_int64_t id)
 {
@@ -1979,7 +1995,7 @@ archive_write_disk_new(void)
 {
 	struct archive_write_disk *a;
 
-	a = (struct archive_write_disk *)calloc(1, sizeof(*a));
+	a = calloc(1, sizeof(*a));
 	if (a == NULL)
 		return (NULL);
 	a->archive.magic = ARCHIVE_WRITE_DISK_MAGIC;
@@ -1996,6 +2012,8 @@ archive_write_disk_new(void)
 		free(a);
 		return (NULL);
 	}
+	a->path_safe.s[0] = 0;
+
 #ifdef HAVE_ZLIB_H
 	a->decmpfs_compression_level = 5;
 #endif
@@ -2101,7 +2119,7 @@ restore_entry(struct archive_write_disk *a)
 
 	if ((en == ENOENT) && (archive_entry_hardlink(a->entry) != NULL)) {
 		archive_set_error(&a->archive, en,
-		    "Hard-link target '%s' does not exist.",
+		    "Hard-link target '%s' does not exist",
 		    archive_entry_hardlink(a->entry));
 		return (ARCHIVE_FAILED);
 	}
@@ -2152,7 +2170,11 @@ restore_entry(struct archive_write_disk *a)
 		 * then don't follow it.
 		 */
 		if (r != 0 || !S_ISDIR(a->mode))
+#ifdef HAVE_LSTAT
 			r = lstat(a->name, &a->st);
+#else
+			r = la_stat(a->name, &a->st);
+#endif
 		if (r != 0) {
 			archive_set_error(&a->archive, errno,
 			    "Can't stat existing object");
@@ -2184,7 +2206,7 @@ restore_entry(struct archive_write_disk *a)
 				(void)clear_nochange_fflags(a);
 
 			if ((a->flags & ARCHIVE_EXTRACT_SAFE_WRITES) &&
-			    S_ISREG(a->st.st_mode)) {
+			    S_ISREG(a->mode)) {
 				/* Use a temporary file to extract */
 				if ((a->fd = la_mktemp(a)) == -1) {
 					archive_set_error(&a->archive, errno,
@@ -2384,7 +2406,7 @@ create_filesystem_object(struct archive_write_disk *a)
 	 */
 	mode = final_mode & 0777 & ~a->user_umask;
 
-	/* 
+	/*
 	 * Always create writable such that [f]setxattr() works if we're not
 	 * root.
 	 */
@@ -2548,7 +2570,12 @@ _archive_write_disk_close(struct archive *_a)
 					goto skip_fixup_entry;
 				} else
 #endif
-				if (lstat(p->name, &st) != 0 ||
+				if (
+#ifdef HAVE_LSTAT
+					lstat(p->name, &st) != 0 ||
+#else
+					la_stat(p->name, &st) != 0 ||
+#endif
 				    la_verify_filetype(st.st_mode,
 				    p->filetype) == 0) {
 					goto skip_fixup_entry;
@@ -2563,7 +2590,12 @@ _archive_write_disk_close(struct archive *_a)
 				goto skip_fixup_entry;
 			} else
 #endif
-			if (lstat(p->name, &st) != 0 ||
+			if (
+#ifdef HAVE_LSTAT
+				lstat(p->name, &st) != 0 ||
+#else
+				la_stat(p->name, &st) != 0 ||
+#endif
 			    la_verify_filetype(st.st_mode,
 			    p->filetype) == 0) {
 				goto skip_fixup_entry;
@@ -2730,7 +2762,7 @@ new_fixup(struct archive_write_disk *a, const char *pathname)
 {
 	struct fixup_entry *fe;
 
-	fe = (struct fixup_entry *)calloc(1, sizeof(struct fixup_entry));
+	fe = calloc(1, sizeof(struct fixup_entry));
 	if (fe == NULL) {
 		archive_set_error(&a->archive, ENOMEM,
 		    "Can't allocate memory for a fixup");
@@ -2783,8 +2815,8 @@ check_symlinks_fsobj(char *path, int *a_eno, struct archive_string *a_estr,
     !(defined(HAVE_OPENAT) && defined(HAVE_FSTATAT) && defined(HAVE_UNLINKAT))
 	/* Platform doesn't have lstat, so we can't look for symlinks. */
 	(void)path; /* UNUSED */
-	(void)error_number; /* UNUSED */
-	(void)error_string; /* UNUSED */
+	(void)a_eno; /* UNUSED */
+	(void)a_estr; /* UNUSED */
 	(void)flags; /* UNUSED */
 	(void)checking_linkname; /* UNUSED */
 	return (ARCHIVE_OK);
@@ -2793,7 +2825,7 @@ check_symlinks_fsobj(char *path, int *a_eno, struct archive_string *a_estr,
 	char *tail;
 	char *head;
 	int last;
-	char c;
+	char c = '\0';
 	int r;
 	struct stat st;
 	int chdir_fd;
@@ -2857,8 +2889,10 @@ check_symlinks_fsobj(char *path, int *a_eno, struct archive_string *a_estr,
 		/* Check that we haven't hit a symlink. */
 #if defined(HAVE_OPENAT) && defined(HAVE_FSTATAT) && defined(HAVE_UNLINKAT)
 		r = fstatat(chdir_fd, head, &st, AT_SYMLINK_NOFOLLOW);
-#else
+#elif defined(HAVE_LSTAT)
 		r = lstat(head, &st);
+#else
+		r = la_stat(head, &st);
 #endif
 		if (r != 0) {
 			tail[0] = c;
@@ -2990,7 +3024,7 @@ check_symlinks_fsobj(char *path, int *a_eno, struct archive_string *a_estr,
 				/*
 				 * We are not the last element and we want to
 				 * follow symlinks if they are a directory.
-				 * 
+				 *
 				 * This is needed to extract hardlinks over
 				 * symlinks.
 				 */
@@ -3401,7 +3435,7 @@ create_dir(struct archive_write_disk *a, char *path)
 			le = new_fixup(a, path);
 			if (le == NULL)
 				return (ARCHIVE_FATAL);
-			le->fixup |=TODO_MODE_BASE;
+			le->fixup |= TODO_MODE_BASE;
 			le->mode = mode_final;
 		}
 		return (ARCHIVE_OK);
@@ -3413,8 +3447,17 @@ create_dir(struct archive_write_disk *a, char *path)
 	 * don't add it to the fixup list here, as it's already been
 	 * added.
 	 */
-	if (la_stat(path, &st) == 0 && S_ISDIR(st.st_mode))
-		return (ARCHIVE_OK);
+	if (errno == EEXIST) {
+		if (la_stat(path, &st) == 0) {
+			if (S_ISDIR(st.st_mode))
+				return (ARCHIVE_OK);
+			/* path exists but is not a directory */
+			errno = ENOTDIR;
+		} else {
+			/* restore original errno */
+			errno = EEXIST;
+		}
+	}
 
 	archive_set_error(&a->archive, errno, "Failed to create dir '%s'",
 	    path);
@@ -3556,7 +3599,9 @@ set_time(int fd, int mode, const char *name,
 	(void)fd; /* UNUSED */
 	(void)mode; /* UNUSED */
 	(void)name; /* UNUSED */
+	(void)atime; /* UNUSED */
 	(void)atime_nsec; /* UNUSED */
+	(void)mtime; /* UNUSED */
 	(void)mtime_nsec; /* UNUSED */
 	return (ARCHIVE_WARN);
 #endif
@@ -3573,7 +3618,7 @@ set_time_tru64(int fd, int mode, const char *name,
 	tstamp.atime.tv_sec = atime;
 	tstamp.mtime.tv_sec = mtime;
 	tstamp.ctime.tv_sec = ctime;
-#if defined (__hpux) && defined (__ia64)
+#if defined (__hpux) && ( defined (__ia64) || defined (__hppa) )
 	tstamp.atime.tv_nsec = atime_nsec;
 	tstamp.mtime.tv_nsec = mtime_nsec;
 	tstamp.ctime.tv_nsec = ctime_nsec;
@@ -3756,7 +3801,7 @@ set_mode(struct archive_write_disk *a, int mode)
 		 * permissions on symlinks, so a failure here has no
 		 * impact.
 		 */
-		if (lchmod(a->name, mode) != 0) {
+		if (lchmod(a->name, (mode_t)mode) != 0) {
 			switch (errno) {
 			case ENOTSUP:
 			case ENOSYS:
@@ -3771,7 +3816,8 @@ set_mode(struct archive_write_disk *a, int mode)
 				break;
 			default:
 				archive_set_error(&a->archive, errno,
-				    "Can't set permissions to 0%o", (int)mode);
+				    "Can't set permissions to 0%o",
+				    (unsigned int)mode);
 				r = ARCHIVE_WARN;
 			}
 		}
@@ -3785,16 +3831,16 @@ set_mode(struct archive_write_disk *a, int mode)
 		 */
 #ifdef HAVE_FCHMOD
 		if (a->fd >= 0)
-			r2 = fchmod(a->fd, mode);
+			r2 = fchmod(a->fd, (mode_t)mode);
 		else
 #endif
 		/* If this platform lacks fchmod(), then
 		 * we'll just use chmod(). */
-		r2 = chmod(a->name, mode);
+		r2 = chmod(a->name, (mode_t)mode);
 
 		if (r2 != 0) {
 			archive_set_error(&a->archive, errno,
-			    "Can't set permissions to 0%o", (int)mode);
+			    "Can't set permissions to 0%o", (unsigned int)mode);
 			r = ARCHIVE_WARN;
 		}
 	}
@@ -3895,10 +3941,14 @@ clear_nochange_fflags(struct archive_write_disk *a)
 #ifdef UF_APPEND
 	    | UF_APPEND
 #endif
-#ifdef EXT2_APPEND_FL
+#if defined(FS_APPEND_FL)
+	    | FS_APPEND_FL
+#elif defined(EXT2_APPEND_FL)
 	    | EXT2_APPEND_FL
 #endif
-#ifdef EXT2_IMMUTABLE_FL
+#if defined(FS_IMMUTABLE_FL)
+	    | FS_IMMUTABLE_FL
+#elif defined(EXT2_IMMUTABLE_FL)
 	    | EXT2_IMMUTABLE_FL
 #endif
 	;
@@ -3969,7 +4019,7 @@ set_fflags_platform(struct archive_write_disk *a, int fd, const char *name,
 #elif defined(HAVE_CHFLAGS)
 	if (S_ISLNK(a->st.st_mode)) {
 		archive_set_error(&a->archive, errno,
-		    "Can't set file flags on symlink.");
+		    "Can't set file flags on symlink");
 		return (ARCHIVE_WARN);
 	}
 	if (chflags(name, a->st.st_flags) == 0)
@@ -4164,7 +4214,7 @@ copy_xattrs(struct archive_write_disk *a, int tmpfd, int dffd)
 	}
 	for (xattr_i = 0; xattr_i < xattr_size;
 	    xattr_i += strlen(xattr_names + xattr_i) + 1) {
-		char *xattr_val_saved;
+		char *p;
 		ssize_t s;
 		int f;
 
@@ -4175,15 +4225,14 @@ copy_xattrs(struct archive_write_disk *a, int tmpfd, int dffd)
 			ret = ARCHIVE_WARN;
 			goto exit_xattr;
 		}
-		xattr_val_saved = xattr_val;
-		xattr_val = realloc(xattr_val, s);
-		if (xattr_val == NULL) {
+		p = realloc(xattr_val, s);
+		if (p == NULL) {
 			archive_set_error(&a->archive, ENOMEM,
 			    "Failed to get metadata(xattr)");
 			ret = ARCHIVE_WARN;
-			free(xattr_val_saved);
 			goto exit_xattr;
 		}
+		xattr_val = p;
 		s = fgetxattr(tmpfd, xattr_names + xattr_i, xattr_val, s, 0, 0);
 		if (s == -1) {
 			archive_set_error(&a->archive, errno,
@@ -4249,8 +4298,10 @@ create_tempdatafork(struct archive_write_disk *a, const char *pathname)
 	int tmpfd;
 
 	archive_string_init(&tmpdatafork);
-	archive_strcpy(&tmpdatafork, "tar.md.XXXXXX");
-	tmpfd = mkstemp(tmpdatafork.s);
+	archive_strcpy(&tmpdatafork, pathname);
+	archive_string_dirname(&tmpdatafork);
+	archive_strcat(&tmpdatafork, "/tar.XXXXXXXX");
+	tmpfd = __archive_mkstemp(tmpdatafork.s);
 	if (tmpfd < 0) {
 		archive_set_error(&a->archive, errno,
 		    "Failed to mkstemp");
@@ -4330,8 +4381,9 @@ set_mac_metadata(struct archive_write_disk *a, const char *pathname,
 	 * copyfile() can read it back in again. */
 	archive_string_init(&tmp);
 	archive_strcpy(&tmp, pathname);
-	archive_strcat(&tmp, ".XXXXXX");
-	fd = mkstemp(tmp.s);
+	archive_string_dirname(&tmp);
+	archive_strcat(&tmp, "/tar.XXXXXXXX");
+	fd = __archive_mkstemp(tmp.s);
 
 	if (fd < 0) {
 		archive_set_error(&a->archive, errno,
@@ -4389,8 +4441,14 @@ fixup_appledouble(struct archive_write_disk *a, const char *pathname)
 	 */
 	archive_strncpy(&datafork, pathname, p - pathname);
 	archive_strcat(&datafork, p + 2);
-	if (lstat(datafork.s, &st) == -1 ||
-	    (st.st_mode & AE_IFMT) != AE_IFREG)
+	if (
+#ifdef HAVE_LSTAT
+		lstat(datafork.s, &st) == -1 ||
+#else
+		la_stat(datafork.s, &st) == -1 ||
+#endif
+	    (((st.st_mode & AE_IFMT) != AE_IFREG) &&
+		((st.st_mode & AE_IFMT) != AE_IFDIR)))
 		goto skip_appledouble;
 
 	/*
@@ -4520,7 +4578,7 @@ set_xattrs(struct archive_write_disk *a)
 		} else
 			archive_set_error(&a->archive, ARCHIVE_ERRNO_MISC,
 			    "Cannot restore extended "
-			    "attributes on this file system.");
+			    "attributes on this file system");
 	}
 
 	archive_string_free(&errlist);
@@ -4622,7 +4680,7 @@ set_xattrs(struct archive_write_disk *a)
 		} else
 			archive_set_error(&a->archive, ARCHIVE_ERRNO_MISC,
 			    "Cannot restore extended "
-			    "attributes on this file system.");
+			    "attributes on this file system");
 	}
 
 	archive_string_free(&errlist);
@@ -4705,5 +4763,16 @@ archive_write_disk_set_acls(struct archive *a, int fd, const char *name,
 }
 #endif
 
-#endif /* !_WIN32 || __CYGWIN__ */
+/*
+ * Close the file descriptor if one is open.
+ */
+static void close_file_descriptor(struct archive_write_disk* a)
+{
+	if (a->fd >= 0) {
+		close(a->fd);
+		a->fd = -1;
+	}
+}
 
+
+#endif /* !_WIN32 || __CYGWIN__ */

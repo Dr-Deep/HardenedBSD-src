@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2005 Michael Bushkov <bushman@rsu.ru>
  * All rights reserved.
@@ -24,12 +24,12 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef __NS_CACHE_H__
 #define __NS_CACHE_H__
+
+#include <sys/_align.h>
 
 #include "nscachedcli.h"
 
@@ -180,6 +180,12 @@ typedef struct _nss_cache_data {
 } nss_cache_data;
 
 __BEGIN_DECLS
+static inline __ptrdiff_t
+__nss_buf_misalignment(const void *p)
+{
+	return ((char *)_ALIGN(p) - (char *)p);
+}
+
 /* dummy function, which is needed to make nss_method_lookup happy */
 extern	int	__nss_cache_handler(void *, void *, va_list);
 

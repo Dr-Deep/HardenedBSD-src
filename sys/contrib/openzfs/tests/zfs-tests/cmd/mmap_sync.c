@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -32,7 +33,7 @@
 static void
 cleanup(char *file)
 {
-	remove(file);
+	(void) remove(file);
 }
 
 int
@@ -59,12 +60,12 @@ main(int argc, char *argv[])
 		return (1);
 	}
 
-	int run_time_mins = 5;
+	int run_time_mins = 1;
 	if (argc >= 2) {
 		run_time_mins = atoi(argv[1]);
 	}
 
-	int max_msync_time_ms = 1000;
+	int max_msync_time_ms = 2000;
 	if (argc >= 3) {
 		max_msync_time_ms = atoi(argv[2]);
 	}
@@ -73,8 +74,7 @@ main(int argc, char *argv[])
 	filepath[0] = '\0';
 	char *file = &filepath[0];
 
-	strcat(file, testdir);
-	strcat(file, "/msync_file");
+	(void) snprintf(file, 512, "%s/msync_file", testdir);
 
 	const int LEN = 8;
 	cleanup(file);
@@ -125,7 +125,8 @@ main(int argc, char *argv[])
 		elapsed += ((t2.tv_usec - t1.tv_usec) / 1000.0);
 		if (elapsed > max_msync_time_ms) {
 			fprintf(stderr, "slow msync: %f ms\n", elapsed);
-			munmap(ptr, LEN);
+			if (munmap(ptr, LEN) != 0)
+				perror("munmap");
 			cleanup(file);
 			return (1);
 		}

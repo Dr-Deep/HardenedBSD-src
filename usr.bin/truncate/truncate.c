@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2000 Sheldon Hearn <sheldonh@FreeBSD.org>.
  * All rights reserved.
@@ -32,9 +32,6 @@
  *
  */
 
-static const char rcsid[] =
-    "$FreeBSD$";
-
 #include <sys/stat.h>
 
 #include <ctype.h>
@@ -65,7 +62,6 @@ main(int argc, char **argv)
 	int do_refer;
 	int got_size;
 	char *fname, *rname;
-	struct spacectl_range sr;
 
 	fd = -1;
 	rsize = tsize = sz = off = 0;
@@ -201,6 +197,8 @@ main(int argc, char **argv)
 			tsize = 0;
 
 		if (do_dealloc == 1) {
+			struct spacectl_range sr;
+
 			sr.r_offset = off;
 			sr.r_len = len;
 			r = fspacectl(fd, SPACECTL_DEALLOC, &sr, 0, &sr);

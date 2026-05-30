@@ -34,8 +34,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include "opt_atpic.h"
@@ -116,7 +114,7 @@ dtrace_invop_calltrap_addr:
 	movq	$0,TF_ADDR(%rsp)
 	movq	$0,TF_ERR(%rsp)
 	jmp	alltraps_noen_u
-	
+
 	.globl	X\l
 	.type	X\l,@function
 X\l:
@@ -209,7 +207,7 @@ X\l:
 	 * alltraps_u/k entry points.
 	 * SWAPGS must be already performed by prologue,
 	 * if this is the first time in the kernel from userland.
-	 * Reenable interrupts if they were enabled before the trap.
+	 * Re-enable interrupts if they were enabled before the trap.
 	 * This approximates SDT_SYS386TGT on the i386 port.
 	 */
 	SUPERALIGN_TEXT
@@ -481,22 +479,14 @@ prot_addrf:
 	jz	6f			/* already running with kernel GS.base */
 	testb	$CPUID_STDEXT_FSGSBASE,cpu_stdext_feature(%rip)
 	jz	2f
-	cmpw	$KUF32SEL,TF_FS(%rsp)
-	jne	1f
 	rdfsbase %rax
-1:	cmpw	$KUG32SEL,TF_GS(%rsp)
-	jne	2f
 	rdgsbase %rdx
 2:	swapgs
 	lfence
 	movq	PCPU(CURPCB),%rdi
 	testb	$CPUID_STDEXT_FSGSBASE,cpu_stdext_feature(%rip)
 	jz	4f
-	cmpw	$KUF32SEL,TF_FS(%rsp)
-	jne	3f
 	movq	%rax,PCB_FSBASE(%rdi)
-3:	cmpw	$KUG32SEL,TF_GS(%rsp)
-	jne	4f
 	movq	%rdx,PCB_GSBASE(%rdi)
 	orl	$PCB_FULL_IRET,PCB_FLAGS(%rdi)	/* full iret from user #gp */
 4:	call	handle_ibrs_entry
@@ -514,7 +504,7 @@ prot_addrf:
 
 /*
  * Fast syscall entry point.  We enter here with just our new %cs/%ss set,
- * and the new privilige level.  We are still running on the old user stack
+ * and the new privilege level.  We are still running on the old user stack
  * pointer.  We have to juggle a few things around to find our stack etc.
  * swapgs gives us access to our PCPU space only.
  *
@@ -732,12 +722,8 @@ dbg_fromuserspace:
 	orl	$PCB_FULL_IRET,PCB_FLAGS(%rdi)
 	testb	$CPUID_STDEXT_FSGSBASE,cpu_stdext_feature(%rip)
 	jz	3f
-	cmpw	$KUF32SEL,TF_FS(%rsp)
-	jne	2f
 	rdfsbase %rax
 	movq	%rax,PCB_FSBASE(%rdi)
-2:	cmpw	$KUG32SEL,TF_GS(%rsp)
-	jne	3f
 	movl	$MSR_KGSBASE,%ecx
 	rdmsr
 	shlq	$32,%rdx
@@ -844,12 +830,8 @@ nmi_fromuserspace:
 	orl	$PCB_FULL_IRET,PCB_FLAGS(%rdi)
 	testb	$CPUID_STDEXT_FSGSBASE,cpu_stdext_feature(%rip)
 	jz	3f
-	cmpw	$KUF32SEL,TF_FS(%rsp)
-	jne	2f
 	rdfsbase %rax
 	movq	%rax,PCB_FSBASE(%rdi)
-2:	cmpw	$KUG32SEL,TF_GS(%rsp)
-	jne	3f
 	movl	$MSR_KGSBASE,%ecx
 	rdmsr
 	shlq	$32,%rdx
@@ -1089,7 +1071,7 @@ ENTRY(fork_trampoline)
  * and bintr, and only interrupt handlers between the labels bintr and
  * eintr.  This is implemented (partly) by including files that contain
  * some of the handlers.  Before including the files, set up a normal asm
- * environment so that the included files doen't need to know that they are
+ * environment so that the included files doesn't need to know that they are
  * included.
  */
 
@@ -1179,15 +1161,12 @@ do_segs:
 	.globl	ld_fs
 ld_fs:
 	movw	%ax,%fs
-	cmpw	$KUF32SEL,%ax
-	jne	1f
 	movl	$MSR_FSBASE,%ecx
 	movl	PCB_FSBASE(%r8),%eax
 	movl	PCB_FSBASE+4(%r8),%edx
 	.globl	ld_fsbase
 ld_fsbase:
 	wrmsr
-1:
 	/* Restore %gs and gsbase */
 	movw	TF_GS(%rsp),%si
 	pushfq
@@ -1200,10 +1179,6 @@ ld_fsbase:
 	.globl	ld_gs
 ld_gs:
 	movw	%si,%gs
-	/* Save user %gs base into %r14d:%r15d */
-	rdmsr
-	movl	%eax,%r14d
-	movl	%edx,%r15d
 	/* Restore kernel %gs base */
 	movl	%r12d,%eax
 	movl	%r13d,%edx
@@ -1214,14 +1189,8 @@ ld_gs:
 	 * from the previously saved msr read.
 	 */
 	movl	$MSR_KGSBASE,%ecx
-	cmpw	$KUG32SEL,%si
-	jne	1f
 	movl	PCB_GSBASE(%r8),%eax
 	movl	PCB_GSBASE+4(%r8),%edx
-	jmp	ld_gsbase
-1:
-	movl	%r14d,%eax
-	movl	%r15d,%edx
 	.globl	ld_gsbase
 ld_gsbase:
 	wrmsr	/* May trap if non-canonical, but only for TLS. */
@@ -1404,3 +1373,5 @@ gsbase_load_fault:
 #ifdef HWPMC_HOOKS
 	ENTRY(end_exceptions)
 #endif
+
+	.section .note.GNU-stack,"",%progbits

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -70,8 +71,8 @@ dnode_increase_indirection(dnode_t *dn, dmu_tx_t *tx)
 	dmu_buf_impl_t *children[DN_MAX_NBLKPTR];
 	ASSERT3U(nblkptr, <=, DN_MAX_NBLKPTR);
 	for (i = 0; i < nblkptr; i++) {
-		children[i] =
-		    dbuf_find(dn->dn_objset, dn->dn_object, old_toplvl, i);
+		children[i] = dbuf_find(dn->dn_objset, dn->dn_object,
+		    old_toplvl, i, NULL);
 	}
 
 	/* transfer dnode's block pointers to new indirect block */
@@ -175,19 +176,21 @@ free_blocks(dnode_t *dn, blkptr_t *bp, int num, dmu_tx_t *tx)
 static void
 free_verify(dmu_buf_impl_t *db, uint64_t start, uint64_t end, dmu_tx_t *tx)
 {
-	int off, num;
-	int i, err, epbs;
+	uint64_t off, num, i, j;
+	unsigned int epbs;
+	int err;
 	uint64_t txg = tx->tx_txg;
 	dnode_t *dn;
 
 	DB_DNODE_ENTER(db);
 	dn = DB_DNODE(db);
 	epbs = dn->dn_phys->dn_indblkshift - SPA_BLKPTRSHIFT;
-	off = start - (db->db_blkid * 1<<epbs);
+	off = start - (db->db_blkid << epbs);
 	num = end - start + 1;
 
-	ASSERT3U(off, >=, 0);
-	ASSERT3U(num, >=, 0);
+	ASSERT3U(dn->dn_phys->dn_indblkshift, >=, SPA_BLKPTRSHIFT);
+	ASSERT3U(end + 1, >=, start);
+	ASSERT3U(start, >=, (db->db_blkid << epbs));
 	ASSERT3U(db->db_level, >, 0);
 	ASSERT3U(db->db.db_size, ==, 1 << dn->dn_phys->dn_indblkshift);
 	ASSERT3U(off+num, <=, db->db.db_size >> SPA_BLKPTRSHIFT);
@@ -197,7 +200,6 @@ free_verify(dmu_buf_impl_t *db, uint64_t start, uint64_t end, dmu_tx_t *tx)
 		uint64_t *buf;
 		dmu_buf_impl_t *child;
 		dbuf_dirty_record_t *dr;
-		int j;
 
 		ASSERT(db->db_level == 1);
 
@@ -207,8 +209,8 @@ free_verify(dmu_buf_impl_t *db, uint64_t start, uint64_t end, dmu_tx_t *tx)
 		rw_exit(&dn->dn_struct_rwlock);
 		if (err == ENOENT)
 			continue;
-		ASSERT(err == 0);
-		ASSERT(child->db_level == 0);
+		ASSERT0(err);
+		ASSERT0(child->db_level);
 		dr = dbuf_find_dirty_eq(child, txg);
 
 		/* data_old better be zeroed */
@@ -217,8 +219,11 @@ free_verify(dmu_buf_impl_t *db, uint64_t start, uint64_t end, dmu_tx_t *tx)
 			for (j = 0; j < child->db.db_size >> 3; j++) {
 				if (buf[j] != 0) {
 					panic("freed data not zero: "
-					    "child=%p i=%d off=%d num=%d\n",
-					    (void *)child, i, off, num);
+					    "child=%p i=%llu off=%llu "
+					    "num=%llu\n",
+					    (void *)child, (u_longlong_t)i,
+					    (u_longlong_t)off,
+					    (u_longlong_t)num);
 				}
 			}
 		}
@@ -234,8 +239,11 @@ free_verify(dmu_buf_impl_t *db, uint64_t start, uint64_t end, dmu_tx_t *tx)
 			for (j = 0; j < child->db.db_size >> 3; j++) {
 				if (buf[j] != 0) {
 					panic("freed data not zero: "
-					    "child=%p i=%d off=%d num=%d\n",
-					    (void *)child, i, off, num);
+					    "child=%p i=%llu off=%llu "
+					    "num=%llu\n",
+					    (void *)child, (u_longlong_t)i,
+					    (u_longlong_t)off,
+					    (u_longlong_t)num);
 				}
 			}
 		}
@@ -432,24 +440,6 @@ dnode_sync_free_range_impl(dnode_t *dn, uint64_t blkid, uint64_t nblks,
 	}
 }
 
-typedef struct dnode_sync_free_range_arg {
-	dnode_t *dsfra_dnode;
-	dmu_tx_t *dsfra_tx;
-	boolean_t dsfra_free_indirects;
-} dnode_sync_free_range_arg_t;
-
-static void
-dnode_sync_free_range(void *arg, uint64_t blkid, uint64_t nblks)
-{
-	dnode_sync_free_range_arg_t *dsfra = arg;
-	dnode_t *dn = dsfra->dsfra_dnode;
-
-	mutex_exit(&dn->dn_mtx);
-	dnode_sync_free_range_impl(dn, blkid, nblks,
-	    dsfra->dsfra_free_indirects, dsfra->dsfra_tx);
-	mutex_enter(&dn->dn_mtx);
-}
-
 /*
  * Try to kick all the dnode's dbufs out of the cache...
  */
@@ -475,7 +465,14 @@ dnode_evict_dbufs(dnode_t *dn)
 		    zfs_refcount_is_zero(&db->db_holds)) {
 			db_marker->db_level = db->db_level;
 			db_marker->db_blkid = db->db_blkid;
-			db_marker->db_state = DB_SEARCH;
+			/*
+			 * Insert a MARKER node with the same level and blkid.
+			 * And to resolve any ties in dbuf_compare() use the
+			 * pointer of the dbuf that we are evicting. Pass the
+			 * address in db_parent.
+			 */
+			db_marker->db_state = DB_MARKER;
+			db_marker->db_parent = (void *)((uintptr_t)db - 1);
 			avl_insert_here(&dn->dn_dbufs, db_marker, db,
 			    AVL_BEFORE);
 
@@ -498,6 +495,7 @@ dnode_evict_dbufs(dnode_t *dn)
 			avl_remove(&dn->dn_dbufs, db_marker);
 		} else {
 			db->db_pending_evict = TRUE;
+			db->db_partial_read = FALSE;
 			mutex_exit(&db->db_mtx);
 			db_next = AVL_NEXT(&dn->dn_dbufs, db);
 		}
@@ -552,7 +550,7 @@ dnode_undirty_dbufs(list_t *list)
 			mutex_destroy(&dr->dt.di.dr_mtx);
 			list_destroy(&dr->dt.di.dr_children);
 		}
-		kmem_free(dr, sizeof (dbuf_dirty_record_t));
+		kmem_cache_free(dbuf_dirty_kmem_cache, dr);
 		dbuf_rele_and_unlock(db, (void *)(uintptr_t)txg, B_FALSE);
 	}
 }
@@ -619,7 +617,66 @@ dnode_sync_free(dnode_t *dn, dmu_tx_t *tx)
 }
 
 /*
+ * We cannot simply detach the range tree (set dn_free_ranges to NULL)
+ * before processing it because dnode_block_freed() relies on it to
+ * correctly identify blocks that have been freed in the current TXG
+ * (for dbuf_read() calls on holes). If we detached it early, a concurrent
+ * reader might see the block as valid on disk and return stale data
+ * instead of zeros.
+ *
+ * We also can't use zfs_range_tree_walk() nor zfs_range_tree_vacate()
+ * with a callback that drops dn_mtx (dnode_sync_free_range()). This is
+ * unsafe because another thread (spa_sync_deferred_frees() ->
+ * dnode_free_range()) could acquire dn_mtx and modify the tree while the
+ * walk or vacate was in progress. This leads to tree corruption or panic
+ * when we resume.
+ *
+ * To fix the race while maintaining visibility, we process the tree
+ * incrementally. We pick a segment, drop the lock to sync it, and
+ * re-acquire the lock to remove it. By always restarting from the head
+ * of the tree, we ensure we are never using an invalid iterator.
+ * We use zfs_range_tree_clear() instead of ..._remove() because the range
+ * might have already been removed while the lock was dropped (specifically
+ * in the dbuf_dirty path mentioned above). ..._clear() handles this
+ * gracefully, while ..._remove() would panic on a missing segment.
+ */
+static void
+dnode_sync_free_ranges(dnode_t *dn, dmu_tx_t *tx)
+{
+	int txgoff = tx->tx_txg & TXG_MASK;
+
+	mutex_enter(&dn->dn_mtx);
+	zfs_range_tree_t *rt = dn->dn_free_ranges[txgoff];
+	if (rt != NULL) {
+		boolean_t freeing_dnode = dn->dn_free_txg > 0 &&
+		    dn->dn_free_txg <= tx->tx_txg;
+		zfs_range_seg_t *rs;
+
+		if (freeing_dnode) {
+			ASSERT(zfs_range_tree_contains(rt, 0,
+			    dn->dn_maxblkid + 1));
+		}
+
+		while ((rs = zfs_range_tree_first(rt)) != NULL) {
+			uint64_t start = zfs_rs_get_start(rs, rt);
+			uint64_t size = zfs_rs_get_end(rs, rt) - start;
+
+			mutex_exit(&dn->dn_mtx);
+			dnode_sync_free_range_impl(dn, start, size,
+			    freeing_dnode, tx);
+			mutex_enter(&dn->dn_mtx);
+
+			zfs_range_tree_clear(rt, start, size);
+		}
+		zfs_range_tree_destroy(rt);
+		dn->dn_free_ranges[txgoff] = NULL;
+	}
+	mutex_exit(&dn->dn_mtx);
+}
+
+/*
  * Write out the dnode's dirty buffers.
+ * Does not wait for zio completions.
  */
 void
 dnode_sync(dnode_t *dn, dmu_tx_t *tx)
@@ -705,7 +762,7 @@ dnode_sync(dnode_t *dn, dmu_tx_t *tx)
 		    dn->dn_maxblkid == 0 || list_head(list) != NULL ||
 		    dn->dn_next_blksz[txgoff] >> SPA_MINBLOCKSHIFT ==
 		    dnp->dn_datablkszsec ||
-		    !range_tree_is_empty(dn->dn_free_ranges[txgoff]));
+		    !zfs_range_tree_is_empty(dn->dn_free_ranges[txgoff]));
 		dnp->dn_datablkszsec =
 		    dn->dn_next_blksz[txgoff] >> SPA_MINBLOCKSHIFT;
 		dn->dn_next_blksz[txgoff] = 0;
@@ -764,31 +821,7 @@ dnode_sync(dnode_t *dn, dmu_tx_t *tx)
 	}
 
 	/* process all the "freed" ranges in the file */
-	if (dn->dn_free_ranges[txgoff] != NULL) {
-		dnode_sync_free_range_arg_t dsfra;
-		dsfra.dsfra_dnode = dn;
-		dsfra.dsfra_tx = tx;
-		dsfra.dsfra_free_indirects = freeing_dnode;
-		mutex_enter(&dn->dn_mtx);
-		if (freeing_dnode) {
-			ASSERT(range_tree_contains(dn->dn_free_ranges[txgoff],
-			    0, dn->dn_maxblkid + 1));
-		}
-		/*
-		 * Because dnode_sync_free_range() must drop dn_mtx during its
-		 * processing, using it as a callback to range_tree_vacate() is
-		 * not safe.  No other operations (besides destroy) are allowed
-		 * once range_tree_vacate() has begun, and dropping dn_mtx
-		 * would leave a window open for another thread to observe that
-		 * invalid (and unsafe) state.
-		 */
-		range_tree_walk(dn->dn_free_ranges[txgoff],
-		    dnode_sync_free_range, &dsfra);
-		range_tree_vacate(dn->dn_free_ranges[txgoff], NULL, NULL);
-		range_tree_destroy(dn->dn_free_ranges[txgoff]);
-		dn->dn_free_ranges[txgoff] = NULL;
-		mutex_exit(&dn->dn_mtx);
-	}
+	dnode_sync_free_ranges(dn, tx);
 
 	if (freeing_dnode) {
 		dn->dn_objset->os_freed_dnodes++;
@@ -810,7 +843,7 @@ dnode_sync(dnode_t *dn, dmu_tx_t *tx)
 	}
 
 	/*
-	 * This must be done after dnode_sync_free_range()
+	 * This must be done after dnode_sync_free_ranges()
 	 * and dnode_increase_indirection(). See dnode_new_blkid()
 	 * for an explanation of the high bit being set.
 	 */
@@ -850,7 +883,7 @@ dnode_sync(dnode_t *dn, dmu_tx_t *tx)
 	dbuf_sync_list(list, dn->dn_phys->dn_nlevels - 1, tx);
 
 	if (!DMU_OBJECT_IS_SPECIAL(dn->dn_object)) {
-		ASSERT3P(list_head(list), ==, NULL);
+		ASSERT0P(list_head(list));
 		dnode_rele(dn, (void *)(uintptr_t)tx->tx_txg);
 	}
 

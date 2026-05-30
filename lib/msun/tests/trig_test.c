@@ -33,9 +33,6 @@
  * available at http://www.cs.berkeley.edu/~wkahan/testpi/ .
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 
 #include <fenv.h>
@@ -88,7 +85,9 @@ ATF_TC_HEAD(special, tc)
 }
 ATF_TC_BODY(special, tc)
 {
-
+#if defined(__aarch64__) || defined(__riscv)
+	atf_tc_expect_fail("https://bugs.freebsd.org/290099");
+#endif
 	/* Values at 0 should be exact. */
 	testall(tan, 0.0, 0.0, ALL_STD_EXCEPT, 0);
 	testall(tan, -0.0, -0.0, ALL_STD_EXCEPT, 0);

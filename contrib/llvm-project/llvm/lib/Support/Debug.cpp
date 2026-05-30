@@ -73,8 +73,7 @@ void setCurrentDebugType(const char *Type) {
 
 void setCurrentDebugTypes(const char **Types, unsigned Count) {
   CurrentDebugType->clear();
-  for (size_t T = 0; T < Count; ++T)
-    CurrentDebugType->push_back(Types[T]);
+  llvm::append_range(*CurrentDebugType, ArrayRef(Types, Count));
 }
 } // namespace llvm
 
@@ -132,7 +131,7 @@ struct CreateDebugOnly {
         "debug-only",
         cl::desc("Enable a specific type of debug output (comma separated list "
                  "of types)"),
-        cl::Hidden, cl::ZeroOrMore, cl::value_desc("debug string"),
+        cl::Hidden, cl::value_desc("debug string"),
         cl::location(DebugOnlyOptLoc), cl::ValueRequired);
   }
 };

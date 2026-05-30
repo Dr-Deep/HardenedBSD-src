@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2009 James Gritton.
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _JAIL_H
@@ -35,6 +33,7 @@
 #define	JP_BOOL		0x02
 #define	JP_NOBOOL	0x04
 #define	JP_JAILSYS	0x08
+#define	JP_KEYVALUE	0x10
 
 #define JAIL_ERRMSGLEN	1024
 

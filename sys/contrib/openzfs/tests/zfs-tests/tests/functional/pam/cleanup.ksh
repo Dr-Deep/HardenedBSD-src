@@ -1,4 +1,5 @@
 #!/bin/ksh -p
+# SPDX-License-Identifier: CDDL-1.0
 #
 # CDDL HEADER START
 #
@@ -25,5 +26,7 @@
 rmconfig
 destroy_pool $TESTPOOL
 del_user ${username}
+del_user ${username}rec
+del_user ${username}mrec
 del_group pamtestgroup
-log_must rm -rf "$runstatedir" $TESTDIRS
+log_must rm -rf "$runstatedir"

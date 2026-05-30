@@ -30,8 +30,6 @@
 #include <sys/cdefs.h>
 #ifndef lint
 __RCSID("$NetBSD: fat.c,v 1.18 2006/06/05 16:51:18 christos Exp $");
-static const char rcsid[] =
-  "$FreeBSD$";
 #endif /* not lint */
 
 #include <sys/endian.h>
@@ -929,6 +927,17 @@ readfat(int fs, struct bootblock *boot, struct fat_descriptor **fp)
 				default:
 					break;
 				}
+				/*
+				 * In cache mode the header lives in
+				 * fat32_cache_allentries[0].  Mark it
+				 * dirty so it is flushed to disk (either
+				 * on eviction or in writefat()) before
+				 * copyfat() copies the primary FAT to
+				 * backup copies.
+				 */
+				if (fat->use_cache)
+					fat->fat32_cache_allentries[0].dirty =
+					    true;
 			}
 		}
 	}

@@ -19,7 +19,7 @@
 namespace llvm {
 namespace orc {
 
-IRLayer::~IRLayer() {}
+IRLayer::~IRLayer() = default;
 
 Error IRLayer::add(ResourceTrackerSP RT, ThreadSafeModule TSM) {
   assert(RT && "RT can not be null");
@@ -76,12 +76,16 @@ IRMaterializationUnit::IRMaterializationUnit(
 
       // Otherwise we just need a normal linker mangling.
       auto MangledName = Mangle(G.getName());
-      SymbolFlags[MangledName] = JITSymbolFlags::fromGlobalValue(G);
+      auto &Flags = SymbolFlags[MangledName];
+      Flags = JITSymbolFlags::fromGlobalValue(G);
+      if (G.getComdat() &&
+          G.getComdat()->getSelectionKind() != Comdat::NoDeduplicate)
+        Flags |= JITSymbolFlags::Weak;
       SymbolToDefinition[MangledName] = &G;
     }
 
     // If we need an init symbol for this module then create one.
-    if (!llvm::empty(getStaticInitGVs(M))) {
+    if (!getStaticInitGVs(M).empty()) {
       size_t Counter = 0;
 
       do {
@@ -122,6 +126,10 @@ void IRMaterializationUnit::discard(const JITDylib &JD,
   assert(!I->second->isDeclaration() &&
          "Discard should only apply to definitions");
   I->second->setLinkage(GlobalValue::AvailableExternallyLinkage);
+  // According to the IR verifier, "Declaration[s] may not be in a Comdat!"
+  // Remove it, if this is a GlobalObject.
+  if (auto *GO = dyn_cast<GlobalObject>(I->second))
+    GO->setComdat(nullptr);
   SymbolToDefinition.erase(I);
 }
 
@@ -158,7 +166,7 @@ char ObjectLayer::ID;
 
 ObjectLayer::ObjectLayer(ExecutionSession &ES) : ES(ES) {}
 
-ObjectLayer::~ObjectLayer() {}
+ObjectLayer::~ObjectLayer() = default;
 
 Error ObjectLayer::add(ResourceTrackerSP RT, std::unique_ptr<MemoryBuffer> O,
                        MaterializationUnit::Interface I) {
@@ -193,9 +201,8 @@ BasicObjectLayerMaterializationUnit::Create(ObjectLayer &L,
   if (!ObjInterface)
     return ObjInterface.takeError();
 
-  return std::unique_ptr<BasicObjectLayerMaterializationUnit>(
-      new BasicObjectLayerMaterializationUnit(L, std::move(O),
-                                              std::move(*ObjInterface)));
+  return std::make_unique<BasicObjectLayerMaterializationUnit>(
+      L, std::move(O), std::move(*ObjInterface));
 }
 
 BasicObjectLayerMaterializationUnit::BasicObjectLayerMaterializationUnit(

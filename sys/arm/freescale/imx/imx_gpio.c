@@ -31,8 +31,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_platform.h"
 
 #include <sys/param.h>
@@ -61,7 +59,7 @@ __FBSDID("$FreeBSD$");
 #endif
 
 #ifdef IMX_ENABLE_CLOCKS
-#include <dev/extres/clk/clk.h>
+#include <dev/clk/clk.h>
 #endif
 
 #include "gpio_if.h"
@@ -136,6 +134,7 @@ static struct ofw_compat_data compat_data[] = {
 	{"fsl,imx6q-gpio",	1},
 	{"fsl,imx53-gpio",	1},
 	{"fsl,imx51-gpio",	1},
+	{"fsl,imx35-gpio",	1},
 	{NULL,			0}
 };
 
@@ -862,13 +861,14 @@ imx51_gpio_attach(device_t dev)
 	gpio_pic_register_isrcs(sc);
 	intr_pic_register(dev, OF_xref_from_node(ofw_bus_get_node(dev)));
 #endif
-	sc->sc_busdev = gpiobus_attach_bus(dev);
+	sc->sc_busdev = gpiobus_add_bus(dev);
 
 	if (sc->sc_busdev == NULL) {
 		imx51_gpio_detach(dev);
 		return (ENXIO);
 	}
 
+	bus_attach_children(dev);
 	return (0);
 }
 
@@ -918,6 +918,10 @@ static device_method_t imx51_gpio_methods[] = {
 	DEVMETHOD(device_detach,	imx51_gpio_detach),
 
 #ifdef INTRNG
+	/* Bus interface */
+	DEVMETHOD(bus_setup_intr,	bus_generic_setup_intr),
+	DEVMETHOD(bus_teardown_intr,	bus_generic_teardown_intr),
+
 	/* Interrupt controller interface */
 	DEVMETHOD(pic_disable_intr,	gpio_pic_disable_intr),
 	DEVMETHOD(pic_enable_intr,	gpio_pic_enable_intr),

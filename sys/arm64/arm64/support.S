@@ -29,9 +29,9 @@
  *
  */
 
-#include <machine/asm.h>
-__FBSDID("$FreeBSD$");
+#include <sys/elf_common.h>
 
+#include <machine/asm.h>
 #include <machine/setjmp.h>
 #include <machine/param.h>
 #include <machine/vmparam.h>
@@ -39,8 +39,15 @@ __FBSDID("$FreeBSD$");
 #include "assym.inc"
 
 .macro check_user_access user_arg, limit, bad_addr_func
+	/*
+	 * TBI is enabled from 15.0. Clear the top byte of the userspace
+	 * address before checking whether it's within the given limit.
+	 * The later load/store instructions will fault if TBI is disabled
+	 * for the current process.
+	 */
+	and	x6, x\user_arg, #(~TBI_ADDR_MASK)
 	ldr	x7, =(\limit)
-	cmp	x\user_arg, x7
+	cmp	x6, x7
 	b.cs	\bad_addr_func
 .endm
 
@@ -54,6 +61,98 @@ fsu_fault_nopcb:
 	mov	x0, #-1
 	ret
 END(fsu_fault)
+
+/*
+ * int swapueword8_llsc(volatile uint8_t *, uint8_t *)
+ */
+ENTRY(swapueword8_llsc)
+	check_user_access 0, (VM_MAXUSER_ADDRESS-3), fsu_fault_nopcb
+	adr	x6, fsu_fault		/* Load the fault handler */
+	SET_FAULT_HANDLER(x6, x4)	/* And set it */
+	ENTER_USER_ACCESS(w6, x4)
+
+	ldrb	w7, [x1]
+
+	ldxrb	w2, [x0]
+	stxrb	w3, w7, [x0]
+	cbnz	w3, 1f
+
+	strb	w2, [x1]		/* Stash old value in *val */
+
+1:	EXIT_USER_ACCESS(w6)
+	SET_FAULT_HANDLER(xzr, x6)
+	mov	w0, w3
+	ret
+END(swapueword8_llsc)
+
+/*
+ * int swapueword8_lse(volatile uint8_t *, uint8_t *)
+ */
+ENTRY(swapueword8_lse)
+	check_user_access 0, (VM_MAXUSER_ADDRESS-3), fsu_fault_nopcb
+	adr	x6, fsu_fault		/* Load the fault handler */
+	SET_FAULT_HANDLER(x6, x4)	/* And set it */
+	ENTER_USER_ACCESS(w6, x4)
+
+	ldrb	w7, [x1]
+
+	.arch_extension lse
+	swpb	w7, w2, [x0]
+	.arch_extension nolse
+
+	strb	w2, [x1]		/* Stash old value in *val */
+
+	EXIT_USER_ACCESS(w6)
+	SET_FAULT_HANDLER(xzr, x6)
+	mov	w0, #0
+	ret
+END(swapueword8_lse)
+
+/*
+ * int swapueword32_llsc(volatile uint32_t *, uint32_t *)
+ */
+ENTRY(swapueword32_llsc)
+	check_user_access 0, (VM_MAXUSER_ADDRESS-3), fsu_fault_nopcb
+	adr	x6, fsu_fault		/* Load the fault handler */
+	SET_FAULT_HANDLER(x6, x4)	/* And set it */
+	ENTER_USER_ACCESS(w6, x4)
+
+	ldr	w7, [x1]
+
+	ldxr	w2, [x0]		/* Stash the old value in w2 */
+	stxr	w3, w7, [x0]		/* Store new value */
+	cbnz	w3, 1f
+
+	str	w2, [x1]		/* Stash old value in *val */
+
+1:	EXIT_USER_ACCESS(w6)
+	SET_FAULT_HANDLER(xzr, x6)
+	mov	w0, w3
+	ret
+END(swapueword32_llsc)
+
+/*
+ * int swapueword32_lse(volatile uint32_t *, uint32_t *)
+ */
+ENTRY(swapueword32_lse)
+	check_user_access 0, (VM_MAXUSER_ADDRESS-3), fsu_fault_nopcb
+	adr	x6, fsu_fault		/* Load the fault handler */
+	SET_FAULT_HANDLER(x6, x4)	/* And set it */
+	ENTER_USER_ACCESS(w6, x4)
+
+	ldr	w7, [x1]
+
+	.arch_extension lse
+	swp	w7, w2, [x0]
+	.arch_extension nolse
+
+	str	w2, [x1]		/* Stash old value in *val */
+
+	EXIT_USER_ACCESS(w6)
+	SET_FAULT_HANDLER(xzr, x6)
+	mov	w0, #0
+	ret
+END(swapueword32_llsc)
 
 /*
  * int casueword32_llsc(volatile uint32_t *, uint32_t, uint32_t *, uint32_t)
@@ -175,15 +274,15 @@ END(fueword32)
  * long fueword(volatile const void *, int64_t *)
  * int64_t fueword64(volatile const void *, int64_t *)
  */
-ENTRY(fueword)
 EENTRY(fueword64)
+ENTRY(fueword)
 	check_user_access 0, (VM_MAXUSER_ADDRESS-7), fsu_fault_nopcb
 	fsudata	ldtr, x0, 0
 	str	x0, [x1]		/* Save the data in kernel space */
 	mov	x0, #0			/* Success */
 	ret				/* Return */
-EEND(fueword64)
 END(fueword)
+EEND(fueword64)
 
 /*
  * int subyte(volatile void *, int)
@@ -218,14 +317,14 @@ END(suword32)
 /*
  * int suword(volatile void *, long)
  */
-ENTRY(suword)
 EENTRY(suword64)
+ENTRY(suword)
 	check_user_access 0, (VM_MAXUSER_ADDRESS-7), fsu_fault_nopcb
 	fsudata	sttr, x1, 0
 	mov	x0, #0			/* Success */
 	ret				/* Return */
-EEND(suword64)
 END(suword)
+EEND(suword64)
 
 ENTRY(setjmp)
 	/* Store the stack pointer */
@@ -286,8 +385,8 @@ END(pagezero_simple)
 ENTRY(pagezero_cache)
 	add	x1, x0, #PAGE_SIZE
 
-	ldr	x2, =dczva_line_size
-	ldr	x2, [x2]
+	adrp	x2, dczva_line_size
+	ldr	x2, [x2, :lo12:dczva_line_size]
 
 1:
 	dc	zva, x0
@@ -297,3 +396,17 @@ ENTRY(pagezero_cache)
 	ret
 
 END(pagezero_cache)
+
+/*
+ * pagezero, MOPS implementation
+ */
+ENTRY(pagezero_mops)
+	mov	x1, #PAGE_SIZE
+	.inst   0x19df0420      /* setp    [x0]!, x1!, xzr  */
+	.inst   0x19df4420      /* setm    [x0]!, x1!, xzr  */
+	.inst   0x19df8420      /* sete    [x0]!, x1!, xzr  */
+	ret
+
+END(pagezero_mops)
+
+GNU_PROPERTY_AARCH64_FEATURE_1_NOTE(GNU_PROPERTY_AARCH64_FEATURE_1_VAL)

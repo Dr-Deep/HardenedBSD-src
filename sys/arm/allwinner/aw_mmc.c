@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2018 Emmanuel Vadot <manu@FreeBSD.org>
  * Copyright (c) 2013 Alexander Fedorov
@@ -27,9 +27,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
@@ -55,9 +52,9 @@ __FBSDID("$FreeBSD$");
 #include <dev/mmc/mmc_fdt_helpers.h>
 
 #include <arm/allwinner/aw_mmc.h>
-#include <dev/extres/clk/clk.h>
-#include <dev/extres/hwreset/hwreset.h>
-#include <dev/extres/regulator/regulator.h>
+#include <dev/clk/clk.h>
+#include <dev/hwreset/hwreset.h>
+#include <dev/regulator/regulator.h>
 
 #include "opt_mmccam.h"
 
@@ -87,21 +84,26 @@ __FBSDID("$FreeBSD$");
 
 struct aw_mmc_conf {
 	uint32_t	dma_xferlen;
+	uint32_t	dma_desc_shift;
 	bool		mask_data0;
 	bool		can_calibrate;
 	bool		new_timing;
+	bool		zero_is_skip;
 };
 
 static const struct aw_mmc_conf a10_mmc_conf = {
 	.dma_xferlen = 0x2000,
+	.dma_desc_shift = 0,
 };
 
 static const struct aw_mmc_conf a13_mmc_conf = {
 	.dma_xferlen = 0x10000,
+	.dma_desc_shift = 0,
 };
 
 static const struct aw_mmc_conf a64_mmc_conf = {
 	.dma_xferlen = 0x10000,
+	.dma_desc_shift = 0,
 	.mask_data0 = true,
 	.can_calibrate = true,
 	.new_timing = true,
@@ -109,15 +111,41 @@ static const struct aw_mmc_conf a64_mmc_conf = {
 
 static const struct aw_mmc_conf a64_emmc_conf = {
 	.dma_xferlen = 0x2000,
+	.dma_desc_shift = 0,
 	.can_calibrate = true,
+};
+
+static const struct aw_mmc_conf h616_mmc_conf = {
+	.dma_xferlen = 0x10000,
+	.dma_desc_shift = 2,
+	.mask_data0 = true,
+	.can_calibrate = true,
+	.new_timing = true,
+};
+
+static const struct aw_mmc_conf h616_emmc_conf = {
+	.dma_xferlen = 0x10000,
+	.can_calibrate = true,
+};
+
+static const struct aw_mmc_conf d1_mmc_conf = {
+	.dma_xferlen = 0x1000,
+	.dma_desc_shift = 2,
+	.mask_data0 = true,
+	.can_calibrate = true,
+	.new_timing = true,
+	.zero_is_skip = true,
 };
 
 static struct ofw_compat_data compat_data[] = {
 	{"allwinner,sun4i-a10-mmc", (uintptr_t)&a10_mmc_conf},
 	{"allwinner,sun5i-a13-mmc", (uintptr_t)&a13_mmc_conf},
 	{"allwinner,sun7i-a20-mmc", (uintptr_t)&a13_mmc_conf},
+	{"allwinner,sun20i-d1-mmc", (uintptr_t)&d1_mmc_conf},
 	{"allwinner,sun50i-a64-mmc", (uintptr_t)&a64_mmc_conf},
 	{"allwinner,sun50i-a64-emmc", (uintptr_t)&a64_emmc_conf},
+	{"allwinner,sun50i-h616-mmc", (uintptr_t)&h616_mmc_conf},
+	{"allwinner,sun50i-h616-emmc", (uintptr_t)&h616_emmc_conf},
 	{NULL,             0}
 };
 
@@ -325,32 +353,29 @@ aw_mmc_helper_cd_handler(device_t dev, bool present)
 #ifdef MMCCAM
 	mmc_cam_sim_discover(&sc->mmc_sim);
 #else
-	AW_MMC_LOCK(sc);
+	bus_topo_lock();
 	if (present) {
 		if (sc->child == NULL) {
 			if (__predict_false(aw_mmc_debug & AW_MMC_DEBUG_CARD))
 				device_printf(sc->aw_dev, "Card inserted\n");
 
-			sc->child = device_add_child(sc->aw_dev, "mmc", -1);
-			AW_MMC_UNLOCK(sc);
+			sc->child = device_add_child(sc->aw_dev, "mmc", DEVICE_UNIT_ANY);
 			if (sc->child) {
 				device_set_ivars(sc->child, sc);
 				(void)device_probe_and_attach(sc->child);
 			}
-		} else
-			AW_MMC_UNLOCK(sc);
+		}
 	} else {
 		/* Card isn't present, detach if necessary */
 		if (sc->child != NULL) {
 			if (__predict_false(aw_mmc_debug & AW_MMC_DEBUG_CARD))
 				device_printf(sc->aw_dev, "Card removed\n");
 
-			AW_MMC_UNLOCK(sc);
 			device_delete_child(sc->aw_dev, sc->child);
 			sc->child = NULL;
-		} else
-			AW_MMC_UNLOCK(sc);
+		}
 	}
+	bus_topo_unlock();
 #endif /* MMCCAM */
 }
 
@@ -485,7 +510,6 @@ static int
 aw_mmc_detach(device_t dev)
 {
 	struct aw_mmc_softc *sc;
-	device_t d;
 
 	sc = device_get_softc(dev);
 
@@ -497,12 +521,7 @@ aw_mmc_detach(device_t dev)
 
 	callout_drain(&sc->aw_timeoutc);
 
-	AW_MMC_LOCK(sc);
-	d = sc->child;
-	sc->child = NULL;
-	AW_MMC_UNLOCK(sc);
-	if (d != NULL)
-		device_delete_child(sc->aw_dev, d);
+	device_delete_children(sc->aw_dev);
 
 	aw_mmc_teardown_dma(sc);
 
@@ -619,16 +638,18 @@ aw_dma_cb(void *arg, bus_dma_segment_t *segs, int nsegs, int err)
 
 	dma_desc = sc->aw_dma_desc;
 	for (i = 0; i < nsegs; i++) {
-		if (segs[i].ds_len == sc->aw_mmc_conf->dma_xferlen)
+		if ((segs[i].ds_len == sc->aw_mmc_conf->dma_xferlen) &&
+		    !sc->aw_mmc_conf->zero_is_skip)
 			dma_desc[i].buf_size = 0;		/* Size of 0 indicate max len */
 		else
 			dma_desc[i].buf_size = segs[i].ds_len;
-		dma_desc[i].buf_addr = segs[i].ds_addr;
+		dma_desc[i].buf_addr = segs[i].ds_addr >>
+		    sc->aw_mmc_conf->dma_desc_shift;
 		dma_desc[i].config = AW_MMC_DMA_CONFIG_CH |
-			AW_MMC_DMA_CONFIG_OWN | AW_MMC_DMA_CONFIG_DIC;
-
-		dma_desc[i].next = sc->aw_dma_desc_phys +
-			((i + 1) * sizeof(struct aw_mmc_dma_desc));
+		    AW_MMC_DMA_CONFIG_OWN | AW_MMC_DMA_CONFIG_DIC;
+		dma_desc[i].next = (sc->aw_dma_desc_phys +
+		    (i + 1) * sizeof(struct aw_mmc_dma_desc)) >>
+		    sc->aw_mmc_conf->dma_desc_shift;
 	}
 
 	dma_desc[0].config |= AW_MMC_DMA_CONFIG_FD;
@@ -690,7 +711,8 @@ aw_mmc_prepare_dma(struct aw_mmc_softc *sc)
 	AW_MMC_WRITE_4(sc, AW_MMC_IDIE, val);
 
 	/* Set DMA descritptor list address */
-	AW_MMC_WRITE_4(sc, AW_MMC_DLBA, sc->aw_dma_desc_phys);
+	AW_MMC_WRITE_4(sc, AW_MMC_DLBA, sc->aw_dma_desc_phys >>
+	    sc->aw_mmc_conf->dma_desc_shift);
 
 	/* FIFO trigger level */
 	AW_MMC_WRITE_4(sc, AW_MMC_FWLR, AW_MMC_DMA_FTRGLEVEL);
@@ -715,6 +737,13 @@ aw_mmc_reset(struct aw_mmc_softc *sc)
 	}
 	if (timeout == 0)
 		return (ETIMEDOUT);
+
+	/*
+	 * Assert hardware reset and have the card move to the pre-idle state.
+	 * This is needed on H616 to get the card into a functional state.
+	 */
+	AW_MMC_WRITE_4(sc, AW_MMC_HWRST, AW_MMC_HWRST_ASSERT);
+	AW_MMC_WRITE_4(sc, AW_MMC_HWRST, AW_MMC_HWRST_DEASSERT);
 
 	return (0);
 }

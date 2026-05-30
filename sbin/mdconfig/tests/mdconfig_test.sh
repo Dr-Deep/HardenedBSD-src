@@ -21,7 +21,6 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 #
 
 check_diskinfo()
@@ -275,24 +274,44 @@ attach_size_rounddown()
 attach_size_rounddown_body()
 {
 	local md
-	local ss=8192
-	local ms=$(($ss + 4096))
-	local ms2=$((2 * $ss + 4096))
+	local pgsz=$(pagesize)
+	local ss=$(($pgsz * 2))
+	local ms=$(($ss + $pgsz))
+	local ms2=$((2 * $ss + $pgsz))
 
-	# Use a sector size that's a likely multiple of PAGE_SIZE, as md(4)
+	# Use a sector size that's a multiple of the kernel page size, as md(4)
 	# expects that for swap MDs.
 	atf_check -s exit:0 -o save:mdconfig.out -e empty \
 	    -x "mdconfig -a -t swap -S $ss -s ${ms}b"
 	md=$(cat mdconfig.out)
-	# 12288 bytes should be rounded down to one sector.
-	check_diskinfo "$md" 8192 1 $ss
+	# one sector plus one page should be rounded down to one sector.
+	check_diskinfo "$md" $ss 1 $ss
 
 	# Resize and verify that the new size was also rounded down.
 	atf_check -s exit:0 -o empty -e empty \
 	    -x "mdconfig -r -u ${md#md} -s ${ms2}b"
-	check_diskinfo "$md" 16384 2 $ss
+	check_diskinfo "$md" $((2 * $ss)) 2 $ss
 }
-attach_size_rounddown()
+attach_size_rounddown_cleanup()
+{
+	cleanup_common
+}
+
+atf_test_case query_verbose cleanup
+query_verbose()
+{
+	atf_set "descr" "mdconfig -lv should print device details"
+}
+query_verbose_body()
+{
+	atf_check -s exit:0 -o save:mdconfig.out \
+	    -x 'mdconfig -a -t swap -s 1m -o reserve -o force'
+	md=$(cat mdconfig.out)
+	atf_check -s exit:0 \
+		-o match:"$md[[:space:]]+swap[[:space:]]+1024K[[:space:]]+[-][[:space:]]+[-][[:space:]]+force,reserve" \
+	-x "mdconfig -lv -u $md"
+}
+query_verbose_cleanup()
 {
 	cleanup_common
 }
@@ -308,4 +327,5 @@ atf_init_test_cases()
 	atf_add_test_case attach_swap
 	atf_add_test_case attach_with_specific_unit_number
 	atf_add_test_case attach_size_rounddown
+	atf_add_test_case query_verbose
 }

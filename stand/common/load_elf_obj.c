@@ -26,21 +26,15 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/exec.h>
 #include <sys/linker.h>
 #include <sys/module.h>
-#include <stdint.h>
-#include <string.h>
 #include <machine/elf.h>
 #include <stand.h>
-#define FREEBSD_ELF
-#include <sys/link_elf.h>
 
 #include "bootstrap.h"
+#include "modinfo.h"
 
 #define COPYOUT(s,d,l)	archsw.arch_copyout((vm_offset_t)(s), d, l)
 
@@ -81,9 +75,6 @@ static int __elfN(obj_parse_modmetadata)(struct preloaded_file *mp,
     elf_file_t ef);
 static Elf_Addr __elfN(obj_symaddr)(struct elf_file *ef, Elf_Size symidx);
 
-const char	*__elfN(obj_kerneltype) = "elf kernel";
-const char	*__elfN(obj_moduletype) = "elf obj module";
-
 /*
  * Attempt to load the file (file) as an ELF module.  It will be stored at
  * (dest), and a pointer to a module structure describing the loaded object
@@ -113,7 +104,8 @@ __elfN(obj_loadfile)(char *filename, uint64_t dest,
 	{
 		int verror;
 
-		ef.vctx = vectx_open(ef.fd, filename, 0L, NULL, &verror, __func__);
+		ef.vctx = vectx_open(ef.fd, filename, VE_MUST,
+		    0L, NULL, &verror, __func__);
 		if (verror) {
 			printf("Unverified %s: %s\n", filename, ve_error_get());
 			close(ef.fd);
@@ -158,7 +150,7 @@ __elfN(obj_loadfile)(char *filename, uint64_t dest,
 	}
 #endif
 
-	kfp = file_findfile(NULL, __elfN(obj_kerneltype));
+	kfp = file_findfile(NULL, md_kerntype);
 	if (kfp == NULL) {
 		printf("elf" __XSTRING(__ELF_WORD_SIZE)
 		    "_obj_loadfile: can't load module before kernel\n");
@@ -166,10 +158,7 @@ __elfN(obj_loadfile)(char *filename, uint64_t dest,
 		goto oerr;
 	}
 
-	if (archsw.arch_loadaddr != NULL)
-		dest = archsw.arch_loadaddr(LOAD_ELF, hdr, dest);
-	else
-		dest = roundup(dest, PAGE_SIZE);
+	dest = md_align(dest);
 
 	/*
 	 * Ok, we think we should handle this.
@@ -182,7 +171,7 @@ __elfN(obj_loadfile)(char *filename, uint64_t dest,
 		goto out;
 	}
 	fp->f_name = strdup(filename);
-	fp->f_type = strdup(__elfN(obj_moduletype));
+	fp->f_type = strdup(md_modtype_obj);
 
 	if (module_verbose > MODULE_VERBOSE_SILENT)
 		printf("%s ", filename);
@@ -208,7 +197,7 @@ out:
 	if (!err && ef.vctx) {
 		int verror;
 
-		verror = vectx_close(ef.vctx, VE_MUST, __func__);
+		verror = vectx_close(ef.vctx, __func__);
 		if (verror) {
 			err = EAUTH;
 			file_discard(fp);

@@ -24,9 +24,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
@@ -37,10 +34,8 @@ __FBSDID("$FreeBSD$");
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
-#include <contrib/ncsw/inc/ncsw_ext.h>
-#include <contrib/ncsw/inc/enet_ext.h>
-
 #include "fman.h"
+#include "fman_if.h"
 
 #define	FFMAN_DEVSTR	"Freescale Frame Manager"
 
@@ -59,7 +54,13 @@ static device_method_t fman_methods[] = {
 	DEVMETHOD(bus_alloc_resource,	fman_alloc_resource),
 	DEVMETHOD(bus_activate_resource,	fman_activate_resource),
 	DEVMETHOD(bus_release_resource,	fman_release_resource),
-	{ 0, 0 }
+
+	DEVMETHOD(fman_get_revision,	fman_get_revision),
+	DEVMETHOD(fman_reset_mac,	fman_reset_mac),
+	DEVMETHOD(fman_set_port_params,	fman_set_port_params),
+	DEVMETHOD(fman_get_qman_channel_id,	fman_qman_channel_id),
+
+	DEVMETHOD_END
 };
 
 DEFINE_CLASS_1(fman, fman_driver, fman_methods,
@@ -71,6 +72,9 @@ EARLY_DRIVER_MODULE(fman, simplebus, fman_driver, 0, 0,
 static int
 fman_fdt_probe(device_t dev)
 {
+
+	if (!ofw_bus_status_okay(dev))
+		return (ENXIO);
 
 	if (!ofw_bus_is_compatible(dev, "fsl,fman"))
 		return (ENXIO);
@@ -92,8 +96,8 @@ fman_get_clock(struct fman_softc *sc)
 
 	if ((OF_getprop(node, "clock-frequency", &fman_clock,
 	    sizeof(fman_clock)) <= 0) || (fman_clock == 0)) {
-		device_printf(dev, "could not acquire correct frequency "
-		    "from DTS\n");
+		device_printf(dev,
+		    "could not acquire correct frequency from DTS\n");
 
 		return (0);
 	}

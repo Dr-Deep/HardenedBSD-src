@@ -25,9 +25,6 @@
  *
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/malloc.h>
@@ -40,11 +37,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/md_var.h>
 #include <machine/pcb.h>
 
-#ifdef __SPE__
-#define	PPC_FEATURE_VECTOR	PPC_FEATURE_HAS_SPE
-#else
 #define	PPC_FEATURE_VECTOR	PPC_FEATURE_HAS_ALTIVEC
-#endif
 
 int
 cpu_ptrace(struct thread *td, int req, void *addr, int data)

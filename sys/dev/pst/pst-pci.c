@@ -28,9 +28,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
@@ -40,9 +37,9 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
+#include <sys/stdarg.h>
 #include <vm/vm.h>
 #include <vm/pmap.h>
-#include <machine/stdarg.h>
 #include <machine/resource.h>
 #include <machine/bus.h>
 #include <sys/rman.h>
@@ -97,7 +94,8 @@ iop_pci_attach(device_t dev)
 
     if (!iop_init(sc))
 	return 0;
-    return bus_generic_attach(dev);
+    bus_attach_children(dev);
+    return (0);
 }
 
 static int
@@ -120,7 +118,7 @@ static device_method_t pst_pci_methods[] = {
     DEVMETHOD(device_probe,		iop_pci_probe),
     DEVMETHOD(device_attach,		iop_pci_attach),
     DEVMETHOD(device_detach,		iop_pci_detach),
-    { 0, 0 }
+    DEVMETHOD_END
 };
 
 static driver_t pst_pci_driver = {

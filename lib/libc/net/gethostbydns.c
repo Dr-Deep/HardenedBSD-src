@@ -51,13 +51,6 @@
  * --Copyright--
  */
 
-#if defined(LIBC_SCCS) && !defined(lint)
-static char sccsid[] = "@(#)gethostnamadr.c	8.1 (Berkeley) 6/4/93";
-static char fromrcsid[] = "From: Id: gethnamaddr.c,v 8.23 1998/04/07 04:59:46 vixie Exp $";
-#endif /* LIBC_SCCS and not lint */
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -81,8 +74,10 @@ __FBSDID("$FreeBSD$");
 
 #define SPRINTF(x) ((size_t)sprintf x)
 
+#ifdef DEBUG
 static const char AskedForGot[] =
 		"gethostby*.gethostanswer: asked for \"%s\", got \"%s\"";
+#endif
 
 #ifdef RESOLVSORT
 static void addrsort(char **, int, res_state);
@@ -292,19 +287,24 @@ gethostanswer(const querybuf *answer, int anslen, const char *qname, int qtype,
 			continue;
 		}
 		if (type != qtype) {
-			if (type != T_SIG && type != ns_t_dname)
+#ifdef DEBUG
+			if (type != T_KEY && type != T_SIG &&
+			    type != T_DNAME && type != T_RRSIG)
 				syslog(LOG_NOTICE|LOG_AUTH,
 	"gethostby*.gethostanswer: asked for \"%s %s %s\", got type \"%s\"",
 				       qname, p_class(C_IN), p_type(qtype),
 				       p_type(type));
+#endif
 			cp += n;
 			continue;		/* XXX - had_error++ ? */
 		}
 		switch (type) {
 		case T_PTR:
 			if (strcasecmp(tname, bp) != 0) {
+#ifdef DEBUG
 				syslog(LOG_NOTICE|LOG_AUTH,
 				       AskedForGot, qname, bp);
+#endif
 				cp += n;
 				continue;	/* XXX - had_error++ ? */
 			}
@@ -351,8 +351,10 @@ gethostanswer(const querybuf *answer, int anslen, const char *qname, int qtype,
 		case T_A:
 		case T_AAAA:
 			if (strcasecmp(he->h_name, bp) != 0) {
+#ifdef DEBUG
 				syslog(LOG_NOTICE|LOG_AUTH,
 				       AskedForGot, he->h_name, bp);
+#endif
 				cp += n;
 				continue;	/* XXX - had_error++ ? */
 			}

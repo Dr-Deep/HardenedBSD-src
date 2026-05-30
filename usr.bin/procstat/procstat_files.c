@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2007-2011 Robert N. M. Watson
  * Copyright (c) 2015 Allan Jude <allanjude@freebsd.org>
@@ -26,9 +26,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/capsicum.h>
@@ -78,6 +75,8 @@ protocol_to_string(int domain, int type, int protocol)
 			return ("UDS");
 		case SOCK_DGRAM:
 			return ("UDD");
+		case SOCK_SEQPACKET:
+			return ("UDQ");
 		default:
 			return ("UD?");
 		}
@@ -152,6 +151,7 @@ static struct cap_desc {
 	{ CAP_FCHFLAGS,		"cf" },
 	{ CAP_FCHMOD,		"cm" },
 	{ CAP_FCHOWN,		"cn" },
+	{ CAP_FCHROOT,		"ct" },
 	{ CAP_FCNTL,		"fc" },
 	{ CAP_FLOCK,		"fl" },
 	{ CAP_FPATHCONF,	"fp" },
@@ -226,6 +226,10 @@ static struct cap_desc {
 	{ CAP_BINDAT,		"ba" },
 	{ CAP_CONNECTAT,	"ca" },
 
+	/* Inotify descriptor rights. */
+	{ CAP_INOTIFY_ADD,	"ina" },
+	{ CAP_INOTIFY_RM,	"inr" },
+
 	/* Aliases and defines that combine multiple rights. */
 	{ CAP_PREAD,		"prd" },
 	{ CAP_PWRITE,		"pwr" },
@@ -267,10 +271,9 @@ width_capability(cap_rights_t *rightsp)
 static void
 print_capability(cap_rights_t *rightsp, u_int capwidth)
 {
-	u_int count, i, width;
+	u_int count, i;
 
 	count = 0;
-	width = 0;
 	for (i = width_capability(rightsp); i < capwidth; i++) {
 		if (i != 0)
 			xo_emit(" ");
@@ -282,9 +285,6 @@ print_capability(cap_rights_t *rightsp, u_int capwidth)
 		if (cap_rights_is_set(rightsp, cap_desc[i].cd_right)) {
 			xo_emit("{D:/%s}{l:capabilities/%s}", count ? "," : "",
 			    cap_desc[i].cd_desc);
-			width += strlen(cap_desc[i].cd_desc);
-			if (count)
-				width++;
 			count++;
 		}
 	}
@@ -418,6 +418,11 @@ procstat_files(struct procstat *procstat, struct kinfo_proc *kipp)
 		case PS_FST_TYPE_EVENTFD:
 			str = "E";
 			xo_emit("{eq:fd_type/eventfd}");
+			break;
+
+		case PS_FST_TYPE_INOTIFY:
+			str = "i";
+			xo_emit("{eq:fd_type/inotify}");
 			break;
 
 		case PS_FST_TYPE_NONE:

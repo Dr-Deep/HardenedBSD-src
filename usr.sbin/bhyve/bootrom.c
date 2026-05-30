@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2015 Neel Natu <neel@freebsd.org>
  * All rights reserved.
@@ -27,12 +27,11 @@
  */
 
 #include <sys/param.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/types.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 
+#include <dev/vmm/vmm_mem.h>
 #include <machine/vmm.h>
 
 #include <err.h>
@@ -84,8 +83,8 @@ static struct bootrom_var_state {
  * that the Firmware Volume area is writable and persistent.
  */
 static int
-bootrom_var_mem_handler(struct vmctx *ctx, int vcpu, int dir, uint64_t addr,
-    int size, uint64_t *val, void *arg1, long arg2)
+bootrom_var_mem_handler(struct vcpu *vcpu __unused, int dir, uint64_t addr,
+    int size, uint64_t *val, void *arg1 __unused, long arg2 __unused)
 {
 	off_t offset;
 
@@ -120,12 +119,15 @@ bootrom_var_mem_handler(struct vmctx *ctx, int vcpu, int dir, uint64_t addr,
 void
 init_bootrom(struct vmctx *ctx)
 {
+	vm_paddr_t highmem;
+
 	romptr = vm_create_devmem(ctx, VM_BOOTROM, "bootrom", BOOTROM_SIZE);
 	if (romptr == MAP_FAILED)
 		err(4, "%s: vm_create_devmem", __func__);
-	gpa_base = (1ULL << 32) - BOOTROM_SIZE;
+	highmem = vm_get_highmem_base(ctx);
+	gpa_base = highmem - BOOTROM_SIZE;
 	gpa_allocbot = gpa_base;
-	gpa_alloctop = (1ULL << 32) - 1;
+	gpa_alloctop = highmem - 1;
 }
 
 int
@@ -191,7 +193,7 @@ bootrom_alloc(struct vmctx *ctx, size_t len, int prot, int flags,
 }
 
 int
-bootrom_loadrom(struct vmctx *ctx, const nvlist_t *nvl)
+bootrom_loadrom(struct vmctx *ctx)
 {
 	struct stat sbuf;
 	ssize_t rlen;
@@ -203,9 +205,9 @@ bootrom_loadrom(struct vmctx *ctx, const nvlist_t *nvl)
 	rv = -1;
 	varfd = -1;
 
-	bootrom = get_config_value_node(nvl, "bootrom");
+	bootrom = get_config_value("bootrom");
 	if (bootrom == NULL) {
-		return (-1);
+		return (0);
 	}
 
 	/*
@@ -234,19 +236,19 @@ bootrom_loadrom(struct vmctx *ctx, const nvlist_t *nvl)
 
 	rom_size = sbuf.st_size;
 
-	varfile = get_config_value_node(nvl, "bootvars");
+	varfile = get_config_value("bootvars");
 	var_size = 0;
 	if (varfile != NULL) {
 		varfd = open(varfile, O_RDWR);
 		if (varfd < 0) {
-			fprintf(stderr, "Error opening bootrom variable file "
-			    "\"%s\": %s\n", varfile, strerror(errno));
+			EPRINTLN("Error opening bootrom variable file "
+			    "\"%s\": %s", varfile, strerror(errno));
 			goto done;
 		}
 
 		if (fstat(varfd, &sbuf) < 0) {
-			fprintf(stderr,
-			    "Could not fstat bootrom variable file \"%s\": %s\n",
+			EPRINTLN(
+			    "Could not fstat bootrom variable file \"%s\": %s",
 			    varfile, strerror(errno));
 			goto done;
 		}
@@ -256,7 +258,7 @@ bootrom_loadrom(struct vmctx *ctx, const nvlist_t *nvl)
 
 	if (var_size > BOOTROM_SIZE ||
 	    (var_size != 0 && var_size < PAGE_SIZE)) {
-		fprintf(stderr, "Invalid bootrom variable size %ld\n",
+		EPRINTLN("Invalid bootrom variable size %ld",
 		    var_size);
 		goto done;
 	}
@@ -264,8 +266,8 @@ bootrom_loadrom(struct vmctx *ctx, const nvlist_t *nvl)
 	total_size = rom_size + var_size;
 
 	if (total_size > BOOTROM_SIZE) {
-		fprintf(stderr, "Invalid bootrom and variable aggregate size "
-		    "%ld\n", total_size);
+		EPRINTLN("Invalid bootrom and variable aggregate size %ld",
+		    total_size);
 		goto done;
 	}
 
@@ -312,4 +314,13 @@ done:
 		close(fd);
 	free(romfile);
 	return (rv);
+}
+
+/*
+ * Are we relying on a bootrom to initialize the guest's CPU context?
+ */
+bool
+bootrom_boot(void)
+{
+	return (get_config_value("bootrom") != NULL);
 }

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright 2012 by Andreas Tobler. All rights reserved.
  *
@@ -23,8 +23,6 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -82,7 +80,7 @@ static device_method_t onyx_methods[] = {
 	/* Device interface. */
 	DEVMETHOD(device_probe,		onyx_probe),
 	DEVMETHOD(device_attach,	onyx_attach),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t onyx_driver = {
@@ -199,7 +197,6 @@ onyx_probe(device_t dev)
 	if (strcmp(name, "codec") == 0) {
 		if (iicbus_get_addr(dev) != PCM3052_IICADDR)
 			return (ENXIO);
-	} else if (strcmp(name, "codec") == 0) {
 		compat = ofw_bus_get_compat(dev);
 		if (compat == NULL || strcmp(compat, "pcm3052") != 0)
 			return (ENXIO);
@@ -271,37 +268,20 @@ static int
 onyx_set(struct snd_mixer *m, unsigned dev, unsigned left, unsigned right)
 {
 	struct onyx_softc *sc;
-	struct mtx *mixer_lock;
-	int locked;
 	uint8_t l, r;
 
 	sc = device_get_softc(mix_getdevinfo(m));
-	mixer_lock = mixer_get_lock(m);
-	locked = mtx_owned(mixer_lock);
 
 	switch (dev) {
 	case SOUND_MIXER_VOLUME:
-
-		/*
-		 * We need to unlock the mixer lock because iicbus_transfer()
-		 * may sleep. The mixer lock itself is unnecessary here
-		 * because it is meant to serialize hardware access, which
-		 * is taken care of by the I2C layer, so this is safe.
-		 */
 		if (left > 100 || right > 100)
 			return (0);
 
 		l = left + 128;
 		r = right + 128;
 
-		if (locked)
-			mtx_unlock(mixer_lock);
-
 		onyx_write(sc, PCM3052_REG_LEFT_ATTN, l);
 		onyx_write(sc, PCM3052_REG_RIGHT_ATTN, r);
-
-		if (locked)
-			mtx_lock(mixer_lock);
 
 		return (left | (right << 8));
 	}

@@ -1,10 +1,6 @@
-# $FreeBSD$
-
-SHLIBDIR?=	/lib/casper
+SHLIBDIR?=	/lib
 
 .include <src.opts.mk>
-
-PACKAGE=	runtime
 
 SHLIB_MAJOR=	1
 INCSDIR?=	${INCLUDEDIR}/casper
@@ -41,3 +37,6 @@ MLINKS+=cap_pwd.3 cap_pwd_limit_fields.3
 MLINKS+=cap_pwd.3 cap_pwd_limit_users.3
 
 .include <bsd.lib.mk>
+
+# GCC 13 complains incorrectly about free after failed realloc: GCC bug #110501
+CFLAGS.cap_pwd.c+= ${NO_WUSE_AFTER_FREE}

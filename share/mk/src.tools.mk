@@ -11,7 +11,6 @@
 # targets survive with MYTOOL_CMD=false, then MYTOOL_CMD probably
 # does not belong here. Stick it somewhere else, thank you very much!
 #
-# $FreeBSD$
 
 .if !target(__<src.tools.mk>__)
 
@@ -22,5 +21,5 @@ SERVICES_MKDB_CMD?=	services_mkdb
 CAP_MKDB_CMD?=	cap_mkdb
 TIC_CMD?=	tic
 
-__<src.tools.mk>__:
+__<src.tools.mk>__:	.NOTMAIN
 .endif  # !target(__<tools>__)

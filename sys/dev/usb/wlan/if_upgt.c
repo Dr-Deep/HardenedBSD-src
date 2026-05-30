@@ -1,5 +1,4 @@
 /*	$OpenBSD: if_upgt.c,v 1.35 2008/04/16 18:32:15 damien Exp $ */
-/*	$FreeBSD$ */
 
 /*
  * Copyright (c) 2007 Marcus Glocker <mglocker@openbsd.org>
@@ -354,6 +353,8 @@ upgt_attach(device_t dev)
 	ic->ic_update_mcast = upgt_update_mcast;
 	ic->ic_transmit = upgt_transmit;
 	ic->ic_parent = upgt_parent;
+
+	ic->ic_flags_ext |= IEEE80211_FEXT_SEQNO_OFFLOAD;
 
 	ieee80211_radiotap_attach(ic,
 	    &sc->sc_txtap.wt_ihdr, sizeof(sc->sc_txtap),
@@ -1173,7 +1174,7 @@ upgt_eeprom_parse_freq3(struct upgt_softc *sc, uint8_t *data, int len)
 
 		sc->sc_eeprom_freq3[channel] = freq3[i];
 
-		DPRINTF(sc, UPGT_DEBUG_FW, "frequence=%d, channel=%d\n",
+		DPRINTF(sc, UPGT_DEBUG_FW, "frequency=%d, channel=%d\n",
 		    le16toh(sc->sc_eeprom_freq3[channel].freq), channel);
 	}
 }
@@ -1215,7 +1216,7 @@ upgt_eeprom_parse_freq4(struct upgt_softc *sc, uint8_t *data, int len)
 			sc->sc_eeprom_freq4[channel][j].pad = 0;
 		}
 
-		DPRINTF(sc, UPGT_DEBUG_FW, "frequence=%d, channel=%d\n",
+		DPRINTF(sc, UPGT_DEBUG_FW, "frequency=%d, channel=%d\n",
 		    le16toh(freq4_1[i].freq), channel);
 	}
 }
@@ -1243,7 +1244,7 @@ upgt_eeprom_parse_freq6(struct upgt_softc *sc, uint8_t *data, int len)
 
 		sc->sc_eeprom_freq6[channel] = freq6[i];
 
-		DPRINTF(sc, UPGT_DEBUG_FW, "frequence=%d, channel=%d\n",
+		DPRINTF(sc, UPGT_DEBUG_FW, "frequency=%d, channel=%d\n",
 		    le16toh(sc->sc_eeprom_freq6[channel].freq), channel);
 	}
 }
@@ -1930,7 +1931,7 @@ upgt_detach(device_t dev)
 {
 	struct upgt_softc *sc = device_get_softc(dev);
 	struct ieee80211com *ic = &sc->sc_ic;
-	unsigned int x;
+	unsigned x;
 
 	/*
 	 * Prevent further allocations from RX/TX/CMD
@@ -2117,6 +2118,9 @@ upgt_tx_start(struct upgt_softc *sc, struct mbuf *m, struct ieee80211_node *ni,
 
 	upgt_set_led(sc, UPGT_LED_BLINK);
 
+	/* Assign sequence number */
+	ieee80211_output_seqno_assign(ni, -1, m);
+
 	/*
 	 * Software crypto.
 	 */
@@ -2140,8 +2144,7 @@ upgt_tx_start(struct upgt_softc *sc, struct mbuf *m, struct ieee80211_node *ni,
 	mem->addr = htole32(data->addr);
 	txdesc = (struct upgt_lmac_tx_desc *)(mem + 1);
 
-	if ((wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) ==
-	    IEEE80211_FC0_TYPE_MGT) {
+	if (IEEE80211_IS_MGMT(wh)) {
 		/* mgmt frames  */
 		txdesc->header1.flags = UPGT_H1_FLAGS_TX_MGMT;
 		/* always send mgmt frames at lowest rate (DS1) */
@@ -2192,7 +2195,7 @@ done:
 	 * will stall.  It's strange, but it works, so we keep reading
 	 * the statistics here.  *shrug*
 	 */
-	if (!(vap->iv_ifp->if_get_counter(vap->iv_ifp, IFCOUNTER_OPACKETS) %
+	if (!(if_getcounter(vap->iv_ifp, IFCOUNTER_OPACKETS) %
 	    UPGT_TX_STAT_INTERVAL))
 		upgt_get_stats(sc);
 
@@ -2206,7 +2209,6 @@ upgt_bulk_rx_callback(struct usb_xfer *xfer, usb_error_t error)
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct ieee80211_frame *wh;
 	struct ieee80211_node *ni;
-	struct epoch_tracker et;
 	struct mbuf *m = NULL;
 	struct upgt_data *data;
 	int8_t nf;
@@ -2244,14 +2246,12 @@ setup:
 			ni = ieee80211_find_rxnode(ic,
 			    (struct ieee80211_frame_min *)wh);
 			nf = -95;	/* XXX */
-			NET_EPOCH_ENTER(et);
 			if (ni != NULL) {
 				(void) ieee80211_input(ni, m, rssi, nf);
 				/* node is no longer needed */
 				ieee80211_free_node(ni);
 			} else
 				(void) ieee80211_input_all(ic, m, rssi, nf);
-			NET_EPOCH_EXIT(et);
 			m = NULL;
 		}
 		UPGT_LOCK(sc);

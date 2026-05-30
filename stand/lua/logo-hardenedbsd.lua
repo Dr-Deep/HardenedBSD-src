@@ -27,28 +27,26 @@
 -- $FreeBSD$
 --
 
-local drawer = require("drawer")
-
-local hardenedbsd_color = {
-"\027[muKOS2qsmkfe38kEuXLimP+7XoBiuIt5k",
-"BM\027[36mHardened\027[34mBSD\027[mxfOL9QwvfA6yxGHkNMG",
-"2I7ADmw7Mp/P8Y4wjnBFDNKvNzdZa/uu",
-"7jx0/j28DcHs1oTUiFxDezXj0+bYBAjk",
-"M/WeI4vOFPUZQcUiqAhCItlLY/1/YsdU",
-"bYCu3JOWsOA/Ctw0oVmHA+jY6Z8RJnsT",
-"NTm3YVdJVYQ+O2ltoSw\027[36mHardened\027[34mBSD\027[mVD",
-"vji9p89gQvsPgS9hh9ekUCw/0TnSeQ1W",
-"NHcmBLfiNO7mU9D4rCxiSQfifcIZzC78",
-"uwaNYp+XGq+qEt7pQ+aX2nsJ2juBCGai",
-"fTclPrFDFBNSqyrmOEI3Lrkn3eudPbJU",
-"Nl\027[36mHardened\027[34mBSD\027[mvCOXT59dcSRw9mB3bOl",
-"gEcyCwdlh1xWKOu9qGWcmsAhOVReHec4"
+return {
+	logo = {
+		ascii = {
+			image = {
+			"\027[muKOS2qsmkfe38kEuXLimP+7XoBiuIt5k",
+			"BM\027[36mHardened\027[34mBSD\027[mxfOL9QwvfA6yxGHkNMG",
+			"2I7ADmw7Mp/P8Y4wjnBFDNKvNzdZa/uu",
+			"7jx0/j28DcHs1oTUiFxDezXj0+bYBAjk",
+			"M/WeI4vOFPUZQcUiqAhCItlLY/1/YsdU",
+			"bYCu3JOWsOA/Ctw0oVmHA+jY6Z8RJnsT",
+			"NTm3YVdJVYQ+O2ltoSw\027[36mHardened\027[34mBSD\027[mVD",
+			"vji9p89gQvsPgS9hh9ekUCw/0TnSeQ1W",
+			"NHcmBLfiNO7mU9D4rCxiSQfifcIZzC78",
+			"uwaNYp+XGq+qEt7pQ+aX2nsJ2juBCGai",
+			"fTclPrFDFBNSqyrmOEI3Lrkn3eudPbJU",
+			"Nl\027[36mHardened\027[34mBSD\027[mvCOXT59dcSRw9mB3bOl",
+			"gEcyCwdlh1xWKOu9qGWcmsAhOVReHec4"
+			},
+			requires_color = true,
+			shift = {x = 1, y = 5}
+		}
+	}
 }
-
-drawer.addLogo("hardenedbsd", {
-	requires_color = true,
-	graphic = hardenedbsd_color,
-	shift = {x = 1, y = 5},
-})
-
-return true

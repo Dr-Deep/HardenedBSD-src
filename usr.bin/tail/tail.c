@@ -32,19 +32,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-
-__FBSDID("$FreeBSD$");
-
-#ifndef lint
-static const char copyright[] =
-"@(#) Copyright (c) 1991, 1993\n\
-	The Regents of the University of California.  All rights reserved.\n";
-#endif
-
-#ifndef lint
-static const char sccsid[] = "@(#)tail.c	8.1 (Berkeley) 6/6/93";
-#endif
 
 #include <sys/capsicum.h>
 #include <sys/types.h>
@@ -70,7 +57,7 @@ int Fflag, fflag, qflag, rflag, rval, no_files, vflag;
 fileargs_t *fa;
 
 static void obsolete(char **);
-static void usage(void);
+static void usage(void) __dead2;
 
 static const struct option long_opts[] =
 {
@@ -108,17 +95,19 @@ main(int argc, char *argv[])
 	 * -r is the entire file, not 10 lines.
 	 */
 #define	ARG(units, forward, backward) {					\
+	int64_t num;							\
 	if (style)							\
 		usage();						\
-	if (expand_number(optarg, &off))				\
+	if (expand_number(optarg, &num))				\
 		err(1, "illegal offset -- %s", optarg);			\
-	if (off > INT64_MAX / units || off < INT64_MIN / units )	\
+	if (num > INT64_MAX / units || num < INT64_MIN / units)		\
 		errx(1, "illegal offset -- %s", optarg);		\
-	switch(optarg[0]) {						\
+	off = num * units;						\
+	switch (optarg[0]) {						\
 	case '+':							\
-		if (off)						\
+		if (off != 0)						\
 			off -= (units);					\
-			style = (forward);				\
+		style = (forward);					\
 		break;							\
 	case '-':							\
 		off = -off;						\
@@ -134,7 +123,7 @@ main(int argc, char *argv[])
 	off = 0;
 	while ((ch = getopt_long(argc, argv, "+Fb:c:fn:qrv", long_opts, NULL)) !=
 	    -1)
-		switch(ch) {
+		switch (ch) {
 		case 'F':	/* -F is superset of (and implies) -f */
 			Fflag = fflag = 1;
 			break;
@@ -176,7 +165,7 @@ main(int argc, char *argv[])
 		cap_rights_set(&rights, CAP_EVENT);
 	if (caph_rights_limit(STDIN_FILENO, &rights) < 0 ||
 	    caph_limit_stderr() < 0 || caph_limit_stdout() < 0)
-		err(1, "can't limit stdio rights");
+		err(1, "unable to limit stdio rights");
 
 	fa = fileargs_init(argc, argv, O_RDONLY, 0, &rights, FA_OPEN);
 	if (fa == NULL)
@@ -216,7 +205,7 @@ main(int argc, char *argv[])
 	if (*argv && fflag) {
 		files = malloc(no_files * sizeof(struct file_info));
 		if (files == NULL)
-			err(1, "Couldn't malloc space for file descriptors.");
+			err(1, "failed to allocate memory for file descriptors");
 
 		for (filep = files; (fn = *argv++); filep++) {
 			filep->file_name = fn;
@@ -273,6 +262,7 @@ main(int argc, char *argv[])
 		} else if (fflag) {
 			file.file_name = fn;
 			file.fp = stdin;
+			file.st = sb;
 			follow(&file, style, off);
 		} else {
 			forward(stdin, fn, style, off, &sb);
@@ -310,7 +300,7 @@ obsolete(char *argv[])
 			/* Malloc space for dash, new option and argument. */
 			len = strlen(*argv);
 			if ((start = p = malloc(len + 3)) == NULL)
-				err(1, "malloc");
+				err(1, "failed to allocate memory");
 			*p++ = '-';
 
 			/*

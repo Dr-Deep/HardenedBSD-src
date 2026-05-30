@@ -1,4 +1,3 @@
-# $FreeBSD$
 #
 # Support Clang static analyzer on SRCS.
 #
@@ -26,7 +25,7 @@
 #		output on stdout.
 
 .if !target(__<bsd.clang-analyze.mk>__)
-__<bsd.clang-analyze.mk>__:
+__<bsd.clang-analyze.mk>__:	.NOTMAIN
 
 .include <bsd.compiler.mk>
 

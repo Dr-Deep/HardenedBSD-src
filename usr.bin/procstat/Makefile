@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 .include <src.opts.mk>
 
 PROG=	procstat
@@ -13,11 +11,13 @@ SRCS=	procstat.c		\
 	procstat_cred.c		\
 	procstat_cs.c		\
 	procstat_files.c	\
+	procstat_kqueue.c	\
 	procstat_kstack.c	\
 	procstat_penv.c		\
 	procstat_ptlwpinfo.c	\
 	procstat_pwdx.c		\
 	procstat_rlimit.c	\
+	procstat_rlimitusage.c	\
 	procstat_rusage.c	\
 	procstat_sigs.c		\
 	procstat_threads.c	\

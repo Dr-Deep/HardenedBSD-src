@@ -2,8 +2,6 @@
  * Various routines from the OSTA 2.01 specs.  Copyrights are included with
  * each code segment.  Slight whitespace modifications have been made for
  * formatting purposes.  Typos/bugs have been fixed.
- *
- * $FreeBSD$
  */
 
 #include <fs/udf/osta.h>
@@ -211,9 +209,7 @@ static unsigned short crc_table[256] = {
 };
 
 unsigned short
-udf_cksum(s, n)
-	unsigned char *s;
-	int n;
+udf_cksum(unsigned char *s, int n)
 {
 	unsigned short crc=0;
 
@@ -224,9 +220,7 @@ udf_cksum(s, n)
 
 /* UNICODE Checksum */
 unsigned short
-udf_unicode_cksum(s, n)
-	unsigned short *s;
-	int n;
+udf_unicode_cksum(unsigned short *s, int n)
 {
 	unsigned short crc=0;
 
@@ -389,7 +383,7 @@ int UDFTransName(
 			int maxFilenameLen;
 			/* Translate extension, and store it in ext. */
 			for(index = 0; index<EXT_SIZE &&
-			    extIndex + index +1 < udfLen; index++ ) {
+			    extIndex + index +1 < udfLen; index++) {
 				current = udfName[extIndex + index + 1];
 				if (IsIllegal(current) ||
 				    !UnicodeIsPrint(current)) {
@@ -438,7 +432,7 @@ int UDFTransName(
 		/* Place a translated extension at end, if found. */
 		if (hasExt) {
 			newName[newIndex++] = PERIOD;
-			for (index = 0;index < localExtIndex ;index++ ) {
+			for (index = 0; index < localExtIndex; index++) {
 				newName[newIndex++] = ext[index];
 			}
 		}

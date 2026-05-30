@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 .include <bsd.own.mk>
 
 TESTSRC=	${SRCTOP}/contrib/netbsd-tests/lib/libm
@@ -60,6 +58,7 @@ ATF_TESTS_C+=	exponential_test
 ATF_TESTS_C+=	fenv_test
 ATF_TESTS_C+=	fma_test
 ATF_TESTS_C+=	fmaxmin_test
+ATF_TESTS_C+=	fmaximum_fminimum_test
 ATF_TESTS_C+=	ilogb2_test
 ATF_TESTS_C+=	invtrig_test
 ATF_TESTS_C+=	invctrig_test

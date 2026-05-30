@@ -29,20 +29,6 @@
  * SUCH DAMAGE.
  */
 
-#if 0
-#ifndef lint
-static const char copyright[] =
-"@(#) Copyright (c) 1990, 1993, 1994\n\
-	The Regents of the University of California.  All rights reserved.\n";
-#endif /* not lint */
-
-#ifndef lint
-static char sccsid[] = "@(#)rm.c	8.5 (Berkeley) 4/18/94";
-#endif /* not lint */
-#endif
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/stat.h>
 #include <sys/param.h>
 #include <sys/mount.h>
@@ -198,7 +184,7 @@ rm_tree(char **argv)
 	flags = FTS_PHYSICAL;
 	if (!needstat)
 		flags |= FTS_NOSTAT;
-	if (Wflag)
+	if (Wflag || fflag)
 		flags |= FTS_WHITEOUT;
 	if (xflag)
 		flags |= FTS_XDEV;
@@ -287,7 +273,7 @@ rm_tree(char **argv)
 
 			case FTS_W:
 				rval = undelete(p->fts_accpath);
-				if (rval == 0 && (fflag && errno == ENOENT)) {
+				if (rval == 0 || (fflag && errno == ENOENT)) {
 					if (vflag)
 						(void)printf("%s\n",
 						    p->fts_path);

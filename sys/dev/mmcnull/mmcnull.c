@@ -23,9 +23,6 @@
  *
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/module.h>
 #include <sys/kernel.h>
@@ -80,7 +77,7 @@ mmcnull_identify(driver_t *driver, device_t parent)
 		return;
 
 	/* Avoid duplicates. */
-	if (device_find_child(parent, "mmcnull", -1))
+	if (device_find_child(parent, "mmcnull", DEVICE_UNIT_ANY))
 		return;
 
 	child = BUS_ADD_CHILD(parent, 20, "mmcnull", 0);

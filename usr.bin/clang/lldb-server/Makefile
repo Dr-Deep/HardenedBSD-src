@@ -1,8 +1,5 @@
-# $FreeBSD$
-
 .include "${SRCTOP}/lib/clang/lldb.pre.mk"
 
-PACKAGE=	lldb
 PROG_CXX=	lldb-server
 
 CFLAGS+=	-I${LLDB_SRCS}/include
@@ -11,7 +8,6 @@ CFLAGS+=	-I${.OBJDIR}
 
 SRCDIR=		lldb/tools/lldb-server
 
-SRCS+=		Acceptor.cpp
 SRCS+=		LLDBServerUtilities.cpp
 SRCS+=		SystemInitializerLLGS.cpp
 SRCS+=		lldb-gdbserver.cpp
@@ -50,5 +46,6 @@ LIBADD+=	ncursesw
 LIBADD+=	panel
 LIBADD+=	pthread
 LIBADD+=	z
+LIBADD+=	zstd
 
 .include <bsd.prog.mk>

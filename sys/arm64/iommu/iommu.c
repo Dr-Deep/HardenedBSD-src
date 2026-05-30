@@ -35,9 +35,6 @@
 
 #include "opt_platform.h"
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/bus.h>
 #include <sys/kernel.h>
@@ -83,22 +80,21 @@ struct iommu_entry {
 static LIST_HEAD(, iommu_entry) iommu_list = LIST_HEAD_INITIALIZER(iommu_list);
 
 static int
-iommu_domain_unmap_buf(struct iommu_domain *iodom, iommu_gaddr_t base,
-    iommu_gaddr_t size, int flags)
+iommu_domain_unmap_buf(struct iommu_domain *iodom,
+    struct iommu_map_entry *entry, int flags)
 {
 	struct iommu_unit *iommu;
 	int error;
 
 	iommu = iodom->iommu;
-
-	error = IOMMU_UNMAP(iommu->dev, iodom, base, size);
-
+	error = IOMMU_UNMAP(iommu->dev, iodom, entry->start, entry->end -
+	    entry->start);
 	return (error);
 }
 
 static int
-iommu_domain_map_buf(struct iommu_domain *iodom, iommu_gaddr_t base,
-    iommu_gaddr_t size, vm_page_t *ma, uint64_t eflags, int flags)
+iommu_domain_map_buf(struct iommu_domain *iodom, struct iommu_map_entry *entry,
+    vm_page_t *ma, uint64_t eflags, int flags)
 {
 	struct iommu_unit *iommu;
 	vm_prot_t prot;
@@ -113,12 +109,10 @@ iommu_domain_map_buf(struct iommu_domain *iodom, iommu_gaddr_t base,
 	if (eflags & IOMMU_MAP_ENTRY_WRITE)
 		prot |= VM_PROT_WRITE;
 
-	va = base;
-
+	va = entry->start;
 	iommu = iodom->iommu;
-
-	error = IOMMU_MAP(iommu->dev, iodom, va, ma, size, prot);
-
+	error = IOMMU_MAP(iommu->dev, iodom, va, ma, entry->end -
+	    entry->start, prot);
 	return (error);
 }
 
@@ -136,8 +130,9 @@ iommu_domain_alloc(struct iommu_unit *iommu)
 	if (iodom == NULL)
 		return (NULL);
 
+	KASSERT(iodom->end != 0, ("domain end is not set"));
+
 	iommu_domain_init(iommu, iodom, &domain_map_ops);
-	iodom->end = VM_MAXUSER_ADDRESS;
 	iodom->iommu = iommu;
 	iommu_gas_init_domain(iodom);
 
@@ -168,13 +163,12 @@ iommu_domain_free(struct iommu_domain *iodom)
 }
 
 static void
-iommu_tag_init(struct bus_dma_tag_iommu *t)
+iommu_tag_init(struct iommu_domain *iodom, struct bus_dma_tag_iommu *t)
 {
 	bus_addr_t maxaddr;
 
-	maxaddr = BUS_SPACE_MAXADDR;
+	maxaddr = MIN(iodom->end, BUS_SPACE_MAXADDR);
 
-	t->common.ref_count = 0;
 	t->common.impl = &bus_dma_iommu_impl;
 	t->common.alignment = 1;
 	t->common.boundary = 0;
@@ -223,7 +217,7 @@ iommu_ctx_init(device_t requester, struct iommu_ctx *ioctx)
 	tag->ctx = ioctx;
 	tag->ctx->domain = iodom;
 
-	iommu_tag_init(tag);
+	iommu_tag_init(iodom, tag);
 
 	return (error);
 }
@@ -247,6 +241,7 @@ iommu_lookup(device_t dev)
 	return (NULL);
 }
 
+#ifdef FDT
 struct iommu_ctx *
 iommu_get_ctx_ofw(device_t dev, int channel)
 {
@@ -332,6 +327,7 @@ iommu_get_ctx_ofw(device_t dev, int channel)
 
 	return (ioctx);
 }
+#endif
 
 struct iommu_ctx *
 iommu_get_ctx(struct iommu_unit *iommu, device_t requester,
@@ -377,32 +373,19 @@ void
 iommu_free_ctx_locked(struct iommu_unit *iommu, struct iommu_ctx *ioctx)
 {
 	struct bus_dma_tag_iommu *tag;
+	int error;
 
 	IOMMU_ASSERT_LOCKED(iommu);
 
 	tag = ioctx->tag;
 
 	IOMMU_CTX_FREE(iommu->dev, ioctx);
-
-	free(tag, M_IOMMU);
-}
-
-void
-iommu_free_ctx(struct iommu_ctx *ioctx)
-{
-	struct iommu_unit *iommu;
-	struct iommu_domain *iodom;
-	int error;
-
-	iodom = ioctx->domain;
-	iommu = iodom->iommu;
-
-	IOMMU_LOCK(iommu);
-	iommu_free_ctx_locked(iommu, ioctx);
 	IOMMU_UNLOCK(iommu);
 
+	free(tag, M_IOMMU);
+
 	/* Since we have a domain per each ctx, remove the domain too. */
-	error = iommu_domain_free(iodom);
+	error = iommu_domain_free(ioctx->domain);
 	if (error)
 		device_printf(iommu->dev, "Could not free a domain\n");
 }
@@ -428,8 +411,8 @@ iommu_domain_unload(struct iommu_domain *iodom,
 	TAILQ_FOREACH_SAFE(entry, entries, dmamap_link, entry1) {
 		KASSERT((entry->flags & IOMMU_MAP_ENTRY_MAP) != 0,
 		    ("not mapped entry %p %p", iodom, entry));
-		error = iodom->ops->unmap(iodom, entry->start, entry->end -
-		    entry->start, cansleep ? IOMMU_PGF_WAITOK : 0);
+		error = iodom->ops->unmap(iodom, entry,
+		    cansleep ? IOMMU_PGF_WAITOK : 0);
 		KASSERT(error == 0, ("unmap %p error %d", iodom, error));
 		TAILQ_REMOVE(entries, entry, dmamap_link);
 		iommu_domain_free_entry(entry, true);
@@ -455,6 +438,7 @@ iommu_register(struct iommu_unit *iommu)
 	LIST_INSERT_HEAD(&iommu_list, entry, next);
 	IOMMU_LIST_UNLOCK();
 
+	sysctl_ctx_init(&iommu->sysctl_ctx);
 	iommu_init_busdma(iommu);
 
 	return (0);
@@ -475,6 +459,7 @@ iommu_unregister(struct iommu_unit *iommu)
 	IOMMU_LIST_UNLOCK();
 
 	iommu_fini_busdma(iommu);
+	sysctl_ctx_free(&iommu->sysctl_ctx);
 
 	mtx_destroy(&iommu->lock);
 
@@ -500,6 +485,11 @@ iommu_find(device_t dev, bool verbose)
 	IOMMU_LIST_UNLOCK();
 
 	return (NULL);
+}
+
+void
+iommu_unit_pre_instantiate_ctx(struct iommu_unit *unit)
+{
 }
 
 void

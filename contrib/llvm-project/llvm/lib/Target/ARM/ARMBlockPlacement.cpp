@@ -16,6 +16,7 @@
 #include "ARMBasicBlockInfo.h"
 #include "ARMSubtarget.h"
 #include "MVETailPredUtils.h"
+#include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
@@ -46,7 +47,7 @@ public:
   bool revertWhileToDoLoop(MachineInstr *WLS);
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.addRequired<MachineLoopInfo>();
+    AU.addRequired<MachineLoopInfoWrapperPass>();
     MachineFunctionPass::getAnalysisUsage(AU);
   }
 };
@@ -212,13 +213,13 @@ bool ARMBlockPlacement::processPostOrderLoops(MachineLoop *ML) {
 bool ARMBlockPlacement::runOnMachineFunction(MachineFunction &MF) {
   if (skipFunction(MF.getFunction()))
     return false;
-  const ARMSubtarget &ST = static_cast<const ARMSubtarget &>(MF.getSubtarget());
+  const ARMSubtarget &ST = MF.getSubtarget<ARMSubtarget>();
   if (!ST.hasLOB())
     return false;
   LLVM_DEBUG(dbgs() << DEBUG_PREFIX << "Running on " << MF.getName() << "\n");
-  MLI = &getAnalysis<MachineLoopInfo>();
+  MLI = &getAnalysis<MachineLoopInfoWrapperPass>().getLI();
   TII = static_cast<const ARMBaseInstrInfo *>(ST.getInstrInfo());
-  BBUtils = std::unique_ptr<ARMBasicBlockUtils>(new ARMBasicBlockUtils(MF));
+  BBUtils = std::make_unique<ARMBasicBlockUtils>(MF);
   MF.RenumberBlocks();
   BBUtils->computeAllBlockSizes();
   BBUtils->adjustBBOffsetsAfter(&MF.front());

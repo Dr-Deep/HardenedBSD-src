@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-3-Clause AND BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-3-Clause AND BSD-2-Clause
  *
  * Copyright (c) 2002-2010 M. Warner Losh <imp@FreeBSD.org>
  *
@@ -62,9 +62,6 @@
 //	o devd.conf and devd man pages need a lot of help:
 //	  - devd needs to document the unix domain socket
 //	  - devd.conf needs more details on the supported statements.
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/socket.h>
@@ -156,6 +153,8 @@ static volatile sig_atomic_t romeo_must_die = 0;
 
 static const char *configfile = CF;
 
+static	char	vm_guest[80];
+
 static void devdlog(int priority, const char* message, ...)
 	__printflike(2, 3);
 static void event_loop(void);
@@ -172,6 +171,8 @@ delete_and_clear(vector<T *> &v)
 }
 
 static config cfg;
+
+static const char *curr_cf = NULL;
 
 event_proc::event_proc() : _prio(-1)
 {
@@ -368,7 +369,7 @@ media::do_match(config &c)
 
 	retval = false;
 
-	s = socket(PF_INET, SOCK_DGRAM, 0);
+	s = socket(PF_LOCAL, SOCK_DGRAM, 0);
 	if (s >= 0) {
 		memset(&ifmr, 0, sizeof(ifmr));
 		strlcpy(ifmr.ifm_name, value.c_str(), sizeof(ifmr.ifm_name));
@@ -452,17 +453,28 @@ config::reset(void)
 	delete_and_clear(_notify_list);
 }
 
+/*
+ * Called recursively as new files are included, so current stack of old names
+ * saved in each instance of 'old' on the call stack. Called single threaded
+ * so global varaibles curr_cf and lineno (and all of yacc's parser state)
+ * are safe to access w/o a lock.
+ */
 void
 config::parse_one_file(const char *fn)
 {
+	const char *old;
+
 	devdlog(LOG_DEBUG, "Parsing %s\n", fn);
 	yyin = fopen(fn, "r");
+	old = curr_cf;
+	curr_cf = fn;
 	if (yyin == NULL)
 		err(1, "Cannot open config file %s", fn);
 	lineno = 1;
 	if (yyparse() != 0)
 		errx(1, "Cannot parse %s at line %d", fn, lineno);
 	fclose(yyin);
+	curr_cf = old;
 }
 
 void
@@ -857,6 +869,8 @@ process_event(char *buffer)
 	cfg.set_variable("timestamp", timestr);
 	free(timestr);
 
+	cfg.set_variable("vm_guest", vm_guest);
+
 	// Match doesn't have a device, and the format is a little
 	// different, so handle it separately.
 	switch (type) {
@@ -928,7 +942,7 @@ create_socket(const char *name, int socktype)
 	return (fd);
 }
 
-static unsigned int max_clients = 10;	/* Default, can be overridden on cmdline. */
+static unsigned int max_clients = 50;	/* Default, can be overridden on cmdline. */
 static unsigned int num_clients;
 
 static list<client_t> clients;
@@ -1097,6 +1111,14 @@ event_loop(void)
 			err(1, "select");
 		} else if (rv == 0)
 			check_clients();
+		/*
+		 * Aside from the socket type, both sockets use the same
+		 * protocol, so we can process clients the same way.
+		 */
+		if (FD_ISSET(stream_fd, &fds))
+			new_client(stream_fd, SOCK_STREAM);
+		if (FD_ISSET(seqpacket_fd, &fds))
+			new_client(seqpacket_fd, SOCK_SEQPACKET);
 		if (FD_ISSET(fd, &fds)) {
 			rv = read(fd, buffer, sizeof(buffer) - 1);
 			if (rv > 0) {
@@ -1125,14 +1147,6 @@ event_loop(void)
 				break;
 			}
 		}
-		if (FD_ISSET(stream_fd, &fds))
-			new_client(stream_fd, SOCK_STREAM);
-		/*
-		 * Aside from the socket type, both sockets use the same
-		 * protocol, so we can process clients the same way.
-		 */
-		if (FD_ISSET(seqpacket_fd, &fds))
-			new_client(seqpacket_fd, SOCK_SEQPACKET);
 	}
 	cfg.remove_pidfile();
 	close(seqpacket_fd);
@@ -1291,6 +1305,7 @@ int
 main(int argc, char **argv)
 {
 	int ch;
+	size_t len;
 
 	check_devd_enabled();
 	while ((ch = getopt(argc, argv, "df:l:nq")) != -1) {
@@ -1313,6 +1328,12 @@ main(int argc, char **argv)
 		default:
 			usage();
 		}
+	}
+
+	len = sizeof(vm_guest);
+	if (sysctlbyname("kern.vm_guest", vm_guest, &len, NULL, 0) < 0) {
+		devdlog(LOG_ERR,
+		    "sysctlbyname(kern.vm_guest) failed: %d\n", errno);
 	}
 
 	cfg.parse();

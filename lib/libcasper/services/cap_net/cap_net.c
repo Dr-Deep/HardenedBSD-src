@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2020 Mariusz Zaborski <oshogbo@FreeBSD.org>
  *
@@ -26,8 +26,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/cnv.h>
 #include <sys/dnv.h>
 #include <sys/nv.h>
@@ -107,7 +105,7 @@ hostent_unpack(const nvlist_t *nvl, struct hostent *hp)
 	hp->h_length = (int)nvlist_get_number(nvl, "length");
 
 	nitems = (unsigned int)nvlist_get_number(nvl, "naliases");
-	hp->h_aliases = calloc(sizeof(hp->h_aliases[0]), nitems + 1);
+	hp->h_aliases = calloc(nitems + 1, sizeof(hp->h_aliases[0]));
 	if (hp->h_aliases == NULL)
 		goto fail;
 	for (ii = 0; ii < nitems; ii++) {
@@ -121,7 +119,7 @@ hostent_unpack(const nvlist_t *nvl, struct hostent *hp)
 	hp->h_aliases[ii] = NULL;
 
 	nitems = (unsigned int)nvlist_get_number(nvl, "naddrs");
-	hp->h_addr_list = calloc(sizeof(hp->h_addr_list[0]), nitems + 1);
+	hp->h_addr_list = calloc(nitems + 1, sizeof(hp->h_addr_list[0]));
 	if (hp->h_addr_list == NULL)
 		goto fail;
 	for (ii = 0; ii < nitems; ii++) {
@@ -290,7 +288,7 @@ cap_getaddrinfo(cap_channel_t *chan, const char *hostname, const char *servname,
 	const nvlist_t *nvlai;
 	char nvlname[64];
 	nvlist_t *nvl;
-	int error, n;
+	int error, serrno, n;
 
 	nvl = nvlist_create(0);
 	nvlist_add_string(nvl, "cmd", "getaddrinfo");
@@ -313,7 +311,9 @@ cap_getaddrinfo(cap_channel_t *chan, const char *hostname, const char *servname,
 		return (EAI_MEMORY);
 	if (nvlist_get_number(nvl, "error") != 0) {
 		error = (int)nvlist_get_number(nvl, "error");
+		serrno = dnvlist_get_number(nvl, "errno", 0);
 		nvlist_destroy(nvl);
+		errno = (error == EAI_SYSTEM) ? serrno : 0;
 		return (error);
 	}
 
@@ -352,7 +352,7 @@ cap_getnameinfo(cap_channel_t *chan, const struct sockaddr *sa, socklen_t salen,
     char *host, size_t hostlen, char *serv, size_t servlen, int flags)
 {
 	nvlist_t *nvl;
-	int error;
+	int error, serrno;
 
 	nvl = nvlist_create(0);
 	nvlist_add_string(nvl, "cmd", "getnameinfo");
@@ -365,14 +365,16 @@ cap_getnameinfo(cap_channel_t *chan, const struct sockaddr *sa, socklen_t salen,
 		return (EAI_MEMORY);
 	if (nvlist_get_number(nvl, "error") != 0) {
 		error = (int)nvlist_get_number(nvl, "error");
+		serrno = dnvlist_get_number(nvl, "errno", 0);
 		nvlist_destroy(nvl);
+		errno = (error == EAI_SYSTEM) ? serrno : 0;
 		return (error);
 	}
 
 	if (host != NULL && nvlist_exists_string(nvl, "host"))
-		strlcpy(host, nvlist_get_string(nvl, "host"), hostlen + 1);
+		strlcpy(host, nvlist_get_string(nvl, "host"), hostlen);
 	if (serv != NULL && nvlist_exists_string(nvl, "serv"))
-		strlcpy(serv, nvlist_get_string(nvl, "serv"), servlen + 1);
+		strlcpy(serv, nvlist_get_string(nvl, "serv"), servlen);
 	nvlist_destroy(nvl);
 	return (0);
 }
@@ -860,33 +862,35 @@ net_getnameinfo(const nvlist_t *limits, const nvlist_t *nvlin, nvlist_t *nvlout)
 	char *host, *serv;
 	size_t sabinsize, hostlen, servlen;
 	socklen_t salen;
-	int error, flags;
+	int error, serrno, flags;
 	const nvlist_t *funclimit;
 
-	if (!net_allowed_mode(limits, CAPNET_ADDR2NAME))
-		return (ENOTCAPABLE);
+	host = serv = NULL;
+	if (!net_allowed_mode(limits, CAPNET_ADDR2NAME)) {
+		serrno = ENOTCAPABLE;
+		error = EAI_SYSTEM;
+		goto out;
+	}
 	funclimit = NULL;
 	if (limits != NULL) {
 		funclimit = dnvlist_get_nvlist(limits, LIMIT_NV_ADDR2NAME,
 		    NULL);
 	}
-
 	error = 0;
-	host = serv = NULL;
 	memset(&sast, 0, sizeof(sast));
 
 	hostlen = (size_t)nvlist_get_number(nvlin, "hostlen");
 	servlen = (size_t)nvlist_get_number(nvlin, "servlen");
 
 	if (hostlen > 0) {
-		host = calloc(1, hostlen + 1);
+		host = calloc(1, hostlen);
 		if (host == NULL) {
 			error = EAI_MEMORY;
 			goto out;
 		}
 	}
 	if (servlen > 0) {
-		serv = calloc(1, servlen + 1);
+		serv = calloc(1, servlen);
 		if (serv == NULL) {
 			error = EAI_MEMORY;
 			goto out;
@@ -899,7 +903,8 @@ net_getnameinfo(const nvlist_t *limits, const nvlist_t *nvlin, nvlist_t *nvlout)
 		goto out;
 	}
 	if (!net_allowed_bsaddr(funclimit, sabin, sabinsize)) {
-		error = ENOTCAPABLE;
+		serrno = ENOTCAPABLE;
+		error = EAI_SYSTEM;
 		goto out;
 	}
 
@@ -915,7 +920,8 @@ net_getnameinfo(const nvlist_t *limits, const nvlist_t *nvlin, nvlist_t *nvlout)
 	}
 
 	if (!net_allowed_family(funclimit, (int)sast.ss_family)) {
-		error = ENOTCAPABLE;
+		serrno = ENOTCAPABLE;
+		error = EAI_SYSTEM;
 		goto out;
 	}
 
@@ -923,6 +929,7 @@ net_getnameinfo(const nvlist_t *limits, const nvlist_t *nvlin, nvlist_t *nvlout)
 
 	error = getnameinfo((struct sockaddr *)&sast, salen, host, hostlen,
 	    serv, servlen, flags);
+	serrno = errno;
 	if (error != 0)
 		goto out;
 
@@ -934,6 +941,8 @@ out:
 	if (error != 0) {
 		free(host);
 		free(serv);
+		if (error == EAI_SYSTEM)
+			nvlist_add_number(nvlout, "errno", serrno);
 	}
 	return (error);
 }
@@ -963,12 +972,15 @@ net_getaddrinfo(const nvlist_t *limits, const nvlist_t *nvlin, nvlist_t *nvlout)
 	char nvlname[64];
 	nvlist_t *elem;
 	unsigned int ii;
-	int error, family, n;
+	int error, serrno, family, n;
 	const nvlist_t *funclimit;
 	bool dnscache;
 
-	if (!net_allowed_mode(limits, CAPNET_NAME2ADDR))
-		return (ENOTCAPABLE);
+	if (!net_allowed_mode(limits, CAPNET_NAME2ADDR)) {
+		serrno = ENOTCAPABLE;
+		error = EAI_SYSTEM;
+		goto out;
+	}
 	dnscache = net_allowed_mode(limits, CAPNET_CONNECTDNS);
 	funclimit = NULL;
 	if (limits != NULL) {
@@ -998,11 +1010,18 @@ net_getaddrinfo(const nvlist_t *limits, const nvlist_t *nvlin, nvlist_t *nvlout)
 		family = AF_UNSPEC;
 	}
 
-	if (!net_allowed_family(funclimit, family))
-		return (ENOTCAPABLE);
-	if (!net_allowed_hosts(funclimit, hostname, servname))
-		return (ENOTCAPABLE);
+	if (!net_allowed_family(funclimit, family)) {
+		serrno = ENOTCAPABLE;
+		error = EAI_SYSTEM;
+		goto out;
+	}
+	if (!net_allowed_hosts(funclimit, hostname, servname)) {
+		serrno = ENOTCAPABLE;
+		error = EAI_SYSTEM;
+		goto out;
+	}
 	error = getaddrinfo(hostname, servname, hintsp, &res);
+	serrno = errno;
 	if (error != 0) {
 		goto out;
 	}
@@ -1021,6 +1040,8 @@ net_getaddrinfo(const nvlist_t *limits, const nvlist_t *nvlin, nvlist_t *nvlout)
 	freeaddrinfo(res);
 	error = 0;
 out:
+	if (error == EAI_SYSTEM)
+		nvlist_add_number(nvlout, "errno", serrno);
 	return (error);
 }
 
@@ -1101,11 +1122,36 @@ net_connect(const nvlist_t *limits, nvlist_t *nvlin, nvlist_t *nvlout)
 	return (0);
 }
 
+/*
+ * If the old sublimit restricted a subkey, the new one must too;
+ * a missing subkey means "allow any" at request time.
+ */
+static bool
+verify_subkeys_present(const nvlist_t *oldfunclimits,
+    const nvlist_t *newfunclimit)
+{
+	void *cookie;
+	const char *name;
+
+	if (oldfunclimits == NULL)
+		return (true);
+
+	cookie = NULL;
+	while ((name = nvlist_next(oldfunclimits, NULL, &cookie)) != NULL) {
+		if (!nvlist_exists(newfunclimit, name))
+			return (false);
+	}
+	return (true);
+}
+
 static bool
 verify_only_sa_newlimts(const nvlist_t *oldfunclimits,
     const nvlist_t *newfunclimit)
 {
 	void *cookie;
+
+	if (!verify_subkeys_present(oldfunclimits, newfunclimit))
+		return (false);
 
 	cookie = NULL;
 	while (nvlist_next(newfunclimit, NULL, &cookie) != NULL) {
@@ -1179,6 +1225,9 @@ verify_addr2name_newlimits(const nvlist_t *oldlimits,
 		    LIMIT_NV_ADDR2NAME, NULL);
 	}
 
+	if (!verify_subkeys_present(oldfunclimits, newfunclimit))
+		return (false);
+
 	cookie = NULL;
 	while (nvlist_next(newfunclimit, NULL, &cookie) != NULL) {
 		if (strcmp(cnvlist_name(cookie), "sockaddr") == 0) {
@@ -1234,8 +1283,11 @@ verify_name2addr_newlimits(const nvlist_t *oldlimits,
 	oldfunclimits = NULL;
 	if (oldlimits != NULL) {
 		oldfunclimits = dnvlist_get_nvlist(oldlimits,
-		    LIMIT_NV_ADDR2NAME, NULL);
+		    LIMIT_NV_NAME2ADDR, NULL);
 	}
+
+	if (!verify_subkeys_present(oldfunclimits, newfunclimit))
+		return (false);
 
 	cookie = NULL;
 	while (nvlist_next(newfunclimit, NULL, &cookie) != NULL) {

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -199,13 +200,15 @@ void dsl_crypto_recv_raw_key_sync(struct dsl_dataset *ds,
 int dsl_crypto_recv_raw(const char *poolname, uint64_t dsobj, uint64_t fromobj,
     dmu_objset_type_t ostype, nvlist_t *nvl, boolean_t do_key);
 
-int spa_keystore_change_key(const char *dsname, dsl_crypto_params_t *dcp);
+int spa_keystore_change_key(const char *dsname, dsl_crypto_params_t *dcp,
+    nvlist_t *userprops);
 int dsl_dir_rename_crypt_check(dsl_dir_t *dd, dsl_dir_t *newparent);
 int dsl_dataset_promote_crypt_check(dsl_dir_t *target, dsl_dir_t *origin);
 void dsl_dataset_promote_crypt_sync(dsl_dir_t *target, dsl_dir_t *origin,
     dmu_tx_t *tx);
 int dmu_objset_create_crypt_check(dsl_dir_t *parentdd,
     dsl_crypto_params_t *dcp, boolean_t *will_encrypt);
+boolean_t dmu_objset_crypto_key_equal(objset_t *osa, objset_t *osb);
 void dsl_dataset_create_crypt_sync(uint64_t dsobj, dsl_dir_t *dd,
     struct dsl_dataset *origin, dsl_crypto_params_t *dcp, dmu_tx_t *tx);
 uint64_t dsl_crypto_key_create_sync(uint64_t crypt, dsl_wrapping_key_t *wkey,

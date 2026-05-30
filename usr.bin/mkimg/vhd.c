@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2014, 2015 Marcel Moolenaar
  * All rights reserved.
  *
@@ -25,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -190,7 +190,7 @@ vhd_timestamp(void)
 	time_t t;
 
 	if (!unit_testing) {
-		t = time(NULL);
+		t = timestamp != (time_t)-1 ? timestamp : time(NULL);
 		return (t - 0x386d4380);
 	}
 

@@ -24,7 +24,6 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 
 from __future__ import print_function
 import os
@@ -308,11 +307,11 @@ class Def(object):
         return vals[param]
 
     def _pp_ex(self, pp):
-        raise NotImplementedError('Extended pretty print not implemeted: %s' %
+        raise NotImplementedError('Extended pretty print not implemented: %s' %
                 str(self))
 
     def _pp(self, pp):
-        raise NotImplementedError('Pretty print not implemeted: %s' % str(self))
+        raise NotImplementedError('Pretty print not implemented: %s' % str(self))
 
 class AnonymousDef(Def):
     def __init__(self, id, **kwargs):

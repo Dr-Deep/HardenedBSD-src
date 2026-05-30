@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2010-2011 Monthadar Al Jaberi, TerraNet AB
  * All rights reserved.
@@ -27,8 +27,6 @@
  * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGES.
- *
- * $FreeBSD$
  */
 
 #ifndef _DEV_WTAP_WTAPVAR_H
@@ -36,45 +34,17 @@
 
 #include <sys/param.h>
 #include <sys/conf.h>
-#include <sys/module.h>
-#include <sys/kernel.h>
-#include <sys/systm.h>
-#include <sys/sysctl.h>
-#include <sys/mbuf.h>
 #include <sys/malloc.h>
-#include <sys/lock.h>
-#include <sys/mutex.h>
 
 #include <sys/sockio.h>
 #include <sys/socket.h>
-#include <sys/socketvar.h>
-#include <sys/errno.h>
-#include <sys/callout.h>
-#include <sys/endian.h>
-#include <sys/kthread.h>
-#include <sys/taskqueue.h>
-#include <sys/priv.h>
-#include <sys/sysctl.h>
-
-#include <machine/bus.h>
 
 #include <net/if.h>
-#include <net/if_dl.h>
 #include <net/if_media.h>
-#include <net/if_types.h>
-#include <net/if_arp.h>
 #include <net/ethernet.h>
-#include <net/if_llc.h>
 
 #include <net80211/ieee80211_var.h>
 #include <net80211/ieee80211_regdomain.h>
-
-#include <net/bpf.h>
-
-#include <net/vnet.h>
-
-#include <netinet/in.h>
-#include <netinet/if_ether.h>
 
 #if 0
 #define DWTAP_PRINTF(...) printf(__VA_ARGS__)

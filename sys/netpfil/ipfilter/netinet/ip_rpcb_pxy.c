@@ -144,11 +144,9 @@ ipf_p_rpcb_main_unload(void)
 /* Allocate resources for per-session proxy structures.			*/
 /* --------------------------------------------------------------------	*/
 int
-ipf_p_rpcb_new(void *arg, fr_info_t *fin, ap_session_t *aps, nat_t *nat)
+ipf_p_rpcb_new(void *arg, fr_info_t *fin, ap_session_t *aps, nat_t *nat __unused)
 {
 	rpcb_session_t *rs;
-
-	nat = nat;	/* LINT */
 
 	if (fin->fin_v != 4)
 		return (-1);
@@ -1023,10 +1021,8 @@ ipf_p_rpcb_lookup(rpcb_session_t *rs, u_32_t xid)
 /* Free the RPCB transaction record rx from the chain of entries.	*/
 /* --------------------------------------------------------------------	*/
 static void
-ipf_p_rpcb_deref(rpcb_session_t *rs, rpcb_xact_t *rx)
+ipf_p_rpcb_deref(rpcb_session_t *rs __unused, rpcb_xact_t *rx)
 {
-	rs = rs;	/* LINT */
-
 	if (rx == NULL)
 		return;
 
@@ -1127,7 +1123,7 @@ ipf_p_rpcb_getnat(fr_info_t *fin, nat_t *nat, u_int proto, u_int port)
 		tcp.th_win = htons(8192);
 		TCP_OFF_A(&tcp, sizeof(tcphdr_t) >> 2);
 		fi.fin_dlen = sizeof(tcphdr_t);
-		tcp.th_flags = TH_SYN;
+		tcp_set_flags(&tcp, TH_SYN);
 		nflags = NAT_TCP;
 	} else {
 		fi.fin_dlen = sizeof(udphdr_t);

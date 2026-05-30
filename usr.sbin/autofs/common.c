@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2014 The FreeBSD Foundation
  *
@@ -28,9 +28,6 @@
  * SUCH DAMAGE.
  *
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
 #include <sys/time.h>
@@ -152,10 +149,11 @@ create_directory(const char *path)
 		error = mkdir(partial, 0755);
 		if (error != 0 && errno != EEXIST) {
 			log_warn("cannot create %s", partial);
-			return;
+			break;
 		}
 	}
 
+	free(partial);
 	free(tofree);
 }
 

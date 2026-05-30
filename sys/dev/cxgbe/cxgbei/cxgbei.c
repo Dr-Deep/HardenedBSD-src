@@ -29,8 +29,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_inet.h"
 #include "opt_inet6.h"
 
@@ -165,21 +163,6 @@ cxgbei_init(struct adapter *sc, struct cxgbei_data *ci)
 		    "%s: failed to initialize the iSCSI page pod region: %u.\n",
 		    __func__, rc);
 		return (rc);
-	}
-
-	r = t4_read_reg(sc, A_ULP_RX_ISCSI_TAGMASK);
-	r &= V_ISCSITAGMASK(M_ISCSITAGMASK);
-	if (r != pr->pr_tag_mask) {
-		/*
-		 * Recent firmwares are supposed to set up the iSCSI tagmask
-		 * but we'll do it ourselves it the computed value doesn't match
-		 * what's in the register.
-		 */
-		device_printf(sc->dev,
-		    "tagmask 0x%08x does not match computed mask 0x%08x.\n", r,
-		    pr->pr_tag_mask);
-		t4_set_reg_field(sc, A_ULP_RX_ISCSI_TAGMASK,
-		    V_ISCSITAGMASK(M_ISCSITAGMASK), pr->pr_tag_mask);
 	}
 
 	read_pdu_limits(sc, &ci->max_tx_data_len, &ci->max_rx_data_len, pr);
@@ -516,10 +499,11 @@ do_rx_iscsi_ddp(struct sge_iq *iq, const struct rss_header *rss, struct mbuf *m)
 		toep->ofld_rxq->rx_iscsi_ddp_octets += ip->ip_data_len;
 	}
 
+	tp = intotcpcb(inp);
 	INP_WLOCK(inp);
-	if (__predict_false(inp->inp_flags & (INP_DROPPED | INP_TIMEWAIT))) {
-		CTR4(KTR_CXGBE, "%s: tid %u, rx (%d bytes), inp_flags 0x%x",
-		    __func__, tid, pdu_len, inp->inp_flags);
+	if (__predict_false(tp->t_flags & TF_DISCONNECTED)) {
+		CTR4(KTR_CXGBE, "%s: tid %u, rx (%d bytes), t_flags 0x%x",
+		    __func__, tid, pdu_len, tp->t_flags);
 		INP_WUNLOCK(inp);
 		icl_cxgbei_conn_pdu_free(NULL, ip);
 		toep->ulpcb2 = NULL;
@@ -530,7 +514,6 @@ do_rx_iscsi_ddp(struct sge_iq *iq, const struct rss_header *rss, struct mbuf *m)
 	 * T6+ does not report data PDUs received via DDP without F
 	 * set.  This can result in gaps in the TCP sequence space.
 	 */
-	tp = intotcpcb(inp);
 	MPASS(chip_id(sc) >= CHELSIO_T6 || icp->icp_seq == tp->rcv_nxt);
 	tp->rcv_nxt = icp->icp_seq + pdu_len;
 	tp->t_rcvtime = ticks;
@@ -669,18 +652,17 @@ do_rx_iscsi_cmp(struct sge_iq *iq, const struct rss_header *rss, struct mbuf *m)
 		toep->ofld_rxq->rx_iscsi_data_digest_errors++;
 	}
 
+	tp = intotcpcb(inp);
 	INP_WLOCK(inp);
-	if (__predict_false(inp->inp_flags & (INP_DROPPED | INP_TIMEWAIT))) {
-		CTR4(KTR_CXGBE, "%s: tid %u, rx (%d bytes), inp_flags 0x%x",
-		    __func__, tid, pdu_len, inp->inp_flags);
+	if (__predict_false(tp->t_flags & TF_DISCONNECTED)) {
+		CTR4(KTR_CXGBE, "%s: tid %u, rx (%d bytes), t_flags 0x%x",
+		    __func__, tid, pdu_len, tp->t_flags);
 		INP_WUNLOCK(inp);
 		icl_cxgbei_conn_pdu_free(NULL, ip);
 		toep->ulpcb2 = NULL;
 		m_freem(m);
 		return (0);
 	}
-
-	tp = intotcpcb(inp);
 
 	/*
 	 * If icc is NULL, the connection is being closed in
@@ -859,9 +841,6 @@ cxgbei_activate(struct adapter *sc)
 
 	/* per-adapter softc for iSCSI */
 	ci = malloc(sizeof(*ci), M_CXGBE, M_ZERO | M_WAITOK);
-	if (ci == NULL)
-		return (ENOMEM);
-
 	rc = cxgbei_init(sc, ci);
 	if (rc != 0) {
 		free(ci, M_CXGBE);
@@ -918,9 +897,8 @@ cxgbei_deactivate_all(struct adapter *sc, void *arg __unused)
 }
 
 static struct uld_info cxgbei_uld_info = {
-	.uld_id = ULD_ISCSI,
-	.activate = cxgbei_activate,
-	.deactivate = cxgbei_deactivate,
+	.uld_activate = cxgbei_activate,
+	.uld_deactivate = cxgbei_deactivate,
 };
 
 static int
@@ -933,7 +911,7 @@ cxgbei_mod_load(void)
 	t4_register_cpl_handler(CPL_RX_ISCSI_DDP, do_rx_iscsi_ddp);
 	t4_register_cpl_handler(CPL_RX_ISCSI_CMP, do_rx_iscsi_cmp);
 
-	rc = t4_register_uld(&cxgbei_uld_info);
+	rc = t4_register_uld(&cxgbei_uld_info, ULD_ISCSI);
 	if (rc != 0)
 		return (rc);
 
@@ -948,7 +926,7 @@ cxgbei_mod_unload(void)
 
 	t4_iterate(cxgbei_deactivate_all, NULL);
 
-	if (t4_unregister_uld(&cxgbei_uld_info) == EBUSY)
+	if (t4_unregister_uld(&cxgbei_uld_info, ULD_ISCSI) == EBUSY)
 		return (EBUSY);
 
 	t4_register_cpl_handler(CPL_ISCSI_HDR, NULL);

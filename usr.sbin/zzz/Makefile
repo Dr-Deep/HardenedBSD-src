@@ -1,6 +1,6 @@
-# $FreeBSD$
+.include <src.opts.mk>
 
-SCRIPTS=zzz.sh
+PROG=	zzz
 MAN=	zzz.8
 
 .include <bsd.prog.mk>

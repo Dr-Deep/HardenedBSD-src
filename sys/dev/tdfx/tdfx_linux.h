@@ -29,25 +29,11 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- *   $FreeBSD$
  */
 
 #include <machine/../linux/linux.h>
 #include <machine/../linux/linux_proto.h>
 #include <compat/linux/linux_ioctl.h>
-
-/*
- * This code was donated by Vladimir N. Silynaev to allow for defining
- * ioctls within modules
- */
-#define LINUX_IOCTL_SET(n,low,high) \
-static linux_ioctl_function_t linux_ioctl_##n; \
-static struct linux_ioctl_handler n##_handler = {linux_ioctl_##n, low, high}; \
-SYSINIT(n##register, SI_SUB_KLD, SI_ORDER_MIDDLE,\
-linux_ioctl_register_handler, &n##_handler); \
-SYSUNINIT(n##unregister, SI_SUB_KLD, SI_ORDER_MIDDLE,\
-linux_ioctl_unregister_handler, &n##_handler);
 
 /* Values for /dev/3dfx */
 /* Query IOCTLs */

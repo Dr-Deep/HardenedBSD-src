@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1999 Cameron Grant <gandalf@vilnya.demon.co.uk>
  * Copyright (c) 2003-2007 Yuriy Tsibizov <yuriy.tsibizov@gfk.ru>
@@ -25,8 +25,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include <sys/param.h>
@@ -45,7 +43,6 @@
 #include "opt_snd.h"
 #endif
 
-#include <dev/sound/chip.h>
 #include <dev/sound/pcm/sound.h>
 #include <dev/sound/pcm/ac97.h>
 
@@ -93,7 +90,7 @@ struct emu_pcm_rchinfo {
 #endif
 
 struct emu_pcm_info {
-	struct mtx		*lock;
+	struct mtx		lock;
 	device_t		dev;		/* device information */
 	struct emu_sc_info 	*card;
 	struct emu_pcm_pchinfo	pch[MAX_CHANNELS];	/* hardware channels */
@@ -774,10 +771,10 @@ emupchan_setblocksize(kobj_t obj __unused, void *c_devinfo, uint32_t blocksize)
 
 	if (blocksize > ch->pcm->bufsz)
 		blocksize = ch->pcm->bufsz;
-	snd_mtxlock(sc->lock);
+	mtx_lock(&sc->lock);
 	ch->blksz = blocksize;
-	emu_timer_set(sc->card, ch->timer, ch->blksz / sndbuf_getalign(ch->buffer));
-	snd_mtxunlock(sc->lock);
+	emu_timer_set(sc->card, ch->timer, ch->blksz / ch->buffer->align);
+	mtx_unlock(&sc->lock);
 	return (ch->blksz);
 }
 
@@ -790,7 +787,7 @@ emupchan_trigger(kobj_t obj __unused, void *c_devinfo, int go)
 	if (!PCMTRIG_COMMON(go))
 		return (0);
 
-	snd_mtxlock(sc->lock); /* XXX can we trigger on parallel threads ? */
+	mtx_lock(&sc->lock); /* XXX can we trigger on parallel threads ? */
 	if (go == PCMTRIG_START) {
 		emu_vsetup(ch->master, ch->fmt, ch->spd);
 		if (AFMT_CHANNEL(ch->fmt) > 1)
@@ -798,13 +795,14 @@ emupchan_trigger(kobj_t obj __unused, void *c_devinfo, int go)
 		else
 			emu_vroute(sc->card, &(sc->rt_mono), ch->master);
 		emu_vwrite(sc->card, ch->master);
-		emu_timer_set(sc->card, ch->timer, ch->blksz / sndbuf_getalign(ch->buffer));
+		emu_timer_set(sc->card, ch->timer, ch->blksz /
+		    ch->buffer->align);
 		emu_timer_enable(sc->card, ch->timer, 1);
 	}
 	/* PCM interrupt handler will handle PCMTRIG_STOP event */
 	ch->run = (go == PCMTRIG_START) ? 1 : 0;
 	emu_vtrigger(sc->card, ch->master, ch->run);
-	snd_mtxunlock(sc->lock);
+	mtx_unlock(&sc->lock);
 	return (0);
 }
 
@@ -881,7 +879,7 @@ emurchan_init(kobj_t obj __unused, void *devinfo, struct snd_dbuf *b, struct pcm
 		return (NULL);
 	else {
 		ch->timer = emu_timer_create(sc->card);
-		emu_wrptr(sc->card, 0, ch->basereg, sndbuf_getbufaddr(ch->buffer));
+		emu_wrptr(sc->card, 0, ch->basereg, ch->buffer->buf_addr);
 		emu_wrptr(sc->card, 0, ch->sizereg, 0);	/* off */
 		return (ch);
 	}
@@ -933,7 +931,8 @@ emurchan_setblocksize(kobj_t obj __unused, void *c_devinfo, uint32_t blocksize)
 	 * (and use) timer interrupts. Otherwise channel will be marked dead.
 	 */
 	if (ch->blksz < (ch->pcm->bufsz / 2)) {
-		emu_timer_set(sc->card, ch->timer, ch->blksz / sndbuf_getalign(ch->buffer));
+		emu_timer_set(sc->card, ch->timer, ch->blksz /
+		    ch->buffer->align);
 		emu_timer_enable(sc->card, ch->timer, 1);
 	} else {
 		emu_timer_enable(sc->card, ch->timer, 0);
@@ -971,7 +970,7 @@ emurchan_trigger(kobj_t obj __unused, void *c_devinfo, int go)
 		sz = EMU_RECBS_BUFSIZE_4096;
 	}
 
-	snd_mtxlock(sc->lock);
+	mtx_lock(&sc->lock);
 	switch (go) {
 	case PCMTRIG_START:
 		ch->run = 1;
@@ -1000,7 +999,7 @@ emurchan_trigger(kobj_t obj __unused, void *c_devinfo, int go)
 	default:
 		break;
 	}
-	snd_mtxunlock(sc->lock);
+	mtx_unlock(&sc->lock);
 
 	return (0);
 }
@@ -1062,7 +1061,7 @@ emufxrchan_init(kobj_t obj __unused, void *devinfo, struct snd_dbuf *b, struct p
 	if (sndbuf_alloc(ch->buffer, emu_gettag(sc->card), 0, sc->bufsz) != 0)
 		return (NULL);
 	else {
-		emu_wrptr(sc->card, 0, ch->basereg, sndbuf_getbufaddr(ch->buffer));
+		emu_wrptr(sc->card, 0, ch->basereg, ch->buffer->buf_addr);
 		emu_wrptr(sc->card, 0, ch->sizereg, 0);	/* off */
 		return (ch);
 	}
@@ -1131,7 +1130,7 @@ emufxrchan_trigger(kobj_t obj __unused, void *c_devinfo, int go)
 		sz = EMU_RECBS_BUFSIZE_4096;
 	}
 
-	snd_mtxlock(sc->lock);
+	mtx_lock(&sc->lock);
 	switch (go) {
 	case PCMTRIG_START:
 		ch->run = 1;
@@ -1170,7 +1169,7 @@ emufxrchan_trigger(kobj_t obj __unused, void *c_devinfo, int go)
 	default:
 		break;
 	}
-	snd_mtxunlock(sc->lock);
+	mtx_unlock(&sc->lock);
 
 	return (0);
 }
@@ -1235,24 +1234,24 @@ emu_pcm_intr(void *pcm, uint32_t stat)
 
 	ack = 0;
 
-	snd_mtxlock(sc->lock);
+	mtx_lock(&sc->lock);
 
 	if (stat & EMU_IPR_INTERVALTIMER) {
 		ack |= EMU_IPR_INTERVALTIMER;
 		for (i = 0; i < MAX_CHANNELS; i++)
 			if (sc->pch[i].channel) {
 				if (sc->pch[i].run == 1) {
-					snd_mtxunlock(sc->lock);
+					mtx_unlock(&sc->lock);
 					chn_intr(sc->pch[i].channel);
-					snd_mtxlock(sc->lock);
+					mtx_lock(&sc->lock);
 				} else
 					emu_timer_enable(sc->card, sc->pch[i].timer, 0);
 			}
 		/* ADC may install timer to get low-latency interrupts */
 		if ((sc->rch_adc.channel) && (sc->rch_adc.run)) {
-			snd_mtxunlock(sc->lock);
+			mtx_unlock(&sc->lock);
 			chn_intr(sc->rch_adc.channel);
-			snd_mtxlock(sc->lock);
+			mtx_lock(&sc->lock);
 		}
 		/*
 		 * EFX does not use timer, because it will fill
@@ -1263,21 +1262,21 @@ emu_pcm_intr(void *pcm, uint32_t stat)
 	if (stat & (EMU_IPR_ADCBUFFULL | EMU_IPR_ADCBUFHALFFULL)) {
 		ack |= stat & (EMU_IPR_ADCBUFFULL | EMU_IPR_ADCBUFHALFFULL);
 		if (sc->rch_adc.channel) {
-			snd_mtxunlock(sc->lock);
+			mtx_unlock(&sc->lock);
 			chn_intr(sc->rch_adc.channel);
-			snd_mtxlock(sc->lock);
+			mtx_lock(&sc->lock);
 		}
 	}
 
 	if (stat & (EMU_IPR_EFXBUFFULL | EMU_IPR_EFXBUFHALFFULL)) {
 		ack |= stat & (EMU_IPR_EFXBUFFULL | EMU_IPR_EFXBUFHALFFULL);
 		if (sc->rch_efx.channel) {
-			snd_mtxunlock(sc->lock);
+			mtx_unlock(&sc->lock);
 			chn_intr(sc->rch_efx.channel);
-			snd_mtxlock(sc->lock);
+			mtx_lock(&sc->lock);
 		}
 	}
-	snd_mtxunlock(sc->lock);
+	mtx_unlock(&sc->lock);
 
 	return (ack);
 }
@@ -1300,7 +1299,6 @@ emu_pcm_probe(device_t dev)
 {
 	uintptr_t func, route;
 	const char *rt;
-	char buffer[255];
 
 	BUS_READ_IVAR(device_get_parent(dev), dev, EMU_VAR_FUNC, &func);
 
@@ -1330,8 +1328,7 @@ emu_pcm_probe(device_t dev)
 		break;
 	}
 
-	snprintf(buffer, 255, "EMU10Kx DSP %s PCM interface", rt);
-	device_set_desc_copy(dev, buffer);
+	device_set_descf(dev, "EMU10Kx DSP %s PCM interface", rt);
 	return (0);
 }
 
@@ -1352,7 +1349,8 @@ emu_pcm_attach(device_t dev)
 		return (ENXIO);
 	}
 
-	sc->lock = snd_mtxcreate(device_get_nameunit(dev), "snd_emu10kx pcm softc");
+	mtx_init(&sc->lock, device_get_nameunit(dev), "snd_emu10kx pcm softc",
+	    MTX_DEF);
 	sc->dev = dev;
 
 	BUS_READ_IVAR(device_get_parent(dev), dev, EMU_VAR_ISEMU10K1, &ivar);
@@ -1464,10 +1462,7 @@ emu_pcm_attach(device_t dev)
 	pcm_setflags(dev, pcm_getflags(dev) | SD_F_MPSAFE);
 
 	/* XXX we should better get number of available channels from parent */
-	if (pcm_register(dev, sc, (route == RT_FRONT) ? MAX_CHANNELS : 1, (route == RT_FRONT) ? 1 : 0)) {
-		device_printf(dev, "can't register PCM channels!\n");
-		goto bad;
-	}
+	pcm_init(dev, sc);
 	sc->pnum = 0;
 	if (route != RT_MCHRECORD)
 		pcm_addchan(dev, PCMDIR_PLAY, &emupchan_class, sc);
@@ -1479,16 +1474,17 @@ emu_pcm_attach(device_t dev)
 	if (route == RT_MCHRECORD)
 		pcm_addchan(dev, PCMDIR_REC, &emufxrchan_class, sc);
 
-	snprintf(status, SND_STATUSLEN, "on %s", device_get_nameunit(device_get_parent(dev)));
-	pcm_setstatus(dev, status);
+	snprintf(status, SND_STATUSLEN, "on %s",
+	    device_get_nameunit(device_get_parent(dev)));
+	if (pcm_register(dev, status))
+		goto bad;
 
 	return (0);
 
 bad:
 	if (sc->codec)
 		ac97_destroy(sc->codec);
-	if (sc->lock)
-		snd_mtxfree(sc->lock);
+	mtx_destroy(&sc->lock);
 	free(sc, M_DEVBUF);
 	return (ENXIO);
 }
@@ -1507,8 +1503,7 @@ emu_pcm_detach(device_t dev)
 
 	emu_pcm_uninit(sc);
 
-	if (sc->lock)
-		snd_mtxfree(sc->lock);
+	mtx_destroy(&sc->lock);
 	free(sc, M_DEVBUF);
 
 	return (0);

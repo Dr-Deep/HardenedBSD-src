@@ -32,11 +32,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef lint
-static const char rcsid[] =
-  "$FreeBSD$";
-#endif /* not lint */
-
 #include <sys/param.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
@@ -49,6 +44,7 @@ static const char rcsid[] =
 #include <errno.h>
 #include <grp.h>
 #include <locale.h>
+#include <mntopts.h>
 #include <pwd.h>
 #include <stdio.h>
 /* must be after stdio to declare fparseln */
@@ -57,8 +53,6 @@ static const char rcsid[] =
 #include <string.h>
 #include <sysexits.h>
 #include <unistd.h>
-
-#include "mntopts.h"
 
 static gid_t	a_gid(char *);
 static uid_t	a_uid(char *);

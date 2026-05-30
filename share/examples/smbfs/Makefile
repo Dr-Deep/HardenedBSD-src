@@ -1,6 +1,4 @@
-# $FreeBSD$
-
-PACKAGE=utilities
+PACKAGE= smbutils
 FILESDIR= ${SHAREDIR}/examples/smbfs
 FILES=	dot.nsmbrc
 

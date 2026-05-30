@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2018 The FreeBSD Foundation
  *
@@ -28,16 +28,11 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
-#include "opt_compat.h"
-
 #include <sys/param.h>
-#include <sys/systm.h>
 #include <sys/imgact.h>
 #include <sys/lock.h>
 #include <sys/sx.h>
+
 #include <vm/vm.h>
 #include <vm/vm_param.h>
 #include <vm/vm_extern.h>
@@ -46,6 +41,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/atomic.h>
 #include <machine/md_var.h>
 
+#include <i386/linux/linux.h>
 #include <compat/linux/linux_emul.h>
 #include <compat/linux/linux_futex.h>
 
@@ -55,12 +51,12 @@ struct futex_st0 {
 };
 
 static void
-futex_xchgl_slow0(vm_offset_t kva, void *arg)
+futex_xchgl_slow0(void *kva, void *arg)
 {
 	struct futex_st0 *st;
 
 	st = arg;
-	*st->oldval = atomic_swap_int((int *)kva, st->oparg);
+	*st->oldval = atomic_swap_int(kva, st->oparg);
 }
 
 int
@@ -77,12 +73,12 @@ futex_xchgl(int oparg, uint32_t *uaddr, int *oldval)
 }
 
 static void
-futex_addl_slow0(vm_offset_t kva, void *arg)
+futex_addl_slow0(void *kva, void *arg)
 {
 	struct futex_st0 *st;
 
 	st = arg;
-	*st->oldval = atomic_fetchadd_int((int *)kva, st->oparg);
+	*st->oldval = atomic_fetchadd_int(kva, st->oparg);
 }
 
 int
@@ -99,14 +95,14 @@ futex_addl(int oparg, uint32_t *uaddr, int *oldval)
 }
 
 static void
-futex_orl_slow0(vm_offset_t kva, void *arg)
+futex_orl_slow0(void *kva, void *arg)
 {
 	struct futex_st0 *st;
 	int old;
 
 	st = arg;
 	old = *(int *)kva;
-	while (!atomic_fcmpset_int((int *)kva, &old, old | st->oparg))
+	while (!atomic_fcmpset_int(kva, &old, old | st->oparg))
 		;
 	*st->oldval = old;
 }
@@ -125,14 +121,14 @@ futex_orl(int oparg, uint32_t *uaddr, int *oldval)
 }
 
 static void
-futex_andl_slow0(vm_offset_t kva, void *arg)
+futex_andl_slow0(void *kva, void *arg)
 {
 	struct futex_st0 *st;
 	int old;
 
 	st = arg;
 	old = *(int *)kva;
-	while (!atomic_fcmpset_int((int *)kva, &old, old & st->oparg))
+	while (!atomic_fcmpset_int(kva, &old, old & st->oparg))
 		;
 	*st->oldval = old;
 }
@@ -151,14 +147,14 @@ futex_andl(int oparg, uint32_t *uaddr, int *oldval)
 }
 
 static void
-futex_xorl_slow0(vm_offset_t kva, void *arg)
+futex_xorl_slow0(void *kva, void *arg)
 {
 	struct futex_st0 *st;
 	int old;
 
 	st = arg;
 	old = *(int *)kva;
-	while (!atomic_fcmpset_int((int *)kva, &old, old ^ st->oparg))
+	while (!atomic_fcmpset_int(kva, &old, old ^ st->oparg))
 		;
 	*st->oldval = old;
 }

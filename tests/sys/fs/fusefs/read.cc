@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2019 The FreeBSD Foundation
  *
@@ -26,8 +26,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 extern "C" {
@@ -56,6 +54,14 @@ public:
 void expect_lookup(const char *relpath, uint64_t ino, uint64_t size)
 {
 	FuseTest::expect_lookup(relpath, ino, S_IFREG | 0644, size, 1);
+}
+};
+
+class RofsRead: public Read {
+public:
+virtual void SetUp() {
+	m_ro = true;
+	Read::SetUp();
 }
 };
 
@@ -89,6 +95,19 @@ class AsyncRead: public AioRead {
 	}
 };
 
+class AsyncReadNoAttrCache: public Read {
+virtual void SetUp() {
+	m_init_flags = FUSE_ASYNC_READ;
+	Read::SetUp();
+}
+public:
+void expect_lookup(const char *relpath, uint64_t ino)
+{
+	// Don't return size, and set attr_valid=0
+	FuseTest::expect_lookup(relpath, ino, S_IFREG | 0644, 0, 1, 0);
+}
+};
+
 class ReadAhead: public Read,
 		 public WithParamInterface<tuple<bool, int>>
 {
@@ -101,6 +120,13 @@ class ReadAhead: public Read,
 
 		m_maxreadahead = val * get<1>(GetParam());
 		m_noclusterr = get<0>(GetParam());
+		Read::SetUp();
+	}
+};
+
+class ReadMaxRead: public Read {
+	virtual void SetUp() {
+		m_maxread = 16384;
 		Read::SetUp();
 	}
 };
@@ -338,6 +364,185 @@ TEST_F(AsyncRead, async_read)
 	leak(fd);
 }
 
+/*
+ * Regression test for a VFS locking bug: as of
+ * 22bb70a6b3bb7799276ab480e40665b7d6e4ce25 (17-December-2024), fusefs did not
+ * obtain an exclusive vnode lock before attempting to clear the attr cache
+ * after an unexpected eof.  The vnode lock would already be exclusive except
+ * when FUSE_ASYNC_READ is set.
+ * https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=283391
+ */
+ TEST_F(AsyncRead, eof)
+{
+	const char FULLPATH[] = "mountpoint/some_file.txt";
+	const char RELPATH[] = "some_file.txt";
+	const char *CONTENTS = "abcdefghijklmnop";
+	uint64_t ino = 42;
+	int fd;
+	uint64_t offset = 100;
+	ssize_t bufsize = strlen(CONTENTS);
+	ssize_t partbufsize = 3 * bufsize / 4;
+	ssize_t r;
+	uint8_t buf[bufsize];
+	struct stat sb;
+
+	expect_lookup(RELPATH, ino, offset + bufsize);
+	expect_open(ino, 0, 1);
+	expect_read(ino, 0, offset + bufsize, offset + partbufsize, CONTENTS);
+	expect_getattr(ino, offset + partbufsize);
+
+	fd = open(FULLPATH, O_RDONLY);
+	ASSERT_LE(0, fd) << strerror(errno);
+
+	r = pread(fd, buf, bufsize, offset);
+	ASSERT_LE(0, r) << strerror(errno);
+	EXPECT_EQ(partbufsize, r) << strerror(errno);
+	ASSERT_EQ(0, fstat(fd, &sb));
+	EXPECT_EQ((off_t)(offset + partbufsize), sb.st_size);
+	leak(fd);
+}
+
+/*
+ * If the daemon disables the attribute cache (or if it has expired), then the
+ * kernel must fetch attributes during VOP_READ.  If async reads are enabled,
+ * then fuse_internal_cache_attrs will be called without the vnode exclusively
+ * locked.  Regression test for
+ * https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=291064
+ */
+TEST_F(AsyncReadNoAttrCache, read)
+{
+	const char FULLPATH[] = "mountpoint/some_file.txt";
+	const char RELPATH[] = "some_file.txt";
+	const char *CONTENTS = "abcdefgh";
+	uint64_t ino = 42;
+	mode_t mode = S_IFREG | 0644;
+	int fd;
+	ssize_t bufsize = strlen(CONTENTS);
+	uint8_t buf[bufsize];
+
+	expect_lookup(RELPATH, ino);
+	expect_open(ino, 0, 1);
+	EXPECT_CALL(*m_mock, process(
+		ResultOf([=](auto in) {
+			return (in.header.opcode == FUSE_GETATTR &&
+				in.header.nodeid == ino);
+		}, Eq(true)),
+		_)
+	).WillRepeatedly(Invoke(ReturnImmediate([=](auto i __unused, auto& out)
+	{
+		SET_OUT_HEADER_LEN(out, attr);
+		out.body.attr.attr.ino = ino;
+		out.body.attr.attr.mode = mode;
+		out.body.attr.attr.size = bufsize;
+		out.body.attr.attr_valid = 0;
+	})));
+	expect_read(ino, 0, bufsize, bufsize, CONTENTS);
+
+	fd = open(FULLPATH, O_RDONLY);
+	ASSERT_LE(0, fd) << strerror(errno);
+
+	ASSERT_EQ(bufsize, read(fd, buf, bufsize)) << strerror(errno);
+	ASSERT_EQ(0, memcmp(buf, CONTENTS, bufsize));
+
+	leak(fd);
+}
+
+/*
+ * If the vnode's attr cache has expired before VOP_READ begins, the kernel
+ * will have to fetch the file's size from the server.  If it has changed since
+ * our last query, we'll need to update the vnode pager.  But we'll only have a
+ * shared vnode lock.
+ */
+TEST_F(AsyncReadNoAttrCache, read_sizechange)
+{
+	const char FULLPATH[] = "mountpoint/some_file.txt";
+	const char RELPATH[] = "some_file.txt";
+	const char *CONTENTS = "abcdefgh";
+	uint64_t ino = 42;
+	mode_t mode = S_IFREG | 0644;
+	int fd;
+	size_t bufsize = strlen(CONTENTS);
+	uint8_t buf[bufsize];
+	size_t size1 = bufsize - 1;
+	size_t size2 = bufsize;
+	Sequence seq;
+
+	expect_lookup(RELPATH, ino);
+	expect_open(ino, 0, 1);
+	EXPECT_CALL(*m_mock, process(
+		ResultOf([=](auto in) {
+			return (in.header.opcode == FUSE_GETATTR &&
+				in.header.nodeid == ino);
+		}, Eq(true)),
+		_)
+	).Times(2)
+	.InSequence(seq)
+	.WillRepeatedly(Invoke(ReturnImmediate([=](auto i __unused, auto& out)
+	{
+		SET_OUT_HEADER_LEN(out, attr);
+		out.body.attr.attr.ino = ino;
+		out.body.attr.attr.mode = mode;
+		out.body.attr.attr.size = size1;
+		out.body.attr.attr_valid = 0;
+	})));
+	EXPECT_CALL(*m_mock, process(
+		ResultOf([=](auto in) {
+			return (in.header.opcode == FUSE_READ &&
+				in.header.nodeid == ino &&
+				in.body.read.offset == 0 &&
+				in.body.read.size == size1);
+		}, Eq(true)),
+		_)
+	).Times(1)
+	.InSequence(seq)
+	.WillOnce(Invoke(ReturnImmediate([=](auto in __unused, auto& out) {
+		out.header.len = sizeof(struct fuse_out_header) + size1;
+		memmove(out.body.bytes, CONTENTS, size1);
+	})));
+	EXPECT_CALL(*m_mock, process(
+		ResultOf([=](auto in) {
+			return (in.header.opcode == FUSE_GETATTR &&
+				in.header.nodeid == ino);
+		}, Eq(true)),
+		_)
+	).InSequence(seq)
+	.WillOnce(Invoke(ReturnImmediate([=](auto i __unused, auto& out)
+	{
+		SET_OUT_HEADER_LEN(out, attr);
+		out.body.attr.attr.ino = ino;
+		out.body.attr.attr.mode = mode;
+		out.body.attr.attr.size = size2;
+		out.body.attr.attr_valid = 0;
+	})));
+	EXPECT_CALL(*m_mock, process(
+		ResultOf([=](auto in) {
+			return (in.header.opcode == FUSE_READ &&
+				in.header.nodeid == ino &&
+				in.body.read.offset == 0 &&
+				in.body.read.size == size2);
+		}, Eq(true)),
+		_)
+	).Times(1)
+	.InSequence(seq)
+	.WillOnce(Invoke(ReturnImmediate([=](auto in __unused, auto& out) {
+		out.header.len = sizeof(struct fuse_out_header) + size2;
+		memmove(out.body.bytes, CONTENTS, size2);
+	})));
+
+	fd = open(FULLPATH, O_RDONLY);
+	ASSERT_LE(0, fd) << strerror(errno);
+
+	ASSERT_EQ(static_cast<ssize_t>(size1), read(fd, buf, bufsize)) << strerror(errno);
+	ASSERT_EQ(0, memcmp(buf, CONTENTS, size1));
+
+	/* Read again, but this time the server has changed the file's size */
+	bzero(buf, size2);
+	ASSERT_EQ(static_cast<ssize_t>(size2), pread(fd, buf, bufsize, 0)) << strerror(errno);
+	ASSERT_EQ(0, memcmp(buf, CONTENTS, size2));
+
+	leak(fd);
+}
+
 /* The kernel should update the cached atime attribute during a read */
 TEST_F(Read, atime)
 {
@@ -454,6 +659,47 @@ TEST_F(Read, atime_during_close)
 	ASSERT_EQ(0, fstat(fd, &sb));
 
 	close(fd);
+}
+
+/*
+ * When not using -o default_permissions, the daemon may make its own decisions
+ * regarding access permissions, and these may be unpredictable.  If it rejects
+ * our attempt to set atime, that should not cause close(2) to fail.
+ */
+TEST_F(Read, atime_during_close_eacces)
+{
+	const char FULLPATH[] = "mountpoint/some_file.txt";
+	const char RELPATH[] = "some_file.txt";
+	const char *CONTENTS = "abcdefgh";
+	uint64_t ino = 42;
+	int fd;
+	ssize_t bufsize = strlen(CONTENTS);
+	uint8_t buf[bufsize];
+
+	expect_lookup(RELPATH, ino, bufsize);
+	expect_open(ino, 0, 1);
+	expect_read(ino, 0, bufsize, bufsize, CONTENTS);
+	EXPECT_CALL(*m_mock, process(
+		ResultOf([&](auto in) {
+			uint32_t valid = FATTR_ATIME;
+			return (in.header.opcode == FUSE_SETATTR &&
+				in.header.nodeid == ino &&
+				in.body.setattr.valid == valid);
+		}, Eq(true)),
+		_)
+	).WillOnce(Invoke(ReturnErrno(EACCES)));
+	expect_flush(ino, 1, ReturnErrno(0));
+	expect_release(ino, FuseTest::FH);
+
+	fd = open(FULLPATH, O_RDONLY);
+	ASSERT_LE(0, fd) << strerror(errno);
+
+	/* Ensure atime will be different than during lookup */
+	nap();
+
+	ASSERT_EQ(bufsize, read(fd, buf, bufsize)) << strerror(errno);
+
+	ASSERT_EQ(0, close(fd));
 }
 
 /* A cached atime should be flushed during FUSE_SETATTR */
@@ -790,6 +1036,52 @@ TEST_F(Read, mmap)
 	ASSERT_EQ(0, memcmp(p, CONTENTS, bufsize));
 
 	ASSERT_EQ(0, munmap(p, len)) << strerror(errno);
+	leak(fd);
+}
+
+
+/* When max_read is set, large reads will be split up as necessary */
+TEST_F(ReadMaxRead, split)
+{
+	const char FULLPATH[] = "mountpoint/some_file.txt";
+	const char RELPATH[] = "some_file.txt";
+	uint64_t ino = 42;
+	int fd;
+	ssize_t bufsize = 65536;
+	ssize_t fragsize = bufsize / 4;
+	char *rbuf, *frag0, *frag1, *frag2, *frag3;
+
+	rbuf = new char[bufsize]();
+	frag0 = new char[fragsize]();
+	frag1 = new char[fragsize]();
+	frag2 = new char[fragsize]();
+	frag3 = new char[fragsize]();
+	memset(frag0, '0', fragsize);
+	memset(frag1, '1', fragsize);
+	memset(frag2, '2', fragsize);
+	memset(frag3, '3', fragsize);
+
+	expect_lookup(RELPATH, ino, bufsize);
+	expect_open(ino, 0, 1);
+	expect_read(ino,            0, fragsize, fragsize, frag0);
+	expect_read(ino,     fragsize, fragsize, fragsize, frag1);
+	expect_read(ino, 2 * fragsize, fragsize, fragsize, frag2);
+	expect_read(ino, 3 * fragsize, fragsize, fragsize, frag3);
+
+	fd = open(FULLPATH, O_RDONLY);
+	ASSERT_LE(0, fd) << strerror(errno);
+
+	ASSERT_EQ(bufsize, read(fd, rbuf, bufsize)) << strerror(errno);
+	ASSERT_EQ(0, memcmp(rbuf,                frag0, fragsize));
+	ASSERT_EQ(0, memcmp(rbuf + fragsize,     frag1, fragsize));
+	ASSERT_EQ(0, memcmp(rbuf + 2 * fragsize, frag2, fragsize));
+	ASSERT_EQ(0, memcmp(rbuf + 3 * fragsize, frag3, fragsize));
+
+	delete[] frag3;
+	delete[] frag2;
+	delete[] frag1;
+	delete[] frag0;
+	delete[] rbuf;
 	leak(fd);
 }
 
@@ -1169,8 +1461,7 @@ TEST_F(Read, cache_block)
 	char buf[bufsize];
 	const char *contents1 = CONTENTS0 + bufsize;
 
-	contents = (char*)calloc(1, filesize);
-	ASSERT_NE(nullptr, contents);
+	contents = new char[filesize]();
 	memmove(contents, CONTENTS0, strlen(CONTENTS0));
 
 	expect_lookup(RELPATH, ino, filesize);
@@ -1188,7 +1479,7 @@ TEST_F(Read, cache_block)
 	ASSERT_EQ(bufsize, read(fd, buf, bufsize)) << strerror(errno);
 	ASSERT_EQ(0, memcmp(buf, contents1, bufsize));
 	leak(fd);
-	free(contents);
+	delete[] contents;
 }
 
 /* Reading with sendfile should work (though it obviously won't be 0-copy) */
@@ -1285,16 +1576,15 @@ TEST_P(ReadAhead, readahead) {
 	char *rbuf, *contents;
 	off_t offs;
 
-	contents = (char*)malloc(filesize);
-	ASSERT_NE(nullptr, contents);
+	contents = new char[filesize];
 	memset(contents, 'X', filesize);
-	rbuf = (char*)calloc(1, bufsize);
+	rbuf = new char[bufsize]();
 
 	expect_lookup(RELPATH, ino, filesize);
 	expect_open(ino, 0, 1);
 	maxcontig = m_noclusterr ? m_maxbcachebuf :
 		m_maxbcachebuf + m_maxreadahead;
-	clustersize = MIN(maxcontig, m_maxphys);
+	clustersize = MIN((unsigned long )maxcontig, m_maxphys);
 	for (offs = 0; offs < bufsize; offs += clustersize) {
 		len = std::min((size_t)clustersize, (size_t)(filesize - offs));
 		expect_read(ino, offs, len, len, contents + offs);
@@ -1310,11 +1600,11 @@ TEST_P(ReadAhead, readahead) {
 	ASSERT_EQ(0, memcmp(rbuf, contents, bufsize));
 
 	leak(fd);
-	free(rbuf);
-	free(contents);
+	delete[] rbuf;
+	delete[] contents;
 }
 
-INSTANTIATE_TEST_CASE_P(RA, ReadAhead,
+INSTANTIATE_TEST_SUITE_P(RA, ReadAhead,
 	Values(tuple<bool, int>(false, 0),
 	       tuple<bool, int>(false, 1),
 	       tuple<bool, int>(false, 2),
@@ -1322,6 +1612,40 @@ INSTANTIATE_TEST_CASE_P(RA, ReadAhead,
 	       tuple<bool, int>(true, 0),
 	       tuple<bool, int>(true, 1),
 	       tuple<bool, int>(true, 2)));
+
+/* With read-only mounts, fuse should never update atime during close */
+TEST_F(RofsRead, atime_during_close)
+{
+	const char FULLPATH[] = "mountpoint/some_file.txt";
+	const char RELPATH[] = "some_file.txt";
+	const char *CONTENTS = "abcdefgh";
+	uint64_t ino = 42;
+	int fd;
+	ssize_t bufsize = strlen(CONTENTS);
+	uint8_t buf[bufsize];
+
+	expect_lookup(RELPATH, ino, bufsize);
+	expect_open(ino, 0, 1);
+	expect_read(ino, 0, bufsize, bufsize, CONTENTS);
+	EXPECT_CALL(*m_mock, process(
+		ResultOf([&](auto in) {
+			return (in.header.opcode == FUSE_SETATTR);
+		}, Eq(true)),
+		_)
+	).Times(0);
+	expect_flush(ino, 1, ReturnErrno(0));
+	expect_release(ino, FuseTest::FH);
+
+	fd = open(FULLPATH, O_RDONLY);
+	ASSERT_LE(0, fd) << strerror(errno);
+
+	/* Ensure atime will be different than during lookup */
+	nap();
+
+	ASSERT_EQ(bufsize, read(fd, buf, bufsize)) << strerror(errno);
+
+	close(fd);
+}
 
 /* fuse_init_out.time_gran controls the granularity of timestamps */
 TEST_P(TimeGran, atime_during_setattr)
@@ -1362,4 +1686,4 @@ TEST_P(TimeGran, atime_during_setattr)
 	leak(fd);
 }
 
-INSTANTIATE_TEST_CASE_P(TG, TimeGran, Range(0u, 10u));
+INSTANTIATE_TEST_SUITE_P(TG, TimeGran, Range(0u, 10u));

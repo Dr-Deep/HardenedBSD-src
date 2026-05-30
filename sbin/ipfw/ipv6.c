@@ -17,8 +17,6 @@
  *
  * NEW command line interface for IP firewall facility
  *
- * $FreeBSD$
- *
  * ipv6 support
  */
 
@@ -55,8 +53,8 @@ static struct _s_x icmp6codes[] = {
 	{ NULL, 0 }
 };
 
-void
-fill_unreach6_code(u_short *codep, char *str)
+uint16_t
+get_unreach6_code(const char *str)
 {
 	int val;
 	char *s;
@@ -66,8 +64,7 @@ fill_unreach6_code(u_short *codep, char *str)
 		val = match_token(icmp6codes, str);
 	if (val < 0)
 		errx(EX_DATAERR, "unknown ICMPv6 unreachable code ``%s''", str);
-	*codep = val;
-	return;
+	return (val);
 }
 
 void
@@ -292,7 +289,7 @@ print_ext6hdr(struct buf_pr *bp, const ipfw_insn *cmd )
 		sep = ',';
 	}
 	if (cmd->arg1 & EXT_ESP) {
-		bprintf(bp, "%cencapsulated security payload", sep);
+		bprintf(bp, "%cencapsulating security payload", sep);
 	}
 }
 
@@ -399,8 +396,6 @@ fill_ip6(ipfw_insn_ip6 *cmd, char *av, int cblen, struct tidx *tstate)
 				n2mask(&d[1], masklen);
 		}
 
-		APPLY_MASK(d, &d[1]);   /* mask base address with mask */
-
 		av = q;
 
 		/* Check this entry */
@@ -411,10 +406,15 @@ fill_ip6(ipfw_insn_ip6 *cmd, char *av, int cblen, struct tidx *tstate)
 			 * list unless it is the only item, in which case we
 			 * report an error.
 			 */
-			if (cmd->o.len & F_NOT && av == NULL && len == 0)
-				errx(EX_DATAERR, "not any never matches");
+			if (av == NULL && len == 0) {
+				if (cmd->o.len & F_NOT)
+					errx(EX_DATAERR, "not any never matches");
+				return (1);
+			}
 			continue;
 		}
+
+		APPLY_MASK(d, &d[1]);   /* mask base address with mask */
 
 		/*
 		 * A single IP can be stored alone

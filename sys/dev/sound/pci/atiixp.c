@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2005 Ariff Abdullah <ariff@FreeBSD.org>
  * All rights reserved.
@@ -69,8 +69,6 @@
 
 #include <dev/sound/pci/atiixp.h>
 
-SND_DECLARE_FILE("$FreeBSD$");
-
 #define ATI_IXP_DMA_RETRY_MAX	100
 
 #define ATI_IXP_BUFSZ_MIN	4096
@@ -131,7 +129,7 @@ struct atiixp_info {
 	uint32_t blkcnt;
 	int registered_channels;
 
-	struct mtx *lock;
+	struct mtx lock;
 	struct callout poll_timer;
 	int poll_ticks, polling;
 };
@@ -141,9 +139,9 @@ struct atiixp_info {
 #define atiixp_wr(_sc, _reg, _val)	\
 		bus_space_write_4((_sc)->st, (_sc)->sh, _reg, _val)
 
-#define atiixp_lock(_sc)	snd_mtxlock((_sc)->lock)
-#define atiixp_unlock(_sc)	snd_mtxunlock((_sc)->lock)
-#define atiixp_assert(_sc)	snd_mtxassert((_sc)->lock)
+#define atiixp_lock(_sc)	mtx_lock(&(_sc)->lock)
+#define atiixp_unlock(_sc)	mtx_unlock(&(_sc)->lock)
+#define atiixp_assert(_sc)	mtx_assert(&(_sc)->lock, MA_OWNED)
 
 static uint32_t atiixp_fmt_32bit[] = {
 	SND_FORMAT(AFMT_S16_LE, 2, 0),
@@ -537,8 +535,8 @@ atiixp_chan_setfragments(kobj_t obj, void *data,
 
 	blksz &= ATI_IXP_BLK_ALIGN;
 
-	if (blksz > (sndbuf_getmaxsize(ch->buffer) / ATI_IXP_DMA_CHSEGS_MIN))
-		blksz = sndbuf_getmaxsize(ch->buffer) / ATI_IXP_DMA_CHSEGS_MIN;
+	if (blksz > (ch->buffer->maxsize / ATI_IXP_DMA_CHSEGS_MIN))
+		blksz = ch->buffer->maxsize / ATI_IXP_DMA_CHSEGS_MIN;
 	if (blksz < ATI_IXP_BLK_MIN)
 		blksz = ATI_IXP_BLK_MIN;
 	if (blkcnt > ATI_IXP_DMA_CHSEGS_MAX)
@@ -546,7 +544,7 @@ atiixp_chan_setfragments(kobj_t obj, void *data,
 	if (blkcnt < ATI_IXP_DMA_CHSEGS_MIN)
 		blkcnt = ATI_IXP_DMA_CHSEGS_MIN;
 
-	while ((blksz * blkcnt) > sndbuf_getmaxsize(ch->buffer)) {
+	while ((blksz * blkcnt) > ch->buffer->maxsize) {
 		if ((blkcnt >> 1) >= ATI_IXP_DMA_CHSEGS_MIN)
 			blkcnt >>= 1;
 		else if ((blksz >> 1) >= ATI_IXP_BLK_MIN)
@@ -555,14 +553,14 @@ atiixp_chan_setfragments(kobj_t obj, void *data,
 			break;
 	}
 
-	if ((sndbuf_getblksz(ch->buffer) != blksz ||
-	    sndbuf_getblkcnt(ch->buffer) != blkcnt) &&
+	if ((ch->buffer->blksz != blksz ||
+	    ch->buffer->blkcnt != blkcnt) &&
 	    sndbuf_resize(ch->buffer, blkcnt, blksz) != 0)
 		device_printf(sc->dev, "%s: failed blksz=%u blkcnt=%u\n",
 		    __func__, blksz, blkcnt);
 
-	ch->blksz = sndbuf_getblksz(ch->buffer);
-	ch->blkcnt = sndbuf_getblkcnt(ch->buffer);
+	ch->blksz = ch->buffer->blksz;
+	ch->blkcnt = ch->buffer->blkcnt;
 
 	return (0);
 }
@@ -585,7 +583,7 @@ atiixp_buildsgdt(struct atiixp_chinfo *ch)
 	uint32_t addr, blksz, blkcnt;
 	int i;
 
-	addr = sndbuf_getbufaddr(ch->buffer);
+	addr = ch->buffer->buf_addr;
 
 	if (sc->polling != 0) {
 		blksz = ch->blksz * ch->blkcnt;
@@ -612,7 +610,7 @@ atiixp_dmapos(struct atiixp_chinfo *ch)
 	volatile uint32_t ptr;
 
 	reg = ch->dt_cur_bit;
-	addr = sndbuf_getbufaddr(ch->buffer);
+	addr = ch->buffer->buf_addr;
 	sz = ch->blkcnt * ch->blksz;
 	retry = ATI_IXP_DMA_RETRY_MAX;
 
@@ -741,8 +739,7 @@ atiixp_chan_trigger(kobj_t obj, void *data, int go)
 			ch->ptr = 0;
 			ch->prevptr = 0;
 			pollticks = ((uint64_t)hz * ch->blksz) /
-			    ((uint64_t)sndbuf_getalign(ch->buffer) *
-			    sndbuf_getspd(ch->buffer));
+			    ((uint64_t)ch->buffer->align * ch->buffer->spd);
 			pollticks >>= 2;
 			if (pollticks > hz)
 				pollticks = hz;
@@ -783,8 +780,8 @@ atiixp_chan_trigger(kobj_t obj, void *data, int go)
 				else
 					ch = &sc->rch;
 				pollticks = ((uint64_t)hz * ch->blksz) /
-				    ((uint64_t)sndbuf_getalign(ch->buffer) *
-				    sndbuf_getspd(ch->buffer));
+				    ((uint64_t)ch->buffer->align *
+				    ch->buffer->spd);
 				pollticks >>= 2;
 				if (pollticks > hz)
 					pollticks = hz;
@@ -807,7 +804,6 @@ atiixp_chan_trigger(kobj_t obj, void *data, int go)
 	default:
 		atiixp_unlock(sc);
 		return (0);
-		break;
 	}
 
 	/* Update bus busy status */
@@ -1022,7 +1018,7 @@ atiixp_chip_post_init(void *arg)
 	if (sc->codec_not_ready_bits == 0) {
 		/* wait for the interrupts to happen */
 		do {
-			msleep(sc, sc->lock, PWAIT, "ixpslp", max(hz / 10, 1));
+			msleep(sc, &sc->lock, PWAIT, "ixpslp", max(hz / 10, 1));
 			if (sc->codec_not_ready_bits != 0)
 				break;
 		} while (--timeout);
@@ -1086,8 +1082,7 @@ atiixp_chip_post_init(void *arg)
 
 	mixer_init(sc->dev, ac97_getmixerclass(), sc->codec);
 
-	if (pcm_register(sc->dev, sc, ATI_IXP_NPCHAN, ATI_IXP_NRCHAN))
-		goto postinitbad;
+	pcm_init(sc->dev, sc);
 
 	for (i = 0; i < ATI_IXP_NPCHAN; i++)
 		pcm_addchan(sc->dev, PCMDIR_PLAY, &atiixp_chan_class, sc);
@@ -1099,11 +1094,12 @@ atiixp_chip_post_init(void *arg)
 	    "polling", CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, sc->dev,
 	    sizeof(sc->dev), sysctl_atiixp_polling, "I", "Enable polling mode");
 
-	snprintf(status, SND_STATUSLEN, "at memory 0x%jx irq %jd %s",
+	snprintf(status, SND_STATUSLEN, "mem 0x%jx irq %jd on %s",
 	    rman_get_start(sc->reg), rman_get_start(sc->irq),
-	    PCM_KLDSTRING(snd_atiixp));
+	    device_get_nameunit(device_get_parent(sc->dev)));
 
-	pcm_setstatus(sc->dev, status);
+	if (pcm_register(sc->dev, status))
+		goto postinitbad;
 
 	atiixp_lock(sc);
 	if (sc->polling == 0)
@@ -1160,22 +1156,19 @@ atiixp_release_resource(struct atiixp_info *sc)
 		bus_dma_tag_destroy(sc->sgd_dmat);
 		sc->sgd_dmat = NULL;
 	}
-	if (sc->lock) {
-		snd_mtxfree(sc->lock);
-		sc->lock = NULL;
-	}
+	mtx_destroy(&sc->lock);
 	free(sc, M_DEVBUF);
 }
 
 static int
 atiixp_pci_probe(device_t dev)
 {
-	int i;
+	size_t i;
 	uint16_t devid, vendor;
 
 	vendor = pci_get_vendor(dev);
 	devid = pci_get_device(dev);
-	for (i = 0; i < sizeof(atiixp_hw) / sizeof(atiixp_hw[0]); i++) {
+	for (i = 0; i < nitems(atiixp_hw); i++) {
 		if (vendor == atiixp_hw[i].vendor &&
 		    devid == atiixp_hw[i].devid) {
 			device_set_desc(dev, atiixp_hw[i].desc);
@@ -1193,7 +1186,8 @@ atiixp_pci_attach(device_t dev)
 	int i;
 
 	sc = malloc(sizeof(*sc), M_DEVBUF, M_WAITOK | M_ZERO);
-	sc->lock = snd_mtxcreate(device_get_nameunit(dev), "snd_atiixp softc");
+	mtx_init(&sc->lock, device_get_nameunit(dev), "snd_atiixp softc",
+	    MTX_DEF);
 	sc->dev = dev;
 
 	callout_init(&sc->poll_timer, 1);
@@ -1408,7 +1402,7 @@ static device_method_t atiixp_methods[] = {
 	DEVMETHOD(device_detach,	atiixp_pci_detach),
 	DEVMETHOD(device_suspend,	atiixp_pci_suspend),
 	DEVMETHOD(device_resume,	atiixp_pci_resume),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t atiixp_driver = {

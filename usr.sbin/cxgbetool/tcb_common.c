@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2018 Chelsio Communications, Inc.
  * All rights reserved.
@@ -27,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "tcb_common.h"
 
 /***:-----------------------------------------------------------------------
@@ -60,6 +58,15 @@ extern void t6_display_tcb_aux_1(_TCBVAR *tvp,int aux);
 extern void t6_display_tcb_aux_2(_TCBVAR *tvp,int aux);
 extern void t6_display_tcb_aux_3(_TCBVAR *tvp,int aux);
 extern void t6_display_tcb_aux_4(_TCBVAR *tvp,int aux);
+
+extern _TCBVAR g_tcb_info7[];
+extern _TCBVAR g_scb_info7[];
+extern _TCBVAR g_fcb_info7[];
+extern void t7_display_tcb_aux_0(_TCBVAR *tvp,int aux);
+extern void t7_display_tcb_aux_1(_TCBVAR *tvp,int aux);
+extern void t7_display_tcb_aux_2(_TCBVAR *tvp,int aux);
+extern void t7_display_tcb_aux_3(_TCBVAR *tvp,int aux);
+extern void t7_display_tcb_aux_4(_TCBVAR *tvp,int aux);
 
 /***:-----------------------------------------------------------------------
  ***: globals
@@ -300,7 +307,7 @@ decompress_val(_TCBVAR *tvp,unsigned ulp_type,unsigned tx_max,
 	  PM_MODE_IANDP==ulp_type) {
 	/* TP does this internally.  Not sure if I should show the
 	 *  unaltered value or the raw value.  For now I
-	 *  will diplay the raw value.  For now I've added the code
+	 *  will display the raw value.  For now I've added the code
 	 *  mainly to stop windows compiler from warning about ulp_type
 	 *  being an unreferenced parameter.
 	 */
@@ -439,7 +446,13 @@ display_tcb_compressed(_TCBVAR *tvp,int aux)
     if      (1==aux) t6_display_tcb_aux_1(tvp,aux);
     else if (2==aux) t6_display_tcb_aux_2(tvp,aux);
     else if (3==aux) t6_display_tcb_aux_3(tvp,aux);
-    else if (4==aux) t6_display_tcb_aux_4(tvp,aux); 
+    else if (4==aux) t6_display_tcb_aux_4(tvp,aux);
+  } else if (g_tN==7) {
+    t7_display_tcb_aux_0(tvp,aux);
+    if      (1==aux) t7_display_tcb_aux_1(tvp,aux);
+    else if (2==aux) t7_display_tcb_aux_2(tvp,aux);
+    else if (3==aux) t7_display_tcb_aux_3(tvp,aux);
+    else if (4==aux) t7_display_tcb_aux_4(tvp,aux);
   }
 }
 
@@ -693,6 +706,11 @@ set_tcb_info(unsigned int tidtype, unsigned int cardtype)
         g_tcb_info = g_tcb_info6;
         g_scb_info = g_scb_info6;
         g_fcb_info = g_fcb_info6;
+    }
+    else if (7 == g_tN) {
+        g_tcb_info = g_tcb_info7;
+        g_scb_info = g_scb_info7;
+        g_fcb_info = g_fcb_info7;
     }
 }
 

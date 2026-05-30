@@ -7,9 +7,6 @@
  *	must be included extraneously.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -20,6 +17,7 @@ __FBSDID("$FreeBSD$");
 u_char	bcea[6] = BA;			/* broadcast ethernet address */
 
 char	rootpath[FNAME_SIZE] = "/";	/* root mount path */
+int	rootport;			/* port for rootpath server */
 char	bootfile[FNAME_SIZE];		/* bootp says to boot this */
 char	hostname[FNAME_SIZE];		/* our hostname */
 int	hostnamelen;

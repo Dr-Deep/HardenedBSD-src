@@ -33,7 +33,6 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 
 .PATH: ${SRCTOP}/lib/libpam
 
@@ -43,8 +42,10 @@ NO_PIC=
 
 # Avoid redundancy with the master Makefile.
 MAN=
+MANNODEV=
 INCS=
 MLINKS=
+MANNODEVLINKS=
 MK_TESTS=	no
 
 #

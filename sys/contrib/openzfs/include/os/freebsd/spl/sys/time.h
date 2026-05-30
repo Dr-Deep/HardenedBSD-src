@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2007 Pawel Jakub Dawidek <pjd@FreeBSD.org>
  * All rights reserved.
@@ -22,8 +23,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _OPENSOLARIS_SYS_TIME_H_
@@ -52,7 +51,7 @@ extern int hz;
 
 typedef longlong_t	hrtime_t;
 
-#if defined(__i386__) || defined(__powerpc__)
+#ifdef __i386__
 #define	TIMESPEC_OVERFLOW(ts)						\
 	((ts)->tv_sec < INT32_MIN || (ts)->tv_sec > INT32_MAX)
 #else
@@ -62,6 +61,17 @@ typedef longlong_t	hrtime_t;
 
 #define	SEC_TO_TICK(sec)	((sec) * hz)
 #define	NSEC_TO_TICK(nsec)	((nsec) / (NANOSEC / hz))
+
+static __inline hrtime_t
+getlrtime(void)
+{
+	struct timespec ts;
+	hrtime_t nsec;
+
+	getnanouptime(&ts);
+	nsec = ((hrtime_t)ts.tv_sec * NANOSEC) + ts.tv_nsec;
+	return (nsec);
+}
 
 static __inline hrtime_t
 gethrtime(void)
@@ -91,6 +101,6 @@ gethrtime(void)
 {
 	struct timespec ts;
 	clock_gettime(CLOCK_UPTIME, &ts);
-	return (((u_int64_t)ts.tv_sec) * NANOSEC + ts.tv_nsec);
+	return (((uint64_t)ts.tv_sec) * NANOSEC + ts.tv_nsec);
 }
 #endif	/* !_OPENSOLARIS_SYS_TIME_H_ */

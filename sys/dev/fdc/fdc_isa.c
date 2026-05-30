@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2004-2005 M. Warner Losh <imp@FreeBSD.org>
  *
@@ -24,9 +24,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/bio.h>
@@ -213,7 +210,7 @@ static device_method_t fdc_methods[] = {
 	DEVMETHOD(bus_write_ivar,       fdc_write_ivar),
 	/* Our children never use any other bus interface methods. */
 
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t fdc_driver = {

@@ -27,8 +27,6 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseMapInfo.h"
-#include "llvm/ADT/None.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/IR/TrackingMDRef.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/Casting.h"
@@ -38,6 +36,7 @@
 #include <cstddef>
 #include <iterator>
 #include <mutex>
+#include <optional>
 #include <type_traits>
 #include <utility>
 
@@ -88,10 +87,12 @@ class ValueMap {
   using ValueMapCVH = ValueMapCallbackVH<KeyT, ValueT, Config>;
   using MapT = DenseMap<ValueMapCVH, ValueT, DenseMapInfo<ValueMapCVH>>;
   using MDMapT = DenseMap<const Metadata *, TrackingMDRef>;
+  /// Map {(InlinedAt, old atom number) -> new atom number}.
+  using DMAtomT = SmallDenseMap<std::pair<Metadata *, uint64_t>, uint64_t>;
   using ExtraData = typename Config::ExtraData;
 
   MapT Map;
-  Optional<MDMapT> MDMap;
+  std::optional<MDMapT> MDMap;
   ExtraData Data;
 
 public:
@@ -104,8 +105,8 @@ public:
       : Map(NumInitBuckets), Data() {}
   explicit ValueMap(const ExtraData &Data, unsigned NumInitBuckets = 64)
       : Map(NumInitBuckets), Data(Data) {}
-  // ValueMap can't be copied nor moved, beucase the callbacks store pointer
-  // to it.
+  // ValueMap can't be copied nor moved, because the callbacks store pointer to
+  // it.
   ValueMap(const ValueMap &) = delete;
   ValueMap(ValueMap &&) = delete;
   ValueMap &operator=(const ValueMap &) = delete;
@@ -117,15 +118,17 @@ public:
       MDMap.emplace();
     return *MDMap;
   }
-  Optional<MDMapT> &getMDMap() { return MDMap; }
+  std::optional<MDMapT> &getMDMap() { return MDMap; }
+  /// Map {(InlinedAt, old atom number) -> new atom number}.
+  DMAtomT AtomMap;
 
   /// Get the mapped metadata, if it's in the map.
-  Optional<Metadata *> getMappedMD(const Metadata *MD) const {
+  std::optional<Metadata *> getMappedMD(const Metadata *MD) const {
     if (!MDMap)
-      return None;
+      return std::nullopt;
     auto Where = MDMap->find(MD);
     if (Where == MDMap->end())
-      return None;
+      return std::nullopt;
     return Where->second.get();
   }
 
@@ -141,11 +144,12 @@ public:
   size_type size() const { return Map.size(); }
 
   /// Grow the map so that it has at least Size buckets. Does not shrink
-  void resize(size_t Size) { Map.resize(Size); }
+  void reserve(size_t Size) { Map.reserve(Size); }
 
   void clear() {
     Map.clear();
     MDMap.reset();
+    AtomMap.clear();
   }
 
   /// Return 1 if the specified key is in the map, 0 otherwise.

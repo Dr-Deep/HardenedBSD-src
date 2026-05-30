@@ -58,8 +58,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_platform.h"
 
 #include <sys/param.h>
@@ -70,8 +68,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/queue.h>
 #include <sys/systm.h>
 #include <sys/endian.h>
-
-#include <machine/stdarg.h>
+#include <sys/stdarg.h>
 
 #include <dev/ofw/ofwvar.h>
 #include <dev/ofw/openfirm.h>
@@ -98,7 +95,7 @@ struct xrefinfo {
 
 static SLIST_HEAD(, xrefinfo) xreflist = SLIST_HEAD_INITIALIZER(xreflist);
 static struct mtx xreflist_lock;
-static boolean_t xref_init_done;
+static bool xref_init_done;
 
 #define	FIND_BY_XREF	0
 #define	FIND_BY_NODE	1
@@ -189,13 +186,22 @@ xrefinfo_add(phandle_t node, phandle_t xref, device_t dev)
 	return (xi);
 }
 
+static void
+xrefinfo_remove(struct xrefinfo *xi)
+{
+
+	mtx_lock(&xreflist_lock);
+	SLIST_REMOVE(&xreflist, xi, xrefinfo, next_entry);
+	mtx_unlock(&xreflist_lock);
+}
+
 /*
  * OFW install routines.  Highest priority wins, equal priority also
  * overrides allowing last-set to win.
  */
 SET_DECLARE(ofw_set, ofw_def_t);
 
-boolean_t
+bool
 OF_install(char *name, int prio)
 {
 	ofw_def_t *ofwp, **ofwpp;
@@ -204,7 +210,7 @@ OF_install(char *name, int prio)
 	/* Allow OF layer to be uninstalled */
 	if (name == NULL) {
 		ofw_def_impl = NULL;
-		return (FALSE);
+		return (false);
 	}
 
 	/*
@@ -218,11 +224,11 @@ OF_install(char *name, int prio)
 		    prio >= curr_prio) {
 			curr_prio = prio;
 			ofw_def_impl = ofwp;
-			return (TRUE);
+			return (true);
 		}
 	}
 
-	return (FALSE);
+	return (false);
 }
 
 /* Initializer */
@@ -375,11 +381,11 @@ OF_getproplen(phandle_t package, const char *propname)
 }
 
 /* Check existence of a property of a package. */
-int
+bool
 OF_hasprop(phandle_t package, const char *propname)
 {
 
-	return (OF_getproplen(package, propname) >= 0 ? 1 : 0);
+	return (OF_getproplen(package, propname) >= 0);
 }
 
 /* Get the value of a property of a package. */
@@ -704,6 +710,16 @@ OF_device_register_xref(phandle_t xref, device_t dev)
 		return (0);
 	}
 	panic("Attempt to register device before xreflist_init");
+}
+
+void
+OF_device_unregister_xref(phandle_t xref, device_t dev)
+{
+	struct xrefinfo *xi;
+
+	if ((xi = xrefinfo_find(xref, FIND_BY_XREF)) == NULL)
+		return;
+	xrefinfo_remove(xi);
 }
 
 /*  Call the method in the scope of a given instance. */

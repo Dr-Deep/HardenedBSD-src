@@ -6,7 +6,7 @@
  * This software is provided ``AS IS'' without any warranties of any kind.
  */
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2003-2005 McAfee, Inc.
  * Copyright (c) 2016-2017 Robert N. M. Watson
@@ -43,9 +43,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include "opt_sysvipc.h"
 
@@ -1311,7 +1308,7 @@ kern_semop(struct thread *td, int usemid, struct sembuf *usops,
 			semptr->semncnt++;
 
 		DPRINTF(("semop:  good night!\n"));
-		error = msleep_sbt(semakptr, sema_mtxp, (PZERO - 4) | PCATCH,
+		error = msleep_sbt(semakptr, sema_mtxp, PVFS | PCATCH,
 		    "semwait", sbt, precision, C_ABSOLUTE);
 		DPRINTF(("semop:  good morning (error=%d)!\n", error));
 		/* return code is checked below, after sem[nz]cnt-- */
@@ -1576,6 +1573,39 @@ sysctl_sema(SYSCTL_HANDLER_ARGS)
 	return (error);
 }
 
+int
+kern_get_sema(struct thread *td, struct semid_kernel **res, size_t *sz)
+{
+	struct prison *pr, *rpr;
+	struct semid_kernel *psemak;
+	int i, mi;
+
+	*sz = mi = seminfo.semmni;
+	if (res == NULL)
+		return (0);
+
+	pr = td->td_ucred->cr_prison;
+	rpr = sem_find_prison(td->td_ucred);
+	*res = malloc(sizeof(struct semid_kernel) * mi, M_TEMP, M_WAITOK);
+	for (i = 0; i < mi; i++) {
+		psemak = &(*res)[i];
+		mtx_lock(&sema_mtx[i]);
+		if ((sema[i].u.sem_perm.mode & SEM_ALLOC) == 0 ||
+		    rpr == NULL || sem_prison_cansee(rpr, &sema[i]) != 0)
+			bzero(psemak, sizeof(*psemak));
+		else {
+			*psemak = sema[i];
+			if (psemak->cred->cr_prison != pr)
+				psemak->u.sem_perm.key = IPC_PRIVATE;
+		}
+		mtx_unlock(&sema_mtx[i]);
+		psemak->u.__sem_base = NULL;
+		psemak->label = NULL;
+		psemak->cred = NULL;
+	}
+	return (0);
+}
+
 static int
 sem_prison_check(void *obj, void *data)
 {
@@ -1765,16 +1795,7 @@ static sy_call_t *semcalls[] = {
  * Entry point for all SEM calls.
  */
 int
-sys_semsys(td, uap)
-	struct thread *td;
-	/* XXX actually varargs. */
-	struct semsys_args /* {
-		int	which;
-		int	a2;
-		int	a3;
-		int	a4;
-		int	a5;
-	} */ *uap;
+sys_semsys(struct thread *td, struct semsys_args *uap)
 {
 	int error;
 
@@ -1883,7 +1904,7 @@ freebsd32_semsys(struct thread *td, struct freebsd32_semsys_args *uap)
 		return (sys_semsys(td, (struct semsys_args *)uap));
 	}
 #else
-	return (nosys(td, NULL));
+	return (kern_nosys(td, 0));
 #endif
 }
 

@@ -24,8 +24,6 @@
 */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * The Broadcom Wireless LAN controller driver.
  */
@@ -249,7 +247,7 @@ bool bwn_ppr_load_max_from_sprom(struct bwn_mac *mac, struct bwn_ppr *ppr,
 		}
 	}
 
-	if (band == BWN_BAND_2G) {
+	if (band == BWN_PHY_BAND_2G) {
 		uint16_t ck2gpo;
 
 		error = bhnd_nvram_getvar_uint16(sc->sc_dev, BHND_NVAR_CCK2GPO,

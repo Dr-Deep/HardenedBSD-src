@@ -1,4 +1,3 @@
-# $FreeBSD$
 #
 #        On the handling of kernel options
 #
@@ -40,10 +39,10 @@ AHC_DEBUG_OPTS		opt_aic7xxx.h
 AHC_REG_PRETTY_PRINT	opt_aic7xxx.h
 AHD_DEBUG		opt_aic79xx.h
 AHD_DEBUG_OPTS		opt_aic79xx.h
-AHD_TMODE_ENABLE	opt_aic79xx.h	
+AHD_TMODE_ENABLE	opt_aic79xx.h
 AHD_REG_PRETTY_PRINT	opt_aic79xx.h
 
-# Debugging options.
+# Debugging options
 ALT_BREAK_TO_DEBUGGER	opt_kdb.h
 BREAK_TO_DEBUGGER	opt_kdb.h
 BUF_TRACKING		opt_global.h
@@ -54,6 +53,7 @@ DDB_CAPTURE_MAXBUFSIZE	opt_ddb.h
 DDB_CTF		opt_ddb.h
 DDB_NUMSYM	opt_ddb.h
 EARLY_PRINTF	opt_global.h
+EXTERR_STRINGS	opt_global.h
 FULL_BUF_TRACKING	opt_global.h
 GDB
 KDB		opt_global.h
@@ -67,11 +67,11 @@ SYSCTL_DEBUG	opt_sysctl.h
 TEXTDUMP_PREFERRED	opt_ddb.h
 TEXTDUMP_VERBOSE	opt_ddb.h
 TSLOG	opt_global.h
+TSLOG_PAGEZERO	opt_global.h
 TSLOGSIZE	opt_global.h
 
-# Miscellaneous options.
+# Miscellaneous options
 ALQ
-ALTERA_SDCARD_FAST_SIM	opt_altera_sdcard.h
 ATSE_CFI_HACK	opt_cfi.h
 AUDIT		opt_global.h
 BOOTHOWTO	opt_global.h
@@ -99,20 +99,17 @@ COMPAT_FREEBSD10	opt_global.h
 COMPAT_FREEBSD11	opt_global.h
 COMPAT_FREEBSD12	opt_global.h
 COMPAT_FREEBSD13	opt_global.h
+COMPAT_FREEBSD14	opt_global.h
 COMPAT_LINUXKPI	opt_dontuse.h
-_COMPAT_LINUX32	opt_compat.h	# XXX: make sure opt_compat.h exists
 COMPILING_LINT	opt_global.h
 CY_PCI_FASTINTR
 DEADLKRES	opt_watchdog.h
-EXPERIMENTAL	opt_global.h
 DIRECTIO
-FILEMON		opt_dontuse.h
 FFCLOCK
 FULL_PREEMPTION	opt_sched.h
 GZIO		opt_gzio.h
-IMAGACT_BINMISC		opt_dontuse.h
+IMGACT_BINMISC		opt_dontuse.h
 IPI_PREEMPTION	opt_sched.h
-GEOM_BDE	opt_geom.h
 GEOM_CACHE	opt_geom.h
 GEOM_CONCAT	opt_geom.h
 GEOM_ELI	opt_geom.h
@@ -133,7 +130,6 @@ GEOM_PART_EBR	opt_geom.h
 GEOM_PART_GPT	opt_geom.h
 GEOM_PART_LDM	opt_geom.h
 GEOM_PART_MBR	opt_geom.h
-GEOM_PART_VTOC8	opt_geom.h
 GEOM_RAID	opt_geom.h
 GEOM_RAID3	opt_geom.h
 GEOM_SHSEC	opt_geom.h
@@ -146,6 +142,7 @@ GEOM_ZERO	opt_geom.h
 IFLIB		opt_iflib.h
 KDTRACE_HOOKS	opt_global.h
 KDTRACE_FRAME	opt_kdtrace.h
+KDTRACE_MIB_SDT	opt_global.h
 KN_HASHSIZE	opt_kqueue.h
 KSTACK_MAX_PAGES
 KSTACK_PAGES
@@ -157,7 +154,10 @@ MAC		opt_global.h
 MAC_BIBA	opt_dontuse.h
 MAC_BSDEXTENDED	opt_dontuse.h
 MAC_DDB		opt_dontuse.h
+MAC_DEBUG	opt_mac.h
+MAC_DO		opt_dontuse.h
 MAC_IFOFF	opt_dontuse.h
+MAC_IPACL	opt_dontuse.h
 MAC_LOMAC	opt_dontuse.h
 MAC_MLS		opt_dontuse.h
 MAC_NONE	opt_dontuse.h
@@ -169,7 +169,9 @@ MAC_SEEOTHERUIDS	opt_dontuse.h
 MAC_STATIC	opt_mac.h
 MAC_STUB	opt_dontuse.h
 MAC_TEST	opt_dontuse.h
+MAC_GRANTBYLABEL	opt_dontuse.h
 MAC_VERIEXEC	opt_dontuse.h
+MAC_VERIEXEC_DEBUG	opt_mac.h
 MAC_VERIEXEC_SHA1	opt_dontuse.h
 MAC_VERIEXEC_SHA256	opt_dontuse.h
 MAC_VERIEXEC_SHA384	opt_dontuse.h
@@ -183,7 +185,6 @@ MFI_DEBUG	opt_mfi.h
 MFI_DECODE_LOG	opt_mfi.h
 MPROF_BUFFERS	opt_mprof.h
 MPROF_HASH_SIZE	opt_mprof.h
-NEW_PCIB	opt_global.h
 NO_ADAPTIVE_MUTEXES	opt_adaptive_mutexes.h
 NO_ADAPTIVE_RWLOCKS
 NO_ADAPTIVE_SX
@@ -204,6 +205,7 @@ SCHED_STATS	opt_sched.h
 SCHED_ULE	opt_sched.h
 SLEEPQUEUE_PROFILING
 SLHCI_DEBUG	opt_slhci.h
+SOCKET_HHOOK	opt_global.h
 STACK		opt_stack.h
 SUIDDIR
 MSGMNB		opt_sysvipc.h
@@ -227,7 +229,12 @@ SYSVMSG		opt_sysvipc.h
 SYSVSEM		opt_sysvipc.h
 SYSVSHM		opt_sysvipc.h
 SW_WATCHDOG	opt_watchdog.h
-TCPHPTS         opt_inet.h
+TCPHPTS
+TCP_HPTS_KTEST	opt_inet.h
+TCP_REQUEST_TRK opt_global.h
+TCP_ACCOUNTING	opt_global.h
+TCP_BBR		opt_inet.h
+TCP_RACK	opt_inet.h
 TURNSTILE_PROFILING
 UMTX_PROFILING
 UMTX_CHAINS	opt_global.h
@@ -265,17 +272,21 @@ NULLFS		opt_dontuse.h
 PROCFS		opt_dontuse.h
 PSEUDOFS	opt_dontuse.h
 SMBFS		opt_dontuse.h
+TARFS		opt_dontuse.h
 TMPFS		opt_dontuse.h
 UDF		opt_dontuse.h
 UNIONFS		opt_dontuse.h
 ZFS		opt_dontuse.h
+P9FS		opt_dontuse.h
 
 # Pseudofs debugging
 PSEUDOFS_TRACE	opt_pseudofs.h
 
+# Tarfs debugging
+TARFS_DEBUG	opt_tarfs.h
+
 # In-kernel GSS-API
 KGSSAPI		opt_kgssapi.h
-KGSSAPI_DEBUG	opt_kgssapi.h
 
 # These static filesystems have one slightly bogus static dependency in
 # sys/i386/i386/autoconf.c.  If any of these filesystems are
@@ -313,10 +324,10 @@ UFS_ACL		opt_ufs.h
 UFS_EXTATTR	opt_ufs.h
 UFS_EXTATTR_AUTOSTART	opt_ufs.h
 
-# Enable fast hash lookups for large directories on UFS-based filesystems.
+# Enable fast hash lookups for large directories on UFS-based filesystems
 UFS_DIRHASH	opt_ufs.h
 
-# Enable gjournal-based UFS journal.
+# Enable gjournal-based UFS journal
 UFS_GJOURNAL	opt_ufs.h
 
 # The below sentence is not in English, and neither is this one.
@@ -329,14 +340,14 @@ NFS_ROOT	opt_nfsroot.h
 # SMB/CIFS requester
 NETSMB		opt_netsmb.h
 
-# Enable debugnet(4) networking support.
+# Enable debugnet(4) networking support
 DEBUGNET 	opt_global.h
-# Enable netdump(4) client support.
+# Enable netdump(4) client support
 NETDUMP 	opt_global.h
-# Enable netgdb(4) support.
+# Enable netgdb(4) support
 NETGDB 		opt_global.h
 
-# Options used only in subr_param.c.
+# Options used only in subr_param.c
 HZ		opt_param.h
 MAXFILES	opt_param.h
 NBUF		opt_param.h
@@ -348,7 +359,7 @@ DFLDSIZ		opt_param.h
 MAXDSIZ		opt_param.h
 MAXSSIZ		opt_param.h
 
-# Generic SCSI options.
+# Generic SCSI options
 CAM_MAX_HIGHPOWER	opt_cam.h
 CAMDEBUG		opt_cam.h
 CAM_DEBUG_COMPILE	opt_cam.h
@@ -375,7 +386,10 @@ CHANGER_MAX_BUSY_SECONDS	opt_cd.h
 # Options used only in cam/scsi/scsi_da.c
 DA_TRACK_REFS		opt_da.h
 
-# Options used only in cam/scsi/scsi_sa.c.
+# Allow unsafe PA transactions
+PASS_UNSAFE_PADDR	opt_pass.h
+
+# Options used only in cam/scsi/scsi_sa.c
 SA_IO_TIMEOUT		opt_sa.h
 SA_SPACE_TIMEOUT	opt_sa.h
 SA_REWIND_TIMEOUT	opt_sa.h
@@ -388,7 +402,7 @@ SCSI_PT_DEFAULT_TIMEOUT	opt_pt.h
 # Options used only in cam/scsi/scsi_ses.c
 SES_ENABLE_PASSTHROUGH	opt_ses.h
 
-# Options used in dev/sym/ (Symbios SCSI driver).
+# Options used in dev/sym/ (Symbios SCSI driver)
 SYM_SETUP_SCSI_DIFF	opt_sym.h	#-HVD support for 825a, 875, 885
 					# disabled:0 (default), enabled:1
 SYM_SETUP_PCI_PARITY	opt_sym.h	#-PCI parity checking
@@ -403,13 +417,11 @@ ISP_DEFAULT_ROLES	opt_isp.h
 ISP_INTERNAL_TARGET	opt_isp.h
 ISP_FCTAPE_OFF		opt_isp.h
 
-# Options used only in dev/iscsi
-ISCSI_INITIATOR_DEBUG	opt_iscsi_initiator.h
-
-# Net stuff.
+# Net stuff
 ACCEPT_FILTER_DATA
 ACCEPT_FILTER_DNS
 ACCEPT_FILTER_HTTP
+ACCEPT_FILTER_TLS
 ALTQ			opt_global.h
 ALTQ_CBQ		opt_altq.h
 ALTQ_CDNR		opt_altq.h
@@ -439,6 +451,7 @@ IPFILTER		opt_ipfilter.h
 IPFILTER_DEFAULT_BLOCK	opt_ipfilter.h
 IPFILTER_LOG		opt_ipfilter.h
 IPFILTER_LOOKUP		opt_ipfilter.h
+IPFILTER_IPFS		opt_ipfilter.h
 IPFIREWALL		opt_ipfw.h
 IPFIREWALL_DEFAULT_TO_ACCEPT	opt_ipfw.h
 IPFIREWALL_NAT		opt_ipfw.h
@@ -450,6 +463,7 @@ IPFIREWALL_PMOD		opt_ipfw.h
 IPSEC			opt_ipsec.h
 IPSEC_DEBUG		opt_ipsec.h
 IPSEC_SUPPORT		opt_ipsec.h
+IPSEC_OFFLOAD		opt_ipsec.h
 IPSTEALTH
 KERN_TLS
 KRPC
@@ -459,17 +473,15 @@ MBUF_PROFILING
 MBUF_STRESS_TEST
 MROUTING		opt_mrouting.h
 NFSLOCKD
+NETLINK			opt_global.h
 PF_DEFAULT_TO_DROP	opt_pf.h
-ROUTE_MPATH		opt_route.h
 ROUTETABLES		opt_route.h
 FIB_ALGO		opt_route.h
 RSS			opt_rss.h
 SLIP_IFF_OPTS		opt_slip.h
-TCPDEBUG
-TCPPCAP		opt_global.h
 SIFTR
 TCP_BLACKBOX		opt_global.h
-TCP_HHOOK		opt_inet.h
+TCP_HHOOK		opt_global.h
 TCP_OFFLOAD		opt_inet.h # Enable code to dispatch TCP offloading
 TCP_RFC7413		opt_inet.h
 TCP_RFC7413_MAX_KEYS	opt_inet.h
@@ -490,8 +502,8 @@ SCTP_MBUF_LOGGING	opt_sctp.h # Log to KTR general mbuf aloc/free
 SCTP_MBCNT_LOGGING	opt_sctp.h # Log to KTR mbcnt activity
 SCTP_PACKET_LOGGING	opt_sctp.h # Log to a packet buffer last N packets
 SCTP_LTRACE_CHUNKS	opt_sctp.h # Log to KTR chunks processed
-SCTP_LTRACE_ERRORS	opt_sctp.h # Log to KTR error returns.
-SCTP_USE_PERCPU_STAT	opt_sctp.h # Use per cpu stats.
+SCTP_LTRACE_ERRORS	opt_sctp.h # Log to KTR error returns
+SCTP_USE_PERCPU_STAT	opt_sctp.h # Use per cpu stats
 SCTP_MCORE_INPUT	opt_sctp.h # Have multiple input threads for input mbufs
 SCTP_LOCAL_TRACE_BUF	opt_sctp.h # Use tracebuffer exported via sysctl
 SCTP_DETAILED_STR_STATS	opt_sctp.h # Use per PR-SCTP policy stream stats
@@ -506,8 +518,6 @@ SCTP_DETAILED_STR_STATS	opt_sctp.h # Use per PR-SCTP policy stream stats
 NETGRAPH
 NETGRAPH_DEBUG		opt_netgraph.h
 NETGRAPH_ASYNC		opt_netgraph.h
-NETGRAPH_ATMLLC		opt_netgraph.h
-NETGRAPH_ATM_ATMPIF	opt_netgraph.h
 NETGRAPH_BLUETOOTH	opt_netgraph.h
 NETGRAPH_BLUETOOTH_BT3C	opt_netgraph.h
 NETGRAPH_BLUETOOTH_H4	opt_netgraph.h
@@ -561,14 +571,6 @@ NETGRAPH_UI		opt_netgraph.h
 NETGRAPH_VJC		opt_netgraph.h
 NETGRAPH_VLAN		opt_netgraph.h
 
-# NgATM options
-NGATM_ATM		opt_netgraph.h
-NGATM_ATMBASE		opt_netgraph.h
-NGATM_SSCOP		opt_netgraph.h
-NGATM_SSCFU		opt_netgraph.h
-NGATM_UNI		opt_netgraph.h
-NGATM_CCATM		opt_netgraph.h
-
 # DRM options
 DRM_DEBUG		opt_drm.h
 
@@ -600,7 +602,6 @@ BLKDEV_IOSIZE		opt_global.h
 BURN_BRIDGES		opt_global.h
 DEBUG			opt_global.h
 DEBUG_LOCKS		opt_global.h
-DEBUG_VFS_LOCKS		opt_global.h
 DFLTPHYS		opt_global.h
 DIAGNOSTIC		opt_global.h
 INVARIANT_SUPPORT	opt_global.h
@@ -612,7 +613,6 @@ MAXPHYS			opt_maxphys.h
 MCLSHIFT		opt_global.h
 MUTEX_NOINLINE		opt_global.h
 LOCK_PROFILING		opt_global.h
-LOCK_PROFILING_FAST	opt_global.h
 MSIZE			opt_global.h
 REGRESSION		opt_global.h
 RWLOCK_NOINLINE		opt_global.h
@@ -625,7 +625,6 @@ VM_KMEM_SIZE_SCALE	opt_vm.h
 VM_KMEM_SIZE_MAX	opt_vm.h
 VM_NRESERVLEVEL		opt_vm.h
 VM_LEVEL_0_ORDER	opt_vm.h
-NO_SWAPPING		opt_vm.h
 MALLOC_MAKE_FAILURES	opt_vm.h
 MALLOC_PROFILE		opt_vm.h
 MALLOC_DEBUG_MAXZONES	opt_vm.h
@@ -718,9 +717,9 @@ IOMMU			opt_iommu.h
 
 # ISA support
 DEV_ISA			opt_isa.h
-ISAPNP			opt_isa.h
+ISAPNP			opt_dontuse.h
 
-# various 'device presence' options.
+# various 'device presence' options
 DEV_BPF			opt_bpf.h
 DEV_CARP		opt_carp.h
 DEV_NETMAP		opt_global.h
@@ -737,10 +736,6 @@ BCE_NVRAM_WRITE_SUPPORT	opt_bce.h
 
 SOCKBUF_DEBUG		opt_global.h
 
-
-# options for hifn driver
-HIFN_DEBUG		opt_hifn.h
-HIFN_RNDTEST		opt_hifn.h
 
 # options for safenet driver
 SAFE_DEBUG		opt_safe.h
@@ -784,9 +779,6 @@ VT_TWOBUTTON_MOUSE	opt_syscons.h
 DEV_SC			opt_syscons.h
 DEV_VT			opt_syscons.h
 
-# kbdmux options
-KBDMUX_DFLT_KEYMAP	opt_kbdmux.h
-
 # teken terminal emulator options
 TEKEN_CONS25		opt_teken.h
 TEKEN_UTF8		opt_teken.h
@@ -804,7 +796,10 @@ KBD_INSTALL_CDEV	opt_kbd.h
 KBD_MAXRETRY		opt_kbd.h
 KBD_MAXWAIT		opt_kbd.h
 KBD_RESETDELAY		opt_kbd.h
+KBD_DELAY1		opt_kbd.h
+KBD_DELAY2		opt_kbd.h
 KBDIO_DEBUG		opt_kbd.h
+KBDMUX_DFLT_KEYMAP	opt_kbdmux.h
 
 # options for the Atheros driver
 ATH_DEBUG		opt_ath.h
@@ -812,23 +807,11 @@ ATH_TXBUF		opt_ath.h
 ATH_RXBUF		opt_ath.h
 ATH_DIAGAPI		opt_ath.h
 ATH_TX99_DIAG		opt_ath.h
-ATH_ENABLE_11N		opt_ath.h
 ATH_ENABLE_DFS		opt_ath.h
 ATH_EEPROM_FIRMWARE	opt_ath.h
 ATH_ENABLE_RADIOTAP_VENDOR_EXT	opt_ath.h
 ATH_DEBUG_ALQ		opt_ath.h
 ATH_KTR_INTR_DEBUG	opt_ath.h
-
-# options for the Atheros hal
-# XXX For now, this breaks non-AR9130 chipsets, so only use it
-# XXX when actually targeting AR9130.
-AH_SUPPORT_AR9130	opt_ah.h
-
-# This is required for AR933x SoC support
-AH_SUPPORT_AR9330	opt_ah.h
-AH_SUPPORT_AR9340	opt_ah.h
-AH_SUPPORT_QCA9530	opt_ah.h
-AH_SUPPORT_QCA9550	opt_ah.h
 
 AH_DEBUG		opt_ah.h
 AH_ASSERT		opt_ah.h
@@ -846,12 +829,6 @@ AH_INTERRUPT_DEBUGGING	opt_ah.h
 # AR5416 and later interrupt mitigation
 # XXX do not use this for AR9130
 AH_AR5416_INTERRUPT_MITIGATION	opt_ah.h
-
-# options for the Altera mSGDMA driver (altera_msgdma)
-ALTERA_MSGDMA_DESC_STD		opt_altera_msgdma.h
-ALTERA_MSGDMA_DESC_EXT		opt_altera_msgdma.h
-ALTERA_MSGDMA_DESC_PF_STD	opt_altera_msgdma.h
-ALTERA_MSGDMA_DESC_PF_EXT	opt_altera_msgdma.h
 
 # options for the Broadcom BCM43xx driver (bwi)
 BWI_DEBUG		opt_bwi.h
@@ -891,7 +868,7 @@ IWN_DEBUG		opt_iwn.h
 # Options for the Intel 3945ABG wireless driver
 WPI_DEBUG		opt_wpi.h
 
-# dcons options 
+# dcons options
 DCONS_BUF_SIZE		opt_dcons.h
 DCONS_POLL_HZ		opt_dcons.h
 DCONS_FORCE_CONSOLE	opt_dcons.h
@@ -900,7 +877,9 @@ DCONS_FORCE_GDB		opt_dcons.h
 # HWPMC options
 HWPMC_DEBUG		opt_global.h
 HWPMC_HOOKS
-HWPMC_MIPS_BACKTRACE 	opt_hwpmc_hooks.h
+
+# Hardware Trace (HWT) framework options
+HWT_HOOKS
 
 # 802.11 support layer
 IEEE80211_DEBUG		opt_wlan.h
@@ -937,13 +916,9 @@ CFI_ARMEDANDDANGEROUS	opt_cfi.h
 CFI_HARDWAREBYTESWAP	opt_cfi.h
 
 # Sound options
-SND_DEBUG		opt_snd.h
 SND_DIAGNOSTIC		opt_snd.h
-SND_FEEDER_MULTIFORMAT	opt_snd.h
-SND_FEEDER_FULL_MULTIFORMAT	opt_snd.h
 SND_FEEDER_RATE_HP	opt_snd.h
 SND_PCM_64		opt_snd.h
-SND_OLDSTEREO		opt_snd.h
 
 X86BIOS
 
@@ -976,6 +951,7 @@ PAX_ASLR	opt_pax.h
 PAX_SYSCTLS	opt_pax.h
 PAX_SEGVGUARD	opt_pax.h
 PAX_HARDENING	opt_pax.h
+PAX_HARDEN_KMALLOC	opt_pax.h
 PAX_NOEXEC	opt_pax.h
 PAX_INSECURE_MODE	opt_pax.h
 PAX_CONTROL_ACL		opt_pax.h
@@ -983,12 +959,15 @@ PAX_CONTROL_ACL_OVERRIDE_SUPPORT	opt_pax.h
 PAX_CONTROL_EXTATTR	opt_pax.h
 PAX_JAIL_SUPPORT	opt_pax.h
 HBSD_DEBUG	opt_pax.h
+HBSD_RESIST_FINGERPRINTING		opt_pax.h
+HBSD_EXPERIMENTAL			opt_pax.h
 
 # ASLR overwritable defaults
 PAX_ASLR_DELTA_MMAP_DEF_LEN		opt_pax.h
 PAX_ASLR_DELTA_STACK_DEF_LEN		opt_pax.h
 PAX_ASLR_DELTA_VDSO_DEF_LEN		opt_pax.h
 PAX_ASLR_DELTA_EXEC_DEF_LEN		opt_pax.h
+PAX_ASLR_DELTA_RTLD_DEF_LEN		opt_pax.h
 PAX_ASLR_COMPAT_DELTA_MMAP_DEF_LEN	opt_pax.h
 PAX_ASLR_COMPAT_DELTA_STACK_DEF_LEN	opt_pax.h
 PAX_ASLR_COMPAT_DELTA_EXEC_DEF_LEN	opt_pax.h
@@ -1002,7 +981,7 @@ PAX_ASLR_DELTA_VDSO_LSB			opt_pax.h
 HBSD_PLEDGE	opt_pledge.h
 
 # Random number generator(s)
-# Alternative RNG algorithm.
+# Alternative RNG algorithm
 RANDOM_FENESTRASX	opt_global.h
 # With this, no entropy processor is loaded, but the entropy
 # harvesting infrastructure is present. This means an entropy
@@ -1012,6 +991,9 @@ RANDOM_LOADABLE	opt_global.h
 # the uma slab allocator.
 RANDOM_ENABLE_UMA	opt_global.h
 RANDOM_ENABLE_ETHER	opt_global.h
+RANDOM_ENABLE_KBD	opt_global.h
+RANDOM_ENABLE_MOUSE	opt_global.h
+RANDOM_ENABLE_TPM	opt_global.h
 
 # This options turns TPM into entropy source.
 TPM_HARVEST	opt_tpm.h
@@ -1043,7 +1025,6 @@ EKCD		opt_ekcd.h
 
 # NVME options
 NVME_USE_NVD	opt_nvme.h
-NVME_2X_RESET	opt_nvme.h
 
 # amdsbwd options
 AMDSBWD_DEBUG	opt_amdsbwd.h
@@ -1058,6 +1039,7 @@ IICHID_DEBUG	opt_hid.h
 IICHID_SAMPLING	opt_hid.h
 HKBD_DFLT_KEYMAP	opt_hkbd.h
 HIDRAW_MAKE_UHID_ALIAS	opt_hid.h
+U2F_DROP_UHID_ALIAS	opt_hid.h
 
 # kenv options
 # The early kernel environment (loader environment, config(8)-provided static)
@@ -1066,3 +1048,10 @@ HIDRAW_MAKE_UHID_ALIAS	opt_hid.h
 # This option is insecure except in controlled environments where the static
 # environment's contents are known to be safe.
 PRESERVE_EARLY_KENV	opt_global.h
+
+# Options for the Intel QuickAssist (QAT) driver
+QAT_DISABLE_SAFE_DC_MODE	opt_qat.h
+
+# EARLY_PRINTF specific options fo NS8250 uart
+UART_NS8250_EARLY_REG_IO_WIDTH	opt_uart.h
+UART_NS8250_EARLY_REG_SHIFT	opt_uart.h

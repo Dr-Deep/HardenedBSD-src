@@ -1,4 +1,3 @@
-# $FreeBSD$
 #
 # The include file <bsd.own.mk> set common variables for owner,
 # group, mode, and directories. Defaults are in brackets.
@@ -44,6 +43,10 @@
 # DEBUGDIR	Base path for standalone debug files. [/usr/lib/debug]
 #
 # DEBUGMODE	Mode for debug files. [${NOBINMODE}]
+#
+# DEBUGOWN      Owner for debug info files. [root]
+#
+# DEBUGGRP      Group for debug info files. [wheel]
 #
 #
 # KMODDIR	Base path for loadable kernel modules
@@ -147,7 +150,7 @@
 # SYMLINKMODE	Symbolic link mode [755]
 
 .if !target(__<bsd.own.mk>__)
-__<bsd.own.mk>__:
+__<bsd.own.mk>__:	.NOTMAIN
 
 .include <bsd.opts.mk>		# options now here or src.opts.mk
 
@@ -155,10 +158,8 @@ __<bsd.own.mk>__:
 
 .if ${MK_CTF} != "no"
 CTFCONVERT_CMD=	${CTFCONVERT} ${CTFFLAGS} ${.TARGET}
-.elif defined(.PARSEDIR) || (defined(MAKE_VERSION) && ${MAKE_VERSION} >= 5201111300)
-CTFCONVERT_CMD=
 .else
-CTFCONVERT_CMD=	@:
+CTFCONVERT_CMD=
 .endif 
 
 .endif # !_WITHOUT_SRCCONF
@@ -172,7 +173,7 @@ NOBINMODE?=	444
 KMODDIR?=	/boot/modules
 KMODOWN?=	${BINOWN}
 KMODGRP?=	${BINGRP}
-KMODMODE?=	500
+KMODMODE?=	${NOBINMODE}
 DTBDIR?=	/boot/dtb
 DTBODIR?=	/boot/dtb/overlays
 DTBOWN?=	root
@@ -200,7 +201,8 @@ LIBMODE?=	${NOBINMODE}
 
 DEBUGDIR?=	/usr/lib/debug
 DEBUGMODE?=	${NOBINMODE}
-
+DEBUGOWN?=	${BINOWN}
+DEBUGGRP?=	${BINGRP}
 
 # Share files
 SHAREDIR?=	/usr/share
@@ -248,7 +250,7 @@ _LINKMODE?=	${LINKMODE:U${NOBINMODE}}
 _SYMLINKOWN?=	${SYMLINKOWN:U${BINOWN}}
 _SYMLINKGRP?=	${SYMLINKGRP:U${BINGRP}}
 _SYMLINKMODE?=	${SYMLINKMODE:U755}
-HRDLINK?=	-l h -o ${_LINKOWN} -g ${_LINKGRP} -m ${_LINKMODE}
+HRDLINK?=	-l mr -o ${_LINKOWN} -g ${_LINKGRP} -m ${_LINKMODE}
 MANHRDLINK?=	-l h -o ${MANOWN} -g ${MANGRP} -m ${MANMODE}
 SYMLINK?=	-l s -o ${_SYMLINKOWN} -g ${_SYMLINKGRP} -m ${_SYMLINKMODE}
 LSYMLINK?=	-l s -o ${LIBOWN} -g ${LIBGRP} -m ${LIBMODE}
@@ -275,8 +277,10 @@ XZ_THREADS?=	0
 
 .if !empty(XZ_THREADS)
 XZ_CMD?=	xz -T ${XZ_THREADS}
+TAR_XZ_CMD?=	${TAR_CMD} -J --options xz:threads=${XZ_THREADS}
 .else
 XZ_CMD?=	xz
+TAR_XZ_CMD?=	${TAR_CMD} -J
 .endif
 
 PKG_CMD?=	pkg

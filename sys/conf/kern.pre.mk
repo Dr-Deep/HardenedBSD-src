@@ -1,4 +1,3 @@
-# $FreeBSD$
 
 # Part of a unified Makefile for building kernels.  This part contains all
 # of the definitions that need to be before %BEFORE_DEPEND.
@@ -9,7 +8,11 @@
 # the rest of /usr/src, but they still always process SRCCONF even though
 # the normal mechanisms to prevent that (compiling out of tree) won't
 # work. To ensure they do work, we have to duplicate thee few lines here.
+.if exists(${SRCTOP}/src.conf)
+SRCCONF?=	${SRCTOP}/src.conf
+.else
 SRCCONF?=	/etc/src.conf
+.endif
 .if (exists(${SRCCONF}) || ${SRCCONF} != "/etc/src.conf") && !target(_srcconf_included_)
 .include "${SRCCONF}"
 _srcconf_included_:
@@ -18,6 +21,7 @@ _srcconf_included_:
 .include <bsd.own.mk>
 .include <bsd.compiler.mk>
 .include "kern.opts.mk"
+.-include <local.kern.pre.mk>
 
 # The kernel build always occurs in the object directory which is .CURDIR.
 .if ${.MAKE.MODE:Unormal:Mmeta}
@@ -74,10 +78,9 @@ CFLAGS=	${COPTFLAGS} ${DEBUG}
 CFLAGS+= ${INCLUDES} -D_KERNEL -DHAVE_KERNEL_OPTION_HEADERS -include opt_global.h
 CFLAGS_PARAM_INLINE_UNIT_GROWTH?=100
 CFLAGS_PARAM_LARGE_FUNCTION_GROWTH?=1000
-CFLAGS.gcc+= -fms-extensions -finline-limit=${INLINE_LIMIT}
+CFLAGS.gcc+= -finline-limit=${INLINE_LIMIT}
 CFLAGS.gcc+= --param inline-unit-growth=${CFLAGS_PARAM_INLINE_UNIT_GROWTH}
 CFLAGS.gcc+= --param large-function-growth=${CFLAGS_PARAM_LARGE_FUNCTION_GROWTH}
-CFLAGS.gcc+= -fms-extensions
 .if defined(CFLAGS_ARCH_PARAMS)
 CFLAGS.gcc+=${CFLAGS_ARCH_PARAMS}
 .endif
@@ -93,45 +96,10 @@ ASM_CFLAGS= -x assembler-with-cpp -DLOCORE ${CFLAGS} ${ASM_CFLAGS.${.IMPSRC:T}}
 COMPAT_FREEBSD32_ENABLED!= grep COMPAT_FREEBSD32 opt_global.h || true ; echo
 
 KASAN_ENABLED!=	grep KASAN opt_global.h || true ; echo
-.if !empty(KASAN_ENABLED)
-SAN_CFLAGS+=	-DSAN_NEEDS_INTERCEPTORS -DSAN_INTERCEPTOR_PREFIX=kasan \
-		-fsanitize=kernel-address \
-		-mllvm -asan-stack=true \
-		-mllvm -asan-instrument-dynamic-allocas=true \
-		-mllvm -asan-globals=true \
-		-mllvm -asan-use-after-scope=true \
-		-mllvm -asan-instrumentation-with-call-threshold=0 \
-		-mllvm -asan-instrument-byval=false
-.endif
-
-KCSAN_ENABLED!=	grep KCSAN opt_global.h || true ; echo
-.if !empty(KCSAN_ENABLED)
-SAN_CFLAGS+=	-DSAN_NEEDS_INTERCEPTORS -DSAN_INTERCEPTOR_PREFIX=kcsan \
-		-fsanitize=thread
-.endif
-
+KCSAN_ENABLED!= grep KCSAN opt_global.h || true ; echo
 KMSAN_ENABLED!= grep KMSAN opt_global.h || true ; echo
-.if !empty(KMSAN_ENABLED)
-SAN_CFLAGS+=	-DSAN_NEEDS_INTERCEPTORS -DSAN_INTERCEPTOR_PREFIX=kmsan \
-		-fsanitize=kernel-memory
-.endif
-
 KUBSAN_ENABLED!=	grep KUBSAN opt_global.h || true ; echo
-.if !empty(KUBSAN_ENABLED)
-SAN_CFLAGS+=	-fsanitize=undefined
-.endif
-
 COVERAGE_ENABLED!=	grep COVERAGE opt_global.h || true ; echo
-.if !empty(COVERAGE_ENABLED)
-.if ${COMPILER_TYPE} == "clang" || \
-    (${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 80100)
-SAN_CFLAGS+=	-fsanitize-coverage=trace-pc,trace-cmp
-.else
-SAN_CFLAGS+=	-fsanitize-coverage=trace-pc
-.endif
-.endif
-
-CFLAGS+=	${SAN_CFLAGS}
 
 GCOV_ENABLED!=	grep GCOV opt_global.h || true ; echo
 .if !empty(GCOV_ENABLED)
@@ -146,16 +114,8 @@ CFLAGS+=	${GCOV_CFLAGS}
 # the others.
 CFLAGS+=	${CONF_CFLAGS}
 
-.if defined(LINKER_FEATURES) && ${LINKER_FEATURES:Mbuild-id}
 LDFLAGS+=	--build-id=sha1
-.endif
 
-.if (${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "amd64" || \
-    ${MACHINE_CPUARCH} == "i386" || ${MACHINE} == "powerpc") && \
-    defined(LINKER_FEATURES) && ${LINKER_FEATURES:Mifunc} == "" && \
-    !make(install)
-.error amd64/arm64/i386/ppc* kernel requires linker ifunc support
-.endif
 .if ${MACHINE_CPUARCH} == "amd64"
 LDFLAGS+=	-z max-page-size=2097152
 .if ${LINKER_TYPE} != "lld"
@@ -189,8 +149,12 @@ NORMAL_M= ${AWK} -f $S/tools/makeobjops.awk ${.IMPSRC} -c ; \
 
 NORMAL_FW= uudecode -o ${.TARGET} ${.ALLSRC}
 NORMAL_FWO= ${CC:N${CCACHE_BIN}} -c ${ASM_CFLAGS} ${WERROR} -o ${.TARGET} \
-	$S/kern/firmw.S -DFIRMW_FILE="${.ALLSRC:M*.fw}" \
+	$S/kern/firmw.S -DFIRMW_FILE=\""${.ALLSRC:M*.fw}"\" \
 	-DFIRMW_SYMBOL="${.ALLSRC:M*.fw:C/[-.\/]/_/g}"
+
+# Remove sanitizer arguments. Some -fno-sanitize* and -fasan-shadow-offset*
+# arguments become an error if the appropriate sanitizer is not enabled.
+NOSAN_C= ${NORMAL_C:N-fsanitize*:N-fno-sanitize*:N-fasan-shadow-offset*}
 
 # for ZSTD in the kernel (include zstd/lib/freebsd before other CFLAGS)
 ZSTD_C= ${CC} -c -DZSTD_HEAPMODE=1 -I$S/contrib/zstd/lib/freebsd ${CFLAGS} \
@@ -225,7 +189,6 @@ CDDL_CFLAGS=	\
 	-Wno-duplicate-decl-specifier \
 	-Wno-missing-braces \
 	-Wno-missing-prototypes \
-	-Wno-nested-externs \
 	-Wno-parentheses \
 	-Wno-pointer-arith \
 	-Wno-strict-prototypes \
@@ -240,17 +203,19 @@ CDDL_CFLAGS=	\
 CDDL_C=		${CC} -c ${CDDL_CFLAGS} ${WERROR} ${.IMPSRC}
 
 # Special flags for managing the compat compiles for ZFS
-ZFS_CFLAGS+=	${CDDL_CFLAGS} -DBUILDING_ZFS -DHAVE_UIO_ZEROCOPY \
-	-DWITH_NETDUMP -D__KERNEL__ -D_SYS_CONDVAR_H_ -DSMP \
-	-DIN_FREEBSD_BASE
+ZFS_CFLAGS+=	-I$S/contrib/openzfs/module/icp/include \
+	-include $S/contrib/openzfs/include/sys/simd_config.h \
+	${CDDL_CFLAGS} -DBUILDING_ZFS -DHAVE_UIO_ZEROCOPY \
+	-DWITH_NETDUMP -D__KERNEL__ -D_SYS_CONDVAR_H_ -DSMP
 
 .if ${MACHINE_ARCH} == "amd64"
 ZFS_CFLAGS+= -D__x86_64 -DHAVE_SSE2 -DHAVE_SSSE3 -DHAVE_SSE4_1 -DHAVE_SSE4_2 \
-	-DHAVE_AVX -DHAVE_AVX2 -DHAVE_AVX512F -DHAVE_AVX512VL -DHAVE_AVX512BW
+	-DHAVE_AVX -DHAVE_AVX2 -DHAVE_AVX512F -DHAVE_AVX512VL -DHAVE_AVX512BW \
+	-DHAVE_VAES -DHAVE_VPCLMULQDQ
 .endif
 
 .if ${MACHINE_ARCH} == "i386" || ${MACHINE_ARCH} == "powerpc" || \
-	${MACHINE_ARCH} == "powerpcspe" || ${MACHINE_ARCH} == "arm"
+	${MACHINE_ARCH} == "arm"
 ZFS_CFLAGS+= -DBITS_PER_LONG=32
 .else
 ZFS_CFLAGS+= -DBITS_PER_LONG=64
@@ -277,6 +242,11 @@ DTRACE_ASM_CFLAGS=	-x assembler-with-cpp -DLOCORE ${DTRACE_CFLAGS}
 DTRACE_C=	${CC} -c ${DTRACE_CFLAGS}	${WERROR} ${.IMPSRC}
 DTRACE_S=	${CC} -c ${DTRACE_ASM_CFLAGS}	${WERROR} ${.IMPSRC}
 
+# zlib code supports systems that are quite old, but will fix this issue once C2x gets radified.
+# see https://github.com/madler/zlib/issues/633 for details
+ZLIB_CFLAGS=	-Wno-cast-qual ${NO_WDEPRECATED_NON_PROTOTYPE} ${NO_WSTRICT_PROTOTYPES}
+ZLIB_C=		${CC} -c ${CFLAGS} ${WERROR} ${ZLIB_CFLAGS} ${.IMPSRC}
+
 # Special flags for managing the compat compiles for DTrace/FBT
 FBT_CFLAGS=	-DBUILDING_DTRACE -nostdinc -I$S/cddl/dev/fbt/${MACHINE_CPUARCH} -I$S/cddl/dev/fbt ${CDDL_CFLAGS} -I$S/cddl/compat/opensolaris -I$S/cddl/contrib/opensolaris/uts/common  
 .if ${MACHINE_CPUARCH} == "amd64" || ${MACHINE_CPUARCH} == "i386"
@@ -293,7 +263,9 @@ NORMAL_CTFCONVERT=	@:
 .endif
 
 # Linux Kernel Programming Interface C-flags
-LINUXKPI_INCLUDES=	-I$S/compat/linuxkpi/common/include
+LINUXKPI_INCLUDES=	-I$S/compat/linuxkpi/common/include \
+			-I$S/compat/linuxkpi/dummy/include \
+			-include $S/compat/linuxkpi/common/include/linux/kconfig.h
 LINUXKPI_C=		${NORMAL_C} ${LINUXKPI_INCLUDES}
 
 # Infiniband C flags.  Correct include paths and omit errors that linux
@@ -310,6 +282,14 @@ MLXFW_C=	${OFED_C_NOIMP} \
 		-I${SRCTOP}/sys/contrib/xz-embedded/freebsd \
 		-I${SRCTOP}/sys/contrib/xz-embedded/linux/lib/xz \
 		${.IMPSRC}
+# BNXT Driver
+BNXT_CFLAGS=	-I$S/dev/bnxt/bnxt_en ${OFEDCFLAGS}
+BNXT_C_NOIMP=	${CC} -c -o ${.TARGET} ${BNXT_CFLAGS} ${WERROR}
+BNXT_C=		${BNXT_C_NOIMP} ${.IMPSRC}
+
+# IP Filter
+IPFILTER_CFLAGS=	-I$S/netpfil/ipfilter
+IPFILTER_C=		${NORMAL_C} ${IPFILTER_CFLAGS}
 
 GEN_CFILES= $S/$M/$M/genassym.c ${MFILES:T:S/.m$/.c/}
 SYSTEM_CFILES= config.c env.c hints.c vnode_if.c
@@ -328,12 +308,11 @@ SYSTEM_OBJS+= embedfs_${MFS_IMAGE:T:R}.o
 .endif
 .endif
 SYSTEM_LD_BASECMD= \
-	${LD} -m ${LD_EMULATION} -Bdynamic -T ${LDSCRIPT} ${_LDFLAGS} \
+	${LD} -m ${LD_EMULATION} -Bdynamic -L $S/conf -T ${LDSCRIPT} ${_LDFLAGS} \
 	--no-warn-mismatch --warn-common --export-dynamic \
 	--dynamic-linker /red/herring -X
 SYSTEM_LD= @${SYSTEM_LD_BASECMD} -o ${.TARGET} ${SYSTEM_OBJS} vers.o
-SYSTEM_LD_TAIL= @${OBJCOPY} --strip-symbol gcc2_compiled. ${.TARGET} ; \
-	${SIZE} ${.TARGET} ; chmod 755 ${.TARGET}
+SYSTEM_LD_TAIL= @${SIZE} ${.TARGET} ; chmod 755 ${.TARGET}
 SYSTEM_DEP+= ${LDSCRIPT}
 
 # Calculate path for .m files early, if needed.
@@ -365,5 +344,5 @@ MKMODULESENV+=	__MPATH="${__MPATH}"
 
 # Detect kernel config options that force stack frames to be turned on.
 DDB_ENABLED!=	grep DDB opt_ddb.h || true ; echo
-DTR_ENABLED!=	grep KDTRACE_FRAME opt_kdtrace.h || true ; echo
+DTRACE_ENABLED!=grep KDTRACE_FRAME opt_kdtrace.h || true ; echo
 HWPMC_ENABLED!=	grep HWPMC opt_hwpmc_hooks.h || true ; echo

@@ -1,4 +1,3 @@
-# $FreeBSD$
 
 #-
 # Copyright (c) 2014 M. Warner Losh <imp@FreeBSD.org>
@@ -98,10 +97,8 @@ NANO_MAKEFS="makefs -B big \
 	-o bsize=4096,fsize=512,density=8192,optimization=space"
 export NANO_MAKEFS
 
-# NB: leave c++ enabled so devd can be built
 CONF_BUILD="
 WITHOUT_ACPI=true
-WITHOUT_ATM=true
 WITHOUT_AUDIT=true
 WITHOUT_BLUETOOTH=true
 WITHOUT_CALENDAR=true
@@ -207,7 +204,7 @@ do_add_port ()
 }
 
 # Need to check if this function works with cross-compiling architecture!!!!
-# Recursive complex fonction: Generate one function for each ports
+# Recursive complex function: Generate one function for each port
 add_port () {
     local port_path=$1
     local port=`echo $1 | sed -e 's/\//_/'`

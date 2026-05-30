@@ -27,9 +27,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)ptrace.h	8.2 (Berkeley) 1/4/94
- * $FreeBSD$
  */
 
 #ifndef	_SYS_PTRACE_H_
@@ -87,9 +84,18 @@
 #define	PT_VM_ENTRY	41	/* Get VM map (entry) */
 #define	PT_GETREGSET	42	/* Get a target register set */
 #define	PT_SETREGSET	43	/* Set a target register set */
+#define	PT_SC_REMOTE	44	/* Execute a syscall */
 
 #define PT_FIRSTMACH    64	/* for machine-specific requests */
+#define	PT_LASTMACH     127
 #include <machine/ptrace.h>	/* machine-specific requests, if any */
+
+#ifdef _KERNEL
+/* Space for ptrace commands not exposed directly to userspace. */
+#define	PTINTERNAL_FIRST	128
+#define	PTINTERNAL_LAST		191
+#define	PTLINUX_GET_SC_ARGS	(PTINTERNAL_FIRST + 0)
+#endif
 
 /* Events used with PT_GET_EVENT_MASK and PT_SET_EVENT_MASK */
 #define	PTRACE_EXEC	0x0001
@@ -152,7 +158,7 @@ struct ptrace_lwpinfo32 {
 	int	pl_flags;	/* LWP flags. */
 	sigset_t	pl_sigmask;	/* LWP signal mask */
 	sigset_t	pl_siglist;	/* LWP pending signal */
-	struct siginfo32 pl_siginfo;	/* siginfo for signal */
+	struct __siginfo32 pl_siginfo;	/* siginfo for signal */
 	char		pl_tdname[MAXCOMLEN + 1]; /* LWP name. */
 	pid_t		pl_child_pid;	/* New child pid */
 	u_int		pl_syscall_code;
@@ -192,13 +198,28 @@ struct ptrace_coredump {
 #define	PC_COMPRESS	0x00000001	/* Allow compression */
 #define	PC_ALL		0x00000002	/* Include non-dumpable entries */
 
+struct ptrace_sc_remote {
+	struct ptrace_sc_ret pscr_ret;
+	u_int	pscr_syscall;
+	u_int	pscr_nargs;
+	syscallarg_t	*pscr_args;
+};
+
 #ifdef _KERNEL
+
+#include <sys/proc.h>
 
 struct thr_coredump_req {
 	struct vnode	*tc_vp;		/* vnode to write coredump to. */
 	off_t		tc_limit;	/* max coredump file size. */
 	int		tc_flags;	/* user flags */
 	int		tc_error;	/* request result */
+};
+
+struct thr_syscall_req {
+	struct ptrace_sc_ret ts_ret;
+	u_int	ts_nargs;
+	struct syscall_args ts_sa;
 };
 
 int	ptrace_set_pc(struct thread *_td, unsigned long _addr);

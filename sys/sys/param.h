@@ -32,15 +32,13 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)param.h	8.3 (Berkeley) 4/4/95
- * $FreeBSD$
  */
 
 #ifndef _SYS_PARAM_H_
 #define _SYS_PARAM_H_
 
 #include <sys/_null.h>
+#include <sys/_param.h>
 
 #define	BSD	199506		/* System version (year & month). */
 #define BSD4_3	1
@@ -76,7 +74,7 @@
  * cannot include sys/param.h and should only be updated here.
  */
 #undef __FreeBSD_version
-#define __FreeBSD_version 1400066
+#define __FreeBSD_version 1600018
 
 /*
  * __FreeBSD_kernel__ indicates that this system uses the kernel of FreeBSD,
@@ -94,7 +92,7 @@
 #undef __FreeBSD_kernel__
 #define __FreeBSD_kernel__
 
-#if defined(_KERNEL) || defined(IN_RTLD)
+#if defined(_KERNEL) || defined(_WANT_P_OSREL)
 #define	P_OSREL_SIGWAIT			700000
 #define	P_OSREL_SIGSEGV			700004
 #define	P_OSREL_MAP_ANON		800104
@@ -107,6 +105,11 @@
 #define	P_OSREL_CK_SUPERBLOCK		1300000
 #define	P_OSREL_CK_INODE		1300005
 #define	P_OSREL_POWERPC_NEW_AUX_ARGS	1300070
+#define	P_OSREL_TIDPID			1400079
+#define	P_OSREL_ARM64_SPSR		1400084
+#define	P_OSREL_TLSBASE			1500044
+#define	P_OSREL_EXTERRCTL		1500045
+#define	P_OSREL_AMD64_TF_FRED		1600014
 
 #define	P_OSREL_MAJOR(x)		((x) / 100000)
 #endif
@@ -151,17 +154,16 @@
 #endif
 #endif
 
-#ifndef _KERNEL
-#ifndef LOCORE
+#if !defined(_KERNEL) && !defined(_STANDALONE) && !defined(LOCORE)
 /* Signals. */
 #include <sys/signal.h>
-#endif
 #endif
 
 /* Machine type dependent parameters. */
 #include <machine/param.h>
 #ifndef _KERNEL
 #include <sys/limits.h>
+#include <sys/_maxphys.h>
 #endif
 
 #ifndef DEV_BSHIFT
@@ -175,15 +177,11 @@
 #ifndef DFLTPHYS
 #define DFLTPHYS	(64 * 1024)	/* default max raw I/O transfer size */
 #endif
-#ifndef MAXPHYS				/* max raw I/O transfer size */
-#ifdef __ILP32__
-#define MAXPHYS		(128 * 1024)
-#else
-#define MAXPHYS		(1024 * 1024)
-#endif
-#endif
 #ifndef MAXDUMPPGS
 #define MAXDUMPPGS	(DFLTPHYS/PAGE_SIZE)
+#endif
+#ifdef STACKALIGNBYTES
+#define	STACKALIGN(p)	(__align_down(p, STACKALIGNBYTES + 1))
 #endif
 
 /*
@@ -208,6 +206,17 @@
 
 #define	MJUM9BYTES	(9 * 1024)	/* jumbo cluster 9k */
 #define	MJUM16BYTES	(16 * 1024)	/* jumbo cluster 16k */
+
+/*
+ * Mach derived conversion macros
+ */
+#define	round_page(x)	roundup2(x, PAGE_SIZE)
+#define	trunc_page(x)	rounddown2(x, PAGE_SIZE)
+
+#define	atop(x)		((x) >> PAGE_SHIFT)
+#define	ptoa(x)		((x) << PAGE_SHIFT)
+
+#define	pgtok(x)	((x) * (PAGE_SIZE / 1024))
 
 /*
  * Some macros for units conversion
@@ -248,9 +257,6 @@
 #define	PRILASTFLAG	0x400	/* Last flag defined above */
 
 #define	NZERO	0		/* default "nice" */
-
-#define	NBBY	8		/* number of bits in a byte */
-#define	NBPW	sizeof(int)	/* number of bytes per word (integer) */
 
 #define	CMASK	022		/* default file mask: S_IWGRP|S_IWOTH */
 
@@ -315,16 +321,7 @@
 #define	isclr(a,i)							\
 	((((const unsigned char *)(a))[(i)/NBBY] & (1<<((i)%NBBY))) == 0)
 
-/* Macros for counting and rounding. */
-#ifndef howmany
-#define	howmany(x, y)	(((x)+((y)-1))/(y))
-#endif
-#define	nitems(x)	(sizeof((x)) / sizeof((x)[0]))
-#define	rounddown(x, y)	(((x)/(y))*(y))
-#define	rounddown2(x, y) __align_down(x, y) /* if y is power of two */
-#define	roundup(x, y)	((((x)+((y)-1))/(y))*(y))  /* to any y */
-#define	roundup2(x, y)	__align_up(x, y) /* if y is powers of two */
-#define powerof2(x)	((((x)-1)&(x))==0)
+/* Macros for counting and rounding provided by <sys/_param.h>. */
 
 /* Macros for min/max. */
 #define	MIN(a,b) (((a)<(b))?(a):(b))

@@ -23,9 +23,6 @@
  * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <stand.h>
 #include <sys/param.h>
 #include <fdt_platform.h>
@@ -34,12 +31,6 @@ __FBSDID("$FreeBSD$");
 #include "bootstrap.h"
 
 extern int command_fdt_internal(int argc, char *argv[]);
-
-static int
-OF_hasprop(phandle_t node, const char *prop)
-{
-	return (OF_getproplen(node, (char *)prop) > 0);
-}
 
 static void
 add_node_to_fdt(void *buffer, phandle_t node, int fdt_offset)

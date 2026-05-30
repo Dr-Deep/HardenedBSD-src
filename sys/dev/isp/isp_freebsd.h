@@ -1,6 +1,5 @@
-/* $FreeBSD$ */
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Qlogic ISP SCSI Host Adapter FreeBSD Wrapper Definitions
  *
@@ -43,6 +42,7 @@
 #include <sys/mutex.h>
 #include <sys/condvar.h>
 #include <sys/rman.h>
+#include <sys/stdarg.h>
 #include <sys/sysctl.h>
 
 #include <sys/proc.h>
@@ -51,7 +51,6 @@
 
 #include <machine/bus.h>
 #include <machine/cpu.h>
-#include <machine/stdarg.h>
 
 #include <cam/cam.h>
 #include <cam/cam_debug.h>
@@ -90,10 +89,11 @@ void		isp_put_ecmd(struct ispsoftc *, isp_ecmd_t *);
 #include <dev/isp/isp_target.h>
 typedef struct atio_private_data {
 	LIST_ENTRY(atio_private_data)	next;
+	void *		ccb;
+	uint32_t	tag;		/* typically f/w RX_ID */
 	uint32_t	orig_datalen;
 	uint32_t	bytes_xfered;
 	uint32_t	bytes_in_transit;
-	uint32_t	tag;		/* typically f/w RX_ID */
 	lun_id_t	lun;
 	uint32_t	nphdl;
 	uint32_t	sid;
@@ -103,9 +103,8 @@ typedef struct atio_private_data {
 	uint16_t	word3;	/* PRLI word3 params */
 	uint16_t	ctcnt;	/* number of CTIOs currently active */
 	uint8_t		seqno;	/* CTIO sequence number */
-	uint32_t
-			srr_notify_rcvd	: 1,
-			cdb0		: 8,
+	uint8_t		cdb0;
+	uint16_t	srr_notify_rcvd	: 1,
 			sendst		: 1,
 			dead		: 1,
 			tattr		: 3,
@@ -245,7 +244,7 @@ struct isposinfo {
 	/*
 	 * Firmware pointer
 	 */
-	const struct firmware *	fw;
+	const struct firmware *	ispfw;
 
 	/*
 	 * DMA related stuff

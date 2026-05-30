@@ -29,8 +29,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <fenv.h>
 #include <float.h>
 #include <math.h>
@@ -52,7 +50,7 @@ __FBSDID("$FreeBSD$");
 	CHECK_FP_EXCEPTIONS_MSG(0, ALL_STD_EXCEPT,			      \
 	    #func "(%.20Lg, %.20Lg) rmode%d", (x), (y), rmode);		      \
 	ATF_CHECK_MSG(fpequal_cs(__result, (expected), true),		      \
-	    #func "(%.20Lg, %.20Lg) rmode%d = %.20Lg, expected %.20Lg\n",     \
+	    #func "(%.20Lg, %.20Lg) rmode%d = %.20Lg, expected %.20Lg",       \
 	    (x), (y), rmode, __result, (expected));			      \
 } while (0)
 

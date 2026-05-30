@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2021 Rick Macklem
  *
@@ -23,8 +23,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -42,13 +40,13 @@ void		rpctls_svc_run(void);
 /*
  * A linked list of all current "SSL *"s and socket "fd"s
  * for kernel RPC TLS connections is maintained.
- * The "refno" field is a unique 64bit value used to
+ * The "cookie" field is a unique 64bit value used to
  * identify which entry a kernel RPC upcall refers to.
  */
 LIST_HEAD(ssl_list, ssl_entry);
 struct ssl_entry {
 	LIST_ENTRY(ssl_entry)	next;
-	uint64_t		refno;
+	uint64_t		cookie;
 	int			s;
 	bool			shutoff;
 	SSL			*ssl;

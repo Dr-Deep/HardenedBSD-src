@@ -1,16 +1,17 @@
-# $FreeBSD$
+.PATH: ${ZFSTOP}/module/avl
 
-.PATH: ${SRCTOP}/sys/contrib/openzfs/module/avl
+PACKAGE=	zfs
+LIB_PACKAGE=
 
-PACKAGE=	runtime
 LIB=	avl
 LIBADD=	spl
 SRCS=	avl.c
 WARNS?=	3
 CFLAGS+= -DIN_BASE
-CFLAGS+= -I${SRCTOP}/sys/contrib/openzfs/include
-CFLAGS+= -I${SRCTOP}/sys/contrib/openzfs/lib/libspl/include/
-CFLAGS+= -I${SRCTOP}/sys/contrib/openzfs/lib/libspl/include/os/freebsd
+CFLAGS+= -I${ZFSTOP}/include
+CFLAGS+= -I${ZFSTOP}/lib/libspl/include/
+CFLAGS+= -I${ZFSTOP}/lib/libspl/include/os/freebsd
 CFLAGS+= -I${SRCTOP}/sys
-CFLAGS+= -include ${SRCTOP}/sys/contrib/openzfs/include/os/freebsd/spl/sys/ccompile.h
+CFLAGS+= -include ${ZFSTOP}/include/os/freebsd/spl/sys/ccompile.h
+
 .include <bsd.lib.mk>

@@ -1,6 +1,5 @@
-/* $FreeBSD$ */
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008-2022 Hans Petter Selasky.
  * Copyright (c) 2021-2022 Idwer Vollering.
@@ -106,6 +105,12 @@ static uint8_t scsi_huawei_eject[] =	{ 0x11, 0x06, 0x00, 0x00, 0x00, 0x00,
 					  0x00, 0x00, 0x00, 0x00 };
 static uint8_t scsi_huawei_eject2[] =	{ 0x11, 0x06, 0x20, 0x00, 0x00, 0x01,
 					  0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+					  0x00, 0x00, 0x00, 0x00 };
+static uint8_t scsi_huawei_eject3[] =	{ 0x11, 0x06, 0x20, 0x00, 0x00, 0x01,
+					  0x01, 0x00, 0x01, 0x00, 0x00, 0x00,
+					  0x00, 0x00, 0x00, 0x00 };
+static uint8_t scsi_huawei_eject4[] =	{ 0x11, 0x06, 0x30, 0x00, 0x00, 0x00,
+					  0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
 					  0x00, 0x00, 0x00, 0x00 };
 static uint8_t scsi_tct_eject[] =	{ 0x06, 0xf5, 0x04, 0x02, 0x52, 0x70 };
 static uint8_t scsi_sync_cache[] =	{ 0x35, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -736,11 +741,10 @@ usb_iface_is_cdrom(struct usb_device *udev, uint8_t iface_index)
 	return (is_cdrom);
 }
 
-static uint8_t
+static int
 usb_msc_get_max_lun(struct usb_device *udev, uint8_t iface_index)
 {
 	struct usb_device_request req;
-	usb_error_t err;
 	uint8_t buf = 0;
 
 	/* The Get Max Lun command is a class-specific request. */
@@ -751,11 +755,7 @@ usb_msc_get_max_lun(struct usb_device *udev, uint8_t iface_index)
 	req.wIndex[1] = 0;
 	USETW(req.wLength, 1);
 
-	err = usbd_do_request(udev, NULL, &req, &buf);
-	if (err)
-		buf = 0;
-
-	return (buf);
+	return usbd_do_request(udev, NULL, &req, &buf);
 }
 
 #define	USB_ADD_QUIRK(udev, any, which) do { \
@@ -798,8 +798,8 @@ usb_msc_auto_quirk(struct usb_device *udev, uint8_t iface_index,
 	usb_pause_mtx(NULL, hz);
 
 	if (usb_test_quirk(uaa, UQ_MSC_NO_GETMAXLUN) == 0 &&
-	    usb_msc_get_max_lun(udev, iface_index) == 0) {
-		DPRINTF("Device has only got one LUN.\n");
+	    usb_msc_get_max_lun(udev, iface_index) != 0) {
+		DPRINTF("Device can't handle GETMAXLUN\n");
 		USB_ADD_QUIRK(udev, any_quirk, UQ_MSC_NO_GETMAXLUN);
 	}
 
@@ -1003,6 +1003,16 @@ usb_msc_eject(struct usb_device *udev, uint8_t iface_index, int method)
 	case MSC_EJECT_HUAWEI2:
 		err = bbb_command_start(sc, DIR_IN, 0, NULL, 0,
 		    &scsi_huawei_eject2, sizeof(scsi_huawei_eject2),
+		    USB_MS_HZ);
+		break;
+	case MSC_EJECT_HUAWEI3:
+		err = bbb_command_start(sc, DIR_IN, 0, NULL, 0,
+		    &scsi_huawei_eject3, sizeof(scsi_huawei_eject3),
+		    USB_MS_HZ);
+		break;
+	case MSC_EJECT_HUAWEI4:
+		err = bbb_command_start(sc, DIR_IN, 0, NULL, 0,
+		    &scsi_huawei_eject4, sizeof(scsi_huawei_eject4),
 		    USB_MS_HZ);
 		break;
 	case MSC_EJECT_TCT:

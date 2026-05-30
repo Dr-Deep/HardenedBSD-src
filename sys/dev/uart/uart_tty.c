@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2003 Marcel Moolenaar
  * All rights reserved.
@@ -26,9 +26,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
@@ -39,11 +36,11 @@ __FBSDID("$FreeBSD$");
 #include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/reboot.h>
+#include <sys/stdarg.h>
 #include <machine/bus.h>
 #include <sys/rman.h>
 #include <sys/tty.h>
 #include <machine/resource.h>
-#include <machine/stdarg.h>
 
 #include <dev/uart/uart.h>
 #include <dev/uart/uart_bus.h>
@@ -76,6 +73,9 @@ CONSOLE_DRIVER(
 );
 
 static struct uart_devinfo uart_console;
+
+/* TTY swi(9) event. Allows all uart soft handlers to share one ithread. */
+static struct intr_event *tty_intr_event;
 
 static void
 uart_cnprobe(struct consdev *cp)
@@ -388,9 +388,19 @@ uart_tty_busy(struct tty *tp)
 
 	sc = tty_softc(tp);
 	if (sc == NULL || sc->sc_leaving)
-                return (FALSE);
+                return (false);
 
-	return (sc->sc_txbusy);
+	/*
+	 * The tty locking is sufficient here; we may lose the race against
+	 * uart_bus_ihand()/uart_intr() clearing sc_txbusy underneath us, in
+	 * which case we will incorrectly but non-fatally report a busy Tx
+	 * path upward. However, tty locking ensures that no additional output
+	 * is enqueued before UART_TXBUSY() returns, which means that there
+	 * are no Tx interrupts to be lost.
+	 */
+	if (sc->sc_txbusy)
+		return (true);
+	return (UART_TXBUSY(sc));
 }
 
 static struct ttydevsw uart_tty_class = {
@@ -437,8 +447,9 @@ uart_tty_detach(struct uart_softc *sc)
 
 	tp = sc->sc_u.u_tty.tp;
 
-	tty_lock(tp);
 	swi_remove(sc->sc_softih);
+
+	tty_lock(tp);
 	tty_rel_gone(tp);
 
 	return (0);

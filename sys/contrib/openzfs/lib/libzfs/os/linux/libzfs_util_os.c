@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -52,12 +53,6 @@
 
 #define	ZDIFF_SHARESDIR		"/.zfs/shares/"
 
-int
-zfs_ioctl(libzfs_handle_t *hdl, int request, zfs_cmd_t *zc)
-{
-	return (ioctl(hdl->libzfs_fd, request, zc));
-}
-
 const char *
 libzfs_error_init(int error)
 {
@@ -81,6 +76,38 @@ libzfs_error_init(int error)
 		return (dgettext(TEXT_DOMAIN, "Failed to initialize the "
 		    "libzfs library."));
 	}
+}
+
+static int
+in_container(void)
+{
+	char buffer[4096];
+	ssize_t count;
+	int fd;
+
+	if (access("/run/systemd/container", R_OK) == 0)
+		return (1);
+
+	fd = open("/proc/1/cgroup", O_RDONLY);
+	if (fd == -1)
+		return (0);
+
+	count = read(fd, buffer, sizeof (buffer) - 1);
+	close(fd);
+
+	if (count <= 0)
+		return (0);
+
+	buffer[count] = '\0';
+
+	if (strstr(buffer, "docker") ||
+	    strstr(buffer, "containerd") ||
+	    strstr(buffer, "kubepods") ||
+	    strstr(buffer, "lxc")) {
+		return (1);
+	}
+
+	return (0);
 }
 
 /*
@@ -109,6 +136,11 @@ libzfs_load_module(void)
 
 	const char *timeout_str = getenv("ZFS_MODULE_TIMEOUT");
 	int seconds = 10;
+
+	/* Set timeout to zero if inside of a container */
+	if (in_container())
+		seconds = 0;
+
 	if (timeout_str)
 		seconds = MIN(strtol(timeout_str, NULL, 0), 600);
 	struct itimerspec timeout = {.it_value.tv_sec = MAX(seconds, 0)};
@@ -145,8 +177,8 @@ libzfs_load_module(void)
 		if (pfds[0].revents & POLLIN) {
 			verify(read(ino, ev, evsz) >
 			    sizeof (struct inotify_event));
-			if (strcmp(ev->name, &ZFS_DEV[sizeof (ZFS_DEVDIR)])
-			    == 0) {
+			if (strncmp(ev->name, &ZFS_DEV[sizeof (ZFS_DEVDIR)],
+			    ev->len) == 0) {
 				ret = 0;
 				break;
 			}

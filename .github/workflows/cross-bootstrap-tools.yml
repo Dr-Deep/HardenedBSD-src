@@ -2,9 +2,13 @@ name: Cross-build Kernel
 
 on:
   push:
-    branches: [ main, 'stable/13' ]
+    branches: [ main, 'stable/[1-9][0-9]' ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -14,27 +18,27 @@ jobs:
       fail-fast: false
       matrix:
         target_arch: [ amd64, aarch64 ]
-        os: [ ubuntu-20.04, ubuntu-22.04, macos-latest ]
+        os: [ ubuntu-22.04, ubuntu-24.04, macos-latest ]
         include:
           # TODO: both Ubuntu and macOS have bmake packages, we should try them instead of bootstrapping our own copy.
-          - os: ubuntu-20.04
-            compiler: clang-12
-            cross-bindir: /usr/lib/llvm-12/bin
-            pkgs: bmake libarchive-dev clang-12 lld-12
           - os: ubuntu-22.04
-            compiler: clang-14
-            cross-bindir: /usr/lib/llvm-14/bin
-            pkgs: bmake libarchive-dev clang-14 lld-14
+            compiler: clang-15
+            cross-bindir: /usr/lib/llvm-15/bin
+            pkgs: bmake libarchive-dev clang-15 lld-15
+          - os: ubuntu-24.04
+            compiler: clang-18
+            cross-bindir: /usr/lib/llvm-18/bin
+            pkgs: bmake libarchive-dev clang-18 lld-18
           - os: macos-latest
-            compiler: clang-13
-            cross-bindir: /usr/local/opt/llvm@13/bin
-            pkgs: bmake libarchive llvm@13
+            compiler: clang-18
+            cross-toolchain: llvm@18
+            pkgs: bmake libarchive llvm@18
           - target_arch: amd64
             target: amd64
           - target_arch: aarch64
             target: arm64
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - name: install packages (Ubuntu)
         if: runner.os == 'Linux'
         run: |
@@ -51,6 +55,9 @@ jobs:
           if [ -n "${{ matrix.cross-bindir }}" ]; then
             echo "EXTRA_BUILD_ARGS=--cross-bindir=${{ matrix.cross-bindir }}" >> $GITHUB_ENV
           fi
+          if [ -n "${{ matrix.cross-toolchain }}" ]; then
+            echo "EXTRA_BUILD_ARGS=--cross-toolchain=${{ matrix.cross-toolchain }}" >> $GITHUB_ENV
+          fi
           mkdir -p ../build
           echo "MAKEOBJDIRPREFIX=${PWD%/*}/build" >> $GITHUB_ENV
           # heh, works on Linux/BSD/macOS ...
@@ -58,6 +65,6 @@ jobs:
       - name: bootstrap bmake
         run: ./tools/build/make.py --debug $EXTRA_BUILD_ARGS TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} -n
       - name: make kernel-toolchain
-        run: ./tools/build/make.py --debug $EXTRA_BUILD_ARGS TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} kernel-toolchain -s -j$NPROC
+        run: ./tools/build/make.py --debug $EXTRA_BUILD_ARGS TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} kernel-toolchain -s -j$NPROC -DWITH_DISK_IMAGE_TOOLS_BOOTSTRAP
       - name: make buildkernel
         run: ./tools/build/make.py --debug $EXTRA_BUILD_ARGS TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} KERNCONF=GENERIC NO_MODULES=yes buildkernel -s -j$NPROC $EXTRA_MAKE_ARGS

@@ -54,6 +54,8 @@ enum ldns_enum_rdf_type
 	LDNS_RDF_TYPE_INT16,
 	/** 32 bits */
 	LDNS_RDF_TYPE_INT32,
+	/** 64 bits */
+	LDNS_RDF_TYPE_INT64,
 	/** A record */
 	LDNS_RDF_TYPE_A,
 	/** AAAA record */
@@ -70,6 +72,7 @@ enum ldns_enum_rdf_type
 	LDNS_RDF_TYPE_HEX,
 	/** nsec type codes */
 	LDNS_RDF_TYPE_NSEC,
+	LDNS_RDF_TYPE_BITMAP = LDNS_RDF_TYPE_NSEC,
 	/** a RR type */
 	LDNS_RDF_TYPE_TYPE,
 	/** a class */
@@ -120,6 +123,9 @@ enum ldns_enum_rdf_type
 	/** 8 * 8 bit hex numbers separated by dashes. For EUI64. */
 	LDNS_RDF_TYPE_EUI64,
 
+	/** Character string without quotes. */
+	LDNS_RDF_TYPE_UNQUOTED,
+
 	/** A non-zero sequence of US-ASCII letters and numbers in lower case.
 	 *  For CAA.
 	 */
@@ -139,8 +145,14 @@ enum ldns_enum_rdf_type
 	LDNS_RDF_TYPE_SELECTOR,
 	LDNS_RDF_TYPE_MATCHING_TYPE,
 
-	/* Aliases */
-	LDNS_RDF_TYPE_BITMAP = LDNS_RDF_TYPE_NSEC
+	/** draft-ietf-mboned-driad-amt-discovery **/
+	LDNS_RDF_TYPE_AMTRELAY,
+
+	/** draft-ietf-dnsop-svcb-https **/
+	LDNS_RDF_TYPE_SVCPARAMS,
+
+	/** draft-johnson-dns-ipn-cla-07 **/
+	LDNS_RDF_TYPE_IPN
 };
 typedef enum ldns_enum_rdf_type ldns_rdf_type;
 
@@ -162,7 +174,23 @@ enum ldns_enum_cert_algorithm
 };
 typedef enum ldns_enum_cert_algorithm ldns_cert_algorithm;
 
-
+/**
+ * keys types in SVCPARAMS rdata fields
+ */
+enum ldns_enum_svcparam_key
+{
+	LDNS_SVCPARAM_KEY_MANDATORY		= 0,
+	LDNS_SVCPARAM_KEY_ALPN			= 1,
+	LDNS_SVCPARAM_KEY_NO_DEFAULT_ALPN	= 2,
+	LDNS_SVCPARAM_KEY_PORT			= 3,
+	LDNS_SVCPARAM_KEY_IPV4HINT		= 4,
+	LDNS_SVCPARAM_KEY_ECH			= 5,
+	LDNS_SVCPARAM_KEY_IPV6HINT		= 6,
+        LDNS_SVCPARAM_KEY_DOHPATH               = 7,
+	LDNS_SVCPARAM_KEY_LAST_KEY		= 7,
+	LDNS_SVCPARAM_KEY_RESERVED		= 65535
+};
+typedef	enum ldns_enum_svcparam_key ldns_svcparam_key;
 
 /**
  * Resource record data field.
@@ -221,7 +249,7 @@ size_t ldns_rdf_size(const ldns_rdf *rd);
 
 /**
  * returns the type of the rdf. We need to insert _get_
- * here to prevent conflict the the rdf_type TYPE.
+ * here to prevent conflict the rdf_type TYPE.
  * \param[in] *rd the rdf to read from
  * \return ldns_rdf_type with the type
  */
@@ -240,7 +268,7 @@ uint8_t *ldns_rdf_data(const ldns_rdf *rd);
 /**
  * allocates a new rdf structure and fills it.
  * This function DOES NOT copy the contents from
- * the buffer, unlinke ldns_rdf_new_frm_data()
+ * the buffer, unlike ldns_rdf_new_frm_data()
  * \param[in] type type of the rdf
  * \param[in] size size of the buffer
  * \param[in] data pointer to the buffer to be copied
@@ -251,7 +279,7 @@ ldns_rdf *ldns_rdf_new(ldns_rdf_type type, size_t size, void *data);
 /**
  * allocates a new rdf structure and fills it.
  * This function _does_ copy the contents from
- * the buffer, unlinke ldns_rdf_new()
+ * the buffer, unlike ldns_rdf_new()
  * \param[in] type type of the rdf
  * \param[in] size size of the buffer
  * \param[in] data pointer to the buffer to be copied

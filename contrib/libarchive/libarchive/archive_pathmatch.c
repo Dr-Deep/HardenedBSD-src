@@ -25,7 +25,6 @@
  */
 
 #include "archive_platform.h"
-__FBSDID("$FreeBSD$");
 
 #ifdef HAVE_STRING_H
 #include <string.h>
@@ -203,7 +202,7 @@ pm(const char *p, const char *s, int flags)
 			if (*p == '\0')
 				return (1);
 			while (*s) {
-				if (archive_pathmatch(p, s, flags))
+				if (pm(p, s, flags))
 					return (1);
 				++s;
 			}
@@ -308,7 +307,7 @@ pm_w(const wchar_t *p, const wchar_t *s, int flags)
 			if (*p == L'\0')
 				return (1);
 			while (*s) {
-				if (archive_pathmatch_w(p, s, flags))
+				if (pm_w(p, s, flags))
 					return (1);
 				++s;
 			}

@@ -1,4 +1,4 @@
-/******************************************************************************
+/*****************************************************************************
   SPDX-License-Identifier: BSD-3-Clause
 
   Copyright (c) 2001-2017, Intel Corporation
@@ -30,8 +30,7 @@
   ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
   POSSIBILITY OF SUCH DAMAGE.
 
-******************************************************************************/
-/*$FreeBSD$*/
+*****************************************************************************/
 
 #ifndef _IXGBE_H_
 #define _IXGBE_H_
@@ -47,6 +46,7 @@
 #include <sys/module.h>
 #include <sys/sockio.h>
 #include <sys/eventhandler.h>
+#include <sys/priv.h>
 
 #include <net/if.h>
 #include <net/if_var.h>
@@ -87,6 +87,7 @@
 #include "ixgbe_phy.h"
 #include "ixgbe_vf.h"
 #include "ixgbe_features.h"
+#include "ixgbe_e610.h"
 
 /* Tunables */
 
@@ -195,6 +196,15 @@
 #define CSUM_OFFLOAD	(CSUM_IP_TSO|CSUM_IP6_TSO|CSUM_IP| \
 			    CSUM_IP_UDP|CSUM_IP_TCP|CSUM_IP_SCTP| \
 			    CSUM_IP6_UDP|CSUM_IP6_TCP|CSUM_IP6_SCTP)
+
+/* All BASE-T Physical layers */
+#define IXGBE_PHYSICAL_LAYERS_BASE_T_ALL \
+	(IXGBE_PHYSICAL_LAYER_10GBASE_T |\
+	 IXGBE_PHYSICAL_LAYER_5000BASE_T |\
+	 IXGBE_PHYSICAL_LAYER_2500BASE_T |\
+	 IXGBE_PHYSICAL_LAYER_1000BASE_T |\
+	 IXGBE_PHYSICAL_LAYER_100BASE_TX |\
+	 IXGBE_PHYSICAL_LAYER_10BASE_T)
 
 #define IXGBE_CAPS (IFCAP_HWCSUM | IFCAP_HWCSUM_IPV6 | IFCAP_TSO | \
 		    IFCAP_LRO | IFCAP_VLAN_HWTAGGING | IFCAP_VLAN_HWTSO | \
@@ -435,6 +445,10 @@ struct ixgbe_softc {
 	/* Bypass */
 	struct ixgbe_bp_data	bypass;
 
+	/* Firmware error check */
+	int			recovery_mode;
+	struct callout		fw_mode_timer;
+
 	/* Misc stats maintained by the driver */
 	unsigned long		dropped_pkts;
 	unsigned long		mbuf_header_failed;
@@ -461,6 +475,21 @@ struct ixgbe_softc {
 	/* Feature capable/enabled flags.  See ixgbe_features.h */
 	u32			feat_cap;
 	u32			feat_en;
+	u16                     lse_mask;
+
+	struct sysctl_oid       *debug_sysctls;
+	u32                     debug_dump_cluster_mask;
+	bool                    do_debug_dump;
+};
+
+struct ixgbe_debug_dump_cmd {
+	u32 offset;		/* offset to read/write from table, in bytes */
+	u8 cluster_id;		/* also used to get next cluster id */
+	u16 table_id;
+	u16 data_size;		/* size of data field, in bytes */
+	u16 reserved1;
+	u32 reserved2;
+	u8 data[];
 };
 
 /* Precision Time Sync (IEEE 1588) defines */
@@ -485,6 +514,43 @@ struct ixgbe_softc {
 #define IXGBE_PHY_CURRENT_TEMP		0xC820
 #define IXGBE_PHY_OVERTEMP_STATUS	0xC830
 
+/**
+ * The ioctl command number used by NVM update for accessing the driver for
+ * NVM access commands.
+ */
+#define IXGBE_NVM_ACCESS \
+	(((((((('E' << 4) + '1') << 4) + 'K') << 4) + 'G') << 4) | 5)
+
+/*
+ * The ioctl command number used by a userspace tool for accessing the driver
+ * for getting debug dump data from the firmware.
+ */
+#define IXGBE_DEBUG_DUMP \
+	(((((((('E' << 4) + '1') << 4) + 'K') << 4) + 'G') << 4) | 6)
+
+/* Debug Dump related definitions */
+#define IXGBE_ACI_DBG_DUMP_CLUSTER_ID_INVALID	0xFFFFFF
+#define IXGBE_ACI_DBG_DUMP_CLUSTER_ID_BASE	50
+#define IXGBE_ACI_DBG_DUMP_CLUSTER_ID_MAX	1
+
+#define IXGBE_DBG_DUMP_VALID_CLUSTERS_MASK	0x3
+#define IXGBE_DBG_DUMP_BASE_SIZE		(2 * 1024 * 1024)
+
+#define IXGBE_SYSCTL_DESC_DEBUG_DUMP_SET_CLUSTER		\
+"\nSelect clusters to dump with \"dump\" sysctl"		\
+"\nFlags:"							\
+"\n\t      0x1 - Link"						\
+"\n\t      0x2 - Full CSR Space, excluding RCW registers"	\
+"\n\t"								\
+"\nUse \"sysctl -x\" to view flags properly."
+
+#define IXGBE_SYSCTL_DESC_DUMP_DEBUG_DUMP 			\
+"\nWrite 1 to output a FW debug dump containing the clusters " 	\
+"specified by the \"clusters\" sysctl" 				\
+"\nThe \"-b\" flag must be used in order to dump this data " 	\
+"as binary data because" 					\
+"\nthis data is opaque and not a string."
+
 /* Sysctl help messages; displayed with sysctl -d */
 #define IXGBE_SYSCTL_DESC_ADV_SPEED	\
     "\nControl advertised link speed using these flags:\n" \
@@ -507,7 +573,6 @@ struct ixgbe_softc {
     "\nSum of the following RX errors counters:\n" \
     " * CRC errors,\n" \
     " * illegal byte error count,\n" \
-    " * checksum error count,\n" \
     " * missed packet count,\n" \
     " * length error count,\n" \
     " * undersized packets count,\n" \
@@ -531,6 +596,8 @@ ixv_check_ether_addr(u8 *addr)
 	return (status);
 }
 
+uint64_t ixgbe_link_speed_to_baudrate(ixgbe_link_speed speed);
+
 /* Shared Prototypes */
 
 int  ixgbe_allocate_queues(struct ixgbe_softc *);
@@ -539,6 +606,11 @@ void ixgbe_free_transmit_structures(struct ixgbe_softc *);
 int  ixgbe_setup_receive_structures(struct ixgbe_softc *);
 void ixgbe_free_receive_structures(struct ixgbe_softc *);
 int  ixgbe_get_regs(SYSCTL_HANDLER_ARGS);
+
+void ixgbe_add_fw_logging_tunables(struct ixgbe_softc *sc,
+	struct sysctl_oid *parent);
+
+#define IXGBE_STR_BUF_LEN 32
 
 #include "ixgbe_bypass.h"
 #include "ixgbe_fdir.h"

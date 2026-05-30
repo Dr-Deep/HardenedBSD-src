@@ -29,8 +29,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include <sys/param.h>
@@ -153,8 +151,10 @@ probe_defrouters(uint32_t ifindex, uint32_t linkid)
 	buf = malloc(len);
 	if (buf == NULL)
 		return (-1);
-	if (sysctl(mib, nitems(mib), buf, &len, NULL, 0) < 0)
+	if (sysctl(mib, nitems(mib), buf, &len, NULL, 0) < 0) {
+		free(buf);
 		return (-1);
+	}
 	ep = (struct in6_defrouter *)(void *)(buf + len);
 	for (p = (struct in6_defrouter *)(void *)buf; p < ep; p++) {
 		if (ifindex != p->if_index)

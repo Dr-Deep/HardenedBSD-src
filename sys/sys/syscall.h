@@ -2,11 +2,12 @@
  * System call numbers.
  *
  * DO NOT EDIT-- this file is automatically @generated.
- * $FreeBSD$
  */
 
+#define 	SYS_exit	SYS__exit
+
 #define	SYS_syscall	0
-#define	SYS_exit	1
+#define	SYS__exit	1
 #define	SYS_fork	2
 #define	SYS_read	3
 #define	SYS_write	4
@@ -74,8 +75,8 @@
 #define	SYS_vfork	66
 				/* 67 is obsolete vread */
 				/* 68 is obsolete vwrite */
-#define	SYS_sbrk	69
-#define	SYS_sstk	70
+				/* 69 is obsolete sbrk */
+				/* 70 is obsolete sstk */
 				/* 71 is old mmap */
 #define	SYS_freebsd11_vadvise	72
 #define	SYS_munmap	73
@@ -84,8 +85,8 @@
 				/* 76 is obsolete vhangup */
 				/* 77 is obsolete vlimit */
 #define	SYS_mincore	78
-#define	SYS_getgroups	79
-#define	SYS_setgroups	80
+#define	SYS_freebsd14_getgroups	79
+#define	SYS_freebsd14_setgroups	80
 #define	SYS_getpgrp	81
 #define	SYS_setpgid	82
 #define	SYS_setitimer	83
@@ -141,7 +142,7 @@
 #define	SYS_mkdir	136
 #define	SYS_rmdir	137
 #define	SYS_utimes	138
-				/* 139 is obsolete 4.2 sigreturn */
+				/* 139 is obsolete sigreturn */
 #define	SYS_adjtime	140
 				/* 141 is old getpeername */
 				/* 142 is old gethostid */
@@ -443,7 +444,7 @@
 #define	SYS_symlinkat	502
 #define	SYS_unlinkat	503
 #define	SYS_posix_openpt	504
-#define	SYS_gssd_syscall	505
+				/* 505 is obsolete kgssapi */
 #define	SYS_jail_get	506
 #define	SYS_jail_set	507
 #define	SYS_jail_remove	508
@@ -520,4 +521,24 @@
 #define	SYS_fspacectl	580
 #define	SYS_sched_getcpu	581
 #define	SYS_swapoff	582
-#define	SYS_MAXSYSCALL	583
+#define	SYS_kqueuex	583
+#define	SYS_membarrier	584
+#define	SYS_timerfd_create	585
+#define	SYS_timerfd_gettime	586
+#define	SYS_timerfd_settime	587
+#define	SYS_kcmp	588
+#define	SYS_getrlimitusage	589
+#define	SYS_fchroot	590
+#define	SYS_setcred	591
+#define	SYS_exterrctl	592
+#define	SYS_inotify_add_watch_at	593
+#define	SYS_inotify_rm_watch	594
+#define	SYS_getgroups	595
+#define	SYS_setgroups	596
+#define	SYS_jail_attach_jd	597
+#define	SYS_jail_remove_jd	598
+#define	SYS_kexec_load	599
+#define	SYS_pdrfork	600
+#define	SYS_pdwait	601
+#define	SYS_renameat2	602
+#define	SYS_MAXSYSCALL	603

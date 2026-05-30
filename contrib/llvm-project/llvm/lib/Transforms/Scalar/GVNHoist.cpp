@@ -54,28 +54,22 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
-#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Use.h"
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
-#include "llvm/InitializePasses.h"
-#include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/GVN.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <algorithm>
 #include <cassert>
-#include <iterator>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -126,7 +120,7 @@ using HoistingPointInfo = std::pair<BasicBlock *, SmallVecInsn>;
 using HoistingPointList = SmallVector<HoistingPointInfo, 4>;
 
 // A map from a pair of VNs to all the instructions with those VNs.
-using VNType = std::pair<unsigned, unsigned>;
+using VNType = std::pair<unsigned, uintptr_t>;
 
 using VNtoInsns = DenseMap<VNType, SmallVector<Instruction *, 4>>;
 
@@ -161,7 +155,7 @@ using InValuesType =
 
 // An invalid value number Used when inserting a single value number into
 // VNtoInsns.
-enum : unsigned { InvalidVN = ~2U };
+enum : uintptr_t { InvalidVN = ~(uintptr_t)2 };
 
 // Records all scalar instructions candidate for code hoisting.
 class InsnInfo {
@@ -187,7 +181,9 @@ public:
   void insert(LoadInst *Load, GVNPass::ValueTable &VN) {
     if (Load->isSimple()) {
       unsigned V = VN.lookupOrAdd(Load->getPointerOperand());
-      VNtoLoads[{V, InvalidVN}].push_back(Load);
+      // With opaque pointers we may have loads from the same pointer with
+      // different result types, which should be disambiguated.
+      VNtoLoads[{V, (uintptr_t)Load->getType()}].push_back(Load);
     }
   }
 
@@ -241,18 +237,6 @@ public:
   const VNtoInsns &getStoreVNTable() const { return VNtoCallsStores; }
 };
 
-static void combineKnownMetadata(Instruction *ReplInst, Instruction *I) {
-  static const unsigned KnownIDs[] = {LLVMContext::MD_tbaa,
-                                      LLVMContext::MD_alias_scope,
-                                      LLVMContext::MD_noalias,
-                                      LLVMContext::MD_range,
-                                      LLVMContext::MD_fpmath,
-                                      LLVMContext::MD_invariant_load,
-                                      LLVMContext::MD_invariant_group,
-                                      LLVMContext::MD_access_group};
-  combineMetadata(ReplInst, I, KnownIDs, true);
-}
-
 // This pass hoists common computations across branches sharing common
 // dominator. The primary goal is to reduce the code size, and in some
 // cases reduce critical path (by exposing more ILP).
@@ -261,7 +245,9 @@ public:
   GVNHoist(DominatorTree *DT, PostDominatorTree *PDT, AliasAnalysis *AA,
            MemoryDependenceResults *MD, MemorySSA *MSSA)
       : DT(DT), PDT(PDT), AA(AA), MD(MD), MSSA(MSSA),
-        MSSAUpdater(std::make_unique<MemorySSAUpdater>(MSSA)) {}
+        MSSAUpdater(std::make_unique<MemorySSAUpdater>(MSSA)) {
+    MSSA->ensureOptimizedUses();
+  }
 
   bool run(Function &F);
 
@@ -377,7 +363,7 @@ private:
     if (!Root)
       return;
     // Depth first walk on PDom tree to fill the CHIargs at each PDF.
-    for (auto Node : depth_first(Root)) {
+    for (auto *Node : depth_first(Root)) {
       BasicBlock *BB = Node->getBlock();
       if (!BB)
         continue;
@@ -433,7 +419,7 @@ private:
         continue;
       const VNType &VN = R;
       SmallPtrSet<BasicBlock *, 2> VNBlocks;
-      for (auto &I : V) {
+      for (const auto &I : V) {
         BasicBlock *BBI = I->getParent();
         if (!hasEH(BBI))
           VNBlocks.insert(BBI);
@@ -517,39 +503,6 @@ private:
   std::pair<unsigned, unsigned> hoistExpressions(Function &F);
 };
 
-class GVNHoistLegacyPass : public FunctionPass {
-public:
-  static char ID;
-
-  GVNHoistLegacyPass() : FunctionPass(ID) {
-    initializeGVNHoistLegacyPassPass(*PassRegistry::getPassRegistry());
-  }
-
-  bool runOnFunction(Function &F) override {
-    if (skipFunction(F))
-      return false;
-    auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-    auto &PDT = getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
-    auto &AA = getAnalysis<AAResultsWrapperPass>().getAAResults();
-    auto &MD = getAnalysis<MemoryDependenceWrapperPass>().getMemDep();
-    auto &MSSA = getAnalysis<MemorySSAWrapperPass>().getMSSA();
-
-    GVNHoist G(&DT, &PDT, &AA, &MD, &MSSA);
-    return G.run(F);
-  }
-
-  void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.addRequired<DominatorTreeWrapperPass>();
-    AU.addRequired<PostDominatorTreeWrapperPass>();
-    AU.addRequired<AAResultsWrapperPass>();
-    AU.addRequired<MemoryDependenceWrapperPass>();
-    AU.addRequired<MemorySSAWrapperPass>();
-    AU.addPreserved<DominatorTreeWrapperPass>();
-    AU.addPreserved<MemorySSAWrapperPass>();
-    AU.addPreserved<GlobalsAAWrapperPass>();
-  }
-};
-
 bool GVNHoist::run(Function &F) {
   NumFuncArgs = F.arg_size();
   VN.setDomTree(DT);
@@ -561,7 +514,7 @@ bool GVNHoist::run(Function &F) {
   for (const BasicBlock *BB : depth_first(&F.getEntryBlock())) {
     DFSNumber[BB] = ++BBI;
     unsigned I = 0;
-    for (auto &Inst : *BB)
+    for (const auto &Inst : *BB)
       DFSNumber[&Inst] = ++I;
   }
 
@@ -611,21 +564,20 @@ unsigned int GVNHoist::rank(const Value *V) const {
 }
 
 bool GVNHoist::hasEH(const BasicBlock *BB) {
-  auto It = BBSideEffects.find(BB);
-  if (It != BBSideEffects.end())
+  auto [It, Inserted] = BBSideEffects.try_emplace(BB);
+  if (!Inserted)
     return It->second;
 
   if (BB->isEHPad() || BB->hasAddressTaken()) {
-    BBSideEffects[BB] = true;
+    It->second = true;
     return true;
   }
 
   if (BB->getTerminator()->mayThrow()) {
-    BBSideEffects[BB] = true;
+    It->second = true;
     return true;
   }
 
-  BBSideEffects[BB] = false;
   return false;
 }
 
@@ -806,15 +758,20 @@ bool GVNHoist::valueAnticipable(CHIArgs C, Instruction *TI) const {
 void GVNHoist::checkSafety(CHIArgs C, BasicBlock *BB, GVNHoist::InsKind K,
                            SmallVectorImpl<CHIArg> &Safe) {
   int NumBBsOnAllPaths = MaxNumberOfBBSInPath;
+  const Instruction *T = BB->getTerminator();
   for (auto CHI : C) {
     Instruction *Insn = CHI.I;
     if (!Insn) // No instruction was inserted in this CHI.
+      continue;
+    // If the Terminator is some kind of "exotic terminator" that produces a
+    // value (such as InvokeInst, CallBrInst, or CatchSwitchInst) which the CHI
+    // uses, it is not safe to hoist the use above the def.
+    if (!T->use_empty() && is_contained(Insn->operands(), cast<const Value>(T)))
       continue;
     if (K == InsKind::Scalar) {
       if (safeToHoistScalar(BB, Insn->getParent(), NumBBsOnAllPaths))
         Safe.push_back(CHI);
     } else {
-      auto *T = BB->getTerminator();
       if (MemoryUseOrDef *UD = MSSA->getMemoryAccess(Insn))
         if (safeToHoistLdSt(T, Insn, UD, K, NumBBsOnAllPaths))
           Safe.push_back(CHI);
@@ -840,7 +797,7 @@ void GVNHoist::fillRenameStack(BasicBlock *BB, InValuesType &ValueBBs,
 void GVNHoist::fillChiArgs(BasicBlock *BB, OutValuesType &CHIBBs,
                            GVNHoist::RenameStackType &RenameStack) {
   // For each *predecessor* (because Post-DOM) of BB check if it has a CHI
-  for (auto Pred : predecessors(BB)) {
+  for (auto *Pred : predecessors(BB)) {
     auto P = CHIBBs.find(Pred);
     if (P == CHIBBs.end()) {
       continue;
@@ -964,7 +921,7 @@ void GVNHoist::makeGepsAvailable(Instruction *Repl, BasicBlock *HoistPt,
     }
 
   // Copy Gep and replace its uses in Repl with ClonedGep.
-  ClonedGep->insertBefore(HoistPt->getTerminator());
+  ClonedGep->insertBefore(HoistPt->getTerminator()->getIterator());
 
   // Conservatively discard any optimization hints, they may differ on the
   // other paths.
@@ -980,6 +937,14 @@ void GVNHoist::makeGepsAvailable(Instruction *Repl, BasicBlock *HoistPt,
       OtherGep = cast<GetElementPtrInst>(
           cast<StoreInst>(OtherInst)->getPointerOperand());
     ClonedGep->andIRFlags(OtherGep);
+
+    // Merge debug locations of GEPs, because the hoisted GEP replaces those
+    // in branches. When cloning, ClonedGep preserves the debug location of
+    // Gepd, so Gep is skipped to avoid merging it twice.
+    if (OtherGep != Gep) {
+      ClonedGep->applyMergedLocation(ClonedGep->getDebugLoc(),
+                                     OtherGep->getDebugLoc());
+    }
   }
 
   // Replace uses of Gep with ClonedGep in Repl.
@@ -1017,8 +982,8 @@ unsigned GVNHoist::rauw(const SmallVecInsn &Candidates, Instruction *Repl,
         MSSAUpdater->removeMemoryAccess(OldMA);
       }
 
+      combineMetadataForCSE(Repl, I, true);
       Repl->andIRFlags(I);
-      combineKnownMetadata(Repl, I);
       I->replaceAllUsesWith(Repl);
       // Also invalidate the Alias Analysis cache.
       MD->removeInstruction(I);
@@ -1142,11 +1107,13 @@ std::pair<unsigned, unsigned> GVNHoist::hoist(HoistingPointList &HPL) {
       // Move the instruction at the end of HoistPt.
       Instruction *Last = DestBB->getTerminator();
       MD->removeInstruction(Repl);
-      Repl->moveBefore(Last);
+      Repl->moveBefore(Last->getIterator());
 
       DFSNumber[Repl] = DFSNumber[Last]++;
     }
 
+    // Drop debug location as per debug info update guide.
+    Repl->dropLocation();
     NR += removeAndReplace(InstructionsToHoist, Repl, DestBB, MoveAccess);
 
     if (isa<LoadInst>(Repl))
@@ -1199,8 +1166,7 @@ std::pair<unsigned, unsigned> GVNHoist::hoistExpressions(Function &F) {
         SI.insert(Store, VN);
       else if (auto *Call = dyn_cast<CallInst>(&I1)) {
         if (auto *Intr = dyn_cast<IntrinsicInst>(Call)) {
-          if (isa<DbgInfoIntrinsic>(Intr) ||
-              Intr->getIntrinsicID() == Intrinsic::assume ||
+          if (Intr->getIntrinsicID() == Intrinsic::assume ||
               Intr->getIntrinsicID() == Intrinsic::sideeffect)
             continue;
         }
@@ -1247,17 +1213,3 @@ PreservedAnalyses GVNHoistPass::run(Function &F, FunctionAnalysisManager &AM) {
   PA.preserve<MemorySSAAnalysis>();
   return PA;
 }
-
-char GVNHoistLegacyPass::ID = 0;
-
-INITIALIZE_PASS_BEGIN(GVNHoistLegacyPass, "gvn-hoist",
-                      "Early GVN Hoisting of Expressions", false, false)
-INITIALIZE_PASS_DEPENDENCY(MemoryDependenceWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(MemorySSAWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(PostDominatorTreeWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
-INITIALIZE_PASS_END(GVNHoistLegacyPass, "gvn-hoist",
-                    "Early GVN Hoisting of Expressions", false, false)
-
-FunctionPass *llvm::createGVNHoistPass() { return new GVNHoistLegacyPass(); }

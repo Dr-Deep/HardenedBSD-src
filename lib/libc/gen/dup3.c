@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2012 Jukka A. Ukkonen
  * All rights reserved.
@@ -28,9 +28,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "namespace.h"
 #include <unistd.h>
 #include <fcntl.h>
@@ -42,21 +39,22 @@ int __dup3(int, int, int);
 int
 __dup3(int oldfd, int newfd, int flags)
 {
-	int how;
+	int fdflags;
 
 	if (oldfd == newfd) {
 		errno = EINVAL;
 		return (-1);
 	}
 
-	if (flags & ~O_CLOEXEC) {
+	if ((flags & ~(O_CLOEXEC | O_CLOFORK)) != 0) {
 		errno = EINVAL;
 		return (-1);
 	}
 
-	how = (flags & O_CLOEXEC) ? F_DUP2FD_CLOEXEC : F_DUP2FD;
+	fdflags = ((flags & O_CLOEXEC) != 0 ? FD_CLOEXEC : 0) |
+	    ((flags & O_CLOFORK) != 0 ? FD_CLOFORK : 0);
 
-	return (_fcntl(oldfd, how, newfd));
+	return (_fcntl(oldfd, F_DUP3FD | (fdflags << F_DUP3FD_SHIFT), newfd));
 }
 
 __weak_reference(__dup3, dup3);

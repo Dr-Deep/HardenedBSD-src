@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008 TAKAHASHI Yoshihiro All rights reserved.
  * Copyright (c) 2008 Marcel Moolenaar All rights reserved.
@@ -26,9 +26,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
@@ -52,7 +49,7 @@ static device_method_t uart_isa_methods[] = {
 	DEVMETHOD(device_attach,	uart_bus_attach),
 	DEVMETHOD(device_detach,	uart_bus_detach),
 	DEVMETHOD(device_resume,	uart_bus_resume),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t uart_isa_driver = {

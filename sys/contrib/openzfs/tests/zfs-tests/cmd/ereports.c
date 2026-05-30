@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -21,10 +22,11 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <libzfs.h>
-#include <sys/zfs_ioctl.h>
 #include <sys/nvpair.h>
 #include <sys/fm/protocol.h>
 #include <sys/fm/fs/zfs.h>
+
+#define	ZEVENT_NONBLOCK	0x1
 
 /*
  * Command to output io and checksum ereport values, one per line.
@@ -48,6 +50,7 @@ static const char *const criteria_name[] = {
 	FM_EREPORT_PAYLOAD_ZFS_ZIO_ERR,
 	FM_EREPORT_PAYLOAD_ZFS_ZIO_SIZE,
 	FM_EREPORT_PAYLOAD_ZFS_ZIO_OFFSET,
+	FM_EREPORT_PAYLOAD_ZFS_ZIO_TYPE,
 	FM_EREPORT_PAYLOAD_ZFS_ZIO_PRIORITY,
 
 	/* logical zio criteriai (optional) */
@@ -62,7 +65,7 @@ static const char *const criteria_name[] = {
 static void
 print_ereport_line(nvlist_t *nvl)
 {
-	char *class;
+	const char *class;
 	int last = CRITERIA_NAMES_COUNT - 1;
 
 	/*
@@ -81,7 +84,7 @@ print_ereport_line(nvlist_t *nvl)
 		nvpair_t *nvp;
 		uint32_t i32 = 0;
 		uint64_t i64 = 0;
-		char *str = NULL;
+		const char *str = NULL;
 
 		if (nvlist_lookup_nvpair(nvl, criteria_name[i], &nvp) != 0) {
 			/* print a proxy for optional criteria */

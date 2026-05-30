@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2018, Matthew Macy
  *
@@ -23,8 +23,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  *
  */
 
@@ -76,8 +74,8 @@ startentry(struct pmclog_ev *ev)
 {
 	char eventbuf[128];
 
-	snprintf(eventbuf, sizeof(eventbuf), "%s, \"tsc\": \"%jd\"",
-	    typenames[ev->pl_type], (uintmax_t)ev->pl_ts.tv_sec);
+	snprintf(eventbuf, sizeof(eventbuf), "%s, \"tsc\": \"%ju\"",
+	    typenames[ev->pl_type], (uintmax_t)ev->pl_tsc);
 	return (string(eventbuf));
 }
 
@@ -163,9 +161,12 @@ procexec_to_json(struct pmclog_ev *ev)
 	startent = startentry(ev);
 	snprintf(eventbuf, sizeof(eventbuf),
 		"%s, \"pmcid\": \"0x%08x\", \"pid\": \"%d\", "
-	    "\"start\": \"0x%016jx\", \"pathname\": \"%s\"}\n",
+	    "\"base\": \"0x%016jx\", \"dyn\": \"0x%016jx\", "
+	    "\"pathname\": \"%s\"}\n",
 		startent.c_str(), ev->pl_u.pl_x.pl_pmcid, ev->pl_u.pl_x.pl_pid,
-		(uintmax_t)ev->pl_u.pl_x.pl_entryaddr, ev->pl_u.pl_x.pl_pathname);
+		(uintmax_t)ev->pl_u.pl_x.pl_baseaddr,
+		(uintmax_t)ev->pl_u.pl_x.pl_dynaddr,
+		ev->pl_u.pl_x.pl_pathname);
 	return string(eventbuf);
 }
 
@@ -392,4 +393,3 @@ event_to_json(struct pmclog_ev *ev){
 		errx(EX_USAGE, "ERROR: unrecognized event type: %d\n", ev->pl_type);
 	}
 }
-

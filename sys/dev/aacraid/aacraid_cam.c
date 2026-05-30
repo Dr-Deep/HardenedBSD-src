@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2002-2010 Adaptec, Inc.
  * Copyright (c) 2010-2012 PMC-Sierra, Inc.
@@ -28,8 +28,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * CAM front-end for communicating with non-DASD devices
  */
@@ -124,7 +122,7 @@ static device_method_t	aacraid_pass_methods[] = {
 	DEVMETHOD(device_probe,		aac_cam_probe),
 	DEVMETHOD(device_attach,	aac_cam_attach),
 	DEVMETHOD(device_detach,	aac_cam_detach),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t	aacraid_pass_driver = {

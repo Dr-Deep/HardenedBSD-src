@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/* Copyright(c) 2007-2022 Intel Corporation */
-/* $FreeBSD$ */
+/* Copyright(c) 2007-2025 Intel Corporation */
 
 /**
  *****************************************************************************
@@ -24,14 +23,14 @@
  * and Triple-DES cipher algorithms, in ECB, CBC and CTR modes.  The ARC4 stream
  * cipher algorithm is also supported.  Data may be provided as a full packet,
  * or as a sequence of partial packets.  The result of the operation can be
- * written back to the source buffer (in-place) or to a seperate output buffer
+ * written back to the source buffer (in-place) or to a separate output buffer
  * (out-of-place).  Data must be encapsulated in ICP buffers.
  *
  * The cipher component is responsible for implementing the cipher-specific
  * functionality for registering and de-registering a session, for the perform
  * operation and for processing the QAT responses to cipher requests. Statistics
  * are maintained for cipher in the symmetric \ref CpaCySymStats64 "stats"
- * structure. This module has been seperated out into two. The cipher QAT module
+ * structure. This module has been separated out into two. The cipher QAT module
  * deals entirely with QAT data structures. The cipher module itself has minimal
  * exposure to the QAT data structures.
  *
@@ -228,6 +227,7 @@
 
 #include "lac_session.h"
 #include "lac_sym.h"
+#include "lac_sal_types_crypto.h"
 
 /*
  * WARNING: There are no checks done on the parameters of the functions in
@@ -253,8 +253,9 @@
  * @retval CPA_STATUS_INVALID_PARAM  Invalid parameter.
  *
  *****************************************************************************/
-CpaStatus LacCipher_SessionSetupDataCheck(
-    const CpaCySymCipherSetupData *pCipherSetupData);
+CpaStatus
+LacCipher_SessionSetupDataCheck(const CpaCySymCipherSetupData *pCipherSetupData,
+				Cpa32U capabilitiesMask);
 
 /**
 *******************************************************************************
@@ -309,4 +310,22 @@ CpaStatus LacCipher_PerformIvCheck(sal_service_t *pService,
 				   Cpa32U qatPacketType,
 				   Cpa8U **ppIvBuffer);
 
+/**
+ *****************************************************************************
+ * @ingroup LacCipher
+ *      Return cipher slice type for given algorithm
+ *
+ * @description
+ *      This function will check what cipher slice type should be used for given
+ *      algorithms and CPM generation combination.
+ *      Since CPM2.0 there is new UCS cipher slice available.
+ *
+ * @param[in] pService          Pointer to service struct
+ * @param[in] cipherAlgorithm   cipher algorithm
+ * @param[in] hashAlgorithm     hash algorithm
+ *
+ *****************************************************************************/
+Cpa32U LacCipher_GetCipherSliceType(sal_crypto_service_t *pService,
+				    CpaCySymCipherAlgorithm algorithm,
+				    CpaCySymHashAlgorithm hash);
 #endif /* LAC_SYM_CIPHER_H */

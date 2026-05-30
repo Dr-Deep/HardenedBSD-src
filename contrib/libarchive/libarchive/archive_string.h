@@ -21,9 +21,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
- *
  */
 
 #ifndef ARCHIVE_STRING_H_INCLUDED
@@ -194,6 +191,10 @@ void	archive_string_vsprintf(struct archive_string *, const char *,
 	    va_list) __LA_PRINTF(2, 0);
 void	archive_string_sprintf(struct archive_string *, const char *, ...)
 	    __LA_PRINTF(2, 3);
+
+/* Equivalent to dirname(3) */
+struct archive_string *
+archive_string_dirname(struct archive_string *);
 
 /* Translates from MBS to Unicode. */
 /* Returns non-zero if conversion failed in any way. */

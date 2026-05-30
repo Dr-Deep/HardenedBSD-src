@@ -1,7 +1,3 @@
-# $FreeBSD$
-
-ZFSTOP=	${SRCTOP}/sys/contrib/openzfs
-
 .PATH: ${ZFSTOP}/man/man4
 .PATH: ${ZFSTOP}/man/man5
 .PATH: ${ZFSTOP}/man/man7
@@ -10,10 +6,11 @@ ZFSTOP=	${SRCTOP}/sys/contrib/openzfs
 .PATH: ${ZFSTOP}/cmd/zpool/os/freebsd
 
 
-PACKAGE=	runtime
+PACKAGE=	zfs
 PROG=	zpool
 MAN= \
 	spl.4 \
+	vdevprops.7 \
 	zfs.4 \
 	zpool.8 \
 	zpool-add.8 \
@@ -23,6 +20,7 @@ MAN= \
 	zpool-create.8 \
 	zpool-destroy.8 \
 	zpool-detach.8 \
+	zpool-ddtprune.8 \
 	zpool-events.8 \
 	zpool-export.8 \
 	zpool-features.7 \
@@ -34,6 +32,7 @@ MAN= \
 	zpool-labelclear.8 \
 	zpool-list.8 \
 	zpool-offline.8 \
+	zpool-prefetch.8 \
 	zpool-reguid.8 \
 	zpool-remove.8 \
 	zpool-reopen.8 \
@@ -66,6 +65,7 @@ CFLAGS+= \
 	-I${ZFSTOP}/include \
 	-I${ZFSTOP}/lib/libspl/include \
 	-I${ZFSTOP}/lib/libspl/include/os/freebsd \
+	-I${ZFSTOP}/lib/libzpool/include \
 	-I${SRCTOP}/sys \
 	-I${SRCTOP}/cddl/compat/opensolaris/include \
 	-I${ZFSTOP}/cmd/zpool \
@@ -75,6 +75,10 @@ CFLAGS+= \
 	-DSYSCONFDIR=\"/etc\" \
 	-DPKGDATADIR=\"/usr/share/zfs\"
 
-LIBADD=	geom jail nvpair uutil zfs zutil avl spl tpool zfs_core m
+LIBADD=	geom nvpair zfs zutil avl spl zfs_core m
 LDADD+= 	-pthread
+
+# HardenedBSD's changes require libjail
+LIBADD+=	jail
+
 .include <bsd.prog.mk>

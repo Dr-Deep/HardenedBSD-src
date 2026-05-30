@@ -53,7 +53,7 @@ struct ldns_struct_dnssec_name
 	 * Usually, the name is a pointer to the owner name of the first rr for
 	 * this name, but sometimes there is no actual data to point to, 
 	 * for instance in
-	 * names representing empty nonterminals. If so, set alloced to true to
+	 * names representing empty nonterminals. If so, set name_alloced to true to
 	 * indicate that this data must also be freed when the name is freed
 	 */
 	bool name_alloced;
@@ -93,7 +93,7 @@ struct ldns_struct_dnssec_zone {
 	ldns_dnssec_name *soa;
 	/** tree of ldns_dnssec_names */
 	ldns_rbtree_t *names;
-	/** tree of ldns_dnssec_names by nsec3 hashes (when applicible) */
+	/** tree of ldns_dnssec_names by nsec3 hashes (when applicable) */
 	ldns_rbtree_t *hashed_names;
 	/** points to the first added NSEC3 rr whose parameters will be 
 	 *  assumed for all subsequent NSEC3 rr's and which will be used
@@ -131,7 +131,8 @@ void ldns_dnssec_rrs_deep_free(ldns_dnssec_rrs *rrs);
  *
  * \param[in] rrs the list to add to
  * \param[in] rr the RR to add
- * \return LDNS_STATUS_OK on success
+ * \return LDNS_STATUS_OK on success and LDNS_STATUS_EQUAL_ERR when and
+ *         RR with equal ownername, class, type and rdata already exists.
  */
 ldns_status ldns_dnssec_rrs_add_rr(ldns_dnssec_rrs *rrs, ldns_rr *rr);
 
@@ -199,12 +200,13 @@ ldns_status ldns_dnssec_rrsets_set_type(ldns_dnssec_rrsets *rrsets,
  *
  * \param[in] rrsets the list of rrsets to add the RR to
  * \param[in] rr the rr to add to the list of rrsets
- * \return LDNS_STATUS_OK on success
+ * \return LDNS_STATUS_OK on success and LDNS_STATUS_EQUAL_ERR when and
+ *         RR with equal ownername, class, type and rdata already exists.
  */
 ldns_status ldns_dnssec_rrsets_add_rr(ldns_dnssec_rrsets *rrsets, ldns_rr *rr);
 
 /**
- * Print the given list of rrsets to the fiven file descriptor
+ * Print the given list of rrsets to the given file descriptor
  * 
  * \param[in] out the file descriptor to print to
  * \param[in] rrsets the list of RRsets to print
@@ -215,7 +217,7 @@ void ldns_dnssec_rrsets_print(FILE *out,
 		bool follow);
 
 /**
- * Print the given list of rrsets to the fiven file descriptor
+ * Print the given list of rrsets to the given file descriptor
  * 
  * \param[in] out the file descriptor to print to
  * \param[in] fmt the format of the textual representation
@@ -297,12 +299,12 @@ void ldns_dnssec_name_set_nsec(ldns_dnssec_name *name, ldns_rr *nsec);
 
 /**
  * Compares the domain names of the two arguments in their
- * canonical ordening.
+ * canonical ordering.
  * 
  * \param[in] a The first dnssec_name to compare
  * \param[in] b The second dnssec_name to compare
  * \return -1 if the domain name of a comes before that of b in canonical
- *            ordening, 1 if it is the other way around, and 0 if they are
+ *            ordering, 1 if it is the other way around, and 0 if they are
  *            equal
  */
 int ldns_dnssec_name_cmp(const void *a, const void *b);
@@ -313,7 +315,9 @@ int ldns_dnssec_name_cmp(const void *a, const void *b);
  *
  * \param[in] name The ldns_dnssec_name to add the RR to
  * \param[in] rr The RR to add
- * \return LDNS_STATUS_OK on success, error code otherwise
+ * \return LDNS_STATUS_OK on success and LDNS_STATUS_EQUAL_ERR when and
+ *         RR with equal ownername, class, type and rdata already exists,
+ *         and an error code otherwise
  */
 ldns_status ldns_dnssec_name_add_rr(ldns_dnssec_name *name,
 							 ldns_rr *rr);
@@ -415,7 +419,9 @@ void ldns_dnssec_zone_deep_free(ldns_dnssec_zone *zone);
  *
  * \param[in] zone the zone to add the RR to
  * \param[in] rr The RR to add
- * \return LDNS_STATUS_OK on success, an error code otherwise
+ * \return LDNS_STATUS_OK on success and LDNS_STATUS_EQUAL_ERR when and
+ *         RR with equal ownername, class, type and rdata already exists,
+ *         and an error code otherwise
  */
 ldns_status ldns_dnssec_zone_add_rr(ldns_dnssec_zone *zone,
 							 ldns_rr *rr);
@@ -475,6 +481,8 @@ ldns_status ldns_dnssec_zone_add_empty_nonterminals(ldns_dnssec_zone *zone);
  * return true when the zone has at least one nsec3 optout record.
  */
 bool ldns_dnssec_zone_is_nsec3_optout(const ldns_dnssec_zone* zone);
+
+ldns_status ldns_dnssec_zone_verify_zonemd(ldns_dnssec_zone *zone);
 
 #ifdef __cplusplus
 }

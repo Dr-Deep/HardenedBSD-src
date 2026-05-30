@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * This file and its contents are supplied under the terms of the
  * Common Development and Distribution License ("CDDL"), version 1.0.
@@ -134,7 +135,7 @@ nvlist_print_json(FILE *fp, nvlist_t *nvl)
 
 		switch (type) {
 		case DATA_TYPE_STRING: {
-			char *string = fnvpair_value_string(curr);
+			const char *string = fnvpair_value_string(curr);
 			if (nvlist_print_json_string(fp, string) == -1)
 				return (-1);
 			break;
@@ -220,7 +221,7 @@ nvlist_print_json(FILE *fp, nvlist_t *nvl)
 		}
 
 		case DATA_TYPE_STRING_ARRAY: {
-			char **val;
+			const char **val;
 			uint_t valsz, i;
 			VERIFY0(nvpair_value_string_array(curr, &val, &valsz));
 			FPRINTF(fp, "[");

@@ -22,16 +22,11 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
  * Allwinner A10/A20 and H3 Audio Codec
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -45,15 +40,14 @@ __FBSDID("$FreeBSD$");
 #include <machine/bus.h>
 
 #include <dev/sound/pcm/sound.h>
-#include <dev/sound/chip.h>
 
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
 #include <dev/gpio/gpiobusvar.h>
 
-#include <dev/extres/clk/clk.h>
-#include <dev/extres/hwreset/hwreset.h>
+#include <dev/clk/clk.h>
+#include <dev/hwreset/hwreset.h>
 
 #include "sunxi_dma_if.h"
 #include "mixer_if.h"
@@ -165,7 +159,7 @@ struct a10codec_chinfo {
 struct a10codec_info {
 	device_t		dev;
 	struct resource		*res[2];
-	struct mtx		*lock;
+	struct mtx		lock;
 	bus_dma_tag_t		dmat;
 	unsigned		dmasize;
 	void			*ih;
@@ -686,7 +680,7 @@ a10codec_dmaintr(void *priv)
 	struct a10codec_chinfo *ch = priv;
 	unsigned bufsize;
 
-	bufsize = sndbuf_getsize(ch->buffer);
+	bufsize = ch->buffer->bufsize;
 
 	ch->pos += ch->blocksize;
 	if (ch->pos >= bufsize)
@@ -955,7 +949,7 @@ a10codec_chan_trigger(kobj_t obj, void *data, int go)
 	if (!PCMTRIG_COMMON(go))
 		return (0);
 
-	snd_mtxlock(sc->lock);
+	mtx_lock(&sc->lock);
 	switch (go) {
 	case PCMTRIG_START:
 		ch->run = 1;
@@ -970,7 +964,7 @@ a10codec_chan_trigger(kobj_t obj, void *data, int go)
 	default:
 		break;
 	}
-	snd_mtxunlock(sc->lock);
+	mtx_unlock(&sc->lock);
 
 	return (0);
 }
@@ -1081,7 +1075,7 @@ a10codec_attach(device_t dev)
 	sc = malloc(sizeof(*sc), M_DEVBUF, M_WAITOK | M_ZERO);
 	sc->cfg = (void *)ofw_bus_search_compatible(dev, compat_data)->ocd_data;
 	sc->dev = dev;
-	sc->lock = snd_mtxcreate(device_get_nameunit(dev), "a10codec softc");
+	mtx_init(&sc->lock, device_get_nameunit(dev), "a10codec_softc", MTX_DEF);
 
 	if (bus_alloc_resources(dev, a10codec_spec, sc->res)) {
 		device_printf(dev, "cannot allocate resources for device\n");
@@ -1171,22 +1165,22 @@ a10codec_attach(device_t dev)
 
 	pcm_setflags(dev, pcm_getflags(dev) | SD_F_MPSAFE);
 
-	if (pcm_register(dev, sc, 1, 1)) {
-		device_printf(dev, "pcm_register failed\n");
-		goto fail;
-	}
+	pcm_init(dev, sc);
 
 	pcm_addchan(dev, PCMDIR_PLAY, &a10codec_chan_class, sc);
 	pcm_addchan(dev, PCMDIR_REC, &a10codec_chan_class, sc);
 
 	snprintf(status, SND_STATUSLEN, "at %s", ofw_bus_get_name(dev));
-	pcm_setstatus(dev, status);
+	if (pcm_register(dev, status)) {
+		device_printf(dev, "pcm_register failed\n");
+		goto fail;
+	}
 
 	return (0);
 
 fail:
 	bus_release_resources(dev, a10codec_spec, sc->res);
-	snd_mtxfree(sc->lock);
+	mtx_destroy(&sc->lock);
 	free(sc, M_DEVBUF);
 
 	return (ENXIO);

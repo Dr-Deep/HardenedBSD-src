@@ -1,4 +1,3 @@
-/* @(#)s_cbrt.c 5.1 93/09/24 */
 /*
  * ====================================================
  * Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
@@ -11,9 +10,6 @@
  *
  * Optimized by Bruce D. Evans.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <float.h>
 #include "math.h"
@@ -94,7 +90,7 @@ cbrt(double x)
      * the result is larger in magnitude than cbrt(x) but not much more than
      * 2 23-bit ulps larger).  With rounding towards zero, the error bound
      * would be ~5/6 instead of ~4/6.  With a maximum error of 2 23-bit ulps
-     * in the rounded t, the infinite-precision error in the Newton
+     * in the rounded t, the infinite-precision error in the Halley
      * approximation barely affects third digit in the final error
      * 0.667; the error in the rounded t can be up to about 3 23-bit ulps
      * before the final error is larger than 0.667 ulps.
@@ -103,7 +99,7 @@ cbrt(double x)
 	u.bits=(u.bits+0x80000000)&0xffffffffc0000000ULL;
 	t=u.value;
 
-    /* one step Newton iteration to 53 bits with error < 0.667 ulps */
+    /* one step Halley iteration to 53 bits with error < 0.667 ulps */
 	s=t*t;				/* t*t is exact */
 	r=x/s;				/* error <= 0.5 ulps; |r| < |t| */
 	w=t+t;				/* t+t is exact */

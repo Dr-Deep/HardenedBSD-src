@@ -24,9 +24,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
@@ -547,7 +544,7 @@ as3722_gpio_attach(struct as3722_softc *sc, phandle_t node)
 	sc->gpio_pins = malloc(sizeof(struct as3722_gpio_pin *) *
 	    sc->gpio_npins, M_AS3722_GPIO, M_WAITOK | M_ZERO);
 
-	sc->gpio_busdev = gpiobus_attach_bus(sc->dev);
+	sc->gpio_busdev = gpiobus_add_bus(sc->dev);
 	if (sc->gpio_busdev == NULL)
 		return (ENXIO);
 	for (i = 0; i < sc->gpio_npins; i++) {

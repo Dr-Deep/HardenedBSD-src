@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2011 James Gritton
  * All rights reserved.
@@ -25,9 +25,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
 #include <sys/cpuset.h>
@@ -294,9 +291,9 @@ run_command(struct cfjail *j)
 	login_cap_t *lcap;
 	const char **argv;
 	char *acs, *cs, *comcs, *devpath;
-	const char *jidstr, *conslog, *path, *ruleset, *term, *username;
+	const char *jidstr, *conslog, *fmt, *path, *ruleset, *term, *username;
 	enum intparam comparam;
-	size_t comlen;
+	size_t comlen, ret;
 	pid_t pid;
 	cpusetid_t setid;
 	int argc, bg, clean, consfd, down, fib, i, injail, sjuser, timeout;
@@ -335,6 +332,25 @@ run_command(struct cfjail *j)
 				printf("%d\n", j->jid);
 			if (verbose >= 0 && (j->name || verbose > 0))
 				jail_note(j, "created\n");
+
+			/*
+			 * Populate our jid and name parameters if they were not
+			 * provided.  This simplifies later logic that wants to
+			 * use the jid or name to be able to do so reliably.
+			 */
+			if (j->intparams[KP_JID] == NULL) {
+				char ljidstr[16];
+
+				(void)snprintf(ljidstr, sizeof(ljidstr), "%d",
+				    j->jid);
+				add_param(j, NULL, KP_JID, ljidstr);
+			}
+
+			/* This matches the kernel behavior. */
+			if (j->intparams[KP_NAME] == NULL)
+				add_param(j, j->intparams[KP_JID], KP_NAME,
+				    NULL);
+
 			dep_done(j, DF_LIGHT);
 		}
 		return 0;
@@ -440,7 +456,7 @@ run_command(struct cfjail *j)
 		} else
 			argc = 4;
 
-		if (!down) {
+		if (!down && extrap != NULL) {
 			for (cs = strtok(extrap, " "); cs;
 			     cs = strtok(NULL, " ")) {
 				size_t len = strlen(cs) + 1;
@@ -459,8 +475,7 @@ run_command(struct cfjail *j)
 		argv[0] = _PATH_IFCONFIG;
 		argv[1] = comstring->s;
 		argv[2] = down ? "-vnet" : "vnet";
-		jidstr = string_param(j->intparams[KP_JID]);
-		argv[3] = jidstr ? jidstr : string_param(j->intparams[KP_NAME]);
+		argv[3] = string_param(j->intparams[KP_JID]);
 		argv[4] = NULL;
 		break;
 
@@ -591,6 +606,29 @@ run_command(struct cfjail *j)
 			argv[4] = devpath;
 			argv[5] = NULL;
 		}
+		break;
+
+	case IP_ZFS_DATASET:
+		argv = alloca(4 * sizeof(char *));
+		jidstr = string_param(j->intparams[KP_JID]);
+		fmt = "if [ $(/sbin/zfs get -H -o value jailed %s) = on ]; then /sbin/zfs jail %s %s || echo error, attaching %s to jail %s failed; else echo error, you need to set jailed=on for dataset %s; fi";
+		comlen = strlen(fmt)
+		    + 2 * strlen(jidstr)
+		    + 4 * comstring->len
+		    - 6 * 2	/* 6 * "%s" */
+		    + 1;
+		comcs = alloca(comlen);
+		ret = snprintf(comcs, comlen, fmt, comstring->s,
+		    jidstr, comstring->s, comstring->s, jidstr,
+		    comstring->s);
+		if (ret >= comlen) {
+			jail_warnx(j, "internal error in ZFS dataset handling");
+			exit(1);
+		}
+		argv[0] = _PATH_BSHELL;
+		argv[1] = "-c";
+		argv[2] = comcs;
+		argv[3] = NULL;
 		break;
 
 	case IP_COMMAND:
@@ -766,12 +804,20 @@ run_command(struct cfjail *j)
 		setenv("HOME", pwd->pw_dir, 1);
 		setenv("SHELL",
 		    *pwd->pw_shell ? pwd->pw_shell : _PATH_BSHELL, 1);
-		if (clean && chdir(pwd->pw_dir) < 0) {
+		if (clean && username && chdir(pwd->pw_dir) < 0) {
 			jail_warnx(j, "chdir %s: %s",
 			    pwd->pw_dir, strerror(errno));
 			exit(1);
 		}
 		endpwent();
+	}
+	if (!injail) {
+		if (string_param(j->intparams[KP_JID]))
+			setenv("JID", string_param(j->intparams[KP_JID]), 1);
+		if (string_param(j->intparams[KP_NAME]))
+			setenv("JNAME", string_param(j->intparams[KP_NAME]), 1);
+		path = string_param(j->intparams[KP_PATH]);
+		setenv("JPATH", path ? path : "", 1);
 	}
 
 	if (consfd != 0 && (dup2(consfd, 1) < 0 || dup2(consfd, 2) < 0)) {

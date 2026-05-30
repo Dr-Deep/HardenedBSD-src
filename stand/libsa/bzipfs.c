@@ -25,9 +25,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #ifndef REGRESSION
 #include "stand.h"
 #else
@@ -71,6 +68,7 @@ static int	bzf_stat(struct open_file *f, struct stat *sb);
 #ifndef REGRESSION
 struct fs_ops bzipfs_fsops = {
 	.fs_name = "bzip",
+	.fs_flags = 0,
 	.fo_open = bzf_open,
 	.fo_close = bzf_close,
 	.fo_read = bzf_read,
@@ -368,7 +366,7 @@ bz_internal_error(int errorcode)
 
 #ifdef REGRESSION
 /* Small test case, open and decompress test.bz2 */
-int main()
+int main(void)
 {
     struct open_file f;
     char buf[1024];

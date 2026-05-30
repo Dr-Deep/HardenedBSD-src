@@ -16,8 +16,6 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  *
- * $FreeBSD$
- *
  */
 
 /*
@@ -30,8 +28,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/stdint.h>
 #include <sys/stddef.h>
 #include <sys/param.h>
@@ -93,7 +89,7 @@ bcm_xhci_probe(device_t dev)
 	root = OF_finddevice("/");
 	if (root == -1)
 		return (ENXIO);
-	if (!ofw_bus_node_is_compatible(root, "raspberrypi,4-model-b"))
+	if (!ofw_bus_node_is_compatible(root, "brcm,bcm2711"))
 		return (ENXIO);
 
 	/*
@@ -109,7 +105,7 @@ bcm_xhci_probe(device_t dev)
 		return (ENXIO);
 
 	device_set_desc(dev,
-	    "VL805 USB 3.0 controller (on the Raspberry Pi 4b)");
+	    "VL805 USB 3.0 controller (on the Raspberry Pi 4 series)");
 
 	return (BUS_PROBE_SPECIFIC);
 }
@@ -216,3 +212,5 @@ DEFINE_CLASS_1(bcm_xhci, bcm_xhci_driver, bcm_xhci_methods,
 
 DRIVER_MODULE(bcm_xhci, pci, bcm_xhci_driver, 0, 0);
 MODULE_DEPEND(bcm_xhci, usb, 1, 1, 1);
+MODULE_DEPEND(bcm_xhci, pci, 1, 1, 1);
+MODULE_DEPEND(bcm_xhci, xhci, 1, 1, 1);

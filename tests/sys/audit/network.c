@@ -21,8 +21,6 @@
  * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include <sys/types.h>
@@ -30,6 +28,8 @@
 #include <sys/stat.h>
 #include <sys/uio.h>
 #include <sys/un.h>
+
+#include <ssp/ssp.h>
 
 #include <atf-c.h>
 #include <fcntl.h>
@@ -961,7 +961,7 @@ ATF_TC_BODY(recvmsg_failure, tc)
 	snprintf(extregex, sizeof(extregex),
 		"recvmsg.*return,failure : Bad address");
 	FILE *pipefd = setup(fds, auclass);
-	ATF_REQUIRE_EQ(-1, recvmsg(-1, NULL, 0));
+	ATF_REQUIRE_EQ(-1, __ssp_real(recvmsg)(-1, NULL, 0));
 	check_audit(fds, extregex, pipefd);
 }
 

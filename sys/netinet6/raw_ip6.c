@@ -57,16 +57,10 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)raw_ip.c	8.2 (Berkeley) 1/4/94
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include "opt_ipsec.h"
 #include "opt_inet6.h"
-#include "opt_route.h"
 
 #include <sys/param.h>
 #include <sys/errno.h>
@@ -81,11 +75,13 @@ __FBSDID("$FreeBSD$");
 #include <sys/signalvar.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
+#include <sys/stdarg.h>
 #include <sys/sx.h>
 #include <sys/syslog.h>
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_private.h>
 #include <net/if_types.h>
 #include <net/route.h>
 #include <net/vnet.h>
@@ -98,7 +94,6 @@ __FBSDID("$FreeBSD$");
 #include <netinet/icmp6.h>
 #include <netinet/ip6.h>
 #include <netinet/ip_var.h>
-#include <netinet6/ip6protosw.h>
 #include <netinet6/ip6_mroute.h>
 #include <netinet6/in6_pcb.h>
 #include <netinet6/ip6_var.h>
@@ -110,8 +105,6 @@ __FBSDID("$FreeBSD$");
 
 #include <netipsec/ipsec_support.h>
 
-#include <machine/stdarg.h>
-
 #define	satosin6(sa)	((struct sockaddr_in6 *)(sa))
 #define	ifatoia6(ifa)	((struct in6_ifaddr *)(ifa))
 
@@ -121,6 +114,9 @@ __FBSDID("$FreeBSD$");
 
 VNET_DECLARE(struct inpcbinfo, ripcbinfo);
 #define	V_ripcbinfo			VNET(ripcbinfo)
+
+VNET_DECLARE(int, rip_bind_all_fibs);
+#define	V_rip_bind_all_fibs	VNET(rip_bind_all_fibs)
 
 extern u_long	rip_sendspace;
 extern u_long	rip_recvspace;
@@ -140,16 +136,16 @@ VNET_PCPUSTAT_SYSUNINIT(rip6stat);
 /*
  * The socket used to communicate with the multicast routing daemon.
  */
-VNET_DEFINE(struct socket *, ip6_mrouter);
+VNET_DEFINE(bool, ip6_mrouting_enabled);
 
 /*
  * The various mrouter functions.
  */
 int (*ip6_mrouter_set)(struct socket *, struct sockopt *);
 int (*ip6_mrouter_get)(struct socket *, struct sockopt *);
-int (*ip6_mrouter_done)(void);
+void (*ip6_mrouter_done)(struct socket *);
 int (*ip6_mforward)(struct ip6_hdr *, struct ifnet *, struct mbuf *);
-int (*mrt6_ioctl)(u_long, caddr_t);
+int (*mrt6_ioctl)(u_long, caddr_t, int);
 
 struct rip6_inp_match_ctx {
 	struct ip6_hdr *ip6;
@@ -194,14 +190,16 @@ rip6_input(struct mbuf **mp, int *offp, int proto)
 	struct rip6_inp_match_ctx ctx = { .ip6 = ip6, .proto = proto };
 	struct inpcb_iterator inpi = INP_ITERATOR(&V_ripcbinfo,
 	    INPLOOKUP_RLOCKPCB, rip6_inp_match, &ctx);
-	int delivered = 0;
+	int delivered = 0, fib;
 
+	M_ASSERTPKTHDR(m);
 	NET_EPOCH_ASSERT();
 
 	RIP6STAT_INC(rip6s_ipackets);
 
 	init_sin6(&fromsa, m, 0); /* general init */
 
+	fib = M_GETFIB(m);
 	ifp = m->m_pkthdr.rcvif;
 
 	while ((inp = inp_next(&inpi)) != NULL) {
@@ -223,6 +221,12 @@ rip6_input(struct mbuf **mp, int *offp, int proto)
 			 * Allow raw socket in jail to receive multicast;
 			 * assume process had PRIV_NETINET_RAW at attach,
 			 * and fall through into normal filter path if so.
+			 */
+			continue;
+		if (V_rip_bind_all_fibs == 0 && fib != inp->inp_inc.inc_fibnum)
+			/*
+			 * Sockets bound to a specific FIB can only receive
+			 * packets from that FIB.
 			 */
 			continue;
 		if (inp->in6p_cksum != -1) {
@@ -324,40 +328,14 @@ rip6_input(struct mbuf **mp, int *offp, int proto)
 }
 
 void
-rip6_ctlinput(int cmd, struct sockaddr *sa, void *d)
+rip6_ctlinput(struct ip6ctlparam *ip6cp)
 {
-	struct ip6ctlparam *ip6cp = NULL;
-	const struct sockaddr_in6 *sa6_src = NULL;
-	void *cmdarg;
-	struct inpcb *(*notify)(struct inpcb *, int) = in6_rtchange;
+	int errno;
 
-	if (sa->sa_family != AF_INET6 ||
-	    sa->sa_len != sizeof(struct sockaddr_in6))
-		return;
-
-	if ((unsigned)cmd >= PRC_NCMDS)
-		return;
-	if (PRC_IS_REDIRECT(cmd))
-		notify = in6_rtchange, d = NULL;
-	else if (cmd == PRC_HOSTDEAD)
-		d = NULL;
-	else if (inet6ctlerrmap[cmd] == 0)
-		return;
-
-	/*
-	 * If the parameter is from icmp6, decode it.
-	 */
-	if (d != NULL) {
-		ip6cp = (struct ip6ctlparam *)d;
-		cmdarg = ip6cp->ip6c_cmdarg;
-		sa6_src = ip6cp->ip6c_src;
-	} else {
-		cmdarg = NULL;
-		sa6_src = &sa6_any;
-	}
-
-	(void) in6_pcbnotify(&V_ripcbinfo, sa, 0,
-	    (const struct sockaddr *)sa6_src, 0, cmd, cmdarg, notify);
+	if ((errno = icmp6_errmap(ip6cp->ip6c_icmp6)) != 0)
+		in6_pcbnotify(&V_ripcbinfo, ip6cp->ip6c_finaldst, 0,
+		    ip6cp->ip6c_src, 0, errno, ip6cp->ip6c_cmdarg,
+		    in6_rtchange);
 }
 
 /*
@@ -382,6 +360,7 @@ rip6_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 	int use_defzone = 0;
 	int hlim = 0;
 	struct in6_addr in6a;
+	uint32_t hash_type, hash_val;
 
 	inp = sotoinpcb(so);
 	KASSERT(inp != NULL, ("rip6_send: inp == NULL"));
@@ -473,16 +452,12 @@ rip6_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 	}
 	ip6 = mtod(m, struct ip6_hdr *);
 
-#ifdef ROUTE_MPATH
-	if (CALC_FLOWID_OUTBOUND) {
-		uint32_t hash_type, hash_val;
-
+	if (V_fib_hash_outbound) {
 		hash_val = fib6_calc_software_hash(&inp->in6p_laddr,
 		    &dstsock->sin6_addr, 0, 0, inp->inp_ip_p, &hash_type);
 		inp->inp_flowid = hash_val;
 		inp->inp_flowtype = hash_type;
 	}
-#endif
 	/*
 	 * Source address selection.
 	 */
@@ -565,7 +540,7 @@ rip6_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 	if (inp->inp_ip_p == IPPROTO_ICMPV6) {
 		if (oifp)
 			icmp6_ifoutstat_inc(oifp, type, code);
-		ICMP6STAT_INC(icp6s_outhist[type]);
+		ICMP6STAT_INC2(icp6s_outhist, type);
 	} else
 		RIP6STAT_INC(rip6s_opackets);
 
@@ -596,7 +571,7 @@ release:
 int
 rip6_ctloutput(struct socket *so, struct sockopt *sopt)
 {
-	struct inpcb *inp;
+	struct inpcb *inp = sotoinpcb(so);
 	int error;
 
 	if (sopt->sopt_level == IPPROTO_ICMPV6)
@@ -606,14 +581,10 @@ rip6_ctloutput(struct socket *so, struct sockopt *sopt)
 		 */
 		return (icmp6_ctloutput(so, sopt));
 	else if (sopt->sopt_level != IPPROTO_IPV6) {
-		if (sopt->sopt_level == SOL_SOCKET &&
-		    sopt->sopt_name == SO_SETFIB) {
-			inp = sotoinpcb(so);
-			INP_WLOCK(inp);
-			inp->inp_inc.inc_fibnum = so->so_fibnum;
-			INP_WUNLOCK(inp);
-			return (0);
-		}
+		if (sopt->sopt_dir == SOPT_SET &&
+		    sopt->sopt_level == SOL_SOCKET &&
+		    sopt->sopt_name == SO_SETFIB)
+			return (ip6_ctloutput(so, sopt));
 		return (EINVAL);
 	}
 
@@ -629,6 +600,11 @@ rip6_ctloutput(struct socket *so, struct sockopt *sopt)
 		case MRT6_ADD_MFC:
 		case MRT6_DEL_MFC:
 		case MRT6_PIM:
+			error = priv_check(curthread, PRIV_NETINET_MROUTE);
+			if (error != 0)
+				return (error);
+			if (inp->inp_ip_p != IPPROTO_ICMPV6)
+				return (EOPNOTSUPP);
 			error = ip6_mrouter_get ?  ip6_mrouter_get(so, sopt) :
 			    EOPNOTSUPP;
 			break;
@@ -650,6 +626,11 @@ rip6_ctloutput(struct socket *so, struct sockopt *sopt)
 		case MRT6_ADD_MFC:
 		case MRT6_DEL_MFC:
 		case MRT6_PIM:
+			error = priv_check(curthread, PRIV_NETINET_MROUTE);
+			if (error != 0)
+				return (error);
+			if (inp->inp_ip_p != IPPROTO_ICMPV6)
+				return (EOPNOTSUPP);
 			error = ip6_mrouter_set ?  ip6_mrouter_set(so, sopt) :
 			    EOPNOTSUPP;
 			break;
@@ -709,12 +690,11 @@ rip6_detach(struct socket *so)
 	inp = sotoinpcb(so);
 	KASSERT(inp != NULL, ("rip6_detach: inp == NULL"));
 
-	if (so == V_ip6_mrouter && ip6_mrouter_done)
-		ip6_mrouter_done();
+	if (ip6_mrouter_done != NULL)
+		ip6_mrouter_done(so);
 	/* xxx: RSVP */
 	INP_WLOCK(inp);
 	free(inp->in6p_icmp6filt, M_PCB);
-	in_pcbdetach(inp);
 	in_pcbfree(inp);
 }
 
@@ -787,16 +767,13 @@ rip6_bind(struct socket *so, struct sockaddr *nam, struct thread *td)
 	}
 	if (ifa != NULL &&
 	    ((struct in6_ifaddr *)ifa)->ia6_flags &
-	    (IN6_IFF_ANYCAST|IN6_IFF_NOTREADY|
-	     IN6_IFF_DETACHED|IN6_IFF_DEPRECATED)) {
+	    (IN6_IFF_NOTREADY|IN6_IFF_DETACHED|IN6_IFF_DEPRECATED)) {
 		NET_EPOCH_EXIT(et);
 		return (EADDRNOTAVAIL);
 	}
 	NET_EPOCH_EXIT(et);
 	INP_WLOCK(inp);
-	INP_INFO_WLOCK(&V_ripcbinfo);
 	inp->in6p_laddr = addr->sin6_addr;
-	INP_INFO_WUNLOCK(&V_ripcbinfo);
 	INP_WUNLOCK(inp);
 	return (0);
 }
@@ -834,14 +811,12 @@ rip6_connect(struct socket *so, struct sockaddr *nam, struct thread *td)
 		return (error);
 
 	INP_WLOCK(inp);
-	INP_INFO_WLOCK(&V_ripcbinfo);
 	/* Source address selection. XXX: need pcblookup? */
 	NET_EPOCH_ENTER(et);
 	error = in6_selectsrc_socket(addr, inp->in6p_outputopts,
 	    inp, so->so_cred, scope_ambiguous, &in6a, NULL);
 	NET_EPOCH_EXIT(et);
 	if (error) {
-		INP_INFO_WUNLOCK(&V_ripcbinfo);
 		INP_WUNLOCK(inp);
 		return (error);
 	}
@@ -849,22 +824,32 @@ rip6_connect(struct socket *so, struct sockaddr *nam, struct thread *td)
 	inp->in6p_faddr = addr->sin6_addr;
 	inp->in6p_laddr = in6a;
 	soisconnected(so);
-	INP_INFO_WUNLOCK(&V_ripcbinfo);
 	INP_WUNLOCK(inp);
 	return (0);
 }
 
 static int
-rip6_shutdown(struct socket *so)
+rip6_shutdown(struct socket *so, enum shutdown_how how)
 {
-	struct inpcb *inp;
 
-	inp = sotoinpcb(so);
-	KASSERT(inp != NULL, ("rip6_shutdown: inp == NULL"));
+	SOCK_LOCK(so);
+	if (!(so->so_state & SS_ISCONNECTED)) {
+		SOCK_UNLOCK(so);
+		return (ENOTCONN);
+	}
+	SOCK_UNLOCK(so);
 
-	INP_WLOCK(inp);
-	socantsendmore(so);
-	INP_WUNLOCK(inp);
+	switch (how) {
+	case SHUT_RD:
+		sorflush(so);
+		break;
+	case SHUT_RDWR:
+		sorflush(so);
+		/* FALLTHROUGH */
+	case SHUT_WR:
+		socantsendmore(so);
+	}
+
 	return (0);
 }
 

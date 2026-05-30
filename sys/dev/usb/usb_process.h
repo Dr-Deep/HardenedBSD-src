@@ -1,6 +1,5 @@
-/* $FreeBSD$ */
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008 Hans Petter Selasky. All rights reserved.
  *
@@ -32,7 +31,6 @@
 #ifndef USB_GLOBAL_INCLUDE_FILE
 #include <sys/interrupt.h>
 #include <sys/priority.h>
-#include <sys/runq.h>
 #endif
 
 /* defines */
@@ -57,11 +55,7 @@ struct usb_process {
 	struct cv up_cv;
 	struct cv up_drain;
 
-#if (__FreeBSD_version >= 800000)
 	struct thread *up_ptr;
-#else
-	struct proc *up_ptr;
-#endif
 	struct thread *up_curtd;
 	struct mtx *up_mtx;
 
@@ -81,6 +75,7 @@ int	usb_proc_create(struct usb_process *up, struct mtx *p_mtx,
 	    const char *pmesg, uint8_t prio);
 void	usb_proc_drain(struct usb_process *up);
 void	usb_proc_mwait(struct usb_process *up, void *pm0, void *pm1);
+int	usb_proc_mwait_sig(struct usb_process *up, void *pm0, void *pm1);
 void	usb_proc_free(struct usb_process *up);
 void   *usb_proc_msignal(struct usb_process *up, void *pm0, void *pm1);
 void	usb_proc_rewakeup(struct usb_process *up);

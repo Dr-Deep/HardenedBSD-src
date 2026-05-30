@@ -4,8 +4,8 @@
  * Copyright (c) 2010 Panasas, Inc.
  * Copyright (c) 2013-2019 Mellanox Technologies, Ltd.
  * All rights reserved.
- * Copyright (c) 2020-2021 The FreeBSD Foundation
- * Copyright (c) 2020-2021 Bjoern A. Zeeb
+ * Copyright (c) 2020-2025 The FreeBSD Foundation
+ * Copyright (c) 2020-2022 Bjoern A. Zeeb
  *
  * Portions of this software were developed by Björn Zeeb
  * under sponsorship from the FreeBSD Foundation.
@@ -30,8 +30,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #ifndef	_LINUXKPI_LINUX_NETDEVICE_H
 #define	_LINUXKPI_LINUX_NETDEVICE_H
@@ -53,6 +51,7 @@
 #include <net/if_var.h>
 #include <net/if_dl.h>
 
+#include <linux/kernel.h>
 #include <linux/bitops.h>
 #include <linux/list.h>
 #include <linux/device.h>
@@ -76,6 +75,10 @@ struct wireless_dev;		/* net/cfg80211.h */
 
 #define	NET_NAME_UNKNOWN	0
 
+enum net_addr_assign_type {
+	NET_ADDR_RANDOM,
+};
+
 enum netdev_tx {
 	NETDEV_TX_OK		= 0,
 };
@@ -96,6 +99,10 @@ enum net_device_reg_state {
 	NETREG_REGISTERED,
 };
 
+enum tc_setup_type {
+	TC_SETUP_MAX_DUMMY,
+};
+
 struct net_device_ops {
 	int (*ndo_open)(struct net_device *);
 	int (*ndo_stop)(struct net_device *);
@@ -105,9 +112,6 @@ struct net_device_ops {
 };
 
 struct net_device {
-	/* BSD specific for compat. */
-	struct ifnet			bsdifp;
-
 	/* net_device fields seen publicly. */
 	/* XXX can we later make some aliases to ifnet? */
 	char				name[IFNAMSIZ];
@@ -126,6 +130,7 @@ struct net_device {
 		unsigned long		tx_errors;
 		unsigned long		tx_packets;
 	} stats;
+	enum net_addr_assign_type	addr_assign_type;
 	enum net_device_reg_state	reg_state;
 	const struct ethtool_ops	*ethtool_ops;
 	const struct net_device_ops	*netdev_ops;
@@ -134,6 +139,7 @@ struct net_device {
 	/* Not properly typed as-of now. */
 	int	flags, type;
 	int	name_assign_type, needed_headroom;
+	int	threaded;
 
 	void (*priv_destructor)(struct net_device *);
 
@@ -153,6 +159,30 @@ struct net_device {
 };
 
 #define	SET_NETDEV_DEV(_ndev, _dev)	(_ndev)->dev.parent = _dev;
+
+enum net_device_path_type {
+	DEV_PATH_MTK_WDMA,
+};
+
+struct net_device_path {
+	enum net_device_path_type		type;
+	const struct net_device			*dev;
+	/* We assume there's a struct per type. */
+	union {
+		struct {
+			uint16_t		wcid;
+			uint8_t			wdma_idx;
+			uint8_t			queue;
+			uint8_t			bss;
+			uint8_t			amsdu;
+		} mtk_wdma;
+	};
+};
+
+struct net_device_path_ctx {
+	const struct net_device			*dev;
+};
+
 
 /* -------------------------------------------------------------------------- */
 /* According to linux::ipoib_main.c. */
@@ -182,6 +212,30 @@ int	unregister_inetaddr_notifier(struct notifier_block *);
 
 #define	NAPI_POLL_WEIGHT			64	/* budget */
 
+/*
+ * There are drivers directly testing napi state bits, so we need to publicly
+ * expose them.  If you ask me, those accesses should be hid behind an
+ * inline function and the bit flags not be directly exposed.
+ */
+enum napi_state_bits {
+	/*
+	 * Official Linux flags encountered.
+	 */
+	NAPI_STATE_SCHED = 1,
+
+	/*
+	 * Our internal versions (for now).
+	 */
+	/* Do not schedule new things while we are waiting to clear things. */
+	LKPI_NAPI_FLAG_DISABLE_PENDING = 0,
+	/* To synchronise that only one poll is ever running. */
+	LKPI_NAPI_FLAG_IS_SCHEDULED = 1,
+	/* If trying to schedule while poll is running. Need to re-schedule. */
+	LKPI_NAPI_FLAG_LOST_RACE_TRY_AGAIN = 2,
+	/* When shutting down forcefully prevent anything from running task/poll. */
+	LKPI_NAPI_FLAG_SHUTDOWN = 3,
+};
+
 struct napi_struct {
 	TAILQ_ENTRY(napi_struct)	entry;
 
@@ -191,11 +245,12 @@ struct napi_struct {
 	int			budget;
 	int			rx_count;
 
+
 	/*
 	 * These flags mostly need to be checked/changed atomically
 	 * (multiple together in some cases).
 	 */
-	volatile unsigned long	_flags;
+	volatile unsigned long	state;
 
 	/* FreeBSD internal. */
 	/* Use task for now, so we can easily switch between direct and task. */
@@ -204,11 +259,11 @@ struct napi_struct {
 
 void linuxkpi_init_dummy_netdev(struct net_device *);
 void linuxkpi_netif_napi_add(struct net_device *, struct napi_struct *,
-    int(*napi_poll)(struct napi_struct *, int), int);
+    int(*napi_poll)(struct napi_struct *, int));
 void linuxkpi_netif_napi_del(struct napi_struct *);
 bool linuxkpi_napi_schedule_prep(struct napi_struct *);
 void linuxkpi___napi_schedule(struct napi_struct *);
-void linuxkpi_napi_schedule(struct napi_struct *);
+bool linuxkpi_napi_schedule(struct napi_struct *);
 void linuxkpi_napi_reschedule(struct napi_struct *);
 bool linuxkpi_napi_complete_done(struct napi_struct *, int);
 bool linuxkpi_napi_complete(struct napi_struct *);
@@ -218,8 +273,8 @@ void linuxkpi_napi_synchronize(struct napi_struct *);
 
 #define	init_dummy_netdev(_n)						\
 	linuxkpi_init_dummy_netdev(_n)
-#define	netif_napi_add(_nd, _ns, _p, _b)				\
-	linuxkpi_netif_napi_add(_nd, _ns, _p, _b)
+#define	netif_napi_add(_nd, _ns, _p)					\
+	linuxkpi_netif_napi_add(_nd, _ns, _p)
 #define	netif_napi_del(_n)						\
 	linuxkpi_netif_napi_del(_n)
 #define	napi_schedule_prep(_n)						\
@@ -241,6 +296,22 @@ void linuxkpi_napi_synchronize(struct napi_struct *);
 #define	napi_synchronize(_n)						\
 	linuxkpi_napi_synchronize(_n)
 
+
+static inline void
+netif_napi_add_tx(struct net_device *dev, struct napi_struct *napi,
+    int(*napi_poll)(struct napi_struct *, int))
+{
+
+	netif_napi_add(dev, napi, napi_poll);
+}
+
+static inline bool
+napi_is_scheduled(struct napi_struct *napi)
+{
+
+	return (test_bit(LKPI_NAPI_FLAG_IS_SCHEDULED, &napi->state));
+}
+
 /* -------------------------------------------------------------------------- */
 
 static inline void
@@ -253,6 +324,13 @@ netdev_rss_key_fill(uint32_t *buf, size_t len)
 	 * iwlwifi is looking for a 10byte "secret" so stay with random for now.
 	 */
 	get_random_bytes(buf, len);
+}
+
+static inline void
+__hw_addr_init(struct netdev_hw_addr_list *list)
+{
+	list->count = 0;
+	INIT_LIST_HEAD(&list->addr_list);
 }
 
 static inline int
@@ -283,6 +361,134 @@ synchronize_net(void)
 	synchronize_rcu();
 }
 
+static __inline void
+netif_receive_skb_list(struct list_head *head)
+{
+
+	pr_debug("%s: TODO\n", __func__);
+}
+
+static __inline int
+napi_gro_receive(struct napi_struct *napi, struct sk_buff *skb)
+{
+
+	pr_debug("%s: TODO\n", __func__);
+	return (-1);
+}
+
+static __inline void
+ether_setup(struct net_device *ndev)
+{
+
+	pr_debug("%s: TODO\n", __func__);
+}
+
+static __inline void
+dev_net_set(struct net_device *ndev, void *p)
+{
+
+	pr_debug("%s: TODO\n", __func__);
+}
+
+static __inline int
+dev_set_threaded(struct net_device *ndev, bool threaded)
+{
+
+	pr_debug("%s: TODO\n", __func__);
+	return (-ENODEV);
+}
+
+/* -------------------------------------------------------------------------- */
+
+static __inline bool
+netif_carrier_ok(struct net_device *ndev)
+{
+	pr_debug("%s: TODO\n", __func__);
+	return (false);
+}
+
+static __inline void
+netif_carrier_off(struct net_device *ndev)
+{
+	pr_debug("%s: TODO\n", __func__);
+}
+
+static __inline void
+netif_carrier_on(struct net_device *ndev)
+{
+	pr_debug("%s: TODO\n", __func__);
+}
+
+/* -------------------------------------------------------------------------- */
+
+static __inline bool
+netif_queue_stopped(struct net_device *ndev)
+{
+	pr_debug("%s: TODO\n", __func__);
+	return (false);
+}
+
+static __inline void
+netif_stop_queue(struct net_device *ndev)
+{
+	pr_debug("%s: TODO\n", __func__);
+}
+
+static __inline void
+netif_wake_queue(struct net_device *ndev)
+{
+	pr_debug("%s: TODO\n", __func__);
+}
+
+/* -------------------------------------------------------------------------- */
+
+static __inline int
+register_netdevice(struct net_device *ndev)
+{
+
+	/* assert rtnl_locked? */
+	pr_debug("%s: TODO\n", __func__);
+	return (0);
+}
+
+static __inline int
+register_netdev(struct net_device *ndev)
+{
+	int error;
+
+	/* lock */
+	error = register_netdevice(ndev);
+	/* unlock */
+	pr_debug("%s: TODO\n", __func__);
+	return (error);
+}
+
+static __inline void
+unregister_netdev(struct net_device *ndev)
+{
+	pr_debug("%s: TODO\n", __func__);
+}
+
+static __inline void
+unregister_netdevice(struct net_device *ndev)
+{
+	pr_debug("%s: TODO\n", __func__);
+}
+
+/* -------------------------------------------------------------------------- */
+
+static __inline void
+netif_rx(struct sk_buff *skb)
+{
+	pr_debug("%s: TODO\n", __func__);
+}
+
+static __inline void
+netif_rx_ni(struct sk_buff *skb)
+{
+	pr_debug("%s: TODO\n", __func__);
+}
+
 /* -------------------------------------------------------------------------- */
 
 struct net_device *linuxkpi_alloc_netdev(size_t, const char *, uint32_t,
@@ -291,6 +497,8 @@ void linuxkpi_free_netdev(struct net_device *);
 
 #define	alloc_netdev(_l, _n, _f, _func)						\
 	linuxkpi_alloc_netdev(_l, _n, _f, _func)
+#define	alloc_netdev_dummy(_l)							\
+	linuxkpi_alloc_netdev(_l, "dummy", NET_NAME_UNKNOWN, NULL)
 #define	free_netdev(_n)								\
 	linuxkpi_free_netdev(_n)
 
@@ -302,9 +510,25 @@ netdev_priv(const struct net_device *ndev)
 }
 
 /* -------------------------------------------------------------------------- */
+
+static __inline void
+netif_device_attach(struct net_device *ndev)
+{
+	pr_debug("%s: TODO\n", __func__);
+}
+
+static __inline void
+netif_device_detach(struct net_device *ndev)
+{
+	pr_debug("%s: TODO\n", __func__);
+}
+
+
+/* -------------------------------------------------------------------------- */
 /* This is really rtnetlink and probably belongs elsewhere. */
 
 #define	rtnl_lock()		do { } while(0)
 #define	rtnl_unlock()		do { } while(0)
+#define	rcu_dereference_rtnl(x)	READ_ONCE(x)
 
 #endif	/* _LINUXKPI_LINUX_NETDEVICE_H */

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2020-2021 The FreeBSD Foundation
+ * Copyright (c) 2022 Bjoern A. Zeeb
  *
  * This software was developed by Björn Zeeb under sponsorship from
  * the FreeBSD Foundation.
@@ -26,8 +27,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include <sys/param.h>
@@ -67,7 +66,8 @@ _linuxkpi_request_firmware(const char *fw_name, const struct linuxkpi_firmware *
 	uint32_t flags;
 
 	if (fw_name == NULL || fw == NULL || dev == NULL) {
-		*fw = NULL;
+		if (fw != NULL)
+			*fw = NULL;
 		return (-EINVAL);
 	}
 
@@ -89,17 +89,17 @@ _linuxkpi_request_firmware(const char *fw_name, const struct linuxkpi_firmware *
 	 * way rather than adding more name-mangling-hacks here in the future
 	 * (though we could if needed).
 	 */
-	/* (1) Try any name removed of path. */
-	fwimg = strrchr(fw_name, '/');
-	if (fwimg != NULL)
-		fwimg++;
-	if (fwimg == NULL || *fwimg == '\0')
-		fwimg = fw_name;
-	fbdfw = firmware_get_flags(fwimg, flags);
-	/* (2) Try the original name if we have not yet. */
-	if (fbdfw == NULL && fwimg != fw_name) {
-		fwimg = fw_name;
-		fbdfw = firmware_get_flags(fwimg, flags);
+	/* (1) Try the original name. */
+	fbdfw = firmware_get_flags(fw_name, flags);
+	/* (2) Try any name removed of path, if we have not yet. */
+	if (fbdfw == NULL) {
+		fwimg = strrchr(fw_name, '/');
+		if (fwimg != NULL)
+			fwimg++;
+		if (fwimg == NULL || *fwimg == '\0')
+			fwimg = fw_name;
+		if (fwimg != fw_name)
+			fbdfw = firmware_get_flags(fwimg, flags);
 	}
 	/* (3) Flatten '/', '.' and '-' to '_' and try with adjusted name. */
 	if (fbdfw == NULL &&
@@ -222,4 +222,27 @@ linuxkpi_release_firmware(const struct linuxkpi_firmware *fw)
 	if (fw->fbdfw)
 		firmware_put(fw->fbdfw, FIRMWARE_UNLOAD);
 	free(__DECONST(void *, fw), M_LKPI_FW);
+}
+
+int
+linuxkpi_request_partial_firmware_into_buf(const struct linuxkpi_firmware **fw,
+    const char *fw_name, struct device *dev, uint8_t *buf, size_t buflen,
+    size_t offset)
+{
+	const struct linuxkpi_firmware *lfw;
+	int error;
+
+	error = linuxkpi_request_firmware(fw, fw_name, dev);
+	if (error != 0)
+		return (error);
+
+	lfw = *fw;
+	if ((offset + buflen) >= lfw->size) {
+		linuxkpi_release_firmware(lfw);
+		return (-ERANGE);
+	}
+
+	memcpy(buf, lfw->data + offset, buflen);
+
+	return (0);
 }

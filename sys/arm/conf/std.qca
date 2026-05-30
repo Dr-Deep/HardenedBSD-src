@@ -46,11 +46,11 @@ device 		mpcore_timer
 device 		psci
 
 # Clock/Reset provider
-device 		qcom_gcc_ipq4018
+device 		qcom_gcc
 
 # TLMM (gpio/pinmux)
 device 		gpio
-device 		qcom_tlmm_ipq4018
+device 		qcom_tlmm
 device 		fdt_pinctrl
 
 # TCSR (core top control and status registers)
@@ -70,7 +70,7 @@ device 		usb
 device 		xhci
 device 		dwc3
 device 		qcom_dwc3
-options		USB_HOST_ALIGN=64
+options 	USB_HOST_ALIGN=64
 
 # Ethernet support
 device 		mdio

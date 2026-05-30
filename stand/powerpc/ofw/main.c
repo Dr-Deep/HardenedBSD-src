@@ -25,9 +25,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/endian.h>
 
 #include <stand.h>
@@ -38,9 +35,21 @@ __FBSDID("$FreeBSD$");
 #include <machine/asm.h>
 #include <machine/psl.h>
 
-struct arch_switch	archsw;		/* MI/MD interface boundary */
+#ifdef CAS
+static int ppc64_autoload(void);
+#endif
 
-extern char end[];
+struct arch_switch	archsw = {		/* MI/MD interface boundary */
+	.arch_getdev = ofw_getdev,
+	.arch_copyin = ofw_copyin,
+	.arch_copyout = ofw_copyout,
+	.arch_readin = ofw_readin,
+#ifdef CAS
+	.arch_autoload = ppc64_autoload,
+#else
+	.arch_autoload = ofw_autoload,
+#endif
+};
 
 uint32_t	acells, scells;
 
@@ -168,26 +177,14 @@ main(int (*openfirm)(void *))
          */
 	cons_probe();
 
-	archsw.arch_getdev = ofw_getdev;
-	archsw.arch_copyin = ofw_copyin;
-	archsw.arch_copyout = ofw_copyout;
-	archsw.arch_readin = ofw_readin;
 #ifdef CAS
 	setenv("cas", "1", 0);
-	archsw.arch_autoload = ppc64_autoload;
-#else
-	archsw.arch_autoload = ofw_autoload;
 #endif
 
 	/* Set up currdev variable to have hooks in place. */
-	env_setenv("currdev", EV_VOLATILE, "", ofw_setcurrdev, env_nounset);
+	env_setenv("currdev", EV_VOLATILE, "", gen_setcurrdev, env_nounset);
 
-	/*
-	 * March through the device switch probing for things.
-	 */
-	for (i = 0; devsw[i] != NULL; i++)
-		if (devsw[i]->dv_init != NULL)
-			(devsw[i]->dv_init)();
+	devinit();
 
 	printf("\n%s", bootprog_info);
 	printf("Memory: %lldKB\n", memsize() / 1024);
@@ -207,11 +204,11 @@ main(int (*openfirm)(void *))
 	bargc = 0;
 	parse(&bargc, &bargv, bootargs);
 	if (bargc == 1)
-		env_setenv("currdev", EV_VOLATILE, bargv[0], ofw_setcurrdev,
+		env_setenv("currdev", EV_VOLATILE, bargv[0], gen_setcurrdev,
 		    env_nounset);
 	else
 		env_setenv("currdev", EV_VOLATILE, bootpath,
-			   ofw_setcurrdev, env_nounset);
+			   gen_setcurrdev, env_nounset);
 	env_setenv("loaddev", EV_VOLATILE, bootpath, env_noset,
 	    env_nounset);
 	setenv("LINES", "24", 1);		/* optional */

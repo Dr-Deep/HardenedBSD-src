@@ -35,8 +35,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * These functions support the macros and help fiddle mbuf chains for
  * the nfs op functions. They do things like create the rpc header and
@@ -56,6 +54,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/malloc.h>
+#include <sys/stdarg.h>
 #include <sys/syscall.h>
 #include <sys/sysproto.h>
 #include <sys/taskqueue.h>
@@ -72,12 +71,6 @@ __FBSDID("$FreeBSD$");
 #include <fs/nfsclient/nfs_kdtrace.h>
 
 #include <netinet/in.h>
-
-/*
- * Note that stdarg.h and the ANSI style va_start macro is used for both
- * ANSI and traditional C compilers.
- */
-#include <machine/stdarg.h>
 
 extern struct mtx ncl_iod_mutex;
 extern enum nfsiod_state ncl_iodwant[NFS_MAXASYNCDAEMON];
@@ -190,7 +183,7 @@ ncl_getattrcache(struct vnode *vp, struct vattr *vaper)
 	np = VTONFS(vp);
 	vap = &np->n_vattr.na_vattr;
 	nmp = VFSTONFS(vp->v_mount);
-	mustflush = nfscl_mustflush(vp);	/* must be before mtx_lock() */
+	mustflush = nfscl_nodeleg(vp, 0);	/* must be before mtx_lock() */
 	NFSLOCKNODE(np);
 	/* XXX n_mtime doesn't seem to be updated on a miss-and-reload */
 	timeo = (time_second - np->n_mtime.tv_sec) / 10;
@@ -223,8 +216,8 @@ ncl_getattrcache(struct vnode *vp, struct vattr *vaper)
 		    (time_second - np->n_attrstamp), timeo);
 #endif
 
-	if ((time_second - np->n_attrstamp) >= timeo &&
-	    (mustflush != 0 || np->n_attrstamp == 0)) {
+	if (mustflush != 0 && (np->n_attrstamp == 0 ||
+	    time_second - np->n_attrstamp >= timeo)) {
 		nfsstatsv1.attrcache_misses++;
 		NFSUNLOCKNODE(np);
 		KDTRACE_NFS_ATTRCACHE_GET_MISS(vp);
@@ -270,9 +263,17 @@ nfsuint64 *
 ncl_getcookie(struct nfsnode *np, off_t off, int add)
 {
 	struct nfsdmap *dp, *dp2;
-	int pos;
+	u_int pos;
 	nfsuint64 *retval = NULL;
 
+	/*
+	 * Limiting "off" to 50Gbytes sets a limit of 100 million directory
+	 * entries of maximum filename length.  Much more with shorter
+	 * file names.  This limit ensures "pos" will not be truncated
+	 * in the devision below.
+	 */
+	if (off > 53687091200ull)
+		goto out;
 	pos = (uoff_t)off / NFS_DIRBLKSIZ;
 	if (pos == 0 || off < 0) {
 		KASSERT(!add, ("nfs getcookie add at <= 0"));

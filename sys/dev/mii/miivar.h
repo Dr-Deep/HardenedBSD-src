@@ -1,7 +1,7 @@
 /*	$NetBSD: miivar.h,v 1.8 1999/04/23 04:24:32 thorpej Exp $	*/
 
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1998, 1999 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -30,8 +30,6 @@
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _DEV_MII_MIIVAR_H_
@@ -252,7 +250,7 @@ struct mii_phydesc {
 	(*(p)->mii_funcs->pf_reset)(p)
 
 enum miibus_device_ivars {
-	MIIBUS_IVAR_FLAGS
+	MIIBUS_IVAR_FLAGS = BUS_IVARS_PRIVATE
 };
 
 /*

@@ -1,6 +1,5 @@
-# $FreeBSD$
 #
-# SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+# SPDX-License-Identifier: BSD-2-Clause
 #
 # Copyright (c) 2017 Kristof Provost <kp@FreeBSD.org>
 #
@@ -38,7 +37,7 @@ v4_head()
 	atf_set require.user root
 
 	# We need scapy to be installed for out test scripts to work
-	atf_set require.progs scapy
+	atf_set require.progs python3 scapy
 }
 
 v4_body()
@@ -66,7 +65,7 @@ v4_body()
 		--sendif ${epair_send}a \
 		--to 198.51.100.3 \
 		--recvif ${epair_recv}a \
-		--expect-tos 42
+		--expect-tc 42
 
 	# The requested ToS is set
 	pft_set_rules alcatraz "scrub out proto icmp set-tos 42"
@@ -74,7 +73,7 @@ v4_body()
 		--sendif ${epair_send}a \
 		--to 198.51.100.3 \
 		--recvif ${epair_recv}a \
-		--expect-tos 42
+		--expect-tc 42
 
 	# ToS is not changed if the scrub rule does not match
 	pft_set_rules alcatraz "scrub out proto tcp set-tos 42"
@@ -82,7 +81,7 @@ v4_body()
 		--sendif ${epair_send}a \
 		--to 198.51.100.3 \
 		--recvif ${epair_recv}a \
-		--expect-tos 42
+		--expect-tc 42
 
 	# Multiple scrub rules match as expected
 	pft_set_rules alcatraz "scrub out proto tcp set-tos 13" \
@@ -91,15 +90,15 @@ v4_body()
 		--sendif ${epair_send}a \
 		--to 198.51.100.3 \
 		--recvif ${epair_recv}a \
-		--expect-tos 14
+		--expect-tc 14
 
 	# And this works even if the packet already has ToS values set
 	atf_check -s exit:0 ${common_dir}/pft_ping.py \
 		--sendif ${epair_send}a \
 		--to 198.51.100.3 \
 		--recvif ${epair_recv}a \
-		--send-tos 42 \
-		--expect-tos 14
+		--send-tc 42 \
+		--expect-tc 14
 
 	# ToS values are unmolested if the packets do not match a scrub rule
 	pft_set_rules alcatraz "scrub out proto tcp set-tos 13"
@@ -107,8 +106,8 @@ v4_body()
 		--sendif ${epair_send}a \
 		--to 198.51.100.3 \
 		--recvif ${epair_recv}a \
-		--send-tos 42 \
-		--expect-tos 42
+		--send-tc 42 \
+		--expect-tc 42
 }
 
 v4_cleanup()
@@ -123,16 +122,12 @@ v6_head()
 	atf_set require.user root
 
 	# We need scapy to be installed for out test scripts to work
-	atf_set require.progs scapy
+	atf_set require.progs python3 scapy
 }
 
 v6_body()
 {
 	pft_init
-
-	if [ "$(atf_config_get ci false)" = "true" ]; then
-            atf_skip "https://bugs.freebsd.org/260459"
-	fi
 
 	epair=$(vnet_mkepair)
 	ifconfig ${epair}a inet6 add 2001:db8:192::1
@@ -147,7 +142,6 @@ v6_body()
 	# No change is done if not requested
 	pft_set_rules alcatraz "scrub out proto ipv6-icmp"
 	atf_check -s exit:1 -o ignore -e ignore ${common_dir}/pft_ping.py \
-		--ip6 \
 		--sendif ${epair}a \
 		--to 2001:db8:192::2 \
 		--replyif ${epair}a \
@@ -156,7 +150,6 @@ v6_body()
 	# The requested ToS is set
 	pft_set_rules alcatraz "scrub out proto ipv6-icmp set-tos 42"
 	atf_check -s exit:0 -o ignore -e ignore ${common_dir}/pft_ping.py \
-		--ip6 \
 		--sendif ${epair}a \
 		--to 2001:db8:192::2 \
 		--replyif ${epair}a \
@@ -165,7 +158,6 @@ v6_body()
 	# ToS is not changed if the scrub rule does not match
 	pft_set_rules alcatraz "scrub out from 2001:db8:192::3 set-tos 42"
 	atf_check -s exit:1 -o ignore -e ignore ${common_dir}/pft_ping.py \
-		--ip6 \
 		--sendif ${epair}a \
 		--to 2001:db8:192::2 \
 		--replyif ${epair}a \
@@ -175,7 +167,6 @@ v6_body()
 	pft_set_rules alcatraz "scrub out from 2001:db8:192::3 set-tos 13" \
 		"scrub out proto ipv6-icmp set-tos 14"
 	atf_check -s exit:0 -o ignore -e ignore ${common_dir}/pft_ping.py \
-		--ip6 \
 		--sendif ${epair}a \
 		--to 2001:db8:192::2 \
 		--replyif ${epair}a \
@@ -183,7 +174,6 @@ v6_body()
 
 	# And this works even if the packet already has ToS values set
 	atf_check -s exit:0 -o ignore -e ignore ${common_dir}/pft_ping.py \
-		--ip6 \
 		--sendif ${epair}a \
 		--to 2001:db8:192::2 \
 		--replyif ${epair}a \
@@ -193,11 +183,26 @@ v6_body()
 	# ToS values are unmolested if the packets do not match a scrub rule
 	pft_set_rules alcatraz "scrub out from 2001:db8:192::3 set-tos 13"
 	atf_check -s exit:0 -o ignore -e ignore ${common_dir}/pft_ping.py \
-		--ip6 \
 		--sendif ${epair}a \
 		--to 2001:db8:192::2 \
 		--replyif ${epair}a \
 		--expect-tc 0
+
+	# We can set tos on pass rules
+	pft_set_rules alcatraz "pass out set tos 13"
+	atf_check -s exit:0 -o ignore -e ignore ${common_dir}/pft_ping.py \
+		--sendif ${epair}a \
+		--to 2001:db8:192::2 \
+		--replyif ${epair}a \
+		--expect-tc 13
+
+	# And that still works with 'scrub' options too
+	pft_set_rules alcatraz "pass out set tos 14 scrub (min-ttl 64)"
+	atf_check -s exit:0 -o ignore -e ignore ${common_dir}/pft_ping.py \
+		--sendif ${epair}a \
+		--to 2001:db8:192::2 \
+		--replyif ${epair}a \
+		--expect-tc 14
 }
 
 v6_cleanup()

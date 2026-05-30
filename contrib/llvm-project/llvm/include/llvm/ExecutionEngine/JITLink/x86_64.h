@@ -15,8 +15,7 @@
 
 #include "llvm/ExecutionEngine/JITLink/JITLink.h"
 #include "llvm/ExecutionEngine/JITLink/TableManager.h"
-
-#include <limits>
+#include "llvm/Support/Compiler.h"
 
 namespace llvm {
 namespace jitlink {
@@ -53,6 +52,28 @@ enum EdgeKind_x86_64 : Edge::Kind {
   ///   the address space, otherwise an out-of-range error will be returned.
   Pointer32Signed,
 
+  /// A plain 16-bit pointer value relocation.
+  ///
+  /// Fixup expression:
+  ///   Fixup <- Target + Addend : uint16
+  ///
+  /// Errors:
+  ///   - The target must reside in the low 16-bits of the address space,
+  ///     otherwise an out-of-range error will be returned.
+  ///
+  Pointer16,
+
+  /// A plain 8-bit pointer value relocation.
+  ///
+  /// Fixup expression:
+  ///   Fixup <- Target + Addend : uint8
+  ///
+  /// Errors:
+  ///   - The target must reside in the low 8-bits of the address space,
+  ///     otherwise an out-of-range error will be returned.
+  ///
+  Pointer8,
+
   /// A 64-bit delta.
   ///
   /// Delta from the fixup to the target.
@@ -67,13 +88,39 @@ enum EdgeKind_x86_64 : Edge::Kind {
   /// Delta from the fixup to the target.
   ///
   /// Fixup expression:
-  ///   Fixup <- Target - Fixup + Addend : int64
+  ///   Fixup <- Target - Fixup + Addend : int32
   ///
   /// Errors:
   ///   - The result of the fixup expression must fit into an int32, otherwise
   ///     an out-of-range error will be returned.
   ///
   Delta32,
+
+  /// A 16-bit delta.
+  ///
+  /// Delta from the fixup to the target.
+  ///
+  /// Fixup expression:
+  ///   Fixup <- Target - Fixup + Addend : int16
+  ///
+  /// Errors:
+  ///   - The result of the fixup expression must fit into an int16, otherwise
+  ///     an out-of-range error will be returned.
+  ///
+  Delta16,
+
+  /// An 8-bit delta.
+  ///
+  /// Delta from the fixup to the target.
+  ///
+  /// Fixup expression:
+  ///   Fixup <- Target - Fixup + Addend : int8
+  ///
+  /// Errors:
+  ///   - The result of the fixup expression must fit into an int8, otherwise
+  ///     an out-of-range error will be returned.
+  ///
+  Delta8,
 
   /// A 64-bit negative delta.
   ///
@@ -95,6 +142,24 @@ enum EdgeKind_x86_64 : Edge::Kind {
   ///   - The result of the fixup expression must fit into an int32, otherwise
   ///     an out-of-range error will be returned.
   NegDelta32,
+
+  /// A 64-bit size relocation.
+  ///
+  /// Fixup expression:
+  ///   Fixup <- Size + Addend : uint64
+  ///
+  Size64,
+
+  /// A 32-bit size relocation.
+  ///
+  /// Fixup expression:
+  ///   Fixup <- Size + Addend : uint32
+  ///
+  /// Errors:
+  ///   - The result of the fixup expression must fit into an uint32, otherwise
+  ///     an out-of-range error will be returned.
+  ///
+  Size32,
 
   /// A 64-bit GOT delta.
   ///
@@ -125,6 +190,24 @@ enum EdgeKind_x86_64 : Edge::Kind {
   ///     an out-of-range error will be returned.
   ///
   BranchPCRel32,
+
+  /// A 32-bit PC-relative relocation.
+  ///
+  /// Represents a data/control flow instruction using PC-relative addressing
+  /// to a target.
+  ///
+  /// The fixup expression for this kind includes an implicit offset to account
+  /// for the PC (unlike the Delta edges) so that a PCRel32 with a target
+  /// T and addend zero is a call/branch to the start (offset zero) of T.
+  ///
+  /// Fixup expression:
+  ///   Fixup <- Target - (Fixup + 4) + Addend : int32
+  ///
+  /// Errors:
+  ///   - The result of the fixup expression must fit into an int32, otherwise
+  ///     an out-of-range error will be returned.
+  ///
+  PCRel32,
 
   /// A 32-bit PC-relative branch to a pointer jump stub.
   ///
@@ -343,23 +426,14 @@ enum EdgeKind_x86_64 : Edge::Kind {
   ///   - *ASSERTION* Failure to handle edges of this kind prior to the fixup
   ///     phase will result in an assert/unreachable during the fixup phase.
   ///
-  RequestTLVPAndTransformToPCRel32TLVPLoadREXRelaxable
+  RequestTLVPAndTransformToPCRel32TLVPLoadREXRelaxable,
+  // First platform specific relocation.
+  FirstPlatformRelocation
 };
 
 /// Returns a string name for the given x86-64 edge. For debugging purposes
 /// only.
-const char *getEdgeKindName(Edge::Kind K);
-
-/// Returns true if the given uint64_t value is in range for a uint32_t.
-inline bool isInRangeForImmU32(uint64_t Value) {
-  return Value <= std::numeric_limits<uint32_t>::max();
-}
-
-/// Returns true if the given int64_t value is in range for an int32_t.
-inline bool isInRangeForImmS32(int64_t Value) {
-  return (Value >= std::numeric_limits<int32_t>::min() &&
-          Value <= std::numeric_limits<int32_t>::max());
-}
+LLVM_ABI const char *getEdgeKindName(Edge::Kind K);
 
 /// Apply fixup expression for edge to block content.
 inline Error applyFixup(LinkGraph &G, Block &B, const Edge &E,
@@ -380,7 +454,7 @@ inline Error applyFixup(LinkGraph &G, Block &B, const Edge &E,
 
   case Pointer32: {
     uint64_t Value = E.getTarget().getAddress().getValue() + E.getAddend();
-    if (LLVM_LIKELY(isInRangeForImmU32(Value)))
+    if (LLVM_LIKELY(isUInt<32>(Value)))
       *(ulittle32_t *)FixupPtr = Value;
     else
       return makeTargetOutOfRangeError(G, B, E);
@@ -388,13 +462,32 @@ inline Error applyFixup(LinkGraph &G, Block &B, const Edge &E,
   }
   case Pointer32Signed: {
     int64_t Value = E.getTarget().getAddress().getValue() + E.getAddend();
-    if (LLVM_LIKELY(isInRangeForImmS32(Value)))
+    if (LLVM_LIKELY(isInt<32>(Value)))
       *(little32_t *)FixupPtr = Value;
     else
       return makeTargetOutOfRangeError(G, B, E);
     break;
   }
 
+  case Pointer16: {
+    uint64_t Value = E.getTarget().getAddress().getValue() + E.getAddend();
+    if (LLVM_LIKELY(isUInt<16>(Value)))
+      *(ulittle16_t *)FixupPtr = Value;
+    else
+      return makeTargetOutOfRangeError(G, B, E);
+    break;
+  }
+
+  case Pointer8: {
+    uint64_t Value = E.getTarget().getAddress().getValue() + E.getAddend();
+    if (LLVM_LIKELY(isUInt<8>(Value)))
+      *(uint8_t *)FixupPtr = Value;
+    else
+      return makeTargetOutOfRangeError(G, B, E);
+    break;
+  }
+
+  case PCRel32:
   case BranchPCRel32:
   case BranchPCRel32ToPtrJumpStub:
   case BranchPCRel32ToPtrJumpStubBypassable:
@@ -403,7 +496,7 @@ inline Error applyFixup(LinkGraph &G, Block &B, const Edge &E,
   case PCRel32TLVPLoadREXRelaxable: {
     int64_t Value =
         E.getTarget().getAddress() - (FixupAddress + 4) + E.getAddend();
-    if (LLVM_LIKELY(isInRangeForImmS32(Value)))
+    if (LLVM_LIKELY(isInt<32>(Value)))
       *(little32_t *)FixupPtr = Value;
     else
       return makeTargetOutOfRangeError(G, B, E);
@@ -418,8 +511,26 @@ inline Error applyFixup(LinkGraph &G, Block &B, const Edge &E,
 
   case Delta32: {
     int64_t Value = E.getTarget().getAddress() - FixupAddress + E.getAddend();
-    if (LLVM_LIKELY(isInRangeForImmS32(Value)))
+    if (LLVM_LIKELY(isInt<32>(Value)))
       *(little32_t *)FixupPtr = Value;
+    else
+      return makeTargetOutOfRangeError(G, B, E);
+    break;
+  }
+
+  case Delta16: {
+    int64_t Value = E.getTarget().getAddress() - FixupAddress + E.getAddend();
+    if (LLVM_LIKELY(isInt<16>(Value)))
+      *(little16_t *)FixupPtr = Value;
+    else
+      return makeTargetOutOfRangeError(G, B, E);
+    break;
+  }
+
+  case Delta8: {
+    int64_t Value = E.getTarget().getAddress() - FixupAddress + E.getAddend();
+    if (LLVM_LIKELY(isInt<8>(Value)))
+      *FixupPtr = Value;
     else
       return makeTargetOutOfRangeError(G, B, E);
     break;
@@ -433,12 +544,28 @@ inline Error applyFixup(LinkGraph &G, Block &B, const Edge &E,
 
   case NegDelta32: {
     int64_t Value = FixupAddress - E.getTarget().getAddress() + E.getAddend();
-    if (LLVM_LIKELY(isInRangeForImmS32(Value)))
+    if (LLVM_LIKELY(isInt<32>(Value)))
       *(little32_t *)FixupPtr = Value;
     else
       return makeTargetOutOfRangeError(G, B, E);
     break;
   }
+
+  case Size64: {
+    uint64_t Value = E.getTarget().getSize() + E.getAddend();
+    *(ulittle64_t *)FixupPtr = Value;
+    break;
+  }
+
+  case Size32: {
+    uint64_t Value = E.getTarget().getSize() + E.getAddend();
+    if (LLVM_LIKELY(isUInt<32>(Value)))
+      *(ulittle32_t *)FixupPtr = Value;
+    else
+      return makeTargetOutOfRangeError(G, B, E);
+    break;
+  }
+
   case Delta64FromGOT: {
     assert(GOTSymbol && "No GOT section symbol");
     int64_t Value =
@@ -447,11 +574,10 @@ inline Error applyFixup(LinkGraph &G, Block &B, const Edge &E,
     break;
   }
 
-  default: {
-    // If you hit this you should check that *constructor and other non-fixup
-    // edges have been removed prior to applying fixups.
-    llvm_unreachable("Graph contains edge kind with no fixup expression");
-  }
+  default:
+    return make_error<JITLinkError>(
+        "In graph " + G.getName() + ", section " + B.getSection().getName() +
+        " unsupported edge kind " + getEdgeKindName(E.getKind()));
   }
 
   return Error::success();
@@ -461,14 +587,14 @@ inline Error applyFixup(LinkGraph &G, Block &B, const Edge &E,
 constexpr uint64_t PointerSize = 8;
 
 /// x86-64 null pointer content.
-extern const char NullPointerContent[PointerSize];
+LLVM_ABI extern const char NullPointerContent[PointerSize];
 
 /// x86-64 pointer jump stub content.
 ///
 /// Contains the instruction sequence for an indirect jump via an in-memory
 /// pointer:
 ///   jmpq *ptr(%rip)
-extern const char PointerJumpStubContent[6];
+LLVM_ABI extern const char PointerJumpStubContent[6];
 
 /// Creates a new pointer block in the given section and returns an anonymous
 /// symbol pointing to it.
@@ -500,7 +626,7 @@ inline Block &createPointerJumpStubBlock(LinkGraph &G, Section &StubSection,
                                          Symbol &PointerSymbol) {
   auto &B = G.createContentBlock(StubSection, PointerJumpStubContent,
                                  orc::ExecutorAddr(~uint64_t(5)), 1, 0);
-  B.addEdge(Delta32, 2, PointerSymbol, -4);
+  B.addEdge(BranchPCRel32, 2, PointerSymbol, 0);
   return B;
 }
 
@@ -516,10 +642,40 @@ inline Symbol &createAnonymousPointerJumpStub(LinkGraph &G,
       false);
 }
 
+/// x86-64 reentry trampoline.
+///
+/// Contains the instruction sequence for a trampoline that stores its return
+/// address on the stack and calls <reentry-symbol>:
+///   call  <reentry-symbol>
+LLVM_ABI extern const char ReentryTrampolineContent[5];
+
+/// Create a block of N reentry trampolines.
+inline Block &createReentryTrampolineBlock(LinkGraph &G,
+                                           Section &TrampolineSection,
+                                           Symbol &ReentrySymbol) {
+  auto &B = G.createContentBlock(TrampolineSection, ReentryTrampolineContent,
+                                 orc::ExecutorAddr(~uint64_t(7)), 1, 0);
+  B.addEdge(BranchPCRel32, 1, ReentrySymbol, 0);
+  return B;
+}
+
+inline Symbol &createAnonymousReentryTrampoline(LinkGraph &G,
+                                                Section &TrampolineSection,
+                                                Symbol &ReentrySymbol) {
+  return G.addAnonymousSymbol(
+      createReentryTrampolineBlock(G, TrampolineSection, ReentrySymbol), 0,
+      sizeof(ReentryTrampolineContent), true, false);
+}
+
 /// Global Offset Table Builder.
 class GOTTableManager : public TableManager<GOTTableManager> {
 public:
   static StringRef getSectionName() { return "$__GOT"; }
+
+  GOTTableManager(LinkGraph &G) {
+    if ((GOTSection = G.findSectionByName(getSectionName())))
+      registerExistingEntries();
+  }
 
   bool visitEdge(LinkGraph &G, Block *B, Edge &E) {
     Edge::Kind KindToSet = Edge::Invalid;
@@ -567,9 +723,11 @@ public:
 private:
   Section &getGOTSection(LinkGraph &G) {
     if (!GOTSection)
-      GOTSection = &G.createSection(getSectionName(), MemProt::Read);
+      GOTSection = &G.createSection(getSectionName(), orc::MemProt::Read);
     return *GOTSection;
   }
+
+  LLVM_ABI void registerExistingEntries();
 
   Section *GOTSection = nullptr;
 };
@@ -577,9 +735,12 @@ private:
 /// Procedure Linkage Table Builder.
 class PLTTableManager : public TableManager<PLTTableManager> {
 public:
-  PLTTableManager(GOTTableManager &GOT) : GOT(GOT) {}
-
   static StringRef getSectionName() { return "$__STUBS"; }
+
+  PLTTableManager(LinkGraph &G, GOTTableManager &GOT) : GOT(GOT) {
+    if ((StubsSection = G.findSectionByName(getSectionName())))
+      registerExistingEntries();
+  }
 
   bool visitEdge(LinkGraph &G, Block *B, Edge &E) {
     if (E.getKind() == x86_64::BranchPCRel32 && !E.getTarget().isDefined()) {
@@ -604,14 +765,16 @@ public:
 
 public:
   Section &getStubsSection(LinkGraph &G) {
-    if (!PLTSection)
-      PLTSection =
-          &G.createSection(getSectionName(), MemProt::Read | MemProt::Exec);
-    return *PLTSection;
+    if (!StubsSection)
+      StubsSection = &G.createSection(getSectionName(),
+                                      orc::MemProt::Read | orc::MemProt::Exec);
+    return *StubsSection;
   }
 
+  LLVM_ABI void registerExistingEntries();
+
   GOTTableManager &GOT;
-  Section *PLTSection = nullptr;
+  Section *StubsSection = nullptr;
 };
 
 /// Optimize the GOT and Stub relocations if the edge target address is in range
@@ -620,7 +783,7 @@ public:
 /// 2. BranchPCRel32ToPtrJumpStubRelaxable. For this edge kind, if the target is
 /// in range, replace a indirect jump by plt stub with a direct jump to the
 /// target
-Error optimizeGOTAndStubAccesses(LinkGraph &G);
+LLVM_ABI Error optimizeGOTAndStubAccesses(LinkGraph &G);
 
 } // namespace x86_64
 } // end namespace jitlink

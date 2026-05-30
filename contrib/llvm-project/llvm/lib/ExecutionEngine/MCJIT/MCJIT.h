@@ -72,8 +72,7 @@ class MCJIT : public ExecutionEngine {
 
   class OwningModuleContainer {
   public:
-    OwningModuleContainer() {
-    }
+    OwningModuleContainer() = default;
     ~OwningModuleContainer() {
       freeModulePtrSet(AddedModules);
       freeModulePtrSet(LoadedModules);
@@ -151,8 +150,7 @@ class MCJIT : public ExecutionEngine {
     }
 
     void markAllLoadedModulesAsFinalized() {
-      for (Module *M : LoadedModules)
-        FinalizedModules.insert(M);
+      FinalizedModules.insert_range(LoadedModules);
       LoadedModules.clear();
     }
 

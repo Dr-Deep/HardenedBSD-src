@@ -23,8 +23,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * $FreeBSD$
- *
  */
 
 #ifndef __CUDBG_LIB_COMMON_H__
@@ -60,11 +58,6 @@
 #ifndef CUDBG_LITE
 #include "common/t4_hw.h"
 #endif
-
-#define CUDBG_SF_MAX_SECTOR         (FLASH_CUDBG_START_SEC + FLASH_CUDBG_NSECS)
-#define CUDBG_SF_SECTOR_SIZE        SF_SEC_SIZE
-#define CUDBG_START_SEC             FLASH_CUDBG_START_SEC
-#define CUDBG_FLASH_SIZE            FLASH_CUDBG_MAX_SIZE
 
 #define CUDBG_EXT_DATA_BIT          0
 #define CUDBG_EXT_DATA_VALID        (1 << CUDBG_EXT_DATA_BIT)
@@ -123,7 +116,7 @@ struct cudbg_flash_sec_info {
 	u32 hdr_data_len;	   /* Total data */
 	u32 skip_size;		   /* Total size of large entities. */
 	u64 max_timestamp;
-	char sec_data[CUDBG_SF_SECTOR_SIZE];
+	char sec_data[SF_SEC_SIZE];
 	u8 sec_bitmap[8];
 };
 

@@ -25,8 +25,6 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
  * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _NET_IF_VLAN_VAR_H_
@@ -138,23 +136,23 @@ struct ether_8021q_tag {
 };
 
 #define	VLAN_CAPABILITIES(_ifp) do {				\
-	if ((_ifp)->if_vlantrunk != NULL) 			\
+	if (if_getvlantrunk(_ifp) != NULL) 			\
 		(*vlan_trunk_cap_p)(_ifp);			\
 } while (0)
 
 #define	VLAN_TRUNKDEV(_ifp)					\
-	((_ifp)->if_type == IFT_L2VLAN ? (*vlan_trunkdev_p)((_ifp)) : NULL)
+	(if_gettype(_ifp) == IFT_L2VLAN ? (*vlan_trunkdev_p)((_ifp)) : NULL)
 #define	VLAN_TAG(_ifp, _vid)					\
-	((_ifp)->if_type == IFT_L2VLAN ? (*vlan_tag_p)((_ifp), (_vid)) : EINVAL)
+	(if_gettype(_ifp) == IFT_L2VLAN ? (*vlan_tag_p)((_ifp), (_vid)) : EINVAL)
 #define	VLAN_PCP(_ifp, _pcp)					\
-	((_ifp)->if_type == IFT_L2VLAN ? (*vlan_pcp_p)((_ifp), (_pcp)) : EINVAL)
+	(if_gettype(_ifp) == IFT_L2VLAN ? (*vlan_pcp_p)((_ifp), (_pcp)) : EINVAL)
 #define	VLAN_COOKIE(_ifp)					\
-	((_ifp)->if_type == IFT_L2VLAN ? (*vlan_cookie_p)((_ifp)) : NULL)
+	(if_gettype(_ifp) == IFT_L2VLAN ? (*vlan_cookie_p)((_ifp)) : NULL)
 #define	VLAN_SETCOOKIE(_ifp, _cookie)				\
-	((_ifp)->if_type == IFT_L2VLAN ?			\
+	(if_gettype(_ifp) == IFT_L2VLAN ?			\
 	    (*vlan_setcookie_p)((_ifp), (_cookie)) : EINVAL)
 #define	VLAN_DEVAT(_ifp, _vid)					\
-	((_ifp)->if_vlantrunk != NULL ? (*vlan_devat_p)((_ifp), (_vid)) : NULL)
+	(if_getvlantrunk(_ifp) != NULL ? (*vlan_devat_p)((_ifp), (_vid)) : NULL)
 
 extern	void (*vlan_trunk_cap_p)(struct ifnet *);
 extern	struct ifnet *(*vlan_trunkdev_p)(struct ifnet *);
@@ -163,6 +161,7 @@ extern	int (*vlan_tag_p)(struct ifnet *, uint16_t *);
 extern	int (*vlan_pcp_p)(struct ifnet *, uint16_t *);
 extern	int (*vlan_setcookie_p)(struct ifnet *, void *);
 extern	void *(*vlan_cookie_p)(struct ifnet *);
+extern	void (*vlan_input_p)(struct ifnet *, struct mbuf *);
 
 #include <sys/_eventhandler.h>
 

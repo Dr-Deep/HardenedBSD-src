@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1999,2000 Jonathan Lemon
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -68,7 +66,7 @@ static device_method_t idad_methods[] = {
 	DEVMETHOD(device_probe,		idad_probe),
 	DEVMETHOD(device_attach,	idad_attach),
 	DEVMETHOD(device_detach,	idad_detach),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t idad_driver = {

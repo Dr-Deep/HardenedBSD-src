@@ -33,9 +33,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/exec.h>
 #include <sys/fcntl.h>
@@ -90,6 +87,15 @@ extern char _binary_elf_vdso32_so_1_size;
 #ifdef COMPAT_FREEBSD4
 static void freebsd4_ia32_sendsig(sig_t, ksiginfo_t *, sigset_t *);
 #endif
+
+/*
+ * Check that the value r is 16bit, i.e. fits into a segment register.
+ */
+static bool
+is_seg_val(uint32_t r)
+{
+	return (r <= 0xffff);
+}
 
 static void
 ia32_get_fpcontext(struct thread *td, struct ia32_mcontext *mcp,
@@ -207,6 +213,8 @@ ia32_set_mcontext(struct thread *td, struct ia32_mcontext *mcp)
 
 	tp = td->td_frame;
 	if (mcp->mc_len != sizeof(*mcp))
+		return (EINVAL);
+	if (!is_seg_val(mcp->mc_ss) || !is_seg_val(mcp->mc_cs))
 		return (EINVAL);
 	rflags = (mcp->mc_eflags & PSL_USERCHANGE) |
 	    (tp->tf_rflags & ~PSL_USERCHANGE);
@@ -442,7 +450,7 @@ static void
 freebsd4_ia32_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 {
 	struct ia32_freebsd4_sigframe sf, *sfp;
-	struct siginfo32 siginfo;
+	struct __siginfo32 siginfo;
 	struct proc *p;
 	struct thread *td;
 	struct sigacts *psp;
@@ -553,7 +561,7 @@ void
 ia32_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 {
 	struct ia32_sigframe sf, *sfp;
-	struct siginfo32 siginfo;
+	struct __siginfo32 siginfo;
 	struct proc *p;
 	struct thread *td;
 	struct sigacts *psp;
@@ -710,6 +718,8 @@ ofreebsd32_sigreturn(struct thread *td, struct ofreebsd32_sigreturn_args *uap)
 	if (!EFL_SECURE(eflags, regs->tf_rflags)) {
 		return (EINVAL);
 	}
+	if (!is_seg_val(scp->sc_ss) || !is_seg_val(scp->sc_cs))
+		return (EINVAL);
 	if (!CS_SECURE(scp->sc_cs)) {
 		ksiginfo_init_trap(&ksi);
 		ksi.ksi_signo = SIGBUS;
@@ -775,6 +785,13 @@ freebsd4_freebsd32_sigreturn(struct thread *td,
 		return (EINVAL);
 	}
 
+	if (!is_seg_val(ucp->uc_mcontext.mc_ss) ||
+	    !is_seg_val(ucp->uc_mcontext.mc_cs)) {
+		uprintf("pid %d (%s): sigreturn cs = %#x ss = %#x\n",
+		    td->td_proc->p_pid, td->td_name, ucp->uc_mcontext.mc_cs,
+		    ucp->uc_mcontext.mc_ss);
+		return (EINVAL);
+	}
 	/*
 	 * Don't allow users to load a valid privileged %cs.  Let the
 	 * hardware check for invalid selectors, excess privilege in
@@ -841,6 +858,14 @@ freebsd32_sigreturn(struct thread *td, struct freebsd32_sigreturn_args *uap)
 	if (!EFL_SECURE(eflags, regs->tf_rflags)) {
 		uprintf("pid %d (%s): freebsd32_sigreturn eflags = 0x%x\n",
 		    td->td_proc->p_pid, td->td_name, eflags);
+		return (EINVAL);
+	}
+
+	if (!is_seg_val(ucp->uc_mcontext.mc_ss) ||
+	    !is_seg_val(ucp->uc_mcontext.mc_cs)) {
+		uprintf("pid %d (%s): sigreturn cs = %#x ss = %#x\n",
+		    td->td_proc->p_pid, td->td_name, ucp->uc_mcontext.mc_cs,
+		    ucp->uc_mcontext.mc_ss);
 		return (EINVAL);
 	}
 
@@ -961,4 +986,5 @@ ia32_setregs(struct thread *td, struct image_params *imgp, uintptr_t stack)
 
 	/* Return via doreti so that we can change to a different %cs */
 	set_pcb_flags(pcb, PCB_32BIT | PCB_FULL_IRET);
+	clear_pcb_flags(pcb, PCB_TLSBASE);
 }

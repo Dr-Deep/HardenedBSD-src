@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2020 Amazon.com, Inc. or its affiliates.
  * All rights reserved.
@@ -27,9 +27,6 @@
  */
 
 #include "opt_acpi.h"
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -70,19 +67,12 @@ pl061_acpi_probe(device_t dev)
 static int
 pl061_acpi_attach(device_t dev)
 {
-	int error;
+	struct pl061_softc *sc;
 
-	error = pl061_attach(dev);
-	if (error != 0)
-		return (error);
+	sc = device_get_softc(dev);
+	sc->sc_xref = ACPI_GPIO_XREF;
 
-	if (!intr_pic_register(dev, ACPI_GPIO_XREF)) {
-		device_printf(dev, "couldn't register PIC\n");
-		pl061_detach(dev);
-		error = ENXIO;
-	}
-
-	return (error);
+	return (pl061_attach(dev));
 }
 
 static device_method_t pl061_acpi_methods[] = {

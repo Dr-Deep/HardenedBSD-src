@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2015 Nahanni Systems, Inc.
  * All rights reserved.
@@ -24,16 +24,14 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
+#include <dev/vmm/vmm_mem.h>
 #include <machine/vmm.h>
 #include <machine/vmm_snapshot.h>
 #include <vmmapi.h>
@@ -50,10 +48,11 @@ __FBSDID("$FreeBSD$");
 #include "config.h"
 #include "debug.h"
 #include "console.h"
-#include "inout.h"
 #include "pci_emul.h"
 #include "rfb.h"
-#include "vga.h"
+#ifdef __amd64__
+#include "amd64/vga.h"
+#endif
 
 /*
  * bhyve Framebuffer device emulation.
@@ -74,10 +73,10 @@ static int fbuf_debug = 1;
 
 #define	DMEMSZ	128
 
-#define	FB_SIZE		(16*MB)
+#define	FB_SIZE		(32*MB)
 
-#define COLS_MAX	1920
-#define	ROWS_MAX	1200
+#define COLS_MAX	3840
+#define ROWS_MAX	2160
 
 #define COLS_DEFAULT	1024
 #define ROWS_DEFAULT	768
@@ -97,6 +96,7 @@ struct pci_fbuf_softc {
 	} __packed memregs;
 
 	/* rfb server */
+	sa_family_t rfb_family;
 	char      *rfb_host;
 	char      *rfb_password;
 	int       rfb_port;
@@ -117,8 +117,8 @@ static struct pci_fbuf_softc *fbuf_sc;
 #define	PCI_FBUF_MSI_MSGS	 4
 
 static void
-pci_fbuf_write(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
-	       int baridx, uint64_t offset, int size, uint64_t value)
+pci_fbuf_write(struct pci_devinst *pi, int baridx, uint64_t offset, int size,
+    uint64_t value)
 {
 	struct pci_fbuf_softc *sc;
 	uint8_t *p;
@@ -171,8 +171,7 @@ pci_fbuf_write(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
 }
 
 static uint64_t
-pci_fbuf_read(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
-	      int baridx, uint64_t offset, int size)
+pci_fbuf_read(struct pci_devinst *pi, int baridx, uint64_t offset, int size)
 {
 	struct pci_fbuf_softc *sc;
 	uint8_t *p;
@@ -217,8 +216,8 @@ pci_fbuf_read(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
 }
 
 static void
-pci_fbuf_baraddr(struct vmctx *ctx, struct pci_devinst *pi, int baridx,
-		 int enabled, uint64_t address)
+pci_fbuf_baraddr(struct pci_devinst *pi, int baridx, int enabled,
+    uint64_t address)
 {
 	struct pci_fbuf_softc *sc;
 	int prot;
@@ -228,14 +227,16 @@ pci_fbuf_baraddr(struct vmctx *ctx, struct pci_devinst *pi, int baridx,
 
 	sc = pi->pi_arg;
 	if (!enabled) {
-		if (vm_munmap_memseg(ctx, sc->fbaddr, FB_SIZE) != 0)
+		if (vm_munmap_memseg(pi->pi_vmctx, sc->fbaddr, FB_SIZE) != 0)
 			EPRINTLN("pci_fbuf: munmap_memseg failed");
 		sc->fbaddr = 0;
 	} else {
 		prot = PROT_READ | PROT_WRITE;
-		if (vm_mmap_memseg(ctx, address, VM_FRAMEBUFFER, 0, FB_SIZE, prot) != 0)
+		if (vm_mmap_memseg(pi->pi_vmctx, address, VM_FRAMEBUFFER, 0,
+		    FB_SIZE, prot) != 0)
 			EPRINTLN("pci_fbuf: mmap_memseg failed");
-		sc->fbaddr = address;
+		else
+			sc->fbaddr = address;
 	}
 }
 
@@ -254,11 +255,13 @@ pci_fbuf_parse_config(struct pci_fbuf_softc *sc, nvlist_t *nvl)
 		value = get_config_value_node(nvl, "tcp");
 	if (value != NULL) {
 		/*
+		 * UNIX -- unix:path/to/socket.sock
 		 * IPv4 -- host-ip:port
 		 * IPv6 -- [host-ip%zone]:port
 		 * XXX for now port is mandatory for IPv4.
 		 */
 		if (value[0] == '[') {
+			sc->rfb_family = AF_INET6;
 			cp = strchr(value + 1, ']');
 			if (cp == NULL || cp == value + 1) {
 				EPRINTLN("fbuf: Invalid IPv6 address: \"%s\"",
@@ -281,7 +284,21 @@ pci_fbuf_parse_config(struct pci_fbuf_softc *sc, nvlist_t *nvl)
 				    value);
 				return (-1);
 			}
+		} else if (strncmp("unix:", value, 5) == 0) {
+			if (strlen(value + 5) > SUNPATHLEN) {
+				EPRINTLN(
+				    "fbuf: UNIX socket path too long: \"%s\"",
+				    value + 5);
+				return (-1);
+			} else if (*(value + 5) == '\0') {
+				EPRINTLN("fbuf: UNIX socket path is empty");
+				return (-1);
+			} else {
+				sc->rfb_family = AF_UNIX;
+				sc->rfb_host = strdup(value + 5);
+			}
 		} else {
+			sc->rfb_family = AF_UNSPEC;
 			cp = strchr(value, ':');
 			if (cp == NULL) {
 				sc->rfb_port = atoi(value);
@@ -316,26 +333,23 @@ pci_fbuf_parse_config(struct pci_fbuf_softc *sc, nvlist_t *nvl)
 	}
 
 	value = get_config_value_node(nvl, "w");
-	if (value != NULL) {
-		sc->memregs.width = atoi(value);
-		if (sc->memregs.width > COLS_MAX) {
-			EPRINTLN("fbuf: width %d too large", sc->memregs.width);
-			return (-1);
-		}
-		if (sc->memregs.width == 0)
-			sc->memregs.width = 1920;
-	}
+	if (value != NULL)
+		sc->memregs.width = strtol(value, NULL, 10);
 
 	value = get_config_value_node(nvl, "h");
-	if (value != NULL) {
-		sc->memregs.height = atoi(value);
-		if (sc->memregs.height > ROWS_MAX) {
-			EPRINTLN("fbuf: height %d too large",
-			    sc->memregs.height);
-			return (-1);
-		}
-		if (sc->memregs.height == 0)
-			sc->memregs.height = 1080;
+	if (value != NULL)
+		sc->memregs.height = strtol(value, NULL, 10);
+
+	if (sc->memregs.width > COLS_MAX ||
+	    sc->memregs.height > ROWS_MAX) {
+		EPRINTLN("fbuf: max resolution is %ux%u", COLS_MAX, ROWS_MAX);
+		return (-1);
+	}
+	if (sc->memregs.width < COLS_MIN ||
+	    sc->memregs.height < ROWS_MIN) {
+		EPRINTLN("fbuf: minimum resolution is %ux%u",
+		    COLS_MIN, ROWS_MIN);
+		return (-1);
 	}
 
 	value = get_config_value_node(nvl, "password");
@@ -344,9 +358,6 @@ pci_fbuf_parse_config(struct pci_fbuf_softc *sc, nvlist_t *nvl)
 
 	return (0);
 }
-
-
-extern void vga_render(struct bhyvegc *gc, void *arg);
 
 static void
 pci_fbuf_render(struct bhyvegc *gc, void *arg)
@@ -368,12 +379,10 @@ pci_fbuf_render(struct bhyvegc *gc, void *arg)
 		sc->gc_width = sc->memregs.width;
 		sc->gc_height = sc->memregs.height;
 	}
-
-	return;
 }
 
 static int
-pci_fbuf_init(struct vmctx *ctx, struct pci_devinst *pi, nvlist_t *nvl)
+pci_fbuf_init(struct pci_devinst *pi, nvlist_t *nvl)
 {
 	int error;
 	struct pci_fbuf_softc *sc;
@@ -393,8 +402,8 @@ pci_fbuf_init(struct vmctx *ctx, struct pci_devinst *pi, nvlist_t *nvl)
 	pci_set_cfgdata8(pi, PCIR_CLASS, PCIC_DISPLAY);
 	pci_set_cfgdata8(pi, PCIR_SUBCLASS, PCIS_DISPLAY_VGA);
 
-	sc->fb_base = vm_create_devmem(
-	    ctx, VM_FRAMEBUFFER, "framebuffer", FB_SIZE);
+	sc->fb_base = vm_create_devmem(pi->pi_vmctx, VM_FRAMEBUFFER,
+	    "framebuffer", FB_SIZE);
 	if (sc->fb_base == MAP_FAILED) {
 		error = -1;
 		goto done;
@@ -443,7 +452,8 @@ pci_fbuf_init(struct vmctx *ctx, struct pci_devinst *pi, nvlist_t *nvl)
 
 	memset((void *)sc->fb_base, 0, FB_SIZE);
 
-	error = rfb_init(sc->rfb_host, sc->rfb_port, sc->rfb_wait, sc->rfb_password);
+	error = rfb_init(sc->rfb_family, sc->rfb_host, sc->rfb_port,
+	    sc->rfb_wait, sc->rfb_password);
 done:
 	if (error)
 		free(sc);

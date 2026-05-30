@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1996, by Steve Passe
  * All rights reserved.
@@ -26,8 +26,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_acpi.h"
 #include "opt_apic.h"
 #include "opt_cpu.h"
@@ -51,9 +49,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/bus.h>
 #include <sys/cons.h>	/* cngetc() */
 #include <sys/cpuset.h>
-#ifdef GPROF 
-#include <sys/gmon.h>
-#endif
 #include <sys/kdb.h>
 #include <sys/kernel.h>
 #include <sys/ktr.h>
@@ -374,8 +369,6 @@ start_all_aps(void)
 	u_int32_t mpbioswarmvec;
 	int apic_id, cpu;
 
-	mtx_init(&ap_boot_mtx, "ap boot", NULL, MTX_SPIN);
-
 	pmap_remap_lower(true);
 
 	/* install the AP 1st level boot code */
@@ -393,9 +386,9 @@ start_all_aps(void)
 		apic_id = cpu_apic_ids[cpu];
 
 		/* allocate and set up a boot stack data page */
-		bootstacks[cpu] = (char *)kmem_malloc(kstack_pages * PAGE_SIZE,
+		bootstacks[cpu] = kmem_malloc(kstack_pages * PAGE_SIZE,
 		    M_WAITOK | M_ZERO);
-		dpcpu = (void *)kmem_malloc(DPCPU_SIZE, M_WAITOK | M_ZERO);
+		dpcpu = kmem_malloc(DPCPU_SIZE, M_WAITOK | M_ZERO);
 		/* setup a vector to our boot code */
 		*((volatile u_short *) WARMBOOT_OFF) = WARMBOOT_TARGET;
 		*((volatile u_short *) WARMBOOT_SEG) = (boot_address >> 4);
@@ -658,6 +651,7 @@ invltlb_handler(void)
 {
 	uint32_t generation;
 
+	trap_check_kstack();
 #ifdef COUNT_XINVLTLB_HITS
 	xhits_gbl[PCPU_GET(cpuid)]++;
 #endif /* COUNT_XINVLTLB_HITS */
@@ -680,6 +674,7 @@ invlpg_handler(void)
 {
 	uint32_t generation;
 
+	trap_check_kstack();
 #ifdef COUNT_XINVLTLB_HITS
 	xhits_pg[PCPU_GET(cpuid)]++;
 #endif /* COUNT_XINVLTLB_HITS */
@@ -699,6 +694,7 @@ invlrng_handler(void)
 	vm_offset_t addr, addr2;
 	uint32_t generation;
 
+	trap_check_kstack();
 #ifdef COUNT_XINVLTLB_HITS
 	xhits_rng[PCPU_GET(cpuid)]++;
 #endif /* COUNT_XINVLTLB_HITS */
@@ -724,6 +720,7 @@ invlcache_handler(void)
 {
 	uint32_t generation;
 
+	trap_check_kstack();
 #ifdef COUNT_IPIS
 	(*ipi_invlcache_counts[PCPU_GET(cpuid)])++;
 #endif /* COUNT_IPIS */
@@ -738,4 +735,18 @@ invlcache_handler(void)
 	generation = smp_tlb_generation;
 	wbinvd();
 	PCPU_SET(smp_tlb_done, generation);
+}
+
+void ipi_bitmap_handler_i386(struct trapframe frame);
+void
+ipi_bitmap_handler_i386(struct trapframe frame)
+{
+	ipi_bitmap_handler(&frame);
+}
+
+void ipi_swi_handler_i386(struct trapframe frame);
+void
+ipi_swi_handler_i386(struct trapframe frame)
+{
+	ipi_swi_handler(&frame);
 }

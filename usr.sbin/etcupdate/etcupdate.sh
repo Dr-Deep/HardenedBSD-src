@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+# SPDX-License-Identifier: BSD-2-Clause
 #
 # Copyright (c) 2010-2013 Hudson River Trading LLC
 # Written by: John H. Baldwin <jhb@FreeBSD.org>
@@ -27,7 +27,6 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 
 # This is a tool to manage updating files that are not updated as part
 # of 'make installworld' such as files in /etc.  Unlike other tools,
@@ -214,15 +213,25 @@ build_tree()
 			mkdir -p $1/etc || return 1
 			cp -p $SRCDIR/$file $1/etc/$name || return 1
 		done
-	elif ! [ -n "$nobuild" ]; then
-		(cd $SRCDIR; $make DESTDIR=$destdir distrib-dirs &&
-    MAKEOBJDIRPREFIX=$destdir/usr/obj $make _obj SUBDIR_OVERRIDE=etc &&
-    MAKEOBJDIRPREFIX=$destdir/usr/obj $make everything SUBDIR_OVERRIDE=etc &&
-    MAKEOBJDIRPREFIX=$destdir/usr/obj $make DESTDIR=$destdir distribution) || \
-		    return 1
 	else
-		(cd $SRCDIR; $make DESTDIR=$destdir distrib-dirs &&
-		    $make DESTDIR=$destdir distribution) || return 1
+		(
+			cd $SRCDIR || exit 1
+			if ! [ -n "$nobuild" ]; then
+				export MAKEOBJDIRPREFIX=$destdir/usr/obj
+				if [ -n "$($make -V.ALLTARGETS:Mbuildetc)" ]; then
+					$make buildetc || exit 1
+				else
+					$make _obj SUBDIR_OVERRIDE=etc || exit 1
+					$make everything SUBDIR_OVERRIDE=etc || exit 1
+				fi
+			fi
+			if [ -n "$($make -V.ALLTARGETS:Minstalletc)" ]; then
+				$make DESTDIR=$destdir installetc || exit 1
+			else
+				$make DESTDIR=$destdir distrib-dirs || exit 1
+				$make DESTDIR=$destdir distribution || exit 1
+			fi
+		) || return 1
 	fi
 	chflags -R noschg $1 || return 1
 	rm -rf $1/usr/obj || return 1
@@ -232,10 +241,6 @@ build_tree()
 	autogenfiles="./etc/*.db ./etc/passwd ./var/db/services.db"
 	(cd $1 && printf '%s\n' $autogenfiles >> $metatmp && \
 	    rm -f $autogenfiles) || return 1
-
-	# Remove empty files.  These just clutter the output of 'diff'.
-	(cd $1 && find . -type f -size 0 -delete -print >> $metatmp) || \
-	    return 1
 
 	# Trim empty directories.
 	(cd $1 && find . -depth -type d -empty -delete -print >> $metatmp) || \
@@ -522,9 +527,15 @@ diffnode()
 			echo
 			;;
 		$COMPARE_DIFFFILES)
+			if [ -n "$difflistonly" ]; then
+				echo
+				echo "Changed: $3"
+				echo
+				break;
+			fi
 			echo "Index: $3"
 			rule "="
-			diff -u $diffargs -L "$3 ($4)" $1/$3 -L "$3 ($5)" $2/$3
+			diff -u $diffargs -L "$3 ($4)" -L "$3 ($5)" $1/$3 $2/$3
 			;;
 	esac
 }
@@ -1321,7 +1332,7 @@ handle_added_file()
 # Build a new tree and save it in a tarball.
 build_cmd()
 {
-	local dir
+	local dir tartree
 
 	if [ $# -ne 1 ]; then
 		echo "Missing required tarball."
@@ -1342,7 +1353,12 @@ build_cmd()
 		remove_tree $dir
 		exit 1
 	fi
-	if ! tar cfj $1 -C $dir . >&3 2>&1; then
+	if [ -n "$noroot" ]; then
+		tartree=@METALOG
+	else
+		tartree=.
+	fi
+	if ! tar cfj $1 -C $dir $tartree >&3 2>&1; then
 		echo "Failed to create tarball."
 		remove_tree $dir
 		exit 1
@@ -1597,6 +1613,9 @@ EOF
 	# Initialize conflicts and warnings handling.
 	rm -f $WARNINGS
 	mkdir -p $CONFLICTS
+	if ! chmod 0700 ${CONFLICTS}; then
+		panic "Unable to set permissions on conflicts directory"
+	fi
 
 	# Ignore removed files for the pre-world case.  A pre-world
 	# update uses a stripped-down tree.
@@ -1774,10 +1793,14 @@ ignore=
 nobuild=
 preworld=
 noroot=
-while getopts "d:m:nprs:t:A:BD:FI:L:M:N" option; do
+difflistonly=
+while getopts "d:lm:nprs:t:A:BD:FI:L:M:N" option; do
 	case "$option" in
 		d)
 			WORKDIR=$OPTARG
+			;;
+		l)
+			difflistonly=YES
 			;;
 		m)
 			MAKE_CMD=$OPTARG

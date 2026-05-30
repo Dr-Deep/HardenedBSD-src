@@ -32,25 +32,14 @@
  * SUCH DAMAGE.
  */
 
-#ifndef lint
-static const char copyright[] =
-"@(#) Copyright (c) 1989, 1993\n\
-	The Regents of the University of California.  All rights reserved.\n";
-#endif /* not lint */
-
-#if 0
-#ifndef lint
-static char sccsid[] = "@(#)paste.c	8.1 (Berkeley) 6/6/93";
-#endif /* not lint */
-#endif
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/types.h>
+#include <sys/queue.h>
+#include <sys/capsicum.h>
 
+#include <capsicum_helpers.h>
 #include <err.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <locale.h>
 #include <stdio.h>
@@ -59,13 +48,16 @@ __FBSDID("$FreeBSD$");
 #include <unistd.h>
 #include <wchar.h>
 
+#include <libcasper.h>
+#include <casper/cap_fileargs.h>
+
 static wchar_t *delim;
 static int delimcnt;
 
-static int parallel(char **);
-static int sequential(char **);
+static int parallel(char **, fileargs_t *);
+static int sequential(char **, fileargs_t *);
 static int tr(wchar_t *);
-static void usage(void);
+static void usage(void) __dead2;
 
 static wchar_t tab[] = L"\t";
 
@@ -76,6 +68,8 @@ main(int argc, char *argv[])
 	wchar_t *warg;
 	const char *arg;
 	size_t len;
+	fileargs_t *fa;
+	cap_rights_t rights;
 
 	setlocale(LC_CTYPE, "");
 
@@ -113,51 +107,58 @@ main(int argc, char *argv[])
 		delim = tab;
 	}
 
-	if (seq)
-		rval = sequential(argv);
-	else
-		rval = parallel(argv);
+	fa = fileargs_init(argc, argv, O_RDONLY, 0,
+	    cap_rights_init(&rights, CAP_READ, CAP_FSTAT, CAP_FCNTL), FA_OPEN);
+	if (fa == NULL)
+		err(1, "unable to open system.fileargs service");
+
+	caph_cache_catpages();
+	if (caph_enter_casper() < 0)
+		err(1, "unable to enter capability mode");
+
+	rval = seq ? sequential(argv, fa) : parallel(argv, fa);
+
+	fileargs_free(fa);
 	exit(rval);
 }
 
 typedef struct _list {
-	struct _list *next;
+	STAILQ_ENTRY(_list) entries;
 	FILE *fp;
 	int cnt;
 	char *name;
 } LIST;
 
+static STAILQ_HEAD(head, _list) lh;
+
 static int
-parallel(char **argv)
+parallel(char **argv, fileargs_t *fa)
 {
 	LIST *lp;
 	int cnt;
 	wint_t ich;
 	wchar_t ch;
 	char *p;
-	LIST *head, *tmp;
 	int opencnt, output;
 
-	for (cnt = 0, head = tmp = NULL; (p = *argv); ++argv, ++cnt) {
+	STAILQ_INIT(&lh);
+
+	for (cnt = 0; (p = *argv); ++argv, ++cnt) {
 		if ((lp = malloc(sizeof(LIST))) == NULL)
 			err(1, NULL);
 		if (p[0] == '-' && !p[1])
 			lp->fp = stdin;
-		else if (!(lp->fp = fopen(p, "r")))
+		else if (!(lp->fp = fileargs_fopen(fa, p, "r")))
 			err(1, "%s", p);
-		lp->next = NULL;
 		lp->cnt = cnt;
 		lp->name = p;
-		if (!head)
-			head = tmp = lp;
-		else {
-			tmp->next = lp;
-			tmp = lp;
-		}
+
+		STAILQ_INSERT_TAIL(&lh, lp, entries);
 	}
 
 	for (opencnt = cnt; opencnt;) {
-		for (output = 0, lp = head; lp; lp = lp->next) {
+		output = 0;
+		STAILQ_FOREACH(lp, &lh, entries) {
 			if (!lp->fp) {
 				if (output && lp->cnt &&
 				    (ch = delim[(lp->cnt - 1) % delimcnt]))
@@ -198,7 +199,7 @@ parallel(char **argv)
 }
 
 static int
-sequential(char **argv)
+sequential(char **argv, fileargs_t *fa)
 {
 	FILE *fp;
 	int cnt, failed, needdelim;
@@ -209,7 +210,7 @@ sequential(char **argv)
 	for (; (p = *argv); ++argv) {
 		if (p[0] == '-' && !p[1])
 			fp = stdin;
-		else if (!(fp = fopen(p, "r"))) {
+		else if (!(fp = fileargs_fopen(fa, p, "r"))) {
 			warn("%s", p);
 			failed = 1;
 			continue;
@@ -258,7 +259,8 @@ tr(wchar_t *arg)
 			default:
 				*arg = ch;
 				break;
-		} else
+			}
+		else
 			*arg = ch;
 
 	if (!cnt)

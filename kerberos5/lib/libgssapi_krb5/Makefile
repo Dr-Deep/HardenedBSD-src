@@ -1,9 +1,5 @@
-# $FreeBSD$
-
-PACKAGE=	kerberos-lib
-
 LIB=	gssapi_krb5
-LDFLAGS= -Wl,-Bsymbolic -Wl,--no-undefined
+LDFLAGS+= -Wl,-Bsymbolic -Wl,--no-undefined
 LIBADD=	gssapi krb5 crypto roken asn1 com_err
 SHLIB_MAJOR=	10
 
@@ -83,6 +79,7 @@ CFLAGS+=-I${KRB5DIR}/lib/asn1
 CFLAGS+=-I${KRB5DIR}/lib/roken
 CFLAGS+=-I${SRCTOP}/contrib/com_err
 CFLAGS+=-I.
+CFLAGS+=-DOPENSSL_API_COMPAT=0x10100000L
 
 .include <bsd.lib.mk>
 

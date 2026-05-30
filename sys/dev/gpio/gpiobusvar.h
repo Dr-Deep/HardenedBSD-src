@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2009 Oleksandr Tymoshenko <gonzo@freebsd.org>
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  *
  */
 
@@ -111,7 +109,7 @@ struct gpiobus_ivar
 };
 
 enum gpiobus_ivars {
-	GPIOBUS_IVAR_NPINS	= 10500,
+	GPIOBUS_IVAR_NPINS	= BUS_IVARS_GPIOBUS,
 	GPIOBUS_IVAR_PINS,
 };
 
@@ -158,6 +156,8 @@ int gpio_pin_get_by_bus_pinnum(device_t _bus, uint32_t _pinnum, gpio_pin_t *_gp)
 /* Acquire a pin by child and index (used by direct children of gpiobus). */
 int gpio_pin_get_by_child_index(device_t _child, uint32_t _idx, gpio_pin_t *_gp);
 
+/* Acquire a pin from an existing gpio_pin_t. */
+int gpio_pin_acquire(gpio_pin_t gpio);
 /* Release a pin acquired via any gpio_pin_get_xxx() function. */
 void gpio_pin_release(gpio_pin_t gpio);
 
@@ -166,22 +166,11 @@ int gpio_pin_getcaps(gpio_pin_t pin, uint32_t *caps);
 int gpio_pin_is_active(gpio_pin_t pin, bool *active);
 int gpio_pin_set_active(gpio_pin_t pin, bool active);
 int gpio_pin_setflags(gpio_pin_t pin, uint32_t flags);
-struct resource *gpio_alloc_intr_resource(device_t consumer_dev, int *rid,
+struct resource *gpio_alloc_intr_resource(device_t consumer_dev, int rid,
     u_int alloc_flags, gpio_pin_t pin, uint32_t intr_mode);
 
-/*
- * Functions shared between gpiobus and other bus classes that derive from it;
- * these should not be called directly by other drivers.
- */
 int gpio_check_flags(uint32_t, uint32_t);
-device_t gpiobus_attach_bus(device_t);
+device_t gpiobus_add_bus(device_t);
 int gpiobus_detach_bus(device_t);
-int gpiobus_init_softc(device_t);
-int gpiobus_alloc_ivars(struct gpiobus_ivar *);
-void gpiobus_free_ivars(struct gpiobus_ivar *);
-int gpiobus_acquire_pin(device_t, uint32_t);
-int gpiobus_release_pin(device_t, uint32_t);
-
-extern driver_t gpiobus_driver;
 
 #endif	/* __GPIOBUS_H__ */

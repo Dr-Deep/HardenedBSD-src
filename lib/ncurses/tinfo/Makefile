@@ -1,6 +1,3 @@
-# $FreeBSD$
-
-PACKAGE=	clibs
 SHLIBDIR?=	/lib
 
 .include <src.opts.mk>
@@ -9,8 +6,6 @@ SHLIBDIR?=	/lib
 
 LIB=		tinfow
 SHLIB_MAJOR=	9
-
-NO_LINT=
 
 NCURSES_MAJOR!=	egrep 'NCURSES_MAJOR[ 	]*=' ${NCURSES_DIR}/dist.mk | sed -e 's%^[^0-9]*%%'
 NCURSES_MINOR!=	egrep 'NCURSES_MINOR[ 	]*=' ${NCURSES_DIR}/dist.mk | sed -e 's%^[^0-9]*%%'
@@ -21,6 +16,7 @@ NCURSES_CH_T=		cchar_t
 NCURSES_OK_WCHAR_T=	1
 NEED_WCHAR_H=		1
 NCURSES_EXT_COLORS=	1
+NCURSES_RGB_COLORS=	0
 NCURSES_EXT_FUNCS=	1
 NCURSES_CONST=		const
 NCURSES_INLINE=		inline
@@ -54,7 +50,9 @@ HAVE_TERMIOS_H=		1
 HAVE_TERMIO_H=		0
 HAVE_VSSCANF=		1
 HAVE_STDINT_H=		1
-HEADER_STDBOOL=		1
+HAVE_STDBOOL_H=		1
+HAVE_STDNORETURN_H=	0
+ENABLE_SIGWINCH=	1
 # XXX amd64 1L and int
 ONEUL=			1U
 TYPEOF_CHTYPE=		uint32_t
@@ -75,6 +73,7 @@ GENHDRS=	\
 	hashsize.h \
 	init_keytry.h \
 	ncurses_def.h \
+	ncurses_dll.h \
 	nomacros.h \
 	parametrized.h \
 	term.h \
@@ -167,10 +166,12 @@ CLEANFILES=	${GENSRCS} ${GENHDRS} keys.list make_hash term.h.new \
 
 CFLAGS+=	-DTERMIOS
 
+CWARNFLAGS.comp_parse.c= ${NO_WUNUSED_BUT_SET_VARIABLE}
+CWARNFLAGS.read_entry.c= ${NO_WUNUSED_BUT_SET_VARIABLE}
+
 # Installed
-HEADERS=	curses.h term.h termcap.h unctrl.h
-SRCHDRS=	ncurses_dll.h
-CLEANFILES+=	ncurses_dll.h
+HEADERS=	curses.h ncurses_dll.h term.h termcap.h unctrl.h
+SRCHDRS=
 
 INCS=		${HEADERS} ${SRCHDRS}
 INCSLINKS=	curses.h ${INCLUDEDIR}/ncurses.h
@@ -192,25 +193,17 @@ SYMLINKS+=	libtinfow.so ${LIBDIR}/libtermcap.so
 SYMLINKS+=	libtinfow.so ${LIBDIR}/libtermlib.so
 SYMLINKS+=	libtinfow.so ${LIBDIR}/libtinfo.so
 .endif
-.if ${MK_PROFILE} != "no"
-SYMLINKS+=	libtinfow_p.a ${LIBDIR}/libtermcapw_p.a
-SYMLINKS+=	libtinfow_p.a ${LIBDIR}/libtermlibw_p.a
-# backward compat
-SYMLINKS+=	libtinfow_p.a ${LIBDIR}/libtermcap_p.a
-SYMLINKS+=	libtinfow_p.a ${LIBDIR}/libtermlib_p.a
-SYMLINKS+=	libtinfow_p.a ${LIBDIR}/libtinfo_p.a
-.endif
-
-DOCSDIR=	${SHAREDIR}/doc/ncurses
-DOCS=		ncurses-intro.html hackguide.html
-
-.if ${MK_HTML} != "no"
-.PATH: ${NCURSES_DIR}/doc/html
-FILESGROUPS=	DOCS
-.endif
 
 # Generated source
 .ORDER: names.c codes.c
+
+# Serialize the build just a little bit; there's nothing stopping the build from
+# proceeding before ncurses_dll.h and curses.h are actually generated on a clean
+# build since we have no dependency information to prevent it.
+.ORDER: ncurses_dll.h curses.h
+.for f in ${SRCS:M*.c}
+.ORDER: curses.h ${f}
+.endfor
 
 names.c: MKnames.awk
 	${AWK} -f ${NCURSES_DIR}/ncurses/tinfo/MKnames.awk bigstrings=${USE_BIG_STRINGS} ${NCURSES_DIR}/include/Caps > names.c
@@ -219,7 +212,8 @@ codes.c: MKcodes.awk
 	${AWK} -f ${NCURSES_DIR}/ncurses/tinfo/MKcodes.awk bigstrings=${USE_BIG_STRINGS} ${NCURSES_DIR}/include/Caps > codes.c
 
 lib_keyname.c: keys.list MKkeyname.awk
-	${AWK} -f ${NCURSES_DIR}/ncurses/base/MKkeyname.awk bigstrings=${USE_BIG_STRINGS} keys.list > lib_keyname.c
+	${AWK} -f ${NCURSES_DIR}/ncurses/base/MKkeyname.awk use_sigwinch=${ENABLE_SIGWINCH} \
+	    bigstrings=${USE_BIG_STRINGS} keys.list > lib_keyname.c
 
 unctrl.c: MKunctrl.awk
 	echo | ${AWK} -f ${NCURSES_DIR}/ncurses/base/MKunctrl.awk bigstrings=${USE_BIG_STRINGS} > unctrl.c
@@ -257,19 +251,32 @@ term.h: MKterm.h.awk edit_cfg.sh Caps Caps-ncurses
 	sh ${NCURSES_DIR}/include/edit_cfg.sh ${NCURSES_CFG_H} $@.new
 	mv -f $@.new $@
 
+# Avoid hard-coding absolute source paths if requested.
+.if ${MK_REPRODUCIBLE_BUILD} != "no"
+NCURSES_SRCTOP=/usr/src
+.else
+NCURSES_SRCTOP=${SRCTOP}
+.endif
+
 curses.h: curses.head MKkey_defs.sh Caps Caps-ncurses
 	cat curses.head > $@.new
 	AWK=${AWK} _POSIX2_VERSION=199209 sh ${NCURSES_DIR}/include/MKkey_defs.sh \
 	    ${NCURSES_DIR}/include/Caps ${NCURSES_DIR}/include/Caps-ncurses >> $@.new
+	sed -i '' 's|${SRCTOP}|${NCURSES_SRCTOP}|g' $@.new
 	cat ${NCURSES_DIR}/include/curses.wide >> $@.new
 	cat ${NCURSES_DIR}/include/curses.tail >> $@.new
 	mv -f $@.new $@
 
 # Generated intermediate files
 keys.list: MKkeys_list.sh Caps Caps-ncurses
-	AWK=${AWK} sh ${NCURSES_DIR}/ncurses/tinfo/MKkeys_list.sh \
+	AWK=${AWK} USE_SIGWINCH=${ENABLE_SIGWINCH} sh ${NCURSES_DIR}/ncurses/tinfo/MKkeys_list.sh \
 	    ${NCURSES_DIR}/include/Caps ${NCURSES_DIR}/include/Caps-ncurses | LC_ALL=C sort > keys.list
 
+.if ${MK_DIRDEPS_BUILD} == "yes" && ${MACHINE} != "host"
+# we need to override the default
+BTOOLSPATH= ${HOST_OBJTOP}/${RELDIR:S,w$,,}
+.endif
+.if ${MACHINE} == "host" || ${MK_DIRDEPS_BUILD} == "no"
 # Build tools
 DEPENDOBJS+= make_hash make_keys
 build-tools: make_hash make_keys
@@ -280,6 +287,14 @@ make_keys: make_keys.c names.c ncurses_def.h ${HEADERS} ${BUILD_TOOLS_META}
 make_hash: make_hash.c hashsize.h ncurses_def.h ${HEADERS} ${BUILD_TOOLS_META}
 	${CC:N${CCACHE_BIN}} -o $@ ${CFLAGS} -DMAIN_PROGRAM \
 		${NCURSES_DIR}/ncurses/tinfo/make_hash.c
+.endif
+.if ${MK_DIRDEPS_BUILD} == "yes" && ${MACHINE} != "host"
+make_keys: ${BTOOLSPATH}/make_keys
+	${LN:Uln} -sf ${.ALLSRC} ${.TARGET}
+
+make_hash: ${BTOOLSPATH}/make_hash
+	${LN:Uln} -sf ${.ALLSRC} ${.TARGET}
+.endif
 
 # ./configure generated
 MKterm.h.awk: MKterm.h.awk.in
@@ -317,6 +332,7 @@ curses.head: curses.h.in
 	    -e "/@BROKEN_LINKER@/s%%${BROKEN_LINKER}%" \
 	    -e "/@HAVE_VSSCANF@/s%%${HAVE_VSSCANF}%" \
 	    -e "/@HAVE_STDINT_H@/s%%${HAVE_STDINT_H}%" \
+	    -e "/@HAVE_STDNORETURN_H@/s%%${HAVE_STDNORETURN_H}%" \
 	    -e "/@NCURSES_CH_T@/s%%${NCURSES_CH_T}%" \
 	    -e "/@NCURSES_CONST@/s%%${NCURSES_CONST}%" \
 	    -e "/@NCURSES_EXT_COLORS@/s%%${NCURSES_EXT_COLORS}%" \
@@ -327,12 +343,14 @@ curses.head: curses.h.in
 	    -e "/@NCURSES_MBSTATE_T@/s%%${NCURSES_MBSTATE_T}%" \
 	    -e "/@NCURSES_MINOR@/s%%${NCURSES_MINOR}%" \
 	    -e "/@NCURSES_MOUSE_VERSION@/s%%${NCURSES_MOUSE_VERSION}%" \
+	    -e "/@NCURSES_XNAMES@/s%%${NCURSES_XNAMES}%" \
 	    -e "/@NCURSES_OK_WCHAR_T@/s%%${NCURSES_OK_WCHAR_T}%" \
 	    -e "/@NCURSES_OPAQUE@/s%%${NCURSES_OPAQUE}%" \
 	    -e "/@NCURSES_OPAQUE_FORM@/s%%${NCURSES_OPAQUE_FORM}%" \
 	    -e "/@NCURSES_OPAQUE_MENU@/s%%${NCURSES_OPAQUE_MENU}%" \
 	    -e "/@NCURSES_OPAQUE_PANEL@/s%%${NCURSES_OPAQUE_PANEL}%" \
 	    -e "/@NCURSES_PATCH@/s%%${NCURSES_PATCH}%" \
+	    -e "/@NCURSES_RGB_COLORS@/s%%${NCURSES_RGB_COLORS}%" \
 	    -e "/@NCURSES_SIZE_T@/s%%${NCURSES_SIZE_T}%" \
 	    -e "/@NCURSES_TPARM_VARARGS@/s%%${NCURSES_TPARM_VARARGS}%" \
 	    -e "/@NCURSES_WATTR_MACROS@/s%%${NCURSES_WATTR_MACROS}%"\
@@ -345,14 +363,15 @@ curses.head: curses.h.in
 	    -e "/@NCURSES_SP_FUNCS@/s%%${NCURSES_SP_FUNCS}%g" \
 	    -e "/@NEED_WCHAR_H@/s%%${NEED_WCHAR_H}%" \
 	    -e "/@USE_CXX_BOOL@/s%%${USE_CXX_BOOL}%" \
+	    -e "/@USE_STDBOOL_H@/s%%${HAVE_STDBOOL_H}%" \
 	    -e "/@GENERATED_EXT_FUNCS@/s%%generated%g" \
 	    -e "s%@NCURSES_CCHARW_MAX@%5%g" \
 	    -e "s%@cf_cv_1UL@%${ONEUL}%g" \
-	    -e "s%@cf_cv_builtin_bool@%${BUILTIN_BOOL}%g" \
+	    -e "s%@USE_BUILTIN_BOOL@%${BUILTIN_BOOL}%g" \
 	    -e "s%@cf_cv_enable_lp64@%${ENABLE_LP64}%g" \
 	    -e "s%@cf_cv_enable_opaque@%${ENABLE_OPAQUE}%g" \
 	    -e "s%@cf_cv_enable_reentrant@%${ENABLE_REENTRANT}%g" \
-	    -e "s%@cf_cv_header_stdbool_h@%${HEADER_STDBOOL}%g" \
+	    -e "s%@cf_cv_enable_sigwinch@%${ENABLE_SIGWINCH}%g" \
 	    -e "s%@cf_cv_type_of_bool@%${TYPE_OF_BOOL}%g" \
 	    -e "s%@cf_cv_typeof_chtype@%${TYPEOF_CHTYPE}%g" \
 	    -e "s%@cf_cv_typeof_mmask_t@%${TYPEOF_MMASK_T}%g" \
@@ -369,10 +388,12 @@ unctrl.h: unctrl.h.in
 terminfo.5: MKterminfo.sh terminfo.head Caps
 	sh ${NCURSES_DIR}/man/MKterminfo.sh ${NCURSES_DIR}/man/terminfo.head \
 	    ${NCURSES_DIR}/include/Caps ${NCURSES_DIR}/man/terminfo.tail >$@
+	sed -i '' 's|${SRCTOP}|${NCURSES_SRCTOP}|g' $@
 
 CLEANFILES+=	terminfo.5
 
 .PATH: ${NCURSES_DIR}/man
+
 MAN=	\
 	curs_addch.3 \
 	curs_addchstr.3 \
@@ -449,8 +470,9 @@ MAN+=	\
 	curs_printw.3 \
 	curs_scanw.3
 
-MAN+=	term.5 terminfo.5 scr_dump.5 user_caps.5
-MAN+=	term.7
+MAN+=	scr_dump.5
+
+MANNODEV=	term.5 term.7 terminfo.5 user_caps.5
 
 CLEANFILES+=	${MAN:M*.3}
 

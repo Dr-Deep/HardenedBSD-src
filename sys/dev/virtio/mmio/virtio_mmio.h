@@ -26,8 +26,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef	_VIRTIO_MMIO_H
@@ -39,7 +37,6 @@ struct vtmmio_virtqueue;
 
 struct vtmmio_softc {
 	device_t			dev;
-	device_t			platform;
 	struct resource			*res[2];
 
 	uint64_t			vtmmio_features;

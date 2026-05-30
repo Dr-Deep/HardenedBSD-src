@@ -25,58 +25,57 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 #
 # Usage:
-# 	$0 PACKAGE_DUMP NANO_PACKAGE_DIR /usr/ports/foo/bar [package.txz]...
+# 	$0 [-cv] PACKAGE_DUMP NANO_PACKAGE_DIR /usr/ports/foo/bar [package.pkg]...
 #
-# Will symlink the packages listed, including their runtime dependencies,
+# Will symlink/copy the packages listed, including their runtime dependencies,
 # from the PACKAGE_DUMP to the NANO_PACKAGE_DIR.
 #
 
 : ${PORTSDIR:=/usr/ports}
 
-usage () {
-	echo "Usage: $0 [-v] package-dump-dir nano-package-dir port-dir-or-pkg ..." 1>&2
+usage() {
+	echo "Usage: $0 [-cv] package-dump-dir nano-package-dir port-dir-or-pkg ..." 1>&2
 	exit 2
 }
 
-msg () {
+msg() {
 	local l
 	l=$1 ; shift
 	[ "$l" -le "$VERBOSE" ] && echo $*
 }
 
-ports_recurse() (
+ports_recurse() {
 	local outputfile dumpdir type fullpath pkgname p
 	outputfile=$1 ; shift
 	dumpdir=$1    ; shift
 	for p do
 		if [ -d "$p" -a -f "$p/Makefile" ] ; then
 			msg 3 "$p: full path to port"
-			pkgname=`cd "$p" && make -V pkgname`
+			pkgname=`cd "$p" && make package-name`
 			type=port
 			fullpath=$p
 		elif [ -d "${PORTSDIR}/$p" -a -f "${PORTSDIR}/$p/Makefile" ] ; then
 			msg 3 "$p: path to port relative to ${PORTSDIR}}"
-			pkgname=`cd "${PORTSDIR}/$p" && make -V pkgname`
+			pkgname=`cd "${PORTSDIR}/$p" && make package-name`
 			type=port
 			fullpath=${PORTSDIR}/$p
-		elif [ "${p%.txz}" != "$p" -a -f "$p" ] && pkg info -F "$p" > /dev/null 2>&1 ; then
+		elif [ "${p%.pkg}" != "$p" -a -f "$p" ] && pkg info -F "$p" > /dev/null 2>&1 ; then
 			msg 3 "$p: full package file name"
-			pkgname=`basename "$p" | sed 's/\.txz$//I'`
+			pkgname=`basename "$p" | sed 's/\.pkg$//I'`
 			type=pkg
 			fullpath=$p
-		elif [ "${p%.txz}" != "$p" -a -f "$dumpdir/$p" ] && pkg info -F "$dumpdir/$p" > /dev/null 2>&1 ; then
+		elif [ "${p%.pkg}" != "$p" -a -f "$dumpdir/$p" ] && pkg info -F "$dumpdir/$p" > /dev/null 2>&1 ; then
 			msg 3 "$p: package file name relative to $dumpdir"
-			pkgname=`basename "$p" | sed 's/\.txz$//I'`
+			pkgname=`basename "$p" | sed 's/\.pkg$//I'`
 			type=pkg
 			fullpath=$dumpdir/$p
-		elif [ -f "$dumpdir/$p.txz" ] && pkg info -F "$dumpdir/$p.txz" > /dev/null 2>&1 ; then
+		elif [ -f "$dumpdir/$p.pkg" ] && pkg info -F "$dumpdir/$p.pkg" > /dev/null 2>&1 ; then
 			msg 3 "$p: package name relative to $dumpdir"
 			pkgname=`basename "$p"`
 			type=pkg
-			fullpath=$dumpdir/$p.txz
+			fullpath=$dumpdir/$p.pkg
 		else
 			echo "Missing port or package $p" 1>&2
 			exit 2
@@ -101,13 +100,13 @@ ports_recurse() (
 		else
 			dir=`dirname "$p"` # Get directory from SPECIFIED path, not from full path
 			if [ "$dir" = "." ] ; then
-			  dir=""
+				dir=""
 			else
-			  dir=${dir}/
+				dir=${dir}/
 			fi
 			deps=`pkg info -dF "$fullpath" | grep -v "$pkgname:"`
 			for dep in $deps ; do
-				arg=`echo $dep | sed -e "s|^|$dir|" -e 's/$/.txz/'`
+				arg=`echo $dep | sed -e "s|^|$dir|" -e 's/$/.pkg/'`
 				msg 2 "Check $arg as requirement for package $pkgname"
 				ports_recurse "$outputfile" "$dumpdir" "$arg"
 			done
@@ -115,12 +114,14 @@ ports_recurse() (
 			echo "$pkgname" >> "$outputfile"
 		fi
 	done
-)
+}
 
+COPY="ln -s"
 VERBOSE=0
 
-while getopts v opt ; do
+while getopts cv opt ; do
 	case "$opt" in
+	  c) COPY="cp -p"              ;;
 	  v) VERBOSE=$(($VERBOSE + 1)) ;;
 	[?]) usage                     ;;
 	esac
@@ -156,10 +157,10 @@ for p do
 done
 
 for i in `cat "$PL"` ; do
-	if [ -f "$NANO_PKG_DUMP/$i.txz" ] ; then
-		ln -s "$NANO_PKG_DUMP/$i.txz" "$NANO_PKG_DIR"
+	if [ -f "$NANO_PKG_DUMP/$i.pkg" ] ; then
+		$COPY "$NANO_PKG_DUMP/$i.pkg" "$NANO_PKG_DIR"
 	else
-		echo "Package $i misssing in $NANO_PKG_DUMP" 1>&2
+		echo "Package $i missing in $NANO_PKG_DUMP" 1>&2
 		exit 1
 	fi
 done

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008 Citrix Systems, Inc.
  * All rights reserved.
@@ -26,20 +26,16 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/bus.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/module.h>
+#include <sys/stdarg.h>
 
 #include <machine/bus.h>
 #include <machine/resource.h>
 #include <sys/rman.h>
-
-#include <machine/stdarg.h>
 
 #include <xen/xen-os.h>
 #include <xen/features.h>
@@ -53,20 +49,13 @@ __FBSDID("$FreeBSD$");
 #include <dev/xen/xenpci/xenpcivar.h>
 
 static int
-xenpci_intr_filter(void *trap_frame)
-{
-	xen_intr_handle_upcall(trap_frame);
-	return (FILTER_HANDLED);
-}
-
-static int
 xenpci_irq_init(device_t device, struct xenpci_softc *scp)
 {
 	int error;
 
 	error = BUS_SETUP_INTR(device_get_parent(device), device,
 			       scp->res_irq, INTR_MPSAFE|INTR_TYPE_MISC,
-			       xenpci_intr_filter, NULL, /*trap_frame*/NULL,
+			       xen_intr_handle_upcall, NULL, NULL,
 			       &scp->intr_cookie);
 	if (error)
 		return error;
@@ -137,8 +126,9 @@ errexit:
 static int
 xenpci_probe(device_t dev)
 {
+	uint32_t device_id = pci_get_devid(dev);
 
-	if (pci_get_devid(dev) != 0x00015853)
+	if (device_id != 0x00015853 && device_id != 0x00025853)
 		return (ENXIO);
 
 	device_set_desc(dev, "Xen Platform Device");
@@ -222,7 +212,8 @@ static device_method_t xenpci_methods[] = {
 	DEVMETHOD(device_attach,	xenpci_attach),
 	DEVMETHOD(device_detach,	xenpci_detach),
 	DEVMETHOD(device_resume,	xenpci_resume),
-	{ 0, 0 }
+
+	DEVMETHOD_END
 };
 
 static driver_t xenpci_driver = {

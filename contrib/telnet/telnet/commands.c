@@ -32,8 +32,6 @@
 static const char sccsid[] = "@(#)commands.c	8.4 (Berkeley) 5/30/95";
 #endif
 #endif
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/un.h>
@@ -424,8 +422,7 @@ send_docmd(char *name)
 }
 
 static int
-send_dontcmd(name)
-    char *name;
+send_dontcmd(char *name)
 {
     return(send_tncmd(send_dont, "dont", name));
 }
@@ -2854,7 +2851,7 @@ cmdrc(char *m1, char *m2)
 static int
 sourceroute(struct addrinfo *ai, char *arg, unsigned char **cpp, int *lenp, int *protop, int *optp)
 {
-	static char buf[1024 + ALIGNBYTES];	/*XXX*/
+	static char buf[1024] __aligned(sizeof(void *));	/*XXX*/
 	unsigned char *cp, *cp2, *lsrp, *ep;
 	struct sockaddr_in *_sin;
 #ifdef INET6
@@ -2894,7 +2891,7 @@ sourceroute(struct addrinfo *ai, char *arg, unsigned char **cpp, int *lenp, int 
 		lsrp = *cpp;
 		ep = lsrp + *lenp;
 	} else {
-		*cpp = lsrp = (char *)ALIGN(buf);
+		*cpp = lsrp = buf;
 		ep = lsrp + 1024;
 	}
 

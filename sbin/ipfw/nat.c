@@ -17,8 +17,6 @@
  *
  * NEW command line interface for IP firewall facility
  *
- * $FreeBSD$
- *
  * In-kernel nat support
  */
 
@@ -69,6 +67,7 @@ static struct _s_x nat_params[] = {
 	{ "redirect_addr",	TOK_REDIR_ADDR },
 	{ "redirect_port",	TOK_REDIR_PORT },
 	{ "redirect_proto",	TOK_REDIR_PROTO },
+	{ "udp_eim",		TOK_UDP_EIM },
  	{ NULL, 0 }	/* terminator */
 };
 
@@ -678,6 +677,9 @@ nat_show_cfg(struct nat44_cfg_nat *n, void *arg __unused)
 		} else if (n->mode & PKT_ALIAS_PROXY_ONLY) {
 			printf(" proxy_only");
 			n->mode &= ~PKT_ALIAS_PROXY_ONLY;
+		} else if (n->mode & PKT_ALIAS_UDP_EIM) {
+			printf(" udp_eim");
+			n->mode &= ~PKT_ALIAS_UDP_EIM;
 		}
 	}
 	/* Print all the redirect's data configuration. */
@@ -755,25 +757,28 @@ nat_show_cfg(struct nat44_cfg_nat *n, void *arg __unused)
 }
 
 static int
-nat_port_alias_parse(char *str, u_short *lpout, u_short *hpout) {
+nat_port_alias_parse(char *str, u_short *lpout, u_short *hpout)
+{
 	long lp, hp;
-	char *ptr;
+	char *ptr, *substr;
+
+	substr = strsep(&str, "-");
+	if (substr == NULL || str == NULL)
+		return (0);
+
 	/* Lower port parsing */
-	lp = (long) strtol(str, &ptr, 10);
-	if (lp < 1024 || lp > 65535)
-		return 0;
-	if (!ptr || *ptr != '-')
-		return 0;
+	lp = (long) strtol(substr, &ptr, 0);
+	if (*ptr != '\0' || lp < 1024 || lp > 65535)
+		return (0);
+
 	/* Upper port parsing */
-	hp = (long) strtol(ptr, &ptr, 10);
-	if (hp < 1024 || hp > 65535)
-		return 0;
-	if (ptr)
-		return 0;
+	hp = (long) strtol(str, &ptr, 0);
+	if (*ptr != '\0' || hp < 1024 || hp > 65535)
+		return (0);
 
 	*lpout = (u_short) lp;
 	*hpout = (u_short) hp;
-	return 1;
+	return (1);
 }
 
 void
@@ -823,6 +828,7 @@ ipfw_config_nat(int ac, char **av)
 		case TOK_RESET_ADDR:
 		case TOK_ALIAS_REV:
 		case TOK_PROXY_ONLY:
+		case TOK_UDP_EIM:
 			break;
 		case TOK_REDIR_ADDR:
 			if (ac1 < 2)
@@ -928,6 +934,9 @@ ipfw_config_nat(int ac, char **av)
 			break;
 		case TOK_PROXY_ONLY:
 			n->mode |= PKT_ALIAS_PROXY_ONLY;
+			break;
+		case TOK_UDP_EIM:
+			n->mode |= PKT_ALIAS_UDP_EIM;
 			break;
 			/*
 			 * All the setup_redir_* functions work directly in
@@ -1074,7 +1083,6 @@ nat_foreach(nat_cb_t *f, void *arg, int sort)
 	struct nat44_cfg_nat *cfg;
 	size_t sz;
 	uint32_t i;
-	int error;
 
 	/* Start with reasonable default */
 	sz = sizeof(*olh) + 16 * sizeof(struct nat44_cfg_nat);
@@ -1097,7 +1105,7 @@ nat_foreach(nat_cb_t *f, void *arg, int sort)
 
 		cfg = (struct nat44_cfg_nat*)(olh + 1);
 		for (i = 0; i < olh->count; i++) {
-			error = f(cfg, arg); /* Ignore errors for now */
+			(void)f(cfg, arg); /* Ignore errors for now */
 			cfg = (struct nat44_cfg_nat *)((caddr_t)cfg +
 			    olh->objsize);
 		}

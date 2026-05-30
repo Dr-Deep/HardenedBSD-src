@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2000-2001 Boris Popov
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  *
  */
 #include <sys/param.h>
@@ -73,7 +71,7 @@ SYSCTL_INT(_vfs_smbfs, OID_AUTO, fastlookup, CTLFLAG_RW, &smbfs_fastlookup, 0, "
 #define DE_SIZE	(sizeof(struct dirent))
 
 static int
-smbfs_readvdir(struct vnode *vp, struct uio *uio, struct ucred *cred)
+smbfs_readvdir(struct vnode *vp, struct uio *uio, struct ucred *cred, int *eofp)
 {
 	struct dirent de;
 	struct componentname cn;
@@ -88,6 +86,8 @@ smbfs_readvdir(struct vnode *vp, struct uio *uio, struct ucred *cred)
 	SMBVDEBUG("dirname='%s'\n", np->n_name);
 	scred = smbfs_malloc_scred();
 	smb_makescred(scred, uio->uio_td, cred);
+	if (eofp != NULL)
+		*eofp = 0;
 	offset = uio->uio_offset / DE_SIZE;	/* offset in the directory */
 	limit = uio->uio_resid / DE_SIZE;
 	if (uio->uio_resid < DE_SIZE || uio->uio_offset < 0) {
@@ -140,8 +140,7 @@ smbfs_readvdir(struct vnode *vp, struct uio *uio, struct ucred *cred)
 		if (error) {
 			smbfs_findclose(np->n_dirseq, scred);
 			np->n_dirseq = NULL;
-			error = ENOENT ? 0 : error;
-			goto out;
+			goto out1;
 		}
 	}
 	error = 0;
@@ -172,16 +171,21 @@ smbfs_readvdir(struct vnode *vp, struct uio *uio, struct ucred *cred)
 		if (error)
 			break;
 	}
-	if (error == ENOENT)
-		error = 0;
 	uio->uio_offset = offset * DE_SIZE;
+out1:
+	if (error == ENOENT) {
+		if (eofp != NULL)
+			*eofp = 1;
+		error = 0;
+	}
 out:
 	smbfs_free_scred(scred);
 	return error;
 }
 
 int
-smbfs_readvnode(struct vnode *vp, struct uio *uiop, struct ucred *cred)
+smbfs_readvnode(struct vnode *vp, struct uio *uiop, struct ucred *cred,
+    int *eofp)
 {
 	struct smbmount *smp = VFSTOSMBFS(vp->v_mount);
 	struct smbnode *np = VTOSMB(vp);
@@ -211,7 +215,7 @@ smbfs_readvnode(struct vnode *vp, struct uio *uiop, struct ucred *cred)
 		lks = LK_EXCLUSIVE;	/* lockstatus(vp->v_vnlock); */
 		if (lks == LK_SHARED)
 			vn_lock(vp, LK_UPGRADE | LK_RETRY);
-		error = smbfs_readvdir(vp, uiop, cred);
+		error = smbfs_readvdir(vp, uiop, cred, eofp);
 		if (lks == LK_SHARED)
 			vn_lock(vp, LK_DOWNGRADE | LK_RETRY);
 		return error;
@@ -285,8 +289,9 @@ smbfs_writevnode(struct vnode *vp, struct uio *uiop,
 	if (uiop->uio_resid == 0)
 		return 0;
 
-	if (vn_rlimit_fsize(vp, uiop, td))
-		return (EFBIG);
+	error = vn_rlimit_fsize(vp, uiop, td);
+	if (error != 0)
+		return (error);
 
 	scred = smbfs_malloc_scred();
 	smb_makescred(scred, td, cred);
@@ -412,13 +417,7 @@ smbfs_doio(struct vnode *vp, struct buf *bp, struct ucred *cr, struct thread *td
  * Wish wish .... get rid from multiple IO routines
  */
 int
-smbfs_getpages(ap)
-	struct vop_getpages_args /* {
-		struct vnode *a_vp;
-		vm_page_t *a_m;
-		int a_count;
-		int a_reqpage;
-	} */ *ap;
+smbfs_getpages(struct vop_getpages_args *ap)
 {
 #ifdef SMBFS_RWGENERIC
 	return vop_stdgetpages(ap);
@@ -426,7 +425,7 @@ smbfs_getpages(ap)
 	int i, error, nextoff, size, toff, npages, count;
 	struct uio uio;
 	struct iovec iov;
-	vm_offset_t kva;
+	void *kva;
 	struct buf *bp;
 	struct vnode *vp;
 	struct thread *td;
@@ -467,13 +466,13 @@ smbfs_getpages(ap)
 
 	bp = uma_zalloc(smbfs_pbuf_zone, M_WAITOK);
 
-	kva = (vm_offset_t) bp->b_data;
+	kva = bp->b_data;
 	pmap_qenter(kva, pages, npages);
 	VM_CNT_INC(v_vnodein);
 	VM_CNT_ADD(v_vnodepgsin, npages);
 
 	count = npages << PAGE_SHIFT;
-	iov.iov_base = (caddr_t) kva;
+	iov.iov_base = kva;
 	iov.iov_len = count;
 	uio.uio_iov = &iov;
 	uio.uio_iovcnt = 1;
@@ -543,14 +542,7 @@ out:
  * not necessary to open vnode.
  */
 int
-smbfs_putpages(ap)
-	struct vop_putpages_args /* {
-		struct vnode *a_vp;
-		vm_page_t *a_m;
-		int a_count;
-		int a_sync;
-		int *a_rtvals;
-	} */ *ap;
+smbfs_putpages(struct vop_putpages_args *ap)
 {
 	int error;
 	struct vnode *vp = ap->a_vp;
@@ -567,7 +559,7 @@ smbfs_putpages(ap)
 #else
 	struct uio uio;
 	struct iovec iov;
-	vm_offset_t kva;
+	void *kva;
 	struct buf *bp;
 	int i, npages, count;
 	int *rtvals;
@@ -592,12 +584,12 @@ smbfs_putpages(ap)
 
 	bp = uma_zalloc(smbfs_pbuf_zone, M_WAITOK);
 
-	kva = (vm_offset_t) bp->b_data;
+	kva = bp->b_data;
 	pmap_qenter(kva, pages, npages);
 	VM_CNT_INC(v_vnodeout);
 	VM_CNT_ADD(v_vnodepgsout, count);
 
-	iov.iov_base = (caddr_t) kva;
+	iov.iov_base = kva;
 	iov.iov_len = count;
 	uio.uio_iov = &iov;
 	uio.uio_iovcnt = 1;
@@ -643,19 +635,14 @@ smbfs_vinvalbuf(struct vnode *vp, struct thread *td)
 
 	while (np->n_flag & NFLUSHINPROG) {
 		np->n_flag |= NFLUSHWANT;
-		error = tsleep(&np->n_flag, PRIBIO + 2, "smfsvinv", 2 * hz);
+		error = tsleep(&np->n_flag, PRIBIO, "smfsvinv", 2 * hz);
 		error = smb_td_intr(td);
 		if (error == EINTR)
 			return EINTR;
 	}
 	np->n_flag |= NFLUSHINPROG;
 
-	if (vp->v_bufobj.bo_object != NULL) {
-		VM_OBJECT_WLOCK(vp->v_bufobj.bo_object);
-		vm_object_page_clean(vp->v_bufobj.bo_object, 0, 0, OBJPC_SYNC);
-		VM_OBJECT_WUNLOCK(vp->v_bufobj.bo_object);
-	}
-
+	vnode_pager_clean_sync(vp);
 	error = vinvalbuf(vp, V_SAVE, PCATCH, 0);
 	while (error) {
 		if (error == ERESTART || error == EINTR) {

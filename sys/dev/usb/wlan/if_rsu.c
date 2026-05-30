@@ -15,9 +15,6 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Driver for Realtek RTL8188SU/RTL8191SU/RTL8192SU.
  *
@@ -147,6 +144,7 @@ static const STRUCT_USB_HOST_ID rsu_devs[] = {
 	RSU_DEV_HT(SENAO,		RTL8192SU_2),
 	RSU_DEV_HT(SITECOMEU,		WL349V1),
 	RSU_DEV_HT(SITECOMEU,		WL353),
+	RSU_DEV_HT(SITECOMEU,		RTL8188S),
 	RSU_DEV_HT(SWEEX2,		LW154),
 	RSU_DEV_HT(TRENDNET,		TEW646UBH),
 #undef RSU_DEV_HT
@@ -163,9 +161,10 @@ static usb_callback_t   rsu_bulk_rx_callback;
 static usb_error_t	rsu_do_request(struct rsu_softc *,
 			    struct usb_device_request *, void *);
 static struct ieee80211vap *
-		rsu_vap_create(struct ieee80211com *, const char name[],
-		    int, enum ieee80211_opmode, int, const uint8_t bssid[],
-		    const uint8_t mac[]);
+		rsu_vap_create(struct ieee80211com *, const char name[IFNAMSIZ],
+		    int, enum ieee80211_opmode, int,
+		    const uint8_t bssid[IEEE80211_ADDR_LEN],
+		    const uint8_t mac[IEEE80211_ADDR_LEN]);
 static void	rsu_vap_delete(struct ieee80211vap *);
 static void	rsu_scan_start(struct ieee80211com *);
 static void	rsu_scan_end(struct ieee80211com *);
@@ -372,17 +371,15 @@ rsu_update_chw(struct ieee80211com *ic)
 
 /*
  * notification from net80211 that it'd like to do A-MPDU on the given TID.
- *
- * Note: this actually hangs traffic at the present moment, so don't use it.
- * The firmware debug does indiciate it's sending and establishing a TX AMPDU
- * session, but then no traffic flows.
  */
 static int
 rsu_ampdu_enable(struct ieee80211_node *ni, struct ieee80211_tx_ampdu *tap)
 {
-#if 0
 	struct rsu_softc *sc = ni->ni_ic->ic_softc;
 	struct r92s_add_ba_req req;
+
+	RSU_DPRINTF(sc, RSU_DEBUG_AMPDU, "%s: called, tid=%d\n",
+	    __func__, tap->txa_tid);
 
 	/* Don't enable if it's requested or running */
 	if (IEEE80211_AMPDU_REQUESTED(tap))
@@ -398,23 +395,30 @@ rsu_ampdu_enable(struct ieee80211_node *ni, struct ieee80211_tx_ampdu *tap)
 		return (0);
 
 	/* Send the firmware command */
-	RSU_DPRINTF(sc, RSU_DEBUG_AMPDU, "%s: establishing AMPDU TX for TID %d\n",
+	RSU_DPRINTF(sc, RSU_DEBUG_AMPDU,
+	    "%s: establishing AMPDU TX for TID %d\n",
 	    __func__,
 	    tap->txa_tid);
 
 	RSU_LOCK(sc);
-	if (rsu_fw_cmd(sc, R92S_CMD_ADDBA_REQ, &req, sizeof(req)) != 1) {
+	if (rsu_fw_cmd(sc, R92S_CMD_ADDBA_REQ, &req, sizeof(req)) != 0) {
 		RSU_UNLOCK(sc);
+		RSU_DPRINTF(sc, RSU_DEBUG_AMPDU, "%s: AMPDU TX cmd failure\n",
+		    __func__);
 		/* Mark failure */
-		(void) ieee80211_ampdu_tx_request_active_ext(ni, tap->txa_tid, 0);
+		ieee80211_ampdu_tx_request_active_ext(ni, tap->txa_tid, 0);
+		/* Return 0, we've been driving this ourselves */
 		return (0);
 	}
 	RSU_UNLOCK(sc);
 
+	RSU_DPRINTF(sc, RSU_DEBUG_AMPDU, "%s: AMPDU TX cmd success\n",
+	    __func__);
+
 	/* Mark success; we don't get any further notifications */
-	(void) ieee80211_ampdu_tx_request_active_ext(ni, tap->txa_tid, 1);
-#endif
-	/* Return 0, we're driving this ourselves */
+	ieee80211_ampdu_tx_request_active_ext(ni, tap->txa_tid, 1);
+
+	/* Return 0, we've been driving this ourselves */
 	return (0);
 }
 
@@ -564,9 +568,7 @@ rsu_attach(device_t self)
 
 		/* Enable basic HT */
 		ic->ic_htcaps = IEEE80211_HTC_HT |
-#if 0
 		    IEEE80211_HTC_AMPDU |
-#endif
 		    IEEE80211_HTC_AMSDU |
 		    IEEE80211_HTCAP_MAXAMSDU_3839 |
 		    IEEE80211_HTCAP_SMPS_OFF;
@@ -577,6 +579,7 @@ rsu_attach(device_t self)
 		ic->ic_rxstream = sc->sc_nrxstream;
 	}
 	ic->ic_flags_ext |= IEEE80211_FEXT_SCAN_OFFLOAD;
+	ic->ic_flags_ext |= IEEE80211_FEXT_SEQNO_OFFLOAD;
 
 	rsu_getradiocaps(ic, IEEE80211_CHAN_MAX, &ic->ic_nchans,
 	    ic->ic_channels);
@@ -683,7 +686,7 @@ rsu_vap_create(struct ieee80211com *ic, const char name[IFNAMSIZ], int unit,
 	struct rsu_softc *sc = ic->ic_softc;
 	struct rsu_vap *uvp;
 	struct ieee80211vap *vap;
-	struct ifnet *ifp;
+	if_t ifp;
 
 	if (!TAILQ_EMPTY(&ic->ic_vaps))         /* only one at a time */
 		return (NULL);
@@ -699,10 +702,10 @@ rsu_vap_create(struct ieee80211com *ic, const char name[IFNAMSIZ], int unit,
 	}
 
 	ifp = vap->iv_ifp;
-	ifp->if_capabilities = IFCAP_RXCSUM | IFCAP_RXCSUM_IPV6;
+	if_setcapabilities(ifp, IFCAP_RXCSUM | IFCAP_RXCSUM_IPV6);
 	RSU_LOCK(sc);
 	if (sc->sc_rx_checksum_enable)
-		ifp->if_capenable |= IFCAP_RXCSUM | IFCAP_RXCSUM_IPV6;
+		if_setcapenablebit(ifp, IFCAP_RXCSUM | IFCAP_RXCSUM_IPV6, 0);
 	RSU_UNLOCK(sc);
 
 	/* override state transition machine */
@@ -1501,7 +1504,8 @@ rsu_newstate(struct ieee80211vap *vap, enum ieee80211_state nstate, int arg)
 		ni = ieee80211_ref_node(vap->iv_bss);
 		rs = &ni->ni_rates;
 		/* Indicate highest supported rate. */
-		ni->ni_txrate = rs->rs_rates[rs->rs_nrates - 1];
+		ieee80211_node_set_txrate_dot11rate(ni,
+		    rs->rs_rates[rs->rs_nrates - 1]);
 		(void) rsu_set_fw_power_state(sc, RSU_PWR_SLEEP);
 		ieee80211_free_node(ni);
 		startcal = 1;
@@ -1527,16 +1531,20 @@ rsu_key_alloc(struct ieee80211vap *vap, struct ieee80211_key *k,
 	struct rsu_softc *sc = vap->iv_ic->ic_softc;
 	int is_checked = 0;
 
-	if (&vap->iv_nw_keys[0] <= k &&
-	    k < &vap->iv_nw_keys[IEEE80211_WEP_NKID]) {
+	if (ieee80211_is_key_global(vap, k)) {
 		*keyix = ieee80211_crypto_get_key_wepidx(vap, k);
 	} else {
+		/* Note: assumes this is a pairwise key */
 		if (vap->iv_opmode != IEEE80211_M_STA) {
 			*keyix = 0;
 			/* TODO: obtain keyix from node id */
 			is_checked = 1;
 			k->wk_flags |= IEEE80211_KEY_SWCRYPT;
 		} else
+			/*
+			 * TODO: should allocate these from the CAM space;
+			 * skipping over the fixed slots and _BC / _BSS.
+			 */
 			*keyix = R92S_MACID_BSS;
 	}
 
@@ -1571,8 +1579,7 @@ rsu_process_key(struct ieee80211vap *vap, const struct ieee80211_key *k,
 	}
 
 	/* Handle group keys. */
-	if (&vap->iv_nw_keys[0] <= k &&
-	    k < &vap->iv_nw_keys[IEEE80211_WEP_NKID]) {
+	if (ieee80211_is_key_global(vap, k)) {
 		KASSERT(k->wk_keyix < nitems(sc->group_keys),
 		    ("keyix %u > %zu\n", k->wk_keyix, nitems(sc->group_keys)));
 
@@ -1717,7 +1724,8 @@ rsu_set_key_group(struct rsu_softc *sc, const struct ieee80211_key *k)
 	RSU_ASSERT_LOCKED(sc);
 
 	/* Map net80211 cipher to HW crypto algorithm. */
-	algo = rsu_crypto_mode(sc, k->wk_cipher->ic_cipher, k->wk_keylen);
+	algo = rsu_crypto_mode(sc, k->wk_cipher->ic_cipher,
+	    ieee80211_crypto_get_key_len(k));
 	if (algo == R92S_KEY_ALGO_INVALID)
 		return (EINVAL);
 
@@ -1725,13 +1733,14 @@ rsu_set_key_group(struct rsu_softc *sc, const struct ieee80211_key *k)
 	key.algo = algo;
 	key.cam_id = k->wk_keyix;
 	key.grpkey = (k->wk_flags & IEEE80211_KEY_GROUP) != 0;
-	memcpy(key.key, k->wk_key, MIN(k->wk_keylen, sizeof(key.key)));
+	memcpy(key.key, ieee80211_crypto_get_key_data(k),
+	    MIN(ieee80211_crypto_get_key_len(k), sizeof(key.key)));
 
 	RSU_DPRINTF(sc, RSU_DEBUG_KEY | RSU_DEBUG_FWCMD,
 	    "%s: keyix %u, group %u, algo %u/%u, flags %04X, len %u, "
 	    "macaddr %s\n", __func__, key.cam_id, key.grpkey,
-	    k->wk_cipher->ic_cipher, key.algo, k->wk_flags, k->wk_keylen,
-	    ether_sprintf(k->wk_macaddr));
+	    k->wk_cipher->ic_cipher, key.algo, k->wk_flags,
+	    ieee80211_crypto_get_key_len(k), ether_sprintf(k->wk_macaddr));
 
 	error = rsu_fw_cmd(sc, R92S_CMD_SET_KEY, &key, sizeof(key));
 	if (error != 0) {
@@ -1757,19 +1766,22 @@ rsu_set_key_pair(struct rsu_softc *sc, const struct ieee80211_key *k)
 		return (ESHUTDOWN);
 
 	/* Map net80211 cipher to HW crypto algorithm. */
-	algo = rsu_crypto_mode(sc, k->wk_cipher->ic_cipher, k->wk_keylen);
+	algo = rsu_crypto_mode(sc, k->wk_cipher->ic_cipher,
+	    ieee80211_crypto_get_key_len(k));
 	if (algo == R92S_KEY_ALGO_INVALID)
 		return (EINVAL);
 
 	memset(&key, 0, sizeof(key));
 	key.algo = algo;
 	memcpy(key.macaddr, k->wk_macaddr, sizeof(key.macaddr));
-	memcpy(key.key, k->wk_key, MIN(k->wk_keylen, sizeof(key.key)));
+	memcpy(key.key, ieee80211_crypto_get_key_data(k),
+	    MIN(ieee80211_crypto_get_key_len(k), sizeof(key.key)));
 
 	RSU_DPRINTF(sc, RSU_DEBUG_KEY | RSU_DEBUG_FWCMD,
 	    "%s: keyix %u, algo %u/%u, flags %04X, len %u, macaddr %s\n",
 	    __func__, k->wk_keyix, k->wk_cipher->ic_cipher, key.algo,
-	    k->wk_flags, k->wk_keylen, ether_sprintf(key.macaddr));
+	    k->wk_flags, ieee80211_crypto_get_key_len(k),
+	    ether_sprintf(key.macaddr));
 
 	error = rsu_fw_cmd(sc, R92S_CMD_SET_STA_KEY, &key, sizeof(key));
 	if (error != 0) {
@@ -2167,7 +2179,7 @@ rsu_event_addba_req_report(struct rsu_softc *sc, uint8_t *buf, int len)
 	    __func__,
 	    ether_sprintf(ba->mac_addr),
 	    (int) ba->tid,
-	    (int) le16toh(ba->ssn));
+	    (int) le16toh(ba->ssn) >> 4);
 
 	/* XXX do node lookup; this is STA specific */
 
@@ -2213,6 +2225,11 @@ rsu_rx_event(struct rsu_softc *sc, uint8_t code, uint8_t *buf, int len)
 		if (vap->iv_state == IEEE80211_S_AUTH)
 			rsu_event_join_bss(sc, buf, len);
 		break;
+
+	/* TODO: what about R92S_EVT_ADD_STA? and decoding macid? */
+	/* It likely is required for IBSS/AP mode */
+
+	/* TODO: should I be doing this transition in AP mode? */
 	case R92S_EVT_DEL_STA:
 		RSU_DPRINTF(sc, RSU_DEBUG_FWCMD | RSU_DEBUG_STATE,
 		    "%s: disassociated from %s\n", __func__,
@@ -2230,6 +2247,7 @@ rsu_rx_event(struct rsu_softc *sc, uint8_t code, uint8_t *buf, int len)
 		break;
 	case R92S_EVT_FWDBG:
 		buf[60] = '\0';
+		/* TODO: some are \n terminated, some aren't, sigh */
 		RSU_DPRINTF(sc, RSU_DEBUG_FWDBG, "FWDBG: %s\n", (char *)buf);
 		break;
 	case R92S_EVT_ADDBA_REQ_REPORT:
@@ -2554,7 +2572,6 @@ rsu_rxeof(struct usb_xfer *xfer, struct rsu_data *data)
 static void
 rsu_bulk_rx_callback(struct usb_xfer *xfer, usb_error_t error)
 {
-	struct epoch_tracker et;
 	struct rsu_softc *sc = usbd_xfer_softc(xfer);
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct ieee80211_node *ni;
@@ -2589,7 +2606,6 @@ tr_setup:
 		 * ieee80211_input() because here is at the end of a USB
 		 * callback and safe to unlock.
 		 */
-		NET_EPOCH_ENTER(et);
 		while (m != NULL) {
 			next = m->m_next;
 			m->m_next = NULL;
@@ -2608,7 +2624,6 @@ tr_setup:
 			RSU_LOCK(sc);
 			m = next;
 		}
-		NET_EPOCH_EXIT(et);
 		break;
 	default:
 		/* needs it to the inactive queue due to a error. */
@@ -2786,6 +2801,9 @@ rsu_tx_start(struct rsu_softc *sc, struct ieee80211_node *ni,
 	if (rate != 0)
 		ridx = rate2ridx(rate);
 
+	/* Assign sequence number, A-MPDU or otherwise */
+	ieee80211_output_seqno_assign(ni, -1, m0);
+
 	if (wh->i_fc[1] & IEEE80211_FC1_PROTECTED) {
 		k = ieee80211_crypto_encap(ni, m0);
 		if (k == NULL) {
@@ -2842,8 +2860,10 @@ rsu_tx_start(struct rsu_softc *sc, struct ieee80211_node *ni,
 	    SM(R92S_TXDW0_OFFSET, sizeof(*txd)) |
 	    R92S_TXDW0_OWN | R92S_TXDW0_FSG | R92S_TXDW0_LSG);
 
+	/* TODO: correct macid here? It should be in the node */
 	txd->txdw1 |= htole32(
 	    SM(R92S_TXDW1_MACID, R92S_MACID_BSS) | SM(R92S_TXDW1_QSEL, qid));
+
 	if (!hasqos)
 		txd->txdw1 |= htole32(R92S_TXDW1_NONQOS);
 	if (k != NULL && !(k->wk_flags & IEEE80211_KEY_SWENCRYPT)) {
@@ -2864,8 +2884,13 @@ rsu_tx_start(struct rsu_softc *sc, struct ieee80211_node *ni,
 		    SM(R92S_TXDW1_CIPHER, cipher) |
 		    SM(R92S_TXDW1_KEYIDX, k->wk_keyix));
 	}
-	/* XXX todo: set AGGEN bit if appropriate? */
-	txd->txdw2 |= htole32(R92S_TXDW2_BK);
+
+	/*
+	 * Note: no need to set TXDW2_AGGEN/TXDW2_BK to mark
+	 * A-MPDU and non-AMPDU candidates; the firmware will
+	 * handle this for us.
+	 */
+
 	if (ismcast)
 		txd->txdw2 |= htole32(R92S_TXDW2_BMCAST);
 
@@ -2884,8 +2909,11 @@ rsu_tx_start(struct rsu_softc *sc, struct ieee80211_node *ni,
 	}
 
 	/*
-	 * Firmware will use and increment the sequence number for the
-	 * specified priority.
+	 * Pass in prio here, NOT the sequence number.
+	 *
+	 * The hardware is in theory incrementing sequence numbers
+	 * for us, but I haven't yet figured out exactly when/how
+	 * it's supposed to work.
 	 */
 	txd->txdw3 |= htole32(SM(R92S_TXDW3_SEQ, prio));
 
@@ -3035,11 +3063,11 @@ rsu_ioctl_net(struct ieee80211com *ic, u_long cmd, void *data)
 
 		IEEE80211_LOCK(ic);	/* XXX */
 		TAILQ_FOREACH(vap, &ic->ic_vaps, iv_next) {
-			struct ifnet *ifp = vap->iv_ifp;
+			if_t ifp = vap->iv_ifp;
 
-			ifp->if_capenable &=
-			    ~(IFCAP_RXCSUM | IFCAP_RXCSUM_IPV6);
-			ifp->if_capenable |= rxmask;
+			if_setcapenablebit(ifp, 0,
+			    IFCAP_RXCSUM | IFCAP_RXCSUM_IPV6);
+			if_setcapenablebit(ifp, rxmask, 0);
 		}
 		IEEE80211_UNLOCK(ic);
 		break;
@@ -3485,7 +3513,8 @@ rsu_load_firmware(struct rsu_softc *sc)
 	dmem.vcs_mode = R92S_VCS_MODE_RTS_CTS;
 	dmem.turbo_mode = 0;
 	dmem.bw40_en = !! (ic->ic_htcaps & IEEE80211_HTCAP_CHWIDTH40);
-	dmem.amsdu2ampdu_en = !! (sc->sc_ht);
+	/* net80211 handles AMSDUs just fine */
+	dmem.amsdu2ampdu_en = 0;
 	dmem.ampdu_en = !! (sc->sc_ht);
 	dmem.agg_offload = !! (sc->sc_ht);
 	dmem.qos_en = 1;

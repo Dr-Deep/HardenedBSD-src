@@ -56,12 +56,6 @@
  * copyright notice and this permission notice appear in all copies.
  */
 
-#if defined(LIBC_SCCS) && !defined(lint)
-static char sccsid[] = "@(#)gethostnamadr.c	8.1 (Berkeley) 6/4/93";
-#endif /* LIBC_SCCS and not lint */
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -310,6 +304,9 @@ _dns_getnetbyaddr(void *rval, void *cb_data, va_list ap)
 	for (nn = 4, net2 = net; net2; net2 >>= 8)
 		netbr[--nn] = net2 & 0xff;
 	switch (nn) {
+	case 4: 	/* net was all-zero i.e. 0.0.0.0 */
+		sprintf(qbuf, "0.0.0.0.in-addr.arpa");
+		break;
 	case 3: 	/* Class A */
 		sprintf(qbuf, "0.0.0.%u.in-addr.arpa", netbr[3]);
 		break;

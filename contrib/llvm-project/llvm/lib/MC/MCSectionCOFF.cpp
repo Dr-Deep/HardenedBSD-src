@@ -14,11 +14,11 @@
 
 using namespace llvm;
 
-// ShouldOmitSectionDirective - Decides whether a '.section' directive
+// shouldOmitSectionDirective - Decides whether a '.section' directive
 // should be printed before the section name
-bool MCSectionCOFF::ShouldOmitSectionDirective(StringRef Name,
+bool MCSectionCOFF::shouldOmitSectionDirective(StringRef Name,
                                                const MCAsmInfo &MAI) const {
-  if (COMDATSymbol)
+  if (COMDATSymbol || isUnique())
     return false;
 
   // FIXME: Does .section .bss/.data/.text work everywhere??
@@ -34,11 +34,11 @@ void MCSectionCOFF::setSelection(int Selection) const {
   Characteristics |= COFF::IMAGE_SCN_LNK_COMDAT;
 }
 
-void MCSectionCOFF::PrintSwitchToSection(const MCAsmInfo &MAI, const Triple &T,
+void MCSectionCOFF::printSwitchToSection(const MCAsmInfo &MAI, const Triple &T,
                                          raw_ostream &OS,
-                                         const MCExpr *Subsection) const {
+                                         uint32_t Subsection) const {
   // standard sections don't require the '.section'
-  if (ShouldOmitSectionDirective(getName(), MAI)) {
+  if (shouldOmitSectionDirective(getName(), MAI)) {
     OS << '\t' << getName() << '\n';
     return;
   }
@@ -63,7 +63,13 @@ void MCSectionCOFF::PrintSwitchToSection(const MCAsmInfo &MAI, const Triple &T,
   if ((getCharacteristics() & COFF::IMAGE_SCN_MEM_DISCARDABLE) &&
       !isImplicitlyDiscardable(getName()))
     OS << 'D';
+  if (getCharacteristics() & COFF::IMAGE_SCN_LNK_INFO)
+    OS << 'i';
   OS << '"';
+
+  // unique should be tail of .section directive.
+  if (isUnique() && !COMDATSymbol)
+    OS << ",unique," << UniqueID;
 
   if (getCharacteristics() & COFF::IMAGE_SCN_LNK_COMDAT) {
     if (COMDATSymbol)
@@ -101,16 +107,14 @@ void MCSectionCOFF::PrintSwitchToSection(const MCAsmInfo &MAI, const Triple &T,
       COMDATSymbol->print(OS, &MAI);
     }
   }
+
+  if (isUnique() && COMDATSymbol)
+    OS << ",unique," << UniqueID;
+
   OS << '\n';
 }
 
-bool MCSectionCOFF::UseCodeAlign() const {
-  return getKind().isText();
-}
-
-bool MCSectionCOFF::isVirtualSection() const {
-  return getCharacteristics() & COFF::IMAGE_SCN_CNT_UNINITIALIZED_DATA;
-}
+bool MCSectionCOFF::useCodeAlign() const { return isText(); }
 
 StringRef MCSectionCOFF::getVirtualSectionKind() const {
   return "IMAGE_SCN_CNT_UNINITIALIZED_DATA";

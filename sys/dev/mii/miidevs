@@ -1,4 +1,3 @@
-$FreeBSD$
 /*$NetBSD: miidevs,v 1.105 2011/11/25 23:28:14 jakllsch Exp $*/
 
 /*-
@@ -63,15 +62,17 @@ oui JMICRON			0x00d831	JMicron Technologies
 oui LEVEL1			0x00207b	Level 1
 oui MARVELL			0x005043	Marvell Semiconductor
 oui MICREL			0x0010a1	Micrel
+oui MOTORCOMM			0x000000	Motorcomm
+oui MOTORCOMM2			0xc82b5e	Motorcomm
 oui MYSON			0x00c0b4	Myson Technology
 oui NATSEMI			0x080017	National Semiconductor
 oui PMCSIERRA			0x00e004	PMC-Sierra
 oui QUALSEMI			0x006051	Quality Semiconductor
 oui RDC				0x00d02d	RDC Semiconductor
-oui REALTEK			0x00e04c	RealTek Semicondctor
+oui REALTEK			0x00e04c	Realtek Semicondctor
 oui SEEQ			0x00a07d	Seeq Technology
 oui SIS				0x00e006	Silicon Integrated Systems
-oui SMC				0x00800f	SMC
+oui SMSC			0x00800f	Microchip (formerly SMSC)
 oui TI				0x080028	Texas Instruments
 oui TSC				0x00c039	TDK Semiconductor
 oui VITESSE			0x0001c1	Vitesse Semiconductor
@@ -108,8 +109,8 @@ oui yyDAVICOM			0x000602	Davicom Semiconductor
 oui xxICPLUS			0x0009c3	IC Plus Corp.
 oui xxPMCSIERRA			0x0009c0	PMC-Sierra
 oui xxPMCSIERRA2		0x009057	PMC-Sierra
-oui xxREALTEK			0x000732	RealTek Semicondctor
-oui yyREALTEK			0x000004	RealTek Semicondctor
+oui xxREALTEK			0x000732	Realtek Semicondctor
+oui yyREALTEK			0x000004	Realtek Semicondctor
 oui xxTI			0x100014	Texas Instruments
 
 /*
@@ -192,6 +193,7 @@ model BROADCOM2 BCM5709C	0x003c BCM5709 10/100/1000baseT PHY
 model BROADCOM2 BCM5761		0x003d BCM5761 10/100/1000baseT PHY
 model BROADCOM2 BCM5709S	0x003f BCM5709S/5720S 1000/2500baseSX PHY
 model BROADCOM3 BCM54618SE	0x000d BCM54618SE 10/100/1000BASE-T PHY
+model BROADCOM3 BCM54616S	0x0011 BCM54616S 10/100/1000BASE-T PHY
 model BROADCOM3 BCM57780	0x0019 BCM57780 1000BASE-T media interface
 model BROADCOM3 BCM5717C	0x0020 BCM5717C 1000BASE-T media interface
 model BROADCOM3 BCM5719C	0x0022 BCM5719C 1000BASE-T media interface
@@ -210,6 +212,7 @@ model xxCICADA CS8201A		0x0020 Cicada CS8201 10/100/1000TX PHY
 model xxCICADA CS8201B		0x0021 Cicada CS8201 10/100/1000TX PHY
 model xxCICADA CS8244		0x002c Cicada CS8244 10/100/1000TX PHY
 model xxVITESSE VSC8601		0x0002 Vitesse VSC8601 10/100/1000TX PHY
+model xxVITESSE VSC8641		0x0003 Vitesse VSC8641 10/100/1000TX PHY
 
 /* Davicom Semiconductor PHYs */
 /* AMD Am79C873 seems to be a relabeled DM9101 */
@@ -291,6 +294,10 @@ model MICREL KSZ8081		0x0016 Micrel KSZ8081 10/100 PHY
 model MICREL KSZ9021		0x0021 Micrel KSZ9021 10/100/1000 PHY
 model MICREL KSZ9031		0x0022 Micrel KSZ9031 10/100/1000 PHY
 
+/* Motorcomm PHYs */
+model MOTORCOMM YT8511		0x010a Motorcomm YT8511 10/100/1000 PHY
+model MOTORCOMM2 YT8531		0x0011 Motorcomm YT8531 10/100/1000 PHY
+
 /* Myson Technology PHYs */
 model xxMYSON MTD972		0x0000 MTD972 10/100 media interface
 model MYSON MTD803		0x0000 MTD803 3-in-1 media interface
@@ -318,13 +325,14 @@ model xxQUALSEMI QS6612		0x0000 QS6612 10/100 media interface
 model RDC R6040			0x0003 R6040 10/100 media interface
 model RDC R6040_2		0x0005 R6040 10/100 media interface
 
-/* RealTek Semicondctor PHYs */
+/* Realtek Semicondctor PHYs */
 model yyREALTEK RTL8201L	0x0020 RTL8201L 10/100 media interface
 model xxREALTEK RTL8169S	0x0011 RTL8169S/8110S/8211 1000BASE-T media interface
 model REALTEK RTL8305SC		0x0005 RTL8305SC 10/100 802.1q switch
 model REALTEK RTL8201E		0x0008 RTL8201E 10/100 media interface
 model REALTEK RTL8251		0x0000 RTL8251/8153 1000BASE-T media interface
 model REALTEK RTL8169S		0x0011 RTL8169S/8110S/8211 1000BASE-T media interface
+model REALTEK RTL8211FVD	0x0007 RTL8211F-VD 1000BASE-T media interface
 
 /* Seeq Seeq PHYs */
 model SEEQ 80220		0x0003 Seeq 80220 10/100 media interface
@@ -348,11 +356,11 @@ model xxTSC 78Q2121		0x0015 78Q2121 100BASE-TX media interface
 /* Vitesse Semiconductor (now Microsemi) */
 model xxVITESSE VSC8501		0x0013 Vitesse VSC8501 10/100/1000TX PHY
 model xxVITESSE VSC8504		0x000c Vitesse VSC8504 10/100/1000TX PHY
-model xxVITESSE VSC8641		0x0003 Vitesse VSC8641 10/100/1000TX PHY
+model xxVITESSE VSC8514		0x0027 Vitesse VSC8514 10/100/1000TX PHY
 
 /* XaQti Corp. PHYs */
 model xxXAQTI XMACII		0x0000 XaQti Corp. XMAC II gigabit interface
 
-/* SMC */
-model SMC LAN8710A		0x000F SMC LAN8710A 10/100 interface
-model SMC LAN8700		0x000C SMC LAN8700  10/100 interface
+/* Microchip (formerly SMSC) */
+model SMSC LAN8710A		0x000F Microchip LAN8710A 10/100 interface
+model SMSC LAN8700		0x000C Microchip LAN8700  10/100 interface

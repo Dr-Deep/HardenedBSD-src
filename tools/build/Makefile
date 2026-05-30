@@ -1,11 +1,18 @@
-# $FreeBSD$
-
 .PATH: ${.CURDIR}/../../include
+
+# XXX We need to include this to avoid installing MIT KRB5 includes on
+# XXX Heimdal systems. Remove the following line when Heimdal is finally
+# XXX removed.
+.include <src.opts.mk>
 
 LIB=		egacy
 SRC=
 INCSGROUPS=	INCS SYSINCS CASPERINC UFSINCS FFSINCS MSDOSFSINCS DISKINCS
 INCSGROUPS+=	MACHINESYSINCS RPCINCS
+.if ${MK_MITKRB5} != "no"
+INCSGROUPS+=	EDITINC K5GSSRPCINC GSSAPIINC
+INCSGROUPS+=	K5GSSAPIINC K52GSSAPIINC KRB5INC
+.endif
 INCS=
 
 SYSINCSDIR=	${INCLUDEDIR}/sys
@@ -17,6 +24,16 @@ MSDOSFSINCSDIR=	${INCLUDEDIR}/fs/msdosfs
 DISKINCSDIR=	${INCLUDEDIR}/sys/disk
 MACHINESYSINCSDIR=	${INCLUDEDIR}/machine
 RPCINCSDIR=	${INCLUDEDIR}/rpc
+.if ${MK_MITKRB5} != "no"
+EDITINCDIR=	${INCLUDEDIR}/edit/readline
+K5GSSRPCINCDIR=	${INCLUDEDIR}/gssrpc
+GSSAPIINCDIR=	${INCLUDEDIR}/gssapi
+K5GSSAPIINCDIR=	${INCLUDEDIR}/gssapi_krb5
+K52GSSAPIINCDIR=${INCLUDEDIR}/gssapi_krb5/gssapi
+KRB5INCDIR=	${INCLUDEDIR}/krb5
+KDB5INCDIR=	${INCLUDEDIR}/kdb5
+KADM5INCDIR=	${INCLUDEDIR}/kadm5
+.endif
 
 BOOTSTRAPPING?=	0
 
@@ -68,13 +85,24 @@ INCS+=		stdlib.h
 SRCS+=		reallocarray.c
 .endif
 
+.if !exists(${HOST_INCLUDE_ROOT}/stdckdint.h)
+INCS+=		stdckdint.h
+.endif
+
+.if exists(${HOST_INCLUDE_ROOT}/sys/stat.h)
 _WITH_UTIMENS!= grep -c utimensat ${HOST_INCLUDE_ROOT}/sys/stat.h || true
+.else
+_WITH_UTIMENS= 0
+.endif
 .if ${_WITH_UTIMENS} == 0
 SYSINCS+=	stat.h
 SRCS+=		futimens.c utimensat.c
 .endif
 
-_WITH_EXPLICIT_BZERO!= grep -c explicit_bzero ${HOST_INCLUDE_ROOT}/strings.h || true
+# Define ptraddr_t for bootstrapping
+INCS+=		stddef.h
+
+_WITH_EXPLICIT_BZERO!= cat ${HOST_INCLUDE_ROOT}/strings.h ${HOST_INCLUDE_ROOT}/string.h | grep -c explicit_bzero || true
 .if ${_WITH_EXPLICIT_BZERO} == 0
 # .PATH: ${SRCTOP}/sys/libkern
 # Adding sys/libkern to .PATH breaks building the cross-build compat library
@@ -121,7 +149,13 @@ CHACHA20INCSDIR=	${INCLUDEDIR}/crypto/chacha20
 CHACHA20INCS+=	${SRCTOP}/sys/crypto/chacha20/_chacha.h \
 	${SRCTOP}/sys/crypto/chacha20/chacha.h
 
+.if ${MACHINE} == "host"
+_host_arch= ${_HOST_ARCH}
+.elif ${MACHINE} == "host32"
+_host_arch= ${_HOST_ARCH32}
+.else
 _host_arch=${MACHINE}
+.endif
 .if ${_host_arch} == "x86_64"
 # bmake on Linux/mac often prints that instead of amd64
 _host_arch=amd64
@@ -150,17 +184,17 @@ INCS+=	${SRCTOP}/include/nlist.h
 SYSINCS+=	${SRCTOP}/sys/sys/imgact_aout.h
 SYSINCS+=	${SRCTOP}/sys/sys/nlist_aout.h
 
+# macOS's bitstring lacks FreeBSD-specific additions used by makefs's ZFS code
+# and Linux doesn't have it at all.  Older FreeBSD versions lack recent
+# additions.
+INCS+=	${SRCTOP}/include/bitstring.h
+SYSINCS+=	${SRCTOP}/sys/sys/bitstring.h
 
 .if ${.MAKE.OS} != "FreeBSD"
 .PATH: ${.CURDIR}/cross-build
 
 # Needed by our sys/types.h wrapper
 SYSINCS+=	${SRCTOP}/sys/sys/bitcount.h
-
-# macOS's bitstring lacks FreeBSD-specific additions used by makefs's ZFS code
-# and Linux doesn't have it at all.
-INCS+=	${SRCTOP}/include/bitstring.h
-SYSINCS+=	${SRCTOP}/sys/sys/bitstring.h
 
 # dbopen() behaves differently on Linux and FreeBSD so we ensure that we
 # bootstrap the FreeBSD db code. The cross-build headers #define dbopen() to
@@ -187,9 +221,15 @@ SRCS+=	strtonum.c merge.c heapsort.c reallocf.c
 SRCS+=	rpmatch.c
 
 .if ${.MAKE.OS} == "Linux"
-# On Linux, glibc does not provide strlcpy,strlcat or strmode.
+# On Linux, glibc does not provide strmode. It only provides strlcpy
+# and strlcat from glibc 2.38.
 .PATH: ${LIBC_SRCTOP}/string
-SRCS+=	strlcpy.c strlcat.c strmode.c
+SRCS+=	strmode.c
+# Assume if strlcpy exists so does strlcat
+_WITH_EXPLICIT_STRLCPY!= cat ${HOST_INCLUDE_ROOT}/strings.h ${HOST_INCLUDE_ROOT}/string.h | grep -c strlcpy || true
+.if ${_WITH_EXPLICIT_STRLCPY} == 0
+SRCS+=	strlcpy.c strlcat.c
+.endif
 # On Linux, glibc provides ffs* but not fls*
 SRCS+=	fls.c flsl.c flsll.c
 # Compile the fgetln/fgetwln/closefrom fallback code from libbsd:
@@ -198,9 +238,26 @@ CFLAGS.closefrom.c+=	-DSTDC_HEADERS -DHAVE_SYS_DIR_H -DHAVE_DIRENT_H \
 	-DHAVE_DIRFD -DHAVE_SYSCONF
 # Provide getprogname/setprograme
 SRCS+=	progname.c
-# Stub implementations of fflagstostr/strtofflags
-SRCS+=	fflags.c
-.endif
+# Provide fflagstostr/strtofflags for mtree and makefs
+# On macOS we use the host's so conflate host and target flags, which ideally
+# we'd avoid, but in practice these align for many flags, including
+# SF_IMMUTABLE, the only flag we currently set during install.
+SRCS+=	strtofflags.c
+
+# macOS has a standalone cross-build implementation, but Linux can use the same
+# ELF one as FreeBSD
+SYSINCS+=	${SRCTOP}/sys/sys/linker_set.h
+
+.endif # ${MAKE.OS} == "Linux"
+
+.if ${.MAKE.OS} == "Darwin"
+# Standalone implementation of secure_getenv(), not available on MacOS.
+SRCS+=	secure_getenv.c
+# macOS currently lacks mempcpy
+.PATH: ${LIBC_SRCTOP}/string
+SRCS+=	mempcpy.c
+.endif # ${MAKE.OS} == "Darwin"
+
 # Provide the same arc4random implementation on Linux/macOS
 CFLAGS.arc4random.c+=	-I${SRCTOP}/sys/crypto/chacha20 -D__isthreaded=1
 SRCS+=	arc4random.c arc4random_uniform.c
@@ -223,9 +280,60 @@ subr_capability.c: ${SRCTOP}/sys/kern/subr_capability.c
 	cp ${.ALLSRC} ${.TARGET}
 SRCS+=	subr_capability.c
 CLEANFILES+=	subr_capability.c
-.endif
+
+# Headers needed for msdosfs use in makefs
+SYSINCS+=	${SRCTOP}/sys/sys/_callout.h
+SYSINCS+=	${SRCTOP}/sys/sys/_lock.h
+SYSINCS+=	${SRCTOP}/sys/sys/_lockmgr.h
+SYSINCS+=	${SRCTOP}/sys/sys/_task.h
+.endif # ${MAKE.OS} != "FreeBSD"
 
 CASPERINC+=	${SRCTOP}/lib/libcasper/services/cap_fileargs/cap_fileargs.h
+
+.if ${MK_MITKRB5} != "no"
+EDITINC+=	${SRCTOP}/contrib/libedit/readline/readline.h
+K5GSSRPCINC+=	${SRCTOP}/crypto/krb5/src/include/gssrpc/auth.h
+K5GSSRPCINC+=	${SRCTOP}/crypto/krb5/src/include/gssrpc/auth_gss.h
+K5GSSRPCINC+=	${SRCTOP}/crypto/krb5/src/include/gssrpc/auth_gssapi.h
+K5GSSRPCINC+=	${SRCTOP}/crypto/krb5/src/include/gssrpc/auth_unix.h
+K5GSSRPCINC+=	${SRCTOP}/crypto/krb5/src/include/gssrpc/clnt.h
+K5GSSRPCINC+=	${SRCTOP}/crypto/krb5/src/include/gssrpc/netdb.h
+K5GSSRPCINC+=	${SRCTOP}/crypto/krb5/src/include/gssrpc/pmap_clnt.h
+K5GSSRPCINC+=	${SRCTOP}/crypto/krb5/src/include/gssrpc/pmap_prot.h
+K5GSSRPCINC+=	${SRCTOP}/crypto/krb5/src/include/gssrpc/pmap_rmt.h
+K5GSSRPCINC+=	${SRCTOP}/crypto/krb5/src/include/gssrpc/rpc_msg.h
+K5GSSRPCINC+=	${SRCTOP}/crypto/krb5/src/include/gssrpc/rpc.h
+K5GSSRPCINC+=	${SRCTOP}/crypto/krb5/src/include/gssrpc/svc_auth.h
+K5GSSRPCINC+=	${SRCTOP}/crypto/krb5/src/include/gssrpc/svc.h
+K5GSSRPCINC+=	${SRCTOP}/krb5/include/gssrpc/types.h
+K5GSSRPCINC+=	${SRCTOP}/crypto/krb5/src/include/gssrpc/xdr.h
+K5GSSRPCINC+=	${SRCTOP}/crypto/krb5/src/include/gssrpc/xdr.h
+GSSAPIINC+=	${SRCTOP}/crypto/krb5/src/lib/gssapi/krb5/gssapi_krb5.h
+GSSAPIINC+=	${SRCTOP}/crypto/krb5/src/lib/gssapi/generic/gssapi_alloc.h
+GSSAPIINC+=	${SRCTOP}/crypto/krb5/src/lib/gssapi/generic/gssapi_generic.h
+GSSAPIINC+=	${SRCTOP}/crypto/krb5/src/lib/gssapi/generic/gssapi_ext.h
+K5GSSAPIINC+=	${SRCTOP}/crypto/krb5/src/include/gssapi.h
+KRB5INC+=	${SRCTOP}/crypto/krb5/src/include/krb5/ccselect_plugin.h
+KRB5INC+=	${SRCTOP}/crypto/krb5/src/include/krb5/certauth_plugin.h
+KRB5INC+=	${SRCTOP}/crypto/krb5/src/include/krb5/clpreauth_plugin.h
+KRB5INC+=	${SRCTOP}/crypto/krb5/src/include/krb5/hostrealm_plugin.h
+KRB5INC+=	${SRCTOP}/crypto/krb5/src/include/krb5/kadm5_auth_plugin.h
+KRB5INC+=	${SRCTOP}/crypto/krb5/src/include/krb5/kadm5_hook_plugin.h
+KRB5INC+=	${SRCTOP}/crypto/krb5/src/include/krb5/kdcpolicy_plugin.h
+KRB5INC+=	${SRCTOP}/crypto/krb5/src/include/krb5/kdcpreauth_plugin.h
+KRB5INC+=	${SRCTOP}/crypto/krb5/src/include/krb5/localauth_plugin.h
+KRB5INC+=	${SRCTOP}/crypto/krb5/src/include/krb5/locate_plugin.h
+KRB5INC+=	${SRCTOP}/crypto/krb5/src/include/krb5/plugin.h
+KRB5INC+=	${SRCTOP}/crypto/krb5/src/include/krb5/preauth_plugin.h
+KRB5INC+=	${SRCTOP}/crypto/krb5/src/include/krb5/pwqual_plugin.h
+INCS+=		${SRCTOP}/crypto/krb5/src/include/gssapi.h
+INCS+=		${SRCTOP}/crypto/krb5/src/include/kdb.h
+INCS+=		${SRCTOP}/crypto/krb5/src/include/krb5.h
+INCS+=		${SRCTOP}/crypto/krb5/src/include/krad.h
+INCS+=		${SRCTOP}/crypto/krb5/src/util/et/com_err.h
+INCS+=		${SRCTOP}/crypto/krb5/src/util/verto/verto-module.h
+INCS+=		${SRCTOP}/crypto/krb5/src/util/verto/verto.h
+.endif
 
 .if empty(SRCS)
 SRCS=		dummy.c
@@ -248,7 +356,16 @@ MSDOSFSINCS+=	${SRCTOP}/sys/fs/msdosfs/fat.h
 MSDOSFSINCS+=	${SRCTOP}/sys/fs/msdosfs/msdosfsmount.h
 DISKINCS+=	${SRCTOP}/sys/sys/disk/bsd.h
 
+.if ${.MAKE.OS} == "FreeBSD"
+# Needed to build most of the things below, which include sys/cdefs.h either
+# directly or transitively
+SYSINCS+=	${SRCTOP}/sys/sys/_decls.h
+SYSINCS+=	${SRCTOP}/sys/sys/_visible.h
+SYSINCS+=	${SRCTOP}/sys/sys/cdefs.h
+.endif
+
 # Needed to build config (since it uses libnv)
+SYSINCS+=	${SRCTOP}/sys/sys/_nv.h
 SYSINCS+=	${SRCTOP}/sys/sys/nv.h ${SRCTOP}/sys/sys/cnv.h \
 		${SRCTOP}/sys/sys/dnv.h ${SRCTOP}/sys/sys/nv_namespace.h
 
@@ -274,6 +391,12 @@ SYSINCS+=	${SRCTOP}/sys/sys/fnv_hash.h
 INCS+=	${SRCTOP}/include/elf.h
 SYSINCS+=	${SRCTOP}/sys/sys/elf.h
 SYSINCS+=	${SRCTOP}/sys/sys/ctf.h
+# for kbdcontrol:
+SYSINCS+=	${SRCTOP}/sys/sys/kbio.h
+# for kldxref:
+SYSINCS+=	${SRCTOP}/sys/sys/module.h
+# for libmd:
+SYSINCS+=	${SRCTOP}/sys/sys/md4.h
 
 # We want to run the build with only ${WORLDTMP} in $PATH to ensure we don't
 # accidentally run tools that are incompatible but happen to be in $PATH.
@@ -296,28 +419,55 @@ _host_tools_to_symlink=	basename bzip2 bunzip2 chmod chown cmp comm cp date dd \
 _make_abs!=	which "${MAKE}"
 _host_abs_tools_to_symlink=	${_make_abs}:make ${_make_abs}:bmake
 
+_LINK_HOST_TOOL=	ln -sfn
+
 .if ${.MAKE.OS} == "FreeBSD"
 # When building on FreeBSD we always copy the host tools instead of linking
 # into WORLDTMP to avoid issues with incompatible libraries (see r364030).
 # Note: we could create links if we don't intend to update the current machine.
-_COPY_HOST_TOOL=cp -pf
+_COPY_HOST_TOOL=	install -p
 .else
 # However, this is not necessary on Linux/macOS. Additionally, copying the host
 # tools to another directory with cp -p results in freezes on macOS Big Sur for
 # some unknown reason. It can also break building inside docker containers if
 # there are ACLs on shared volumes.
-_COPY_HOST_TOOL=ln -sfn
-_make_abs!=	which "${MAKE}"
-_host_abs_tools_to_symlink+=	${_make_abs}:make ${_make_abs}:bmake
+_COPY_HOST_TOOL=	${_LINK_HOST_TOOL}
+
 .if ${.MAKE.OS} == "Darwin"
 # /usr/bin/cpp may invoke xcrun:
-_host_tools_to_symlink+=xcrun
+_host_tools_to_symlink+=	xcrun
 .endif  # ${.MAKE.OS} == "Darwin"
-# On Ubuntu /bin/sh is dash which is totally useless. Let's just link bash
-# as the build sh since that will work fine.
+
+# On Ubuntu /bin/sh is dash which is totally useless, and the same for modern
+# macOS. Let's just link bash as the build sh since that will work fine.
 _host_abs_tools_to_symlink+=	/bin/bash:sh
-_host_tools_to_symlink:=${_host_tools_to_symlink:Nsh}
+_host_tools_to_symlink:=	${_host_tools_to_symlink:Nsh}
 .endif
+
+# We also need to symlink any non-absolute toolchain commands. Clang finds its
+# resource directory relative to itself, so CC/CXX/CPP cannot be copied, and
+# there should be no concerns about installing over the current system since we
+# don't use the toolchain during install, so that's not an issue. However,
+# before Clang 13 there was no symlink detection for FreeBSD so that was broken
+# in the same way as copying (https://reviews.llvm.org/D103346), thus create a
+# wrapper script for each to work around this and behave like a symlink.
+# Remove this hack and just use a symlink once Clang 13 can be assumed.
+# For consistency, we use the same strategy for LD.
+.include <bsd.compiler.mk>
+.if ${.MAKE.OS} == "FreeBSD" && ${COMPILER_TYPE} == "clang" && \
+    ${COMPILER_VERSION} < 130000
+_WRAP_HOST_TOOL=	sh -c "printf '\#!/bin/sh\nexec \"\%s\" \"\$$@\"\n' \"\$$0\" > \"\$$1\" && chmod +x \"\$$1\""
+.else
+_WRAP_HOST_TOOL=	${_LINK_HOST_TOOL}
+.endif
+.for var in CC CXX CPP LD
+.for X in $${_empty_var_} X
+.if !empty(${X}${var}) && !${${X}${var}:[1]:M/*} && \
+	!${_toolchain_tools_to_symlink:U:M${${X}${var}:[1]}}
+_toolchain_tools_to_symlink+=	${${X}${var}:[1]}
+.endif
+.endfor
+.endfor
 
 host-symlinks:
 	@echo "Linking host tools into ${DESTDIR}/bin"
@@ -343,16 +493,26 @@ host-symlinks:
 	rm -f ${DESTDIR}/usr/libexec/flua
 	${_COPY_HOST_TOOL} /usr/libexec/flua ${DESTDIR}/usr/libexec/flua
 .endif
+.for _tool in ${_toolchain_tools_to_symlink}
+	@export PATH=$${PATH}:/usr/local/bin; \
+	source_path=`which ${_tool} || echo /dev/null/no/such`; \
+	if [ ! -e "$${source_path}" ] ; then \
+		echo "Cannot find host tool '${_tool}' in PATH ($$PATH)." >&2; false; \
+	fi; \
+	rm -f "${DESTDIR}/bin/${_tool}"; \
+	${_WRAP_HOST_TOOL} "$${source_path}" "${DESTDIR}/bin/${_tool}"
+.endfor
 
 # Create all the directories that are needed during the legacy, bootstrap-tools
 # and cross-tools stages. We do this here using mkdir since mtree may not exist
 # yet (this happens if we are crossbuilding from Linux/Mac).
 INSTALLDIR_LIST= \
 	bin \
-	lib/casper \
 	lib/geom \
 	usr/include/casper \
+	usr/include/openssl \
 	usr/include/private/ucl \
+	usr/include/private/yaml \
 	usr/include/private/zstd \
 	usr/lib \
 	usr/libdata/pkgconfig \

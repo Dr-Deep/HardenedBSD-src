@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -59,6 +60,8 @@ _ZFS_FLETCHER_H int fletcher_2_incremental_native(void *, size_t, void *);
 _ZFS_FLETCHER_H int fletcher_2_incremental_byteswap(void *, size_t, void *);
 _ZFS_FLETCHER_H void fletcher_4_native_varsize(const void *, uint64_t,
     zio_cksum_t *);
+_ZFS_FLETCHER_H void fletcher_4_byteswap_varsize(const void *, uint64_t,
+    zio_cksum_t *);
 _ZFS_FLETCHER_H void fletcher_4_byteswap(const void *, uint64_t, const void *,
     zio_cksum_t *);
 _ZFS_FLETCHER_H int fletcher_4_incremental_native(void *, size_t, void *);
@@ -76,19 +79,19 @@ typedef struct zfs_fletcher_superscalar {
 } zfs_fletcher_superscalar_t;
 
 typedef struct zfs_fletcher_sse {
-	uint64_t v[2] __attribute__((aligned(16)));
+	uint64_t v[2];
 } zfs_fletcher_sse_t;
 
 typedef struct zfs_fletcher_avx {
-	uint64_t v[4] __attribute__((aligned(32)));
+	uint64_t v[4];
 } zfs_fletcher_avx_t;
 
 typedef struct zfs_fletcher_avx512 {
-	uint64_t v[8] __attribute__((aligned(64)));
+	uint64_t v[8];
 } zfs_fletcher_avx512_t;
 
 typedef struct zfs_fletcher_aarch64_neon {
-	uint64_t v[2] __attribute__((aligned(16)));
+	uint64_t v[2];
 } zfs_fletcher_aarch64_neon_t;
 
 
@@ -96,13 +99,13 @@ typedef union fletcher_4_ctx {
 	zio_cksum_t scalar;
 	zfs_fletcher_superscalar_t superscalar[4];
 
-#if defined(HAVE_SSE2) || (defined(HAVE_SSE2) && defined(HAVE_SSSE3))
+#if HAVE_SIMD(SSE2) || (HAVE_SIMD(SSE2) && HAVE_SIMD(SSSE3))
 	zfs_fletcher_sse_t sse[4];
 #endif
-#if defined(HAVE_AVX) && defined(HAVE_AVX2)
+#if HAVE_SIMD(AVX) && HAVE_SIMD(AVX2)
 	zfs_fletcher_avx_t avx[4];
 #endif
-#if defined(__x86_64) && defined(HAVE_AVX512F)
+#if defined(__x86_64) && HAVE_SIMD(AVX512F)
 	zfs_fletcher_avx512_t avx512[4];
 #endif
 #if defined(__aarch64__)
@@ -126,29 +129,30 @@ typedef struct fletcher_4_func {
 	fletcher_4_fini_f fini_byteswap;
 	fletcher_4_compute_f compute_byteswap;
 	boolean_t (*valid)(void);
+	boolean_t uses_fpu;
 	const char *name;
-} fletcher_4_ops_t;
+} __attribute__((aligned(64))) fletcher_4_ops_t;
 
 _ZFS_FLETCHER_H const fletcher_4_ops_t fletcher_4_superscalar_ops;
 _ZFS_FLETCHER_H const fletcher_4_ops_t fletcher_4_superscalar4_ops;
 
-#if defined(HAVE_SSE2)
+#if HAVE_SIMD(SSE2)
 _ZFS_FLETCHER_H const fletcher_4_ops_t fletcher_4_sse2_ops;
 #endif
 
-#if defined(HAVE_SSE2) && defined(HAVE_SSSE3)
+#if HAVE_SIMD(SSE2) && HAVE_SIMD(SSSE3)
 _ZFS_FLETCHER_H const fletcher_4_ops_t fletcher_4_ssse3_ops;
 #endif
 
-#if defined(HAVE_AVX) && defined(HAVE_AVX2)
+#if HAVE_SIMD(AVX) && HAVE_SIMD(AVX2)
 _ZFS_FLETCHER_H const fletcher_4_ops_t fletcher_4_avx2_ops;
 #endif
 
-#if defined(__x86_64) && defined(HAVE_AVX512F)
+#if defined(__x86_64) && HAVE_SIMD(AVX512F)
 _ZFS_FLETCHER_H const fletcher_4_ops_t fletcher_4_avx512f_ops;
 #endif
 
-#if defined(__x86_64) && defined(HAVE_AVX512BW)
+#if defined(__x86_64) && HAVE_SIMD(AVX512BW)
 _ZFS_FLETCHER_H const fletcher_4_ops_t fletcher_4_avx512bw_ops;
 #endif
 
@@ -159,21 +163,5 @@ _ZFS_FLETCHER_H const fletcher_4_ops_t fletcher_4_aarch64_neon_ops;
 #ifdef	__cplusplus
 }
 #endif
-
-#if	defined(ZFS_UBSAN_ENABLED)
-#if	defined(__has_attribute)
-#if	__has_attribute(no_sanitize_undefined)
-#define	ZFS_NO_SANITIZE_UNDEFINED __attribute__((no_sanitize_undefined))
-#elif	__has_attribute(no_sanitize)
-#define	ZFS_NO_SANITIZE_UNDEFINED __attribute__((no_sanitize("undefined")))
-#else
-#error	"Compiler has to support attribute "
-	"`no_sanitize_undefined` or `no_sanitize(\"undefined\")`"
-	"when compiling with UBSan enabled"
-#endif	/* __has_attribute(no_sanitize_undefined) */
-#endif	/* defined(__has_attribute) */
-#else
-#define	ZFS_NO_SANITIZE_UNDEFINED
-#endif	/* defined(ZFS_UBSAN_ENABLED) */
 
 #endif	/* _ZFS_FLETCHER_H */

@@ -34,13 +34,9 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	from: @(#)machdep.c	7.4 (Berkeley) 6/3/91
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_acpi.h"
 #include "opt_atpic.h"
 #include "opt_cpu.h"
@@ -52,7 +48,6 @@ __FBSDID("$FreeBSD$");
 #include "opt_maxmem.h"
 #include "opt_pax.h"
 #include "opt_platform.h"
-#include "opt_sched.h"
 #ifdef __i386__
 #include "opt_apic.h"
 #endif
@@ -70,6 +65,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/mutex.h>
 #include <sys/pcpu.h>
+#include <sys/pmckern.h>
 #include <sys/rwlock.h>
 #include <sys/sched.h>
 #include <sys/smp.h>
@@ -81,6 +77,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/cputypes.h>
 #include <machine/specialreg.h>
 #include <machine/md_var.h>
+#include <machine/trap.h>
 #include <machine/tss.h>
 #ifdef SMP
 #include <machine/smp.h>
@@ -122,23 +119,78 @@ struct msr_op_arg {
 	int op;
 	uint64_t arg1;
 	uint64_t *res;
+	bool safe;
+	int error;
 };
 
 static void
-x86_msr_op_one(void *argp)
+x86_msr_op_one_safe(struct msr_op_arg *a)
 {
-	struct msr_op_arg *a;
+	uint64_t v;
+	int error;
+
+	error = 0;
+	switch (a->op) {
+	case MSR_OP_ANDNOT:
+		error = rdmsr_safe(a->msr, &v);
+		if (error != 0) {
+			atomic_cmpset_int(&a->error, 0, error);
+			break;
+		}
+		if (a->res != NULL)
+			atomic_store_64(a->res, v);
+		v &= ~a->arg1;
+		error = wrmsr_safe(a->msr, v);
+		if (error != 0)
+			atomic_cmpset_int(&a->error, 0, error);
+		break;
+	case MSR_OP_OR:
+		error = rdmsr_safe(a->msr, &v);
+		if (error != 0) {
+			atomic_cmpset_int(&a->error, 0, error);
+			break;
+		}
+		if (a->res != NULL)
+			atomic_store_64(a->res, v);
+		v |= a->arg1;
+		error = wrmsr_safe(a->msr, v);
+		if (error != 0)
+			atomic_cmpset_int(&a->error, 0, error);
+		break;
+	case MSR_OP_WRITE:
+		error = wrmsr_safe(a->msr, a->arg1);
+		if (error != 0)
+			atomic_cmpset_int(&a->error, 0, error);
+		break;
+	case MSR_OP_READ:
+		error = rdmsr_safe(a->msr, &v);
+		if (error == 0) {
+			if (a->res != NULL)
+				atomic_store_64(a->res, v);
+		} else {
+			atomic_cmpset_int(&a->error, 0, error);
+		}
+		break;
+	}
+}
+
+static void
+x86_msr_op_one_unsafe(struct msr_op_arg *a)
+{
 	uint64_t v;
 
-	a = argp;
 	switch (a->op) {
 	case MSR_OP_ANDNOT:
 		v = rdmsr(a->msr);
+		if (a->res != NULL)
+			atomic_store_64(a->res, v);
 		v &= ~a->arg1;
 		wrmsr(a->msr, v);
 		break;
 	case MSR_OP_OR:
 		v = rdmsr(a->msr);
+		if (a->res != NULL)
+			atomic_store_64(a->res, v);
 		v |= a->arg1;
 		wrmsr(a->msr, v);
 		break;
@@ -147,37 +199,97 @@ x86_msr_op_one(void *argp)
 		break;
 	case MSR_OP_READ:
 		v = rdmsr(a->msr);
-		*a->res = v;
+		if (a->res != NULL)
+			atomic_store_64(a->res, v);
 		break;
+	default:
+		__assert_unreachable();
 	}
+}
+
+static void
+x86_msr_op_one(void *arg)
+{
+	struct msr_op_arg *a;
+
+	a = arg;
+	if (a->safe)
+		x86_msr_op_one_safe(a);
+	else
+		x86_msr_op_one_unsafe(a);
 }
 
 #define	MSR_OP_EXMODE_MASK	0xf0000000
 #define	MSR_OP_OP_MASK		0x000000ff
-#define	MSR_OP_GET_CPUID(x)	(((x) & ~MSR_OP_EXMODE_MASK) >> 8)
+#define	MSR_OP_GET_CPUID(x) \
+    (((x) & ~(MSR_OP_EXMODE_MASK | MSR_OP_SAFE)) >> 8)
 
-void
+/*
+ * Utility function to wrap common MSR accesses.
+ *
+ * The msr argument specifies the MSR number to operate on.
+ * arg1 is an optional additional argument which is needed by
+ * modifying ops.
+ *
+ * res is the location where the value read from MSR is placed.  It is
+ * the value that was initially read from the MSR, before applying the
+ * specified operation.  Can be NULL if the value is not needed.  If
+ * the op is executed on more than one CPU, it is unspecified on which
+ * CPU the value was read.
+ *
+ * op encoding combines the target/mode specification and the requested
+ * operation, all or-ed together.
+ *
+ * MSR accesses are executed with interrupts disabled.
+
+ * The following targets can be specified:
+ * MSR_OP_LOCAL				execute on current CPU.
+ * MSR_OP_SCHED_ALL			execute on all CPUs, by migrating
+ *					the current thread to them in sequence.
+ * MSR_OP_SCHED_ALL | MSR_OP_SAFE	execute on all CPUs by migrating, using
+ *					safe MSR access.
+ * MSR_OP_SCHED_ONE			execute on specified CPU, migrate
+ *					curthread to it.
+ * MSR_OP_SCHED_ONE | MSR_OP_SAFE	safely execute on specified CPU,
+ *					migrate curthread to it.
+ * MSR_OP_RENDEZVOUS_ALL		execute on all CPUs in interrupt
+ *					context.
+ * MSR_OP_RENDEZVOUS_ONE		execute on specified CPU in interrupt
+ *					context.
+ * If a _ONE target is specified, 'or' the op value with MSR_OP_CPUID(cpuid)
+ * to name the target CPU.  _SAFE variants might return EFAULT if access to
+ * MSR faulted with #GP.  Non-_SAFE variants most likely panic or reboot
+ * the machine if the MSR is not present or access is not tolerated by hw.
+ *
+ * The following operations can be specified:
+ * MSR_OP_ANDNOT	*res = v = *msr; *msr = v & ~arg1
+ * MSR_OP_OR		*res = v = *msr; *msr = v | arg1
+ * MSR_OP_READ		*res = *msr
+ * MSR_OP_WRITE		*res = *msr; *msr = arg1
+ */
+int
 x86_msr_op(u_int msr, u_int op, uint64_t arg1, uint64_t *res)
 {
 	struct thread *td;
 	struct msr_op_arg a;
 	cpuset_t set;
+	register_t flags;
 	u_int exmode;
 	int bound_cpu, cpu, i, is_bound;
 
-	a.op = op & MSR_OP_OP_MASK;
-	MPASS(a.op == MSR_OP_ANDNOT || a.op == MSR_OP_OR ||
-	    a.op == MSR_OP_WRITE || a.op == MSR_OP_READ);
 	exmode = op & MSR_OP_EXMODE_MASK;
-	MPASS(exmode == MSR_OP_LOCAL || exmode == MSR_OP_SCHED_ALL ||
-	    exmode == MSR_OP_SCHED_ONE || exmode == MSR_OP_RENDEZVOUS_ALL ||
-	    exmode == MSR_OP_RENDEZVOUS_ONE);
+	a.op = op & MSR_OP_OP_MASK;
 	a.msr = msr;
+	a.safe = (op & MSR_OP_SAFE) != 0;
 	a.arg1 = arg1;
 	a.res = res;
+	a.error = 0;
+
 	switch (exmode) {
 	case MSR_OP_LOCAL:
+		flags = intr_disable();
 		x86_msr_op_one(&a);
+		intr_restore(flags);
 		break;
 	case MSR_OP_SCHED_ALL:
 		td = curthread;
@@ -212,8 +324,8 @@ x86_msr_op(u_int msr, u_int op, uint64_t arg1, uint64_t *res)
 		thread_unlock(td);
 		break;
 	case MSR_OP_RENDEZVOUS_ALL:
-		smp_rendezvous(smp_no_rendezvous_barrier, x86_msr_op_one,
-		    smp_no_rendezvous_barrier, &a);
+		smp_rendezvous(smp_no_rendezvous_barrier,
+		    x86_msr_op_one, smp_no_rendezvous_barrier, &a);
 		break;
 	case MSR_OP_RENDEZVOUS_ONE:
 		cpu = MSR_OP_GET_CPUID(op);
@@ -221,7 +333,10 @@ x86_msr_op(u_int msr, u_int op, uint64_t arg1, uint64_t *res)
 		smp_rendezvous_cpus(set, smp_no_rendezvous_barrier,
 		    x86_msr_op_one, smp_no_rendezvous_barrier, &a);
 		break;
+	default:
+		__assert_unreachable();
 	}
+	return (a.error);
 }
 
 /*
@@ -309,8 +424,9 @@ int
 cpu_est_clockrate(int cpu_id, uint64_t *rate)
 {
 	uint64_t tsc1, tsc2;
-	uint64_t acnt, mcnt, perf;
+	uint64_t acnt_start, acnt_end, mcnt_start, mcnt_end, perf;
 	register_t reg;
+	int error = 0;
 
 	if (pcpu_find(cpu_id) == NULL || rate == NULL)
 		return (EINVAL);
@@ -338,15 +454,20 @@ cpu_est_clockrate(int cpu_id, uint64_t *rate)
 	/* Calibrate by measuring a short delay. */
 	reg = intr_disable();
 	if (tsc_is_invariant) {
-		wrmsr(MSR_MPERF, 0);
-		wrmsr(MSR_APERF, 0);
+		mcnt_start = rdmsr(MSR_MPERF);
+		acnt_start = rdmsr(MSR_APERF);
 		tsc1 = rdtsc();
 		DELAY(1000);
-		mcnt = rdmsr(MSR_MPERF);
-		acnt = rdmsr(MSR_APERF);
+		mcnt_end = rdmsr(MSR_MPERF);
+		acnt_end = rdmsr(MSR_APERF);
 		tsc2 = rdtsc();
 		intr_restore(reg);
-		perf = 1000 * acnt / mcnt;
+		if (mcnt_end == mcnt_start) {
+			tsc_perf_stat = 0;
+			error = EOPNOTSUPP;
+			goto err;
+		}
+		perf = 1000 * (acnt_end - acnt_start) / (mcnt_end - mcnt_start);
 		*rate = (tsc2 - tsc1) * perf;
 	} else {
 		tsc1 = rdtsc();
@@ -356,6 +477,7 @@ cpu_est_clockrate(int cpu_id, uint64_t *rate)
 		*rate = (tsc2 - tsc1) * 1000;
 	}
 
+err:
 #ifdef SMP
 	if (smp_cpus > 1) {
 		thread_lock(curthread);
@@ -364,7 +486,7 @@ cpu_est_clockrate(int cpu_id, uint64_t *rate)
 	}
 #endif
 
-	return (0);
+	return (error);
 }
 
 /*
@@ -546,9 +668,7 @@ cpu_idle_enter(int *statep, int newstate)
 	 * is visible before calling cpu_idle_wakeup().
 	 */
 	atomic_store_int(statep, newstate);
-#if defined(SCHED_ULE) && defined(SMP)
 	atomic_thread_fence_seq_cst();
-#endif
 
 	/*
 	 * Since we may be in a critical section from cpu_idle(), if
@@ -691,7 +811,7 @@ out:
 }
 
 static int cpu_idle_apl31_workaround;
-SYSCTL_INT(_machdep, OID_AUTO, idle_apl31, CTLFLAG_RW,
+SYSCTL_INT(_machdep, OID_AUTO, idle_apl31, CTLFLAG_RWTUN | CTLFLAG_NOFETCH,
     &cpu_idle_apl31_workaround, 0,
     "Apollo Lake APL31 MWAIT bug workaround");
 
@@ -720,9 +840,9 @@ cpu_idle_wakeup(int cpu)
 /*
  * Ordered by speed/power consumption.
  */
-static struct {
+static const struct {
 	void	*id_fn;
-	char	*id_name;
+	const char *id_name;
 	int	id_cpuid2_flag;
 } idle_tbl[] = {
 	{ .id_fn = cpu_idle_spin, .id_name = "spin" },
@@ -786,7 +906,8 @@ cpu_idle_selector(const char *new_idle_name)
 static int
 cpu_idle_sysctl(SYSCTL_HANDLER_ARGS)
 {
-	char buf[16], *p;
+	char buf[16];
+	const char *p;
 	int error, i;
 
 	p = "unknown";
@@ -804,7 +925,7 @@ cpu_idle_sysctl(SYSCTL_HANDLER_ARGS)
 }
 
 SYSCTL_PROC(_machdep, OID_AUTO, idle,
-    CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_MPSAFE,
+    CTLTYPE_STRING | CTLFLAG_RWTUN | CTLFLAG_NOFETCH | CTLFLAG_MPSAFE,
     0, 0, cpu_idle_sysctl, "A",
     "currently selected idle function");
 
@@ -824,7 +945,7 @@ cpu_idle_tun(void *unused __unused)
 	}
 
 	if (cpu_vendor_id == CPU_VENDOR_INTEL &&
-	    (cpu_id == 0x506c9 || cpu_id == 0x506ca)) {
+	    CPUID_TO_FAMILY(cpu_id) == 0x6 && CPUID_TO_MODEL(cpu_id) == 0x5c) {
 		/*
 		 * Apollo Lake errata APL31 (public errata APL30).
 		 * Stores to the armed address range may not trigger
@@ -889,17 +1010,109 @@ nmi_call_kdb(u_int cpu, u_int type, struct trapframe *frame)
 		panic("NMI");
 }
 
+/*
+ * Dynamically registered NMI handlers.
+ */
+struct nmi_handler {
+	int running;
+	int (*func)(struct trapframe *);
+	struct nmi_handler *next;
+};
+static struct nmi_handler *nmi_handlers_head = NULL;
+MALLOC_DEFINE(M_NMI, "NMI handlers",
+    "List entries for dynamically registered NMI handlers");
+
 void
-nmi_handle_intr(u_int type, struct trapframe *frame)
+nmi_register_handler(int (*handler)(struct trapframe *))
 {
+	struct nmi_handler *hp;
+	int (*hpf)(struct trapframe *);
+
+	hp = (struct nmi_handler *)atomic_load_acq_ptr(
+	    (uintptr_t *)&nmi_handlers_head);
+	while (hp != NULL) {
+		hpf = hp->func;
+		MPASS(hpf != handler);
+		if (hpf == NULL &&
+		    atomic_cmpset_ptr((volatile uintptr_t *)&hp->func,
+		    (uintptr_t)NULL, (uintptr_t)handler) != 0) {
+			hp->running = 0;
+			return;
+		}
+		hp = (struct nmi_handler *)atomic_load_acq_ptr(
+		    (uintptr_t *)&hp->next);
+	}
+	hp = malloc(sizeof(struct nmi_handler), M_NMI, M_WAITOK | M_ZERO);
+	hp->func = handler;
+	hp->next = nmi_handlers_head;
+	while (atomic_fcmpset_rel_ptr(
+	    (volatile uintptr_t *)&nmi_handlers_head,
+	    (uintptr_t *)&hp->next, (uintptr_t)hp) == 0)
+	        ;
+}
+
+void
+nmi_remove_handler(int (*handler)(struct trapframe *))
+{
+	struct nmi_handler *hp;
+
+	hp = (struct nmi_handler *)atomic_load_acq_ptr(
+	    (uintptr_t *)&nmi_handlers_head);
+	while (hp != NULL) {
+		if (hp->func == handler) {
+			hp->func = NULL;
+			/* Wait for the handler to exit before returning. */
+			while (atomic_load_int(&hp->running) != 0)
+				cpu_spinwait();
+			return;
+		}
+		hp = (struct nmi_handler *)atomic_load_acq_ptr(
+		    (uintptr_t *)&hp->next);
+	}
+
+	panic("%s: attempting to remove an unregistered NMI handler %p\n",
+	    __func__, handler);
+}
+
+void
+nmi_handle_intr(struct trapframe *frame)
+{
+	int (*func)(struct trapframe *);
+	struct nmi_handler *hp;
+	int rv;
+	bool handled;
 
 #ifdef SMP
+	/* Handler for NMI IPIs used for stopping CPUs. */
+	if (ipi_nmi_handler() == 0)
+		return;
+#endif
+	handled = false;
+	hp = (struct nmi_handler *)atomic_load_acq_ptr(
+	    (uintptr_t *)&nmi_handlers_head);
+	while (!handled && hp != NULL) {
+		func = hp->func;
+		if (func != NULL) {
+			atomic_add_int(&hp->running, 1);
+			rv = func(frame);
+			atomic_subtract_int(&hp->running, 1);
+			if (rv != 0) {
+				handled = true;
+				break;
+			}
+		}
+		hp = (struct nmi_handler *)atomic_load_acq_ptr(
+		    (uintptr_t *)&hp->next);
+	}
+	if (handled)
+		return;
+#ifdef SMP
 	if (nmi_is_broadcast) {
-		nmi_call_kdb_smp(type, frame);
+		nmi_call_kdb_smp(T_NMI, frame);
 		return;
 	}
 #endif
-	nmi_call_kdb(PCPU_GET(cpuid), type, frame);
+	nmi_call_kdb(PCPU_GET(cpuid), T_NMI, frame);
 }
 
 static int hw_ibrs_active;
@@ -1482,6 +1695,129 @@ SYSCTL_PROC(_machdep_mitigations_rngds, OID_AUTO, state,
     CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, 0,
     sysctl_rngds_state_handler, "A",
     "MCU Optimization state");
+
+
+/*
+ * Zenbleed.
+ *
+ * No corresponding errata is publicly listed.  AMD has issued a security
+ * bulletin (AMD-SB-7008), entitled "Cross-Process Information Leak".  This
+ * document lists (as of August 2023) platform firmware's availability target
+ * dates, with most being November/December 2023.  It will then be up to
+ * motherboard manufacturers to produce corresponding BIOS updates, which will
+ * happen with an inevitable lag.  Additionally, for a variety of reasons,
+ * operators might not be able to apply them everywhere due.  On the side of
+ * standalone CPU microcodes, no plans for availability have been published so
+ * far.  However, a developer appearing to be an AMD employee has hardcoded in
+ * Linux revision numbers of future microcodes that are presumed to fix the
+ * vulnerability.
+ *
+ * Given the stability issues encountered with early microcode releases for Rome
+ * (the only microcode publicly released so far) and the absence of official
+ * communication on standalone CPU microcodes, we have opted instead for
+ * matching by default all AMD Zen2 processors which, according to the
+ * vulnerability's discoverer, are all affected (see
+ * https://lock.cmpxchg8b.com/zenbleed.html).  This policy, also adopted by
+ * OpenBSD, may be overriden using the tunable/sysctl
+ * 'machdep.mitigations.zenbleed.enable'.  We might revise it later depending on
+ * official statements, microcode updates' public availability and community
+ * assessment that they actually fix the vulnerability without any instability
+ * side effects.
+ */
+
+SYSCTL_NODE(_machdep_mitigations, OID_AUTO, zenbleed,
+    CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "Zenbleed OS-triggered prevention (via chicken bit)");
+
+/* 2 is auto, see below. */
+int zenbleed_enable = 2;
+
+void
+zenbleed_sanitize_enable(void)
+{
+	/* Default to auto (2). */
+	if (zenbleed_enable < 0 || zenbleed_enable > 2)
+		zenbleed_enable = 2;
+}
+
+static bool
+zenbleed_chicken_bit_applicable(void)
+{
+	/* Concerns only bare-metal AMD Zen2 processors. */
+	return (cpu_vendor_id == CPU_VENDOR_AMD &&
+	    CPUID_TO_FAMILY(cpu_id) == 0x17 &&
+	    CPUID_TO_MODEL(cpu_id) >= 0x30 &&
+	    vm_guest == VM_GUEST_NO);
+}
+
+static bool
+zenbleed_chicken_bit_should_enable(void)
+{
+	/*
+	 * Obey tunable/sysctl.
+	 *
+	 * As explained above, currently, the automatic setting (2) and the "on"
+	 * one (1) have the same effect.  In the future, we might additionally
+	 * check for specific microcode revisions as part of the automatic
+	 * determination.
+	 */
+	return (zenbleed_enable != 0);
+}
+
+void
+zenbleed_check_and_apply(bool all_cpus)
+{
+	bool set;
+
+	if (!zenbleed_chicken_bit_applicable())
+		return;
+
+	set = zenbleed_chicken_bit_should_enable();
+
+	x86_msr_op(MSR_DE_CFG,
+	    (set ? MSR_OP_OR : MSR_OP_ANDNOT) |
+	    (all_cpus ? MSR_OP_RENDEZVOUS_ALL : MSR_OP_LOCAL),
+	    DE_CFG_ZEN2_FP_BACKUP_FIX_BIT, NULL);
+}
+
+static int
+sysctl_zenbleed_enable_handler(SYSCTL_HANDLER_ARGS)
+{
+	int error, val;
+
+	val = zenbleed_enable;
+	error = sysctl_handle_int(oidp, &val, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	zenbleed_enable = val;
+	zenbleed_sanitize_enable();
+	zenbleed_check_and_apply(true);
+	return (0);
+}
+SYSCTL_PROC(_machdep_mitigations_zenbleed, OID_AUTO, enable, CTLTYPE_INT |
+    CTLFLAG_RWTUN | CTLFLAG_NOFETCH | CTLFLAG_MPSAFE, NULL, 0,
+    sysctl_zenbleed_enable_handler, "I",
+    "Enable Zenbleed OS-triggered mitigation (chicken bit) "
+    "(0: Force disable, 1: Force enable, 2: Automatic determination)");
+
+static int
+sysctl_zenbleed_state_handler(SYSCTL_HANDLER_ARGS)
+{
+	const char *state;
+
+	if (!zenbleed_chicken_bit_applicable())
+		state = "Not applicable";
+	else if (zenbleed_chicken_bit_should_enable())
+		state = "Mitigation enabled";
+	else
+		state = "Mitigation disabled";
+	return (SYSCTL_OUT(req, state, strlen(state)));
+}
+SYSCTL_PROC(_machdep_mitigations_zenbleed, OID_AUTO, state,
+    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, 0,
+    sysctl_zenbleed_state_handler, "A",
+    "Zenbleed OS-triggered mitigation (chicken bit) state");
+
 
 /*
  * Enable and restore kernel text write permissions.

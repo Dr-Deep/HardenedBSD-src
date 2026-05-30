@@ -32,21 +32,18 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)systm.h	8.7 (Berkeley) 3/29/95
- * $FreeBSD$
  */
 
 #ifndef _SYS_SYSTM_H_
 #define	_SYS_SYSTM_H_
 
-#include <sys/cdefs.h>
-#include <machine/atomic.h>
-#include <machine/cpufunc.h>
+#include <sys/types.h>
 #include <sys/callout.h>
 #include <sys/kassert.h>
 #include <sys/queue.h>
 #include <sys/stdint.h>		/* for people using printf mainly */
+#include <machine/atomic.h>
+#include <machine/cpufunc.h>
 
 __NULLABILITY_PRAGMA_PUSH
 
@@ -54,9 +51,9 @@ __NULLABILITY_PRAGMA_PUSH
 extern int cold;		/* nonzero if we are doing a cold boot */
 extern int suspend_blocked;	/* block suspend due to pending shutdown */
 extern int rebooting;		/* kern_reboot() has been called. */
-extern char version[];		/* system version */
-extern char compiler_version[];	/* compiler version */
-extern char copyright[];	/* system copyright */
+extern const char version[];	/* system version */
+extern const char compiler_version[];	/* compiler version */
+extern const char copyright[];	/* system copyright */
 extern int kstack_pages;	/* number of kernel stack pages */
 
 extern u_long pagesizes[];	/* supported page sizes */
@@ -82,7 +79,7 @@ extern u_long maxphys;		/* max raw I/O transfer size */
  */
 enum VM_GUEST { VM_GUEST_NO = 0, VM_GUEST_VM, VM_GUEST_XEN, VM_GUEST_HV,
 		VM_GUEST_VMWARE, VM_GUEST_KVM, VM_GUEST_BHYVE, VM_GUEST_VBOX,
-		VM_GUEST_PARALLELS, VM_LAST };
+		VM_GUEST_PARALLELS, VM_GUEST_NVMM, VM_GUEST_LAST };
 
 #endif /* KERNEL */
 
@@ -102,7 +99,17 @@ struct ucred;
 #include <sys/pcpu.h>		/* curthread */
 #include <sys/kpilite.h>
 
-extern int osreldate;
+extern bool scheduler_stopped;
+
+/*
+ * If we have already panic'd and this is the thread that called
+ * panic(), then don't block on any mutexes but silently succeed.
+ * Otherwise, the kernel will deadlock since the scheduler isn't
+ * going to run the thread that holds any lock we need.
+ */
+#define	SCHEDULER_STOPPED()	__predict_false(scheduler_stopped)
+
+extern const int osreldate;
 
 extern const void *zero_region;	/* address space maps to a zeroed page	*/
 
@@ -120,12 +127,10 @@ extern int unmapped_buf_allowed;
  * General function declarations.
  */
 
-struct inpcb;
 struct lock_object;
 struct malloc_type;
 struct mtx;
 struct proc;
-struct socket;
 struct thread;
 struct tty;
 struct ucred;
@@ -201,6 +206,16 @@ critical_exit(void)
 #ifdef  EARLY_PRINTF
 typedef void early_putc_t(int ch);
 extern early_putc_t *early_putc;
+#define	CHECK_EARLY_PRINTF(x)	\
+    __CONCAT(early_printf_, EARLY_PRINTF) == __CONCAT(early_printf_, x)
+#define	early_printf_1		1
+#define	early_printf_mvebu	2
+#define	early_printf_ns8250	3
+#define	early_printf_pl011	4
+#define	early_printf_snps	5
+#define	early_printf_sbi	6
+#else
+#define	CHECK_EARLY_PRINTF(x)	0
 #endif
 int	kvprintf(char const *, void (*)(int, void*), void *, int,
 	    __va_list) __printflike(1, 0);
@@ -285,17 +300,18 @@ void	*memmove_early(void * _Nonnull dest, const void * _Nonnull src, size_t n);
 	((__r >= __len) ? ENAMETOOLONG : 0);			\
 })
 
-int	copyinstr(const void * __restrict udaddr,
-	    void * _Nonnull __restrict kaddr, size_t len,
-	    size_t * __restrict lencopied);
-int	copyin(const void * __restrict udaddr,
-	    void * _Nonnull __restrict kaddr, size_t len);
-int	copyin_nofault(const void * __restrict udaddr,
-	    void * _Nonnull __restrict kaddr, size_t len);
-int	copyout(const void * _Nonnull __restrict kaddr,
-	    void * __restrict udaddr, size_t len);
-int	copyout_nofault(const void * _Nonnull __restrict kaddr,
-	    void * __restrict udaddr, size_t len);
+int __result_use_check copyinstr(const void * __restrict udaddr,
+    void * _Nonnull __restrict kaddr, size_t len,
+    size_t * __restrict lencopied);
+int __result_use_check copyin(const void * __restrict udaddr,
+    void * _Nonnull __restrict kaddr, size_t len);
+int __result_use_check copyin_nofault(const void * __restrict udaddr,
+    void * _Nonnull __restrict kaddr, size_t len);
+__nodiscard int copyout(const void * _Nonnull __restrict kaddr,
+    void * __restrict udaddr, size_t len);
+__nodiscard int copyout_nofault(
+    const void * _Nonnull __restrict kaddr, void * __restrict udaddr,
+    size_t len);
 
 #ifdef SAN_NEEDS_INTERCEPTORS
 int	SAN_INTERCEPTOR(copyin)(const void *, void *, size_t);
@@ -313,14 +329,14 @@ long	fuword(volatile const void *base);
 int	fuword16(volatile const void *base);
 int32_t	fuword32(volatile const void *base);
 int64_t	fuword64(volatile const void *base);
-int	fueword(volatile const void *base, long *val);
-int	fueword32(volatile const void *base, int32_t *val);
-int	fueword64(volatile const void *base, int64_t *val);
-int	subyte(volatile void *base, int byte);
-int	suword(volatile void *base, long word);
-int	suword16(volatile void *base, int word);
-int	suword32(volatile void *base, int32_t word);
-int	suword64(volatile void *base, int64_t word);
+int __result_use_check fueword(volatile const void *base, long *val);
+int __result_use_check fueword32(volatile const void *base, int32_t *val);
+int __result_use_check fueword64(volatile const void *base, int64_t *val);
+__nodiscard int subyte(volatile void *base, int byte);
+__nodiscard int suword(volatile void *base, long word);
+__nodiscard int suword16(volatile void *base, int word);
+__nodiscard int suword32(volatile void *base, int32_t word);
+__nodiscard int suword64(volatile void *base, int64_t word);
 uint32_t casuword32(volatile uint32_t *base, uint32_t oldval, uint32_t newval);
 u_long	casuword(volatile u_long *p, u_long oldval, u_long newval);
 int	casueword32(volatile uint32_t *base, uint32_t oldval, uint32_t *oldvalp,
@@ -448,8 +464,11 @@ int	msleep_spin_sbt(const void * _Nonnull chan, struct mtx *mtx,
 	    0, C_HARDCLOCK)
 int	pause_sbt(const char *wmesg, sbintime_t sbt, sbintime_t pr,
 	    int flags);
-#define	pause(wmesg, timo)						\
-	pause_sbt((wmesg), tick_sbt * (timo), 0, C_HARDCLOCK)
+static __inline int
+pause(const char *wmesg, int timo)
+{
+	return (pause_sbt(wmesg, tick_sbt * timo, 0, C_HARDCLOCK));
+}
 #define	pause_sig(wmesg, timo)						\
 	pause_sbt((wmesg), tick_sbt * (timo), 0, C_HARDCLOCK | C_CATCH)
 #define	tsleep(chan, pri, wmesg, timo)					\
@@ -479,6 +498,8 @@ int poll_no_poll(int events);
 /* XXX: Should be void nanodelay(u_int nsec); */
 void	DELAY(int usec);
 
+int kcmp_cmp(uintptr_t a, uintptr_t b);
+
 /* Root mount holdback API */
 struct root_hold_token {
 	int				flags;
@@ -506,10 +527,9 @@ int alloc_unr(struct unrhdr *uh);
 int alloc_unr_specific(struct unrhdr *uh, u_int item);
 int alloc_unrl(struct unrhdr *uh);
 void free_unr(struct unrhdr *uh, u_int item);
-
-#ifndef __LP64__
-#define UNR64_LOCKED
-#endif
+void *create_iter_unr(struct unrhdr *uh);
+int next_iter_unr(void *handle);
+void free_iter_unr(void *handle);
 
 struct unrhdr64 {
         uint64_t	counter;
@@ -522,35 +542,54 @@ new_unrhdr64(struct unrhdr64 *unr64, uint64_t low)
 	unr64->counter = low;
 }
 
-#ifdef UNR64_LOCKED
-uint64_t alloc_unr64(struct unrhdr64 *);
-#else
 static __inline uint64_t
 alloc_unr64(struct unrhdr64 *unr64)
 {
 
 	return (atomic_fetchadd_64(&unr64->counter, 1));
 }
-#endif
 
 void	intr_prof_stack_use(struct thread *td, struct trapframe *frame);
 
 void counted_warning(unsigned *counter, const char *msg);
 
 /*
+ * Safely read one byte of kernel memory at address addr, placing the
+ * value into *valp.  Returns 0 on success, EFAULT if read was
+ * impossible, e.g. due to the address not being mapped or not having
+ * necessary permissions.
+ */
+int safe_read(vm_offset_t addr, char *valp);
+
+/*
  * APIs to manage deprecation and obsolescence.
  */
-void _gone_in(int major, const char *msg);
-void _gone_in_dev(device_t dev, int major, const char *msg);
+void _gone_in(int major, const char *msg, ...) __printflike(2, 3);
+void _gone_in_dev(device_t dev, int major, const char *msg, ...)
+    __printflike(3, 4);
 #ifdef NO_OBSOLETE_CODE
 #define __gone_ok(m, msg)					 \
 	_Static_assert(m < P_OSREL_MAJOR(__FreeBSD_version)),	 \
-	    "Obsolete code: " msg);
+	    "Obsolete code: " msg)
 #else
 #define	__gone_ok(m, msg)
 #endif
-#define gone_in(major, msg)		__gone_ok(major, msg) _gone_in(major, msg)
-#define gone_in_dev(dev, major, msg)	__gone_ok(major, msg) _gone_in_dev(dev, major, msg)
+#define gone_in(major, msg, ...)	do {				\
+	static bool __read_mostly __gone_in_ ## __LINE__ = true;	\
+	__gone_ok(major, msg);						\
+	if (__predict_false(__gone_in_ ## __LINE__)) {			\
+		__gone_in_ ## __LINE__ = false;				\
+		_gone_in(major, msg __VA_OPT__(,) __VA_ARGS__);		\
+	}								\
+} while (0)
+#define gone_in_dev(dev, major, msg, ...)	do {			\
+	static bool __read_mostly __gone_in_ ## __LINE__ = true;	\
+	__gone_ok(major, msg);						\
+	if (__predict_false(__gone_in_ ## __LINE__)) {			\
+		__gone_in_ ## __LINE__ = false;				\
+		_gone_in_dev(dev, major, msg __VA_OPT__(,) __VA_ARGS__);\
+	}								\
+} while (0)
 
 #ifdef INVARIANTS
 #define	__diagused

@@ -23,15 +23,14 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
-.Dd August 7, 2022
+.Dd December 13, 2025
 .Dt REL2ABS 3
 .Os
 .Sh NAME
 .Nm rel2abs
 .Nd make an absolute path name from a relative path name
 .Sh SYNOPSIS
+.Lb libpathconv
 .Ft "char *"
 .Fn rel2abs "const char *path" "const char *base" "char *result" "size_t size"
 .Sh DESCRIPTION
@@ -92,6 +91,7 @@ argument is zero.
 The
 .Fa size
 argument is greater than zero but smaller than the length of the pathname plus 1
+.El
 .Sh SEE ALSO
 .Xr abs2rel 3
 .Sh AUTHORS

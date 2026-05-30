@@ -1,10 +1,7 @@
-# $FreeBSD$
-
-ZFSTOP=	${SRCTOP}/sys/contrib/openzfs
-
 .PATH: ${ZFSTOP}/cmd/zinject
 .PATH: ${ZFSTOP}/man/man8
 
+PACKAGE=	zfs
 PROG=	zinject
 INCS=	zinject.h
 SRCS=	zinject.c translate.c
@@ -16,6 +13,7 @@ CFLAGS+= \
 	-I${ZFSTOP}/include \
 	-I${ZFSTOP}/lib/libspl/include \
 	-I${ZFSTOP}/lib/libspl/include/os/freebsd \
+	-I${ZFSTOP}/lib/libzpool/include \
 	-I${SRCTOP}/sys \
 	-I${SRCTOP}/cddl/compat/opensolaris/include \
 	-I${ZFSTOP}/module/icp/include \
@@ -23,6 +21,6 @@ CFLAGS+= \
 	-DHAVE_ISSETUGID \
 	-include ${SRCTOP}/sys/modules/zfs/zfs_config.h
 
-LIBADD=	geom m nvpair umem uutil avl spl zfs_core zfs zutil zpool
+LIBADD=	geom m nvpair umem avl spl zfs_core zfs zutil zpool pthread
 
 .include <bsd.prog.mk>

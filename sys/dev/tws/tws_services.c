@@ -32,8 +32,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
  * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include <dev/tws/tws.h>
@@ -202,7 +200,7 @@ tws_init_qs(struct tws_softc *sc)
 {
 
     mtx_lock(&sc->q_lock);
-    for(int i=0;i<TWS_MAX_QS;i++) {
+    for (int i = 0; i < TWS_MAX_QS; i++) {
         sc->q_head[i] = NULL;
         sc->q_tail[i] = NULL;
     }

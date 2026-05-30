@@ -33,9 +33,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)extern.h	8.1 (Berkeley) 6/6/93
- * $FreeBSD$
  */
 
 /* eval.c */
@@ -98,7 +95,7 @@ extern int exit_code;
 extern void	chrsave(int);
 extern char	*compute_prevep(void);
 extern void	getdiv(int);
-extern ptrdiff_t indx(const char *, const char *);
+extern ptrdiff_t doindex(const char *, const char *);
 extern void	initspaces(void);
 extern void	killdiv(void);
 extern void	onintr(int);

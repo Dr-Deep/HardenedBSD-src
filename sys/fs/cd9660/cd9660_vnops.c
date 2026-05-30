@@ -32,12 +32,7 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)cd9660_vnops.c	8.19 (Berkeley) 5/27/95
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -61,6 +56,7 @@ __FBSDID("$FreeBSD$");
 
 #include <fs/cd9660/iso.h>
 #include <fs/cd9660/cd9660_node.h>
+#include <fs/cd9660/cd9660_mount.h>
 #include <fs/cd9660/iso_rrip.h>
 
 static vop_setattr_t	cd9660_setattr;
@@ -124,8 +120,11 @@ cd9660_access(struct vop_access_args *ap)
 	struct vnode *vp = ap->a_vp;
 	struct iso_node *ip = VTOI(vp);
 	accmode_t accmode = ap->a_accmode;
+	accmode_t file_mode;
+	uid_t uid;
+	gid_t gid;
 
-	if (vp->v_type == VCHR || vp->v_type == VBLK)
+	if (VN_ISDEV(vp))
 		return (EOPNOTSUPP);
 
 	/*
@@ -145,8 +144,16 @@ cd9660_access(struct vop_access_args *ap)
 		}
 	}
 
-	return (vaccess(vp->v_type, ip->inode.iso_mode, ip->inode.iso_uid,
-	    ip->inode.iso_gid, ap->a_accmode, ap->a_cred));
+	file_mode = ip->inode.iso_mode;
+	file_mode &= (vp->v_type == VDIR) ? ip->i_mnt->im_dmask : ip->i_mnt->im_fmask;
+
+	uid = (ip->i_mnt->im_flags & ISOFSMNT_UID) ?
+		ip->i_mnt->im_uid : ip->inode.iso_uid;
+	gid = (ip->i_mnt->im_flags & ISOFSMNT_GID) ?
+		ip->i_mnt->im_gid : ip->inode.iso_gid;
+
+	return (vaccess(vp->v_type, file_mode, uid,
+	    gid, ap->a_accmode, ap->a_cred));
 }
 
 static int
@@ -155,7 +162,7 @@ cd9660_open(struct vop_open_args *ap)
 	struct vnode *vp = ap->a_vp;
 	struct iso_node *ip = VTOI(vp);
 
-	if (vp->v_type == VCHR || vp->v_type == VBLK)
+	if (VN_ISDEV(vp))
 		return (EOPNOTSUPP);
 
 	vnode_create_vobject(vp, ip->i_size, ap->a_td);
@@ -174,16 +181,20 @@ cd9660_getattr(struct vop_getattr_args *ap)
 	vap->va_fileid	= ip->i_number;
 
 	vap->va_mode	= ip->inode.iso_mode;
+	vap->va_mode &= (vp->v_type == VDIR) ? ip->i_mnt->im_dmask : ip->i_mnt->im_fmask;
+
 	vap->va_nlink	= ip->inode.iso_links;
-	vap->va_uid	= ip->inode.iso_uid;
-	vap->va_gid	= ip->inode.iso_gid;
+	vap->va_uid	= (ip->i_mnt->im_flags & ISOFSMNT_UID) ?
+			ip->i_mnt->im_uid : ip->inode.iso_uid;
+	vap->va_gid	= (ip->i_mnt->im_flags & ISOFSMNT_GID) ?
+			ip->i_mnt->im_gid : ip->inode.iso_gid;
 	vap->va_atime	= ip->inode.iso_atime;
 	vap->va_mtime	= ip->inode.iso_mtime;
 	vap->va_ctime	= ip->inode.iso_ctime;
-	vap->va_rdev	= ip->inode.iso_rdev;
+	vap->va_rdev	= VN_ISDEV(vp) ? ip->inode.iso_rdev : NODEV;
 
-	vap->va_size	= (u_quad_t) ip->i_size;
-	if (ip->i_size == 0 && (vap->va_mode & S_IFMT) == S_IFLNK) {
+	vap->va_size	= ip->i_size;
+	if (ip->i_size == 0 && vp->v_type == VLNK) {
 		struct vop_readlink_args rdlnk;
 		struct iovec aiov;
 		struct uio auio;
@@ -231,7 +242,7 @@ cd9660_ioctl(struct vop_ioctl_args *ap)
 		VOP_UNLOCK(vp);
 		return (EBADF);
 	}
-	if (vp->v_type == VCHR || vp->v_type == VBLK) {
+	if (VN_ISDEV(vp)) {
 		VOP_UNLOCK(vp);
 		return (EOPNOTSUPP);
 	}
@@ -269,7 +280,7 @@ cd9660_read(struct vop_read_args *ap)
 	int seqcount;
 	long size, n, on;
 
-	if (vp->v_type == VCHR || vp->v_type == VBLK)
+	if (VN_ISDEV(vp))
 		return (EOPNOTSUPP);
 
 	seqcount = ap->a_ioflag >> IO_SEQSHIFT;
@@ -432,7 +443,7 @@ cd9660_readdir(struct vop_readdir_args *ap)
 	u_short namelen;
 	u_int ncookies = 0;
 	uint64_t *cookies = NULL;
-	cd_ino_t ino;
+	ino_t ino;
 
 	dp = VTOI(vdp);
 	imp = dp->i_mnt;
@@ -700,7 +711,7 @@ cd9660_strategy(struct vop_strategy_args *ap)
 	struct bufobj *bo;
 
 	ip = VTOI(vp);
-	if (vp->v_type == VBLK || vp->v_type == VCHR)
+	if (VN_ISDEV(vp))
 		panic("cd9660_strategy: spec");
 	if (bp->b_blkno == bp->b_lblkno) {
 		bp->b_blkno = (ip->iso_start + bp->b_lblkno) <<
@@ -746,6 +757,9 @@ cd9660_pathconf(struct vop_pathconf_args *ap)
 	}
 	/* NOTREACHED */
 }
+
+_Static_assert(sizeof(struct ifid) <= sizeof(struct fid),
+    "struct ifid must be no larger than struct fid");
 
 /*
  * Vnode pointer to File handle
@@ -804,7 +818,7 @@ cd9660_getpages(struct vop_getpages_args *ap)
 	struct vnode *vp;
 
 	vp = ap->a_vp;
-	if (vp->v_type == VCHR || vp->v_type == VBLK)
+	if (VN_ISDEV(vp))
 		return (EOPNOTSUPP);
 
 	if (use_buf_pager)

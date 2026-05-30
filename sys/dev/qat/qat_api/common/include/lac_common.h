@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/* Copyright(c) 2007-2022 Intel Corporation */
-/* $FreeBSD$ */
+/* Copyright(c) 2007-2025 Intel Corporation */
 /**
  *****************************************************************************
  * @file lac_common.h Common macros
@@ -575,7 +574,6 @@ typedef enum lac_expected_size_s {
  ******************************************************************************/
 #define LAC_QUADWORDS_TO_BYTES(x) ((x) << 3)
 
-
 /******************************************************************************/
 
 /*
@@ -756,17 +754,14 @@ typedef struct mtx *lac_lock_t;
 #define LAC_SPINLOCK(lock)                                                     \
 	({                                                                     \
 		(void)qatUtilsLock(lock);                                      \
-		CPA_STATUS_SUCCESS;                                            \
 	})
 #define LAC_SPINUNLOCK(lock)                                                   \
 	({                                                                     \
 		(void)qatUtilsUnlock(lock);                                    \
-		CPA_STATUS_SUCCESS;                                            \
 	})
 #define LAC_SPINLOCK_DESTROY(lock)                                             \
 	({                                                                     \
 		(void)qatUtilsLockDestroy(lock);                               \
-		CPA_STATUS_SUCCESS;                                            \
 	})
 
 #define LAC_CONST_PTR_CAST(castee) ((void *)(LAC_ARCH_UINT)(castee))

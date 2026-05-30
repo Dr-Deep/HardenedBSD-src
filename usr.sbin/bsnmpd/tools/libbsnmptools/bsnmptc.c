@@ -27,8 +27,6 @@
  * SUCH DAMAGE.
  *
  * Textual conventions for OctetStrings
- *
- * $FreeBSD$
  */
 
 #include <sys/param.h>
@@ -338,7 +336,7 @@ static char *
 snmp_date2asn_oid(char *str, struct asn_oid *oid)
 {
 	char *endptr, *ptr;
-	static const char UTC[3] = "UTC";
+	static const char UTC[3] __nonstring = "UTC";
 	int32_t saved_errno;
 	uint32_t v;
 

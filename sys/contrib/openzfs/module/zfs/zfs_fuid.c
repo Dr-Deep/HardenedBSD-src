@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -27,8 +28,8 @@
 #include <sys/avl.h>
 #include <sys/zap.h>
 #include <sys/nvpair.h>
-#ifdef _KERNEL
 #include <sys/sid.h>
+#ifdef _KERNEL
 #include <sys/zfs_vfsops.h>
 #include <sys/zfs_znode.h>
 #endif
@@ -83,11 +84,8 @@ domain_compare(const void *arg1, const void *arg2)
 {
 	const fuid_domain_t *node1 = (const fuid_domain_t *)arg1;
 	const fuid_domain_t *node2 = (const fuid_domain_t *)arg2;
-	int val;
-
-	val = strcmp(node1->f_ksid->kd_name, node2->f_ksid->kd_name);
-
-	return (TREE_ISIGN(val));
+	return (TREE_ISIGN(strcmp(node1->f_ksid->kd_name,
+	    node2->f_ksid->kd_name)));
 }
 
 void
@@ -111,8 +109,7 @@ zfs_fuid_table_load(objset_t *os, uint64_t fuid_obj, avl_tree_t *idx_tree,
 	uint64_t fuid_size;
 
 	ASSERT(fuid_obj != 0);
-	VERIFY(0 == dmu_bonus_hold(os, fuid_obj,
-	    FTAG, &db));
+	VERIFY0(dmu_bonus_hold(os, fuid_obj, FTAG, &db));
 	fuid_size = *(uint64_t *)db->db_data;
 	dmu_buf_rele(db, FTAG);
 
@@ -124,22 +121,21 @@ zfs_fuid_table_load(objset_t *os, uint64_t fuid_obj, avl_tree_t *idx_tree,
 		int i;
 
 		packed = kmem_alloc(fuid_size, KM_SLEEP);
-		VERIFY(dmu_read(os, fuid_obj, 0,
-		    fuid_size, packed, DMU_READ_PREFETCH) == 0);
-		VERIFY(nvlist_unpack(packed, fuid_size,
-		    &nvp, 0) == 0);
-		VERIFY(nvlist_lookup_nvlist_array(nvp, FUID_NVP_ARRAY,
-		    &fuidnvp, &count) == 0);
+		VERIFY0(dmu_read(os, fuid_obj, 0,
+		    fuid_size, packed, DMU_READ_PREFETCH));
+		VERIFY0(nvlist_unpack(packed, fuid_size, &nvp, 0));
+		VERIFY0(nvlist_lookup_nvlist_array(nvp, FUID_NVP_ARRAY,
+		    &fuidnvp, &count));
 
 		for (i = 0; i != count; i++) {
 			fuid_domain_t *domnode;
-			char *domain;
+			const char *domain;
 			uint64_t idx;
 
-			VERIFY(nvlist_lookup_string(fuidnvp[i], FUID_DOMAIN,
-			    &domain) == 0);
-			VERIFY(nvlist_lookup_uint64(fuidnvp[i], FUID_IDX,
-			    &idx) == 0);
+			VERIFY0(nvlist_lookup_string(fuidnvp[i], FUID_DOMAIN,
+			    &domain));
+			VERIFY0(nvlist_lookup_uint64(fuidnvp[i], FUID_IDX,
+			    &idx));
 
 			domnode = kmem_alloc(sizeof (fuid_domain_t), KM_SLEEP);
 
@@ -245,35 +241,33 @@ zfs_fuid_sync(zfsvfs_t *zfsvfs, dmu_tx_t *tx)
 		    &zfsvfs->z_fuid_obj, tx) == 0);
 	}
 
-	VERIFY(nvlist_alloc(&nvp, NV_UNIQUE_NAME, KM_SLEEP) == 0);
+	VERIFY0(nvlist_alloc(&nvp, NV_UNIQUE_NAME, KM_SLEEP));
 
 	numnodes = avl_numnodes(&zfsvfs->z_fuid_idx);
 	fuids = kmem_alloc(numnodes * sizeof (void *), KM_SLEEP);
 	for (i = 0, domnode = avl_first(&zfsvfs->z_fuid_domain); domnode; i++,
 	    domnode = AVL_NEXT(&zfsvfs->z_fuid_domain, domnode)) {
-		VERIFY(nvlist_alloc(&fuids[i], NV_UNIQUE_NAME, KM_SLEEP) == 0);
-		VERIFY(nvlist_add_uint64(fuids[i], FUID_IDX,
-		    domnode->f_idx) == 0);
-		VERIFY(nvlist_add_uint64(fuids[i], FUID_OFFSET, 0) == 0);
-		VERIFY(nvlist_add_string(fuids[i], FUID_DOMAIN,
-		    domnode->f_ksid->kd_name) == 0);
+		VERIFY0(nvlist_alloc(&fuids[i], NV_UNIQUE_NAME, KM_SLEEP));
+		VERIFY0(nvlist_add_uint64(fuids[i], FUID_IDX,
+		    domnode->f_idx));
+		VERIFY0(nvlist_add_uint64(fuids[i], FUID_OFFSET, 0));
+		VERIFY0(nvlist_add_string(fuids[i], FUID_DOMAIN,
+		    domnode->f_ksid->kd_name));
 	}
 	fnvlist_add_nvlist_array(nvp, FUID_NVP_ARRAY,
 	    (const nvlist_t * const *)fuids, numnodes);
 	for (i = 0; i != numnodes; i++)
 		nvlist_free(fuids[i]);
 	kmem_free(fuids, numnodes * sizeof (void *));
-	VERIFY(nvlist_size(nvp, &nvsize, NV_ENCODE_XDR) == 0);
+	VERIFY0(nvlist_size(nvp, &nvsize, NV_ENCODE_XDR));
 	packed = kmem_alloc(nvsize, KM_SLEEP);
-	VERIFY(nvlist_pack(nvp, &packed, &nvsize,
-	    NV_ENCODE_XDR, KM_SLEEP) == 0);
+	VERIFY0(nvlist_pack(nvp, &packed, &nvsize, NV_ENCODE_XDR, KM_SLEEP));
 	nvlist_free(nvp);
 	zfsvfs->z_fuid_size = nvsize;
 	dmu_write(zfsvfs->z_os, zfsvfs->z_fuid_obj, 0,
-	    zfsvfs->z_fuid_size, packed, tx);
+	    zfsvfs->z_fuid_size, packed, tx, DMU_READ_NO_PREFETCH);
 	kmem_free(packed, zfsvfs->z_fuid_size);
-	VERIFY(0 == dmu_bonus_hold(zfsvfs->z_os, zfsvfs->z_fuid_obj,
-	    FTAG, &db));
+	VERIFY0(dmu_bonus_hold(zfsvfs->z_os, zfsvfs->z_fuid_obj, FTAG, &db));
 	dmu_buf_will_dirty(db, tx);
 	*(uint64_t *)db->db_data = zfsvfs->z_fuid_size;
 	dmu_buf_rele(db, FTAG);
@@ -622,7 +616,7 @@ zfs_fuid_create(zfsvfs_t *zfsvfs, uint64_t id, cred_t *cr,
 			rid = FUID_RID(fuidp->z_fuid_group);
 			idx = FUID_INDEX(fuidp->z_fuid_group);
 			break;
-		};
+		}
 		domain = fuidp->z_domain_table[idx - 1];
 	} else {
 		if (type == ZFS_OWNER || type == ZFS_ACE_USER)
@@ -699,19 +693,15 @@ zfs_fuid_info_free(zfs_fuid_info_t *fuidp)
 	zfs_fuid_t *zfuid;
 	zfs_fuid_domain_t *zdomain;
 
-	while ((zfuid = list_head(&fuidp->z_fuids)) != NULL) {
-		list_remove(&fuidp->z_fuids, zfuid);
+	while ((zfuid = list_remove_head(&fuidp->z_fuids)) != NULL)
 		kmem_free(zfuid, sizeof (zfs_fuid_t));
-	}
 
 	if (fuidp->z_domain_table != NULL)
 		kmem_free(fuidp->z_domain_table,
 		    (sizeof (char *)) * fuidp->z_domain_cnt);
 
-	while ((zdomain = list_head(&fuidp->z_domains)) != NULL) {
-		list_remove(&fuidp->z_domains, zdomain);
+	while ((zdomain = list_remove_head(&fuidp->z_domains)) != NULL)
 		kmem_free(zdomain, sizeof (zfs_fuid_domain_t));
-	}
 
 	kmem_free(fuidp, sizeof (zfs_fuid_info_t));
 }

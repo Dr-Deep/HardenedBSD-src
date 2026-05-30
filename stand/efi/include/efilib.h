@@ -23,8 +23,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _LOADER_EFILIB_H
@@ -33,6 +31,8 @@
 #include <stand.h>
 #include <stdbool.h>
 #include <sys/queue.h>
+
+#include <Protocol/BlockIo.h>
 
 extern EFI_HANDLE		IH;
 extern EFI_SYSTEM_TABLE		*ST;
@@ -85,8 +85,6 @@ efi_exit_boot_services(UINTN key)
 }
 
 int efi_getdev(void **vdev, const char *devspec, const char **path);
-int efi_setcurrdev(struct env_var *ev, int flags, const void *value);
-
 
 int efi_register_handles(struct devsw *, EFI_HANDLE *, EFI_HANDLE *, int);
 EFI_HANDLE efi_find_handle(struct devsw *, int);
@@ -99,6 +97,7 @@ void efi_close_devpath(EFI_HANDLE);
 EFI_HANDLE efi_devpath_handle(EFI_DEVICE_PATH *);
 EFI_DEVICE_PATH *efi_devpath_last_node(EFI_DEVICE_PATH *);
 EFI_DEVICE_PATH *efi_devpath_trim(EFI_DEVICE_PATH *);
+EFI_DEVICE_PATH *efi_devpath_next_instance(EFI_DEVICE_PATH *);
 bool efi_devpath_match(EFI_DEVICE_PATH *, EFI_DEVICE_PATH *);
 bool efi_devpath_match_node(EFI_DEVICE_PATH *, EFI_DEVICE_PATH *);
 bool efi_devpath_is_prefix(EFI_DEVICE_PATH *, EFI_DEVICE_PATH *);
@@ -122,7 +121,7 @@ int parse_uefi_con_out(void);
 EFI_STATUS efi_main(EFI_HANDLE Ximage, EFI_SYSTEM_TABLE* Xsystab);
 
 EFI_STATUS main(int argc, CHAR16 *argv[]);
-void efi_exit(EFI_STATUS status) __dead2;
+void efi_exit(EFI_STATUS status);
 
 /* EFI environment initialization. */
 void efi_init_environment(void);

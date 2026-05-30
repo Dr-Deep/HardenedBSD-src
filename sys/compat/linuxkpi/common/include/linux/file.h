@@ -25,8 +25,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #ifndef	_LINUXKPI_LINUX_FILE_H_
 #define	_LINUXKPI_LINUX_FILE_H_
@@ -41,11 +39,16 @@
 #include <linux/fs.h>
 #include <linux/slab.h>
 
+#include <linux/compiler.h>
+#include <linux/types.h>
+#include <linux/errno.h>
+#include <linux/cleanup.h>
+
 struct linux_file;
 
 #undef file
 
-extern struct fileops linuxfileops;
+extern const struct fileops linuxfileops;
 
 static inline struct linux_file *
 linux_fget(unsigned int fd)
@@ -180,6 +183,8 @@ static inline struct fd fdget(unsigned int fd)
 	struct linux_file *f = linux_fget(fd);
 	return (struct fd){f};
 }
+
+#define	fd_file(fd)	((fd).linux_file)
 
 #define	file		linux_file
 #define	fget(...)	linux_fget(__VA_ARGS__)

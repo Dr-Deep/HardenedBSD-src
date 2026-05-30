@@ -25,9 +25,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
@@ -141,6 +138,7 @@ powernv_attach(platform_t plat)
 	phandle_t opal;
 	int res, len, idx;
 	register_t msr;
+	register_t fscr;
 	bool has_lp;
 
 	/* Ping OPAL again just to make sure */
@@ -181,6 +179,11 @@ powernv_attach(platform_t plat)
 
 	mtspr(SPR_LPCR, lpcr);
 	isync();
+
+	fscr = mfspr(SPR_HFSCR);
+	fscr |= FSCR_TAR | FSCR_EBB | HFSCR_BHRB | HFSCR_PM |
+	    HFSCR_VECVSX | HFSCR_FP | FSCR_MSGP | FSCR_DSCR;
+	mtspr(SPR_HFSCR, fscr);
 
 	mtmsr(msr);
 

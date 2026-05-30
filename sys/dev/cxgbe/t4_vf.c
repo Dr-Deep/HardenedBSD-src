@@ -26,8 +26,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_inet.h"
 #include "opt_inet6.h"
 
@@ -107,15 +105,15 @@ struct {
 	{0x6802, "Chelsio T6225-SO-CR VF"},	/* 2 x 10/25G, nomem */
 	{0x6803, "Chelsio T6425-CR VF"},	/* 4 x 10/25G */
 	{0x6804, "Chelsio T6425-SO-CR VF"},	/* 4 x 10/25G, nomem */
-	{0x6805, "Chelsio T6225-OCP-SO VF"},	/* 2 x 10/25G, nomem */
-	{0x6806, "Chelsio T62100-OCP-SO VF"},	/* 2 x 40/50/100G, nomem */
+	{0x6805, "Chelsio T6225-SO-OCP3 VF"},	/* 2 x 10/25G, nomem */
+	{0x6806, "Chelsio T6225-OCP3 VF"},	/* 2 x 10/25G */
 	{0x6807, "Chelsio T62100-LP-CR VF"},	/* 2 x 40/50/100G */
 	{0x6808, "Chelsio T62100-SO-CR VF"},	/* 2 x 40/50/100G, nomem */
 	{0x6809, "Chelsio T6210-BT VF"},	/* 2 x 10GBASE-T */
 	{0x680d, "Chelsio T62100-CR VF"},	/* 2 x 40/50/100G */
 	{0x6810, "Chelsio T6-DBG-100 VF"},	/* 2 x 40/50/100G, debug */
 	{0x6811, "Chelsio T6225-LL-CR VF"},	/* 2 x 10/25G */
-	{0x6814, "Chelsio T61100-OCP-SO VF"},	/* 1 x 40/50/100G, nomem */
+	{0x6814, "Chelsio T62100-SO-OCP3 VF"},	/* 2 x 40/50/100G, nomem */
 	{0x6815, "Chelsio T6201-BT VF"},	/* 2 x 1000BASE-T */
 
 	/* Custom */
@@ -127,6 +125,28 @@ struct {
 	{0x6885, "Chelsio T6240-SO 85 VF"},
 	{0x6886, "Chelsio T6225-SO-CR 86 VF"},
 	{0x6887, "Chelsio T6225-CR 87 VF"},
+}, t7vf_pciids[] = {
+	{0xd800, "Chelsio T7 FPGA VF"},		/* T7 PE12K FPGA */
+	{0x7800, "Chelsio T72200-DBG VF"},	/* 2 x 200G, debug */
+	{0x7801, "Chelsio T7250 VF"},		/* 2 x 10/25/50G, 1 mem */
+	{0x7802, "Chelsio S7250 VF"},		/* 2 x 10/25/50G, nomem */
+	{0x7803, "Chelsio T7450 VF"},		/* 4 x 10/25/50G, 1 mem */
+	{0x7804, "Chelsio S7450 VF"},		/* 4 x 10/25/50G, nomem */
+	{0x7805, "Chelsio T72200 VF"},		/* 2 x 40/100/200G, 1 mem */
+	{0x7806, "Chelsio S72200 VF"},		/* 2 x 40/100/200G, nomem */
+	{0x7807, "Chelsio T72200-FH VF"},	/* 2 x 40/100/200G, 2 mem */
+	{0x7808, "Chelsio T71400 VF"},		/* 1 x 400G, nomem */
+	{0x7809, "Chelsio S7210-BT VF"},	/* 2 x 10GBASE-T, nomem */
+	{0x780a, "Chelsio T7450-RC VF"},	/* 4 x 10/25/50G, 1 mem, RC */
+	{0x780b, "Chelsio T72200-RC VF"},	/* 2 x 40/100/200G, 1 mem, RC */
+	{0x780c, "Chelsio T72200-FH-RC VF"},	/* 2 x 40/100/200G, 2 mem, RC */
+	{0x780d, "Chelsio S72200-OCP3 VF"},	/* 2 x 40/100/200G OCP3 */
+	{0x780e, "Chelsio S7450-OCP3 VF"},	/* 4 x 1/20/25/50G OCP3 */
+	{0x780f, "Chelsio S7410-BT-OCP3 VF"},	/* 4 x 10GBASE-T OCP3 */
+	{0x7810, "Chelsio S7210-BT-A VF"},	/* 2 x 10GBASE-T */
+	{0x7811, "Chelsio T7_MAYRA_7 VF"},	/* Motherboard */
+
+	{0x7880, "Custom T7 VF"},
 };
 
 static d_ioctl_t t4vf_ioctl;
@@ -179,6 +199,22 @@ t6vf_probe(device_t dev)
 	for (i = 0; i < nitems(t6vf_pciids); i++) {
 		if (d == t6vf_pciids[i].device) {
 			device_set_desc(dev, t6vf_pciids[i].desc);
+			return (BUS_PROBE_DEFAULT);
+		}
+	}
+	return (ENXIO);
+}
+
+static int
+chvf_probe(device_t dev)
+{
+	uint16_t d;
+	size_t i;
+
+	d = pci_get_device(dev);
+	for (i = 0; i < nitems(t7vf_pciids); i++) {
+		if (d == t7vf_pciids[i].device) {
+			device_set_desc(dev, t7vf_pciids[i].desc);
 			return (BUS_PROBE_DEFAULT);
 		}
 	}
@@ -591,6 +627,10 @@ t4vf_attach(device_t dev)
 	if (rc != 0)
 		goto done; /* error message displayed already */
 
+	rc = t4_adj_doorbells(sc);
+	if (rc != 0)
+		goto done; /* error message displayed already */
+
 	rc = t4_create_dma_tag(sc);
 	if (rc != 0)
 		goto done; /* error message displayed already */
@@ -658,6 +698,8 @@ t4vf_attach(device_t dev)
 			t4_os_set_hw_addr(pi, mac);
 		pmask &= ~(1 << p);
 
+		sc->vlan_id = t4vf_get_vf_vlan(sc);
+
 		/* No t4_link_start. */
 
 		snprintf(pi->lockname, sizeof(pi->lockname), "%sp%d",
@@ -669,7 +711,7 @@ t4vf_attach(device_t dev)
 		ifmedia_init(&pi->media, IFM_IMASK, cxgbe_media_change,
 		    cxgbe_media_status);
 
-		pi->dev = device_add_child(dev, sc->names->vf_ifnet_name, -1);
+		pi->dev = device_add_child(dev, sc->names->vf_ifnet_name, DEVICE_UNIT_ANY);
 		if (pi->dev == NULL) {
 			device_printf(dev,
 			    "failed to add device for port %d.\n", i);
@@ -751,12 +793,7 @@ t4vf_attach(device_t dev)
 		goto done;
 	}
 
-	rc = bus_generic_attach(dev);
-	if (rc != 0) {
-		device_printf(dev,
-		    "failed to attach all child ports: %d\n", rc);
-		goto done;
-	}
+	bus_attach_children(dev);
 
 	device_printf(dev,
 	    "%d ports, %d %s interrupt%s, %d eq, %d iq\n",
@@ -957,6 +994,20 @@ static driver_t t6vf_driver = {
 	sizeof(struct adapter)
 };
 
+static device_method_t chvf_methods[] = {
+	DEVMETHOD(device_probe,		chvf_probe),
+	DEVMETHOD(device_attach,	t4vf_attach),
+	DEVMETHOD(device_detach,	t4_detach_common),
+
+	DEVMETHOD_END
+};
+
+static driver_t chvf_driver = {
+	"chvf",
+	chvf_methods,
+	sizeof(struct adapter)
+};
+
 static driver_t cxgbev_driver = {
 	"cxgbev",
 	cxgbe_methods,
@@ -975,6 +1026,12 @@ static driver_t ccv_driver = {
 	sizeof(struct port_info)
 };
 
+static driver_t chev_driver = {
+	"chev",
+	cxgbe_methods,
+	sizeof(struct port_info)
+};
+
 DRIVER_MODULE(t4vf, pci, t4vf_driver, 0, 0);
 MODULE_VERSION(t4vf, 1);
 MODULE_DEPEND(t4vf, t4nex, 1, 1, 1);
@@ -987,6 +1044,10 @@ DRIVER_MODULE(t6vf, pci, t6vf_driver, 0, 0);
 MODULE_VERSION(t6vf, 1);
 MODULE_DEPEND(t6vf, t6nex, 1, 1, 1);
 
+DRIVER_MODULE(chvf, pci, chvf_driver, 0, 0);
+MODULE_VERSION(chvf, 1);
+MODULE_DEPEND(chvf, chnex, 1, 1, 1);
+
 DRIVER_MODULE(cxgbev, t4vf, cxgbev_driver, 0, 0);
 MODULE_VERSION(cxgbev, 1);
 
@@ -995,3 +1056,6 @@ MODULE_VERSION(cxlv, 1);
 
 DRIVER_MODULE(ccv, t6vf, ccv_driver, 0, 0);
 MODULE_VERSION(ccv, 1);
+
+DRIVER_MODULE(chev, chvf, chev_driver, 0, 0);
+MODULE_VERSION(chev, 1);

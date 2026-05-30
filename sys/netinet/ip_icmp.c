@@ -27,12 +27,7 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)ip_icmp.c	8.2 (Berkeley) 1/4/94
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include "opt_inet.h"
 #include "opt_pax.h"
@@ -50,6 +45,7 @@ __FBSDID("$FreeBSD$");
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_private.h>
 #include <net/if_types.h>
 #include <net/route.h>
 #include <net/route/route_ctl.h>
@@ -67,7 +63,6 @@ __FBSDID("$FreeBSD$");
 #include <netinet/ip_options.h>
 #include <netinet/sctp.h>
 #include <netinet/tcp.h>
-#include <netinet/tcp_var.h>
 #include <netinet/tcpip.h>
 #include <netinet/icmp_var.h>
 
@@ -85,19 +80,22 @@ extern ipproto_ctlinput_t	*ip_ctlprotox[];
  * routines to turnaround packets back to the originator, and
  * host table maintenance routines.
  */
-VNET_DEFINE_STATIC(int, icmplim) = 200;
+static int sysctl_icmplim_and_jitter(SYSCTL_HANDLER_ARGS);
+VNET_DEFINE_STATIC(u_int, icmplim) = 200;
 #define	V_icmplim			VNET(icmplim)
-SYSCTL_INT(_net_inet_icmp, ICMPCTL_ICMPLIM, icmplim, CTLFLAG_VNET | CTLFLAG_RW,
-	&VNET_NAME(icmplim), 0,
-	"Maximum number of ICMP responses per second");
+SYSCTL_PROC(_net_inet_icmp, ICMPCTL_ICMPLIM, icmplim, CTLTYPE_UINT |
+    CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(icmplim), 0,
+    &sysctl_icmplim_and_jitter, "IU",
+    "Maximum number of ICMP responses per second");
 
-VNET_DEFINE_STATIC(int, icmplim_curr_jitter) = 0;
+VNET_DEFINE_STATIC(int, icmplim_curr_jitter[BANDLIM_MAX]) = {0};
 #define V_icmplim_curr_jitter		VNET(icmplim_curr_jitter)
-VNET_DEFINE_STATIC(int, icmplim_jitter) = 16;
+VNET_DEFINE_STATIC(u_int, icmplim_jitter) = 16;
 #define	V_icmplim_jitter		VNET(icmplim_jitter)
-SYSCTL_INT(_net_inet_icmp, OID_AUTO, icmplim_jitter, CTLFLAG_VNET | CTLFLAG_RW,
-	&VNET_NAME(icmplim_jitter), 0,
-	"Random icmplim jitter adjustment limit");
+SYSCTL_PROC(_net_inet_icmp, OID_AUTO, icmplim_jitter, CTLTYPE_UINT |
+    CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(icmplim_jitter), 0,
+    &sysctl_icmplim_and_jitter, "IU",
+    "Random icmplim jitter adjustment limit");
 
 VNET_DEFINE_STATIC(int, icmplim_output) = 1;
 #define	V_icmplim_output		VNET(icmplim_output)
@@ -350,7 +348,7 @@ stdreply:	icmpelen = max(8, min(V_icmp_quotelen, ntohs(oip->ip_len) -
 	 */
 	M_SETFIB(m, M_GETFIB(n));
 	icp = mtod(m, struct icmp *);
-	ICMPSTAT_INC(icps_outhist[type]);
+	ICMPSTAT_INC2(icps_outhist, type);
 	icp->icmp_type = type;
 	if (type == ICMP_REDIRECT)
 		icp->icmp_gwaddr.s_addr = dest;
@@ -397,7 +395,6 @@ stdreply:	icmpelen = max(8, min(V_icmp_quotelen, ntohs(oip->ip_len) -
 	nip->ip_hl = 5;
 	nip->ip_p = IPPROTO_ICMP;
 	nip->ip_tos = 0;
-	nip->ip_off = 0;
 
 	if (V_error_keeptags)
 		m_tag_copy_chain(m, n, M_NOWAIT);
@@ -406,6 +403,55 @@ stdreply:	icmpelen = max(8, min(V_icmp_quotelen, ntohs(oip->ip_len) -
 
 freeit:
 	m_freem(n);
+}
+
+int
+icmp_errmap(const struct icmp *icp)
+{
+
+	switch (icp->icmp_type) {
+	case ICMP_UNREACH:
+		switch (icp->icmp_code) {
+		case ICMP_UNREACH_NET:
+		case ICMP_UNREACH_HOST:
+		case ICMP_UNREACH_SRCFAIL:
+		case ICMP_UNREACH_NET_UNKNOWN:
+		case ICMP_UNREACH_HOST_UNKNOWN:
+		case ICMP_UNREACH_ISOLATED:
+		case ICMP_UNREACH_TOSNET:
+		case ICMP_UNREACH_TOSHOST:
+		case ICMP_UNREACH_HOST_PRECEDENCE:
+		case ICMP_UNREACH_PRECEDENCE_CUTOFF:
+			return (EHOSTUNREACH);
+		case ICMP_UNREACH_NEEDFRAG:
+			return (EMSGSIZE);
+		case ICMP_UNREACH_PROTOCOL:
+		case ICMP_UNREACH_PORT:
+		case ICMP_UNREACH_NET_PROHIB:
+		case ICMP_UNREACH_HOST_PROHIB:
+		case ICMP_UNREACH_FILTER_PROHIB:
+			return (ECONNREFUSED);
+		default:
+			return (0);
+		}
+	case ICMP_TIMXCEED:
+		switch (icp->icmp_code) {
+		case ICMP_TIMXCEED_INTRANS:
+			return (EHOSTUNREACH);
+		default:
+			return (0);
+		}
+	case ICMP_PARAMPROB:
+		switch (icp->icmp_code) {
+		case ICMP_PARAMPROB_ERRATPTR:
+		case ICMP_PARAMPROB_OPTABSENT:
+			return (ENOPROTOOPT);
+		default:
+			return (0);
+		}
+	default:
+		return (0);
+	}
 }
 
 /*
@@ -485,60 +531,25 @@ icmp_input(struct mbuf **mp, int *offp, int proto)
 	icmpgw.sin_len = sizeof(struct sockaddr_in);
 	icmpgw.sin_family = AF_INET;
 
-	ICMPSTAT_INC(icps_inhist[icp->icmp_type]);
+	ICMPSTAT_INC2(icps_inhist, icp->icmp_type);
 	code = icp->icmp_code;
 	switch (icp->icmp_type) {
 	case ICMP_UNREACH:
-		switch (code) {
-			case ICMP_UNREACH_NET:
-			case ICMP_UNREACH_HOST:
-			case ICMP_UNREACH_SRCFAIL:
-			case ICMP_UNREACH_NET_UNKNOWN:
-			case ICMP_UNREACH_HOST_UNKNOWN:
-			case ICMP_UNREACH_ISOLATED:
-			case ICMP_UNREACH_TOSNET:
-			case ICMP_UNREACH_TOSHOST:
-			case ICMP_UNREACH_HOST_PRECEDENCE:
-			case ICMP_UNREACH_PRECEDENCE_CUTOFF:
-				code = PRC_UNREACH_NET;
-				break;
-
-			case ICMP_UNREACH_NEEDFRAG:
-				code = PRC_MSGSIZE;
-				break;
-
-			/*
-			 * RFC 1122, Sections 3.2.2.1 and 4.2.3.9.
-			 * Treat subcodes 2,3 as immediate RST
-			 */
-			case ICMP_UNREACH_PROTOCOL:
-				code = PRC_UNREACH_PROTOCOL;
-				break;
-			case ICMP_UNREACH_PORT:
-				code = PRC_UNREACH_PORT;
-				break;
-
-			case ICMP_UNREACH_NET_PROHIB:
-			case ICMP_UNREACH_HOST_PROHIB:
-			case ICMP_UNREACH_FILTER_PROHIB:
-				code = PRC_UNREACH_ADMIN_PROHIB;
-				break;
-
-			default:
-				goto badcode;
-		}
-		goto deliver;
+		if (code > ICMP_UNREACH_PRECEDENCE_CUTOFF)
+			goto badcode;
+		else
+			goto deliver;
 
 	case ICMP_TIMXCEED:
-		if (code > 1)
+		if (code > ICMP_TIMXCEED_REASS)
 			goto badcode;
-		code += PRC_TIMXCEED_INTRANS;
-		goto deliver;
+		else
+			goto deliver;
 
 	case ICMP_PARAMPROB:
-		if (code > 1)
+		if (code > ICMP_PARAMPROB_LENGTH)
 			goto badcode;
-		code = PRC_PARAMPROB;
+
 	deliver:
 		/*
 		 * Problem with datagram; advise higher level routines.
@@ -551,11 +562,14 @@ icmp_input(struct mbuf **mp, int *offp, int proto)
 		/* Discard ICMP's in response to multicast packets */
 		if (IN_MULTICAST(ntohl(icp->icmp_ip.ip_dst.s_addr)))
 			goto badcode;
+		/* Filter out responses to INADDR_ANY, protocols ignore it. */
+		if (icp->icmp_ip.ip_dst.s_addr == INADDR_ANY ||
+		    icp->icmp_ip.ip_src.s_addr == INADDR_ANY)
+			goto freeit;
 #ifdef ICMPPRINTFS
 		if (icmpprintfs)
 			printf("deliver to protocol %d\n", icp->icmp_ip.ip_p);
 #endif
-		icmpsrc.sin_addr = icp->icmp_ip.ip_dst;
 		/*
 		 * XXX if the packet contains [IPv4 AH TCP], we can't make a
 		 * notification to TCP layer.
@@ -578,8 +592,7 @@ icmp_input(struct mbuf **mp, int *offp, int proto)
 		 *   ICMP_ADVLENPREF. See its definition in ip_icmp.h.
 		 */
 		if (ip_ctlprotox[icp->icmp_ip.ip_p] != NULL)
-			ip_ctlprotox[icp->icmp_ip.ip_p](code,
-			    (struct sockaddr *)&icmpsrc, &icp->icmp_ip);
+			ip_ctlprotox[icp->icmp_ip.ip_p](icp);
 		break;
 
 	badcode:
@@ -625,15 +638,10 @@ icmp_input(struct mbuf **mp, int *offp, int proto)
 		 */
 		if (icmplen < ICMP_MASKLEN)
 			break;
-		switch (ip->ip_dst.s_addr) {
-		case INADDR_BROADCAST:
-		case INADDR_ANY:
+		if (in_broadcast(ip->ip_dst))
 			icmpdst.sin_addr = ip->ip_src;
-			break;
-
-		default:
+		else
 			icmpdst.sin_addr = ip->ip_dst;
-		}
 		ia = (struct in_ifaddr *)ifaof_ifpforaddr(
 			    (struct sockaddr *)&icmpdst, m->m_pkthdr.rcvif);
 		if (ia == NULL)
@@ -653,7 +661,7 @@ icmp_input(struct mbuf **mp, int *offp, int proto)
 		}
 reflect:
 		ICMPSTAT_INC(icps_reflect);
-		ICMPSTAT_INC(icps_outhist[icp->icmp_type]);
+		ICMPSTAT_INC2(icps_outhist, icp->icmp_type);
 		icmp_reflect(m);
 		return (IPPROTO_DONE);
 
@@ -778,10 +786,11 @@ icmp_reflect(struct mbuf *m)
 
 	if (IN_MULTICAST(ntohl(ip->ip_src.s_addr)) ||
 	    (IN_EXPERIMENTAL(ntohl(ip->ip_src.s_addr)) && !V_ip_allow_net240) ||
-	    (IN_ZERONET(ntohl(ip->ip_src.s_addr)) && !V_ip_allow_net0) ) {
+	    (IN_ZERONET(ntohl(ip->ip_src.s_addr)) && !V_ip_allow_net0) ||
+	    in_nullhost(ip->ip_src) ) {
 		m_freem(m);	/* Bad return address */
 		ICMPSTAT_INC(icps_badaddr);
-		goto done;	/* Ip_output() will check for broadcast */
+		goto done;	/* ip_output() will check for broadcast */
 	}
 
 	t = ip->ip_dst;
@@ -866,6 +875,8 @@ match:
 	mac_netinet_icmp_replyinplace(m);
 #endif
 	ip->ip_src = t;
+	/* ip->ip_tos will be reflected. */
+	ip->ip_off = htons(0);
 	ip->ip_ttl = V_ip_defttl;
 
 	if (optlen > 0) {
@@ -1084,77 +1095,114 @@ ip_next_mtu(int mtu, int dir)
  *	the 'final' error, but it doesn't make sense to solve the printing
  *	delay with more complex code.
  */
-struct icmp_rate {
-	const char *descr;
-	struct counter_rate cr;
-};
-VNET_DEFINE_STATIC(struct icmp_rate, icmp_rates[BANDLIM_MAX]) = {
-	{ "icmp unreach response" },
-	{ "icmp ping response" },
-	{ "icmp tstamp response" },
-	{ "closed port RST response" },
-	{ "open port RST response" },
-	{ "icmp6 unreach response" },
-	{ "sctp ootb response" }
-};
+VNET_DEFINE_STATIC(struct counter_rate *, icmp_rates[BANDLIM_MAX]);
 #define	V_icmp_rates	VNET(icmp_rates)
+
+static const char *icmp_rate_descrs[BANDLIM_MAX] = {
+	[BANDLIM_ICMP_UNREACH] = "icmp unreach",
+	[BANDLIM_ICMP_ECHO] = "icmp ping",
+	[BANDLIM_ICMP_TSTAMP] = "icmp tstamp",
+	[BANDLIM_TCP_RST] = "tcp reset",
+	[BANDLIM_ICMP6_UNREACH] = "icmp6 unreach",
+	[BANDLIM_SCTP_OOTB] = "sctp ootb",
+};
+
+static void
+icmplim_new_jitter(int which)
+{
+	/*
+	 * Adjust limit +/- to jitter the measurement to deny a side-channel
+	 * port scan as in https://dl.acm.org/doi/10.1145/3372297.3417280
+	 */
+	KASSERT(which >= 0 && which < BANDLIM_MAX,
+	    ("%s: which %d", __func__, which));
+	if (V_icmplim_jitter > 0)
+		V_icmplim_curr_jitter[which] =
+		    arc4random_uniform(V_icmplim_jitter * 2 + 1) -
+		    V_icmplim_jitter;
+}
+
+static int
+sysctl_icmplim_and_jitter(SYSCTL_HANDLER_ARGS)
+{
+	uint32_t new;
+	int error;
+	bool lim;
+
+	MPASS(oidp->oid_arg1 == &VNET_NAME(icmplim) ||
+	    oidp->oid_arg1 == &VNET_NAME(icmplim_jitter));
+
+	lim = (oidp->oid_arg1 == &VNET_NAME(icmplim));
+	new = lim ? V_icmplim : V_icmplim_jitter;
+	error = sysctl_handle_int(oidp, &new, 0, req);
+	if (error == 0 && req->newptr) {
+		if (lim) {
+			if (new != 0 && new <= V_icmplim_jitter)
+				error = EINVAL;
+			else
+				V_icmplim = new;
+		} else {
+			if (new >= V_icmplim)
+				error = EINVAL;
+			else {
+				V_icmplim_jitter = new;
+				for (int i = 0; i < BANDLIM_MAX; i++) {
+					icmplim_new_jitter(i);
+				}
+			}
+		}
+	}
+	MPASS(V_icmplim == 0 || V_icmplim > V_icmplim_jitter);
+
+	return (error);
+}
 
 static void
 icmp_bandlimit_init(void)
 {
 
 	for (int i = 0; i < BANDLIM_MAX; i++) {
-		V_icmp_rates[i].cr.cr_rate = counter_u64_alloc(M_WAITOK);
-		V_icmp_rates[i].cr.cr_ticks = ticks;
+		V_icmp_rates[i] = counter_rate_alloc(M_WAITOK, 1);
+		icmplim_new_jitter(i);
 	}
 }
 VNET_SYSINIT(icmp_bandlimit, SI_SUB_PROTO_DOMAIN, SI_ORDER_ANY,
     icmp_bandlimit_init, NULL);
 
+#ifdef VIMAGE
 static void
 icmp_bandlimit_uninit(void)
 {
 
 	for (int i = 0; i < BANDLIM_MAX; i++)
-		counter_u64_free(V_icmp_rates[i].cr.cr_rate);
+		counter_rate_free(V_icmp_rates[i]);
 }
 VNET_SYSUNINIT(icmp_bandlimit, SI_SUB_PROTO_DOMAIN, SI_ORDER_THIRD,
     icmp_bandlimit_uninit, NULL);
+#endif
 
 int
 badport_bandlim(int which)
 {
 	int64_t pps;
 
-	if (V_icmplim == 0 || which == BANDLIM_UNLIMITED)
+	if (V_icmplim == 0)
 		return (0);
 
 	KASSERT(which >= 0 && which < BANDLIM_MAX,
 	    ("%s: which %d", __func__, which));
 
-	if ((V_icmplim + V_icmplim_curr_jitter) <= 0)
-		V_icmplim_curr_jitter = -V_icmplim + 1;
-
-	pps = counter_ratecheck(&V_icmp_rates[which].cr, V_icmplim +
-	    V_icmplim_curr_jitter);
+	pps = counter_ratecheck(V_icmp_rates[which], V_icmplim +
+	    V_icmplim_curr_jitter[which]);
 	if (pps > 0) {
-		/*
-		 * Adjust limit +/- to jitter the measurement to deny a
-		 * side-channel port scan as in CVE-2020-25705
-		 */
-		if (V_icmplim_jitter > 0) {
-			int32_t inc =
-			    arc4random_uniform(V_icmplim_jitter * 2 +1)
-			    - V_icmplim_jitter;
-
-			V_icmplim_curr_jitter = inc;
-		}
+		if (V_icmplim_output)
+			log(LOG_NOTICE,
+			    "Limiting %s response from %jd to %d packets/sec\n",
+			    icmp_rate_descrs[which], (intmax_t )pps,
+			    V_icmplim + V_icmplim_curr_jitter[which]);
+		icmplim_new_jitter(which);
 	}
 	if (pps == -1)
 		return (-1);
-	if (pps > 0 && V_icmplim_output)
-		log(LOG_NOTICE, "Limiting %s from %jd to %d packets/sec\n",
-		    V_icmp_rates[which].descr, (intmax_t )pps, V_icmplim +
-		    V_icmplim_curr_jitter);
 	return (0);
 }

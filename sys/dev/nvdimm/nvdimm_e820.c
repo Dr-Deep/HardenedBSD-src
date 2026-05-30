@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2019 Dell EMC Isilon
  *
@@ -24,9 +24,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/bio.h>
@@ -260,25 +257,21 @@ static void
 nvdimm_e820_identify(driver_t *driver, device_t parent)
 {
 	device_t child;
-	caddr_t kmdp;
 
 	if (resource_disabled(driver->name, 0))
 		return;
 	/* Just create a single instance of the fake bus. */
-	if (device_find_child(parent, driver->name, -1) != NULL)
+	if (device_find_child(parent, driver->name, DEVICE_UNIT_ANY) != NULL)
 		return;
 
-	kmdp = preload_search_by_type("elf kernel");
-	if (kmdp == NULL)
-		kmdp = preload_search_by_type("elf64 kernel");
-	smapbase = (const void *)preload_search_info(kmdp,
+	smapbase = (const void *)preload_search_info(preload_kmdp,
 	    MODINFO_METADATA | MODINFOMD_SMAP);
 
 	/* Only supports BIOS SMAP for now. */
 	if (smapbase == NULL)
 		return;
 
-	child = BUS_ADD_CHILD(parent, 0, driver->name, -1);
+	child = BUS_ADD_CHILD(parent, 0, driver->name, DEVICE_UNIT_ANY);
 	if (child == NULL)
 		device_printf(parent, "add %s child failed\n", driver->name);
 }

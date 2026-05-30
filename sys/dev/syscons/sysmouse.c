@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1999 Kazutaka YOKOTA <yokota@zodiac.mech.utsunomiya-u.ac.jp>
  * All rights reserved.
@@ -28,8 +28,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_evdev.h"
 #include "opt_syscons.h"
 
@@ -96,7 +94,15 @@ smdev_evdev_write(int x, int y, int z, int buttons)
 	evdev_push_event(sysmouse_evdev, EV_REL, REL_X, x);
 	evdev_push_event(sysmouse_evdev, EV_REL, REL_Y, y);
 	switch (evdev_sysmouse_t_axis) {
-	case EVDEV_SYSMOUSE_T_AXIS_PSM:
+	case EVDEV_SYSMOUSE_T_AXIS_WSP: /* 3 */
+		if (buttons & (1 << 5)) {
+			evdev_push_rel(sysmouse_evdev, REL_HWHEEL, z);
+			buttons &= ~(1 << 5);
+		} else {
+			evdev_push_rel(sysmouse_evdev, REL_WHEEL, -z);
+		}
+		break;
+	case EVDEV_SYSMOUSE_T_AXIS_PSM: /* 2 */
 		switch (z) {
 		case 1:
 		case -1:
@@ -108,14 +114,14 @@ smdev_evdev_write(int x, int y, int z, int buttons)
 			break;
 		}
 		break;
-	case EVDEV_SYSMOUSE_T_AXIS_UMS:
+	case EVDEV_SYSMOUSE_T_AXIS_UMS: /* 1 */
 		if (buttons & (1 << 6))
 			evdev_push_rel(sysmouse_evdev, REL_HWHEEL, 1);
 		else if (buttons & (1 << 5))
 			evdev_push_rel(sysmouse_evdev, REL_HWHEEL, -1);
 		buttons &= ~((1 << 5)|(1 << 6));
 		/* PASSTHROUGH */
-	case EVDEV_SYSMOUSE_T_AXIS_NONE:
+	case EVDEV_SYSMOUSE_T_AXIS_NONE: /* 0 */
 	default:
 		evdev_push_rel(sysmouse_evdev, REL_WHEEL, -z);
 	}
@@ -295,6 +301,8 @@ sysmouse_event(mouse_info_t *info)
 
 #ifdef EVDEV_SUPPORT
 	smdev_evdev_write(x, y, z, mouse_status.button);
+	if (evdev_is_grabbed(sysmouse_evdev))
+		goto done;
 #endif
 
 	if (!tty_opened(sysmouse_tty))

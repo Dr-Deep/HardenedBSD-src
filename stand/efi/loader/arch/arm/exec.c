@@ -25,9 +25,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/linker.h>
 
@@ -42,9 +39,6 @@ __FBSDID("$FreeBSD$");
 
 #include "bootstrap.h"
 #include "loader_efi.h"
-
-extern vm_offset_t md_load(char *, vm_offset_t *);
-extern int bi_load(char *, vm_offset_t *, vm_offset_t *, bool);
 
 static int
 __elfN(arm_load)(char *filename, uint64_t dest,
@@ -75,28 +69,28 @@ __elfN(arm_exec)(struct preloaded_file *fp)
 
 	efi_time_fini();
 
-	entry = efi_translate(e->e_entry);
-
-	printf("Kernel entry at %p...\n", entry);
 	printf("Kernel args: %s\n", fp->f_args);
 
+	/*
+	 * we have to cleanup here because net_cleanup() doesn't work after
+	 * we call ExitBootServices
+	 */
+	dev_cleanup();
+	
 	if ((error = bi_load(fp->f_args, &modulep, &kernend, true)) != 0) {
 		efi_time_init();
 		return (error);
 	}
 
-	/* At this point we've called ExitBootServices, so we can't call
-	 * printf or any other function that uses Boot Services */
-
-	dev_cleanup();
+	entry = efi_translate(e->e_entry);
 
 	(*entry)((void *)modulep);
 	panic("exec returned");
 }
 
 static struct file_format arm_elf = {
-	__elfN(arm_load),
-	__elfN(arm_exec)
+	.l_load = __elfN(arm_load),
+	.l_exec = __elfN(arm_exec)
 };
 
 struct file_format *file_formats[] = {

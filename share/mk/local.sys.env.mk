@@ -1,4 +1,3 @@
-# $FreeBSD$
 
 # This makefile is for customizations that should be done early
 
@@ -23,9 +22,16 @@ M_L_TARGETS = ${M_ListToMatch:S,V,_TARGETS,}
 # NskipFoo = ${Foo:${M_ListToSkip}}
 M_ListToSkip= O:u:ts::S,:,:N,g:S,^,N,
 
+# :sh1 evaluates command only once and caches the result.
+.if ${MAKE_VERSION} < 20251111
+M_sh1 = sh
+.else
+M_sh1 = sh1
+.endif
+
 # type should be a builtin in any sh since about 1980,
 # AUTOCONF := ${autoconf:L:${M_whence}}
-M_type = @x@(type $$x 2> /dev/null); echo;@:sh:[0]:N* found*:[@]:C,[()],,g
+M_type = @x@(type $$x 2> /dev/null); echo;@:${M_sh1:Ush}:[0]:N* found*:[@]:C,[()],,g
 M_whence = ${M_type}:M/*:[1]
 
 # convert a path to a valid shell variable
@@ -44,8 +50,23 @@ TIME_STAMP_END?= ${TIME_STAMP_DATE}
 # error spam and show a proper error.
 Mkdirs= Mkdirs() { mkdir -p $$* || :; }
 
+# jobs.mk wants this
+.if empty(NEWLOG_SH)
+NEWLOG_SH:= ${SRCTOP}/contrib/bmake/mk/newlog.sh
+.export NEWLOG_SH
+.endif
+
 .if !empty(.MAKEFLAGS:M-s)
 ECHO_TRACE?=	true
 .endif
 
 .include "src.sys.env.mk"
+.-include <site.sys.env.mk>
+
+.if !defined(HOST_TARGET) || !defined(HOST_MACHINE) || !defined(_HOST_OSREL)
+# we need HOST_TARGET etc below.
+.include <host-target.mk>
+.export HOST_TARGET
+.endif
+
+.include <local.sys.machine.mk>

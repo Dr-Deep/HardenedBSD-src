@@ -1,6 +1,4 @@
-# $FreeBSD$
-
 PROG=	mkkfont
-MAN1=
+MAN=
 
 .include <bsd.prog.mk>

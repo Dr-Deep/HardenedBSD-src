@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2012 The FreeBSD Foundation
  *
@@ -86,7 +86,7 @@ log_common(int priority, int log_errno, const char *fmt, va_list ap)
 	static char msgbuf[MSGBUF_LEN];
 	static char msgbuf_strvised[MSGBUF_LEN * 4 + 1];
 	char *errstr;
-	int ret;
+	int ret, serrno = errno;
 
 	ret = vsnprintf(msgbuf, sizeof(msgbuf), fmt, ap);
 	if (ret < 0) {
@@ -138,6 +138,8 @@ log_common(int priority, int log_errno, const char *fmt, va_list ap)
 			    msgbuf_strvised, errstr);
 		}
 	}
+
+	errno = serrno;
 }
 
 void
@@ -147,6 +149,18 @@ log_err(int eval, const char *fmt, ...)
 
 	va_start(ap, fmt);
 	log_common(LOG_CRIT, errno, fmt, ap);
+	va_end(ap);
+
+	exit(eval);
+}
+
+void
+log_errc(int eval, int code, const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	log_common(LOG_CRIT, code, fmt, ap);
 	va_end(ap);
 
 	exit(eval);
@@ -171,6 +185,16 @@ log_warn(const char *fmt, ...)
 
 	va_start(ap, fmt);
 	log_common(LOG_WARNING, errno, fmt, ap);
+	va_end(ap);
+}
+
+void
+log_warnc(int code, const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	log_common(LOG_WARNING, code, fmt, ap);
 	va_end(ap);
 }
 

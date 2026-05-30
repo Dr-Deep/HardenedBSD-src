@@ -43,7 +43,7 @@ typedef BegemotSnmpdTransportProto ENUM (
 
 (1 internet
   (2 mgmt
-    (1 mibII
+    (1 mib-2
       (1 system
 #
 # The standard System group
@@ -116,15 +116,6 @@ typedef BegemotSnmpdTransportProto ENUM (
                   (5 begemotTrapSinkVersion INTEGER GET SET)
                 )
               )
-#
-#	Port table
-#
-              (4 begemotSnmpdPortTable
-                (1 begemotSnmpdPortEntry : IPADDRESS INTEGER op_snmp_port
-                  (1 begemotSnmpdPortAddress IPADDRESS)
-                  (2 begemotSnmpdPortPort UNSIGNED32)
-                  (3 begemotSnmpdPortStatus INTEGER GET SET)
-              ))
 #
 #	Community table
 #

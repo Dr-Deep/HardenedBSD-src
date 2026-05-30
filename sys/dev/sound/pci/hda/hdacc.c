@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2006 Stephane E. Potvin <sepotvin@videotron.ca>
  * Copyright (c) 2006 Ariff Abdullah <ariff@FreeBSD.org>
@@ -43,8 +43,6 @@
 #include <dev/sound/pci/hda/hda_reg.h>
 #include <dev/sound/pci/hda/hdac.h>
 
-SND_DECLARE_FILE("$FreeBSD$");
-
 struct hdacc_fg {
 	device_t	dev;
 	nid_t		nid;
@@ -62,9 +60,9 @@ struct hdacc_softc {
 	struct hdacc_fg	*fgs;
 };
 
-#define hdacc_lock(codec)	snd_mtxlock((codec)->lock)
-#define hdacc_unlock(codec)	snd_mtxunlock((codec)->lock)
-#define hdacc_lockassert(codec)	snd_mtxassert((codec)->lock)
+#define hdacc_lock(codec)	mtx_lock((codec)->lock)
+#define hdacc_unlock(codec)	mtx_unlock((codec)->lock)
+#define hdacc_lockassert(codec)	mtx_assert((codec)->lock, MA_OWNED)
 
 MALLOC_DEFINE(M_HDACC, "hdacc", "HDA CODEC");
 
@@ -76,11 +74,13 @@ static const struct {
 } hdacc_codecs[] = {
 	{ HDA_CODEC_CS4206, 0,		"Cirrus Logic CS4206" },
 	{ HDA_CODEC_CS4207, 0,		"Cirrus Logic CS4207" },
+	{ HDA_CODEC_CS4208, 0,		"Cirrus Logic CS4208" },
 	{ HDA_CODEC_CS4210, 0,		"Cirrus Logic CS4210" },
 	{ HDA_CODEC_ALC215, 0,		"Realtek ALC215" },
 	{ HDA_CODEC_ALC221, 0,		"Realtek ALC221" },
 	{ HDA_CODEC_ALC222, 0,		"Realtek ALC222" },
 	{ HDA_CODEC_ALC225, 0,		"Realtek ALC225" },
+	{ HDA_CODEC_ALC230, 0,		"Realtek ALC230" },
 	{ HDA_CODEC_ALC231, 0,		"Realtek ALC231" },
 	{ HDA_CODEC_ALC233, 0,		"Realtek ALC233" },
 	{ HDA_CODEC_ALC234, 0,		"Realtek ALC234" },
@@ -148,6 +148,7 @@ static const struct {
 	{ HDA_CODEC_ALC889, 0,		"Realtek ALC889" },
 	{ HDA_CODEC_ALC892, 0,		"Realtek ALC892" },
 	{ HDA_CODEC_ALC897, 0,		"Realtek ALC897" },
+	{ HDA_CODEC_ALC898, 0,		"Realtek ALC898" },
 	{ HDA_CODEC_ALC899, 0,		"Realtek ALC899" },
 	{ HDA_CODEC_ALC1150, 0,		"Realtek ALC1150" },
 	{ HDA_CODEC_ALCS1200A, 0,	"Realtek ALCS1200A" },
@@ -359,6 +360,7 @@ static const struct {
 	{ HDA_CODEC_NVIDIAMCP78_3, 0,	"NVIDIA MCP78" },
 	{ HDA_CODEC_NVIDIAMCP78_4, 0,	"NVIDIA MCP78" },
 	{ HDA_CODEC_NVIDIAMCP7A, 0,	"NVIDIA MCP7A" },
+	{ HDA_CODEC_NVIDIAGM204, 0,	"NVIDIA GM204" },
 	{ HDA_CODEC_NVIDIAGT220, 0,	"NVIDIA GT220" },
 	{ HDA_CODEC_NVIDIAGT21X, 0,	"NVIDIA GT21x" },
 	{ HDA_CODEC_NVIDIAMCP89, 0,	"NVIDIA MCP89" },
@@ -394,9 +396,11 @@ static const struct {
 	{ HDA_CODEC_INTELGMLK1, 0,	"Intel Gemini Lake" },
 	{ HDA_CODEC_INTELICLK, 0,	"Intel Ice Lake" },
 	{ HDA_CODEC_INTELTGLK, 0,	"Intel Tiger Lake" },
+	{ HDA_CODEC_INTELTGLKH, 0,	"Intel Tiger Lake-H" },
 	{ HDA_CODEC_INTELALLK, 0,	"Intel Alder Lake" },
 	{ HDA_CODEC_SII1390, 0,		"Silicon Image SiI1390" },
 	{ HDA_CODEC_SII1392, 0,		"Silicon Image SiI1392" },
+	{ HDA_CODEC_VMWARE, 0,		"VMware" },
 	/* Unknown CODECs */
 	{ HDA_CODEC_ADXXXX, 0,		"Analog Devices" },
 	{ HDA_CODEC_AGEREXXXX, 0,	"Lucent/Agere Systems" },
@@ -414,6 +418,7 @@ static const struct {
 	{ HDA_CODEC_NVIDIAXXXX, 0,	"NVIDIA" },
 	{ HDA_CODEC_SIIXXXX, 0,		"Silicon Image" },
 	{ HDA_CODEC_STACXXXX, 0,	"Sigmatel" },
+	{ HDA_CODEC_VMWAREXXXX, 0,	"VMware" },
 	{ HDA_CODEC_VTXXXX, 0,		"VIA" },
 };
 
@@ -472,8 +477,7 @@ hdacc_probe(device_t dev)
 			    hdacc_codecs[i].name, hda_get_device_id(dev));
 	} else
 		snprintf(buf, sizeof(buf), "Generic (0x%04x)", id);
-	strlcat(buf, " HDA CODEC", sizeof(buf));
-	device_set_desc_copy(dev, buf);
+	device_set_descf(dev, "%s HDA CODEC", buf);
 	return (BUS_PROBE_DEFAULT);
 }
 
@@ -520,7 +524,7 @@ hdacc_attach(device_t dev)
 		codec->fgs[n].subsystem_id = hda_command(dev,
 		    HDA_CMD_GET_SUBSYSTEM_ID(0, i));
 		hdacc_unlock(codec);
-		codec->fgs[n].dev = child = device_add_child(dev, NULL, -1);
+		codec->fgs[n].dev = child = device_add_child(dev, NULL, DEVICE_UNIT_ANY);
 		if (child == NULL) {
 			device_printf(dev, "Failed to add function device\n");
 			continue;
@@ -528,7 +532,7 @@ hdacc_attach(device_t dev)
 		device_set_ivars(child, &codec->fgs[n]);
 	}
 
-	bus_generic_attach(dev);
+	bus_attach_children(dev);
 
 	return (0);
 }
@@ -539,9 +543,10 @@ hdacc_detach(device_t dev)
 	struct hdacc_softc *codec = device_get_softc(dev);
 	int error;
 
-	error = device_delete_children(dev);
+	if ((error = bus_generic_detach(dev)) != 0)
+		return (error);
 	free(codec->fgs, M_HDACC);
-	return (error);
+	return (0);
 }
 
 static int

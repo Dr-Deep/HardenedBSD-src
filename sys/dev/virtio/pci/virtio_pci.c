@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2017, Bryan Venteicher <bryanv@FreeBSD.org>
  * All rights reserved.
@@ -25,9 +25,6 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -100,8 +97,13 @@ MODULE_VERSION(virtio_pci, 1);
 MODULE_DEPEND(virtio_pci, pci, 1, 1, 1);
 MODULE_DEPEND(virtio_pci, virtio, 1, 1, 1);
 
+SYSCTL_DECL(_hw_virtio);
+SYSCTL_NODE(_hw_virtio, OID_AUTO, pci, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
+    "VirtIO PCI driver parameters");
+
 int vtpci_disable_msix = 0;
-TUNABLE_INT("hw.virtio.pci.disable_msix", &vtpci_disable_msix);
+SYSCTL_INT(_hw_virtio_pci, OID_AUTO, disable_msix, CTLFLAG_RDTUN,
+    &vtpci_disable_msix, 0, "If set to 1, disables MSI-X.");
 
 static uint8_t
 vtpci_read_isr(struct vtpci_common *cn)
@@ -171,7 +173,7 @@ vtpci_add_child(struct vtpci_common *cn)
 
 	dev = cn->vtpci_dev;
 
-	child = device_add_child(dev, NULL, -1);
+	child = device_add_child(dev, NULL, DEVICE_UNIT_ANY);
 	if (child == NULL) {
 		device_printf(dev, "cannot create child device\n");
 		return (ENOMEM);
@@ -185,18 +187,14 @@ vtpci_add_child(struct vtpci_common *cn)
 int
 vtpci_delete_child(struct vtpci_common *cn)
 {
-	device_t dev, child;
+	device_t dev;
 	int error;
 
 	dev = cn->vtpci_dev;
 
-	child = cn->vtpci_child_dev;
-	if (child != NULL) {
-		error = device_delete_child(dev, child);
-		if (error)
-			return (error);
-		cn->vtpci_child_dev = NULL;
-	}
+	error = bus_generic_detach(dev);
+	if (error)
+		return (error);
 
 	return (0);
 }
@@ -269,7 +267,7 @@ vtpci_negotiate_features(struct vtpci_common *cn,
 	return (features);
 }
 
-int
+bool
 vtpci_with_feature(struct vtpci_common *cn, uint64_t feature)
 {
 	return ((cn->vtpci_features & feature) != 0);
@@ -326,7 +324,7 @@ vtpci_write_ivar(struct vtpci_common *cn, int index, uintptr_t value)
 }
 
 int
-vtpci_alloc_virtqueues(struct vtpci_common *cn, int flags, int nvqs,
+vtpci_alloc_virtqueues(struct vtpci_common *cn, int nvqs,
     struct vq_alloc_info *vq_info)
 {
 	device_t dev;

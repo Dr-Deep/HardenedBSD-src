@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2002-2007 Sam Leffler, Errno Consulting
  * All rights reserved.
@@ -27,8 +27,6 @@
  * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGES.
- *
- * $FreeBSD$
  */
 
 #ifndef	_BSDSTAT_H_
@@ -38,7 +36,7 @@
  */
 
 /*
- * Statistic definition/description.  The are defined
+ * Statistic definition/description.  These are defined
  * for stats that correspond 1-1 w/ a collected stat
  * and for stats that are calculated indirectly.
  */
@@ -78,7 +76,7 @@ struct fmt {
  * classes derived from it are useful.
  */
 struct bsdstat {
-	const char *name;		/* statistics name, e.g. wlanstats */
+	const char *name;		/* statistics name, e.g. wlanstat */
 	const struct fmt *stats;	/* statistics in class */
 	int nstats;			/* number of stats */
 #define	FMTS_IS_STAT	0x80	/* the following two bytes are the stat id */

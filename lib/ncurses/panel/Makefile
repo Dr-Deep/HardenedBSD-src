@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 .include <src.opts.mk>
 .include "${.CURDIR:H}/config.mk"
 
@@ -62,9 +60,6 @@ SYMLINKS+=	libpanelw.a ${LIBDIR}/libpanel.a
 .endif
 .if !defined(NO_PIC)
 SYMLINKS+=	libpanelw.so ${LIBDIR}/libpanel.so
-.endif
-.if ${MK_PROFILE} != "no"
-SYMLINKS+=	libpanelw_p.a ${LIBDIR}/libpanel_p.a
 .endif
 
 INCS=	panel.h

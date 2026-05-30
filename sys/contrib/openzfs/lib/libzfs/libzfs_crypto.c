@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -16,9 +17,9 @@
 /*
  * Copyright (c) 2017, Datto, Inc. All rights reserved.
  * Copyright 2020 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
-#include <sys/zfs_context.h>
 #include <sys/fs/zfs.h>
 #include <sys/dsl_crypt.h>
 #include <libintl.h>
@@ -37,6 +38,7 @@
 #include <curl/curl.h>
 #endif
 #include <libzfs.h>
+#include <libzutil.h>
 #include "libzfs_impl.h"
 #include "zfeature_common.h"
 
@@ -493,7 +495,7 @@ get_key_material_file(libzfs_handle_t *hdl, const char *uri,
 		ret = errno;
 		errno = 0;
 		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
-		    "Failed to open key material file: %s"), strerror(ret));
+		    "Failed to open key material file: %s"), zfs_strerror(ret));
 		return (ret);
 	}
 
@@ -582,7 +584,7 @@ get_key_material_https(libzfs_handle_t *hdl, const char *uri,
 		goto end;
 	}
 
-	int kfd = -1;
+	int kfd;
 #ifdef O_TMPFILE
 	kfd = open(getenv("TMPDIR") ?: "/tmp",
 	    O_RDWR | O_TMPFILE | O_EXCL | O_CLOEXEC, 0600);
@@ -595,7 +597,7 @@ get_key_material_https(libzfs_handle_t *hdl, const char *uri,
 	    "%s/libzfs-XXXXXXXX.https", getenv("TMPDIR") ?: "/tmp") == -1) {
 		ret = ENOMEM;
 		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN, "%s"),
-		    strerror(ret));
+		    zfs_strerror(ret));
 		goto end;
 	}
 
@@ -604,19 +606,21 @@ get_key_material_https(libzfs_handle_t *hdl, const char *uri,
 		ret = errno;
 		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 		    "Couldn't create temporary file %s: %s"),
-		    path, strerror(ret));
+		    path, zfs_strerror(ret));
 		free(path);
 		goto end;
 	}
 	(void) unlink(path);
 	free(path);
 
+#ifdef O_TMPFILE
 kfdok:
+#endif
 	if ((key = fdopen(kfd, "r+")) == NULL) {
 		ret = errno;
 		(void) close(kfd);
 		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
-		    "Couldn't reopen temporary file: %s"), strerror(ret));
+		    "Couldn't reopen temporary file: %s"), zfs_strerror(ret));
 		goto end;
 	}
 
@@ -942,7 +946,7 @@ proplist_has_encryption_props(nvlist_t *props)
 {
 	int ret;
 	uint64_t intval;
-	char *strval;
+	const char *strval;
 
 	ret = nvlist_lookup_uint64(props,
 	    zfs_prop_to_name(ZFS_PROP_ENCRYPTION), &intval);
@@ -1007,7 +1011,7 @@ zfs_crypto_create(libzfs_handle_t *hdl, char *parent_name, nvlist_t *props,
 	char errbuf[ERRBUFLEN];
 	uint64_t crypt = ZIO_CRYPT_INHERIT, pcrypt = ZIO_CRYPT_INHERIT;
 	uint64_t keyformat = ZFS_KEYFORMAT_NONE;
-	char *keylocation = NULL;
+	const char *keylocation = NULL;
 	zfs_handle_t *pzhp = NULL;
 	uint8_t *wkeydata = NULL;
 	uint_t wkeylen = 0;
@@ -1226,7 +1230,7 @@ load_keys_cb(zfs_handle_t *zhp, void *arg)
 		cb->cb_numfailed++;
 
 out:
-	(void) zfs_iter_filesystems(zhp, load_keys_cb, cb);
+	(void) zfs_iter_filesystems_v2(zhp, 0, load_keys_cb, cb);
 	zfs_close(zhp);
 
 	/* always return 0, since this function is best effort */
@@ -1407,6 +1411,11 @@ try_again:
 			    "Incorrect key provided for '%s'."),
 			    zfs_get_name(zhp));
 			break;
+		case ZFS_ERR_CRYPTO_NOTSUP:
+			zfs_error_aux(zhp->zfs_hdl, dgettext(TEXT_DOMAIN,
+			    "'%s' uses an unsupported encryption suite."),
+			    zfs_get_name(zhp));
+			break;
 		}
 		goto error;
 	}
@@ -1528,34 +1537,51 @@ error:
 
 static int
 zfs_crypto_verify_rewrap_nvlist(zfs_handle_t *zhp, nvlist_t *props,
-    nvlist_t **props_out, char *errbuf)
+    boolean_t inheritkey, nvlist_t **props_out, char *errbuf)
 {
 	int ret;
 	nvpair_t *elem = NULL;
-	zfs_prop_t prop;
 	nvlist_t *new_props = NULL;
-
-	new_props = fnvlist_alloc();
 
 	/*
 	 * loop through all provided properties, we should only have
-	 * keyformat, keylocation and pbkdf2iters. The actual validation of
-	 * values is done by zfs_valid_proplist().
+	 * keyformat, keylocation and pbkdf2iters, and user properties.
+	 * The actual validation of values is done by zfs_valid_proplist().
 	 */
 	while ((elem = nvlist_next_nvpair(props, elem)) != NULL) {
 		const char *propname = nvpair_name(elem);
-		prop = zfs_name_to_prop(propname);
 
-		switch (prop) {
+		switch (zfs_name_to_prop(propname)) {
 		case ZFS_PROP_PBKDF2_ITERS:
 		case ZFS_PROP_KEYFORMAT:
 		case ZFS_PROP_KEYLOCATION:
+			if (inheritkey) {
+				ret = EINVAL;
+				zfs_error_aux(zhp->zfs_hdl,
+				    dgettext(TEXT_DOMAIN,
+				    "Only user properties may be set with "
+				    "'zfs change-key -i'"));
+				goto error;
+			}
 			break;
+		case ZPROP_INVAL:
+			if (zfs_prop_user(propname))
+				break;
+			zfs_fallthrough;
 		default:
 			ret = EINVAL;
-			zfs_error_aux(zhp->zfs_hdl, dgettext(TEXT_DOMAIN,
-			    "Only keyformat, keylocation and pbkdf2iters may "
-			    "be set with this command."));
+			if (inheritkey) {
+				zfs_error_aux(zhp->zfs_hdl,
+				    dgettext(TEXT_DOMAIN,
+				    "Only user properties may be set with "
+				    "'zfs change-key -i'"));
+			} else {
+				zfs_error_aux(zhp->zfs_hdl,
+				    dgettext(TEXT_DOMAIN,
+				    "Only keyformat, keylocation, pbkdf2iters, "
+				    "and user properties may be set with this "
+				    "command."));
+			}
 			goto error;
 		}
 	}
@@ -1590,7 +1616,7 @@ zfs_crypto_rewrap(zfs_handle_t *zhp, nvlist_t *raw_props, boolean_t inheritkey)
 	uint64_t crypt, pcrypt, keystatus, pkeystatus;
 	uint64_t keyformat = ZFS_KEYFORMAT_NONE;
 	zfs_handle_t *pzhp = NULL;
-	char *keylocation = NULL;
+	const char *keylocation = NULL;
 	char origin_name[MAXNAMELEN];
 	char prop_keylocation[MAXNAMELEN];
 	char parent_name[ZFS_MAX_DATASET_NAME_LEN];
@@ -1634,17 +1660,17 @@ zfs_crypto_rewrap(zfs_handle_t *zhp, nvlist_t *raw_props, boolean_t inheritkey)
 		goto error;
 	}
 
+	/* validate the provided properties */
+	ret = zfs_crypto_verify_rewrap_nvlist(zhp, raw_props, inheritkey,
+	    &props, errbuf);
+	if (ret != 0)
+		goto error;
+
 	/*
 	 * If the user wants to use the inheritkey variant of this function
 	 * we don't need to collect any crypto arguments.
 	 */
 	if (!inheritkey) {
-		/* validate the provided properties */
-		ret = zfs_crypto_verify_rewrap_nvlist(zhp, raw_props, &props,
-		    errbuf);
-		if (ret != 0)
-			goto error;
-
 		/*
 		 * Load keyformat and keylocation from the nvlist. Fetch from
 		 * the dataset properties if not specified.
@@ -1700,7 +1726,7 @@ zfs_crypto_rewrap(zfs_handle_t *zhp, nvlist_t *raw_props, boolean_t inheritkey)
 
 			/* default to prompt if no keylocation is specified */
 			if (keylocation == NULL) {
-				keylocation = (char *)"prompt";
+				keylocation = "prompt";
 				ret = nvlist_add_string(props,
 				    zfs_prop_to_name(ZFS_PROP_KEYLOCATION),
 				    keylocation);
@@ -1810,4 +1836,15 @@ error:
 
 	zfs_error(zhp->zfs_hdl, EZFS_CRYPTOFAILED, errbuf);
 	return (ret);
+}
+
+boolean_t
+zfs_is_encrypted(zfs_handle_t *zhp)
+{
+	uint8_t flags = zhp->zfs_dmustats.dds_flags;
+
+	if (flags & DDS_FLAG_HAS_ENCRYPTED)
+		return ((flags & DDS_FLAG_ENCRYPTED) != 0);
+
+	return (zfs_prop_get_int(zhp, ZFS_PROP_ENCRYPTION) != ZIO_CRYPT_OFF);
 }

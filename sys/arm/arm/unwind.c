@@ -28,13 +28,11 @@
  * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/linker.h>
 #include <sys/malloc.h>
+#include <sys/proc.h>
 #include <sys/queue.h>
 #include <sys/systm.h>
 
@@ -280,7 +278,7 @@ unwind_module_unloaded(struct linker_file *lf)
  * the unwind tables might be stripped, so instead we have to use the
  * _exidx_start/end symbols created by ldscript.arm.
  */
-static int
+static void
 module_info_init(void *arg __unused)
 {
 	struct linker_file thekernel;
@@ -293,8 +291,6 @@ module_info_init(void *arg __unused)
 	thekernel.exidx_addr = CADDR(&_exidx_start);
 	thekernel.exidx_size = UADDR(&_exidx_end) - UADDR(&_exidx_start);
 	populate_module_info(create_module_info(), &thekernel);
-
-	return (0);
 }
 SYSINIT(unwind_init, SI_SUB_KMEM, SI_ORDER_ANY, module_info_init, NULL);
 
@@ -370,6 +366,7 @@ unwind_exec_read_byte(struct unwind_state *state)
 static int
 unwind_exec_insn(struct unwind_state *state)
 {
+	struct thread *td = curthread;
 	unsigned int insn;
 	uint32_t *vsp = (uint32_t *)state->registers[SP];
 	int update_vsp = 0;
@@ -398,12 +395,19 @@ unwind_exec_insn(struct unwind_state *state)
 		if (mask == 0)
 			return 1;
 
+		if (!__is_aligned(vsp, sizeof(register_t)))
+			return 1;
+
 		/* Update SP */
 		update_vsp = 1;
 
 		/* Load the registers */
 		for (reg = 4; mask && reg < 16; mask >>= 1, reg++) {
 			if (mask & 1) {
+				if (!kstack_contains(td, (uintptr_t)vsp,
+				    sizeof(*vsp)))
+					return 1;
+
 				state->registers[reg] = *vsp++;
 				state->update_mask |= 1 << reg;
 
@@ -426,10 +430,16 @@ unwind_exec_insn(struct unwind_state *state)
 		/* Read how many registers to load */
 		count = insn & INSN_POP_COUNT_MASK;
 
+		if (!__is_aligned(vsp, sizeof(register_t)))
+			return 1;
+
 		/* Update sp */
 		update_vsp = 1;
 
 		/* Pop the registers */
+		if (!kstack_contains(td, (uintptr_t)vsp,
+		    sizeof(*vsp) * (4 + count)))
+			return 1;
 		for (reg = 4; reg <= 4 + count; reg++) {
 			state->registers[reg] = *vsp++;
 			state->update_mask |= 1 << reg;
@@ -437,6 +447,8 @@ unwind_exec_insn(struct unwind_state *state)
 
 		/* Check if we are in the pop r14 version */
 		if ((insn & INSN_POP_TYPE_MASK) != 0) {
+			if (!kstack_contains(td, (uintptr_t)vsp, sizeof(*vsp)))
+				return 1;
 			state->registers[14] = *vsp++;
 		}
 
@@ -451,12 +463,18 @@ unwind_exec_insn(struct unwind_state *state)
 		if (mask == 0 || (mask & 0xf0) != 0)
 			return 1;
 
+		if (!__is_aligned(vsp, sizeof(register_t)))
+			return 1;
+
 		/* Update SP */
 		update_vsp = 1;
 
 		/* Load the registers */
 		for (reg = 0; mask && reg < 4; mask >>= 1, reg++) {
 			if (mask & 1) {
+				if (!kstack_contains(td, (uintptr_t)vsp,
+				    sizeof(*vsp)))
+					return 1;
 				state->registers[reg] = *vsp++;
 				state->update_mask |= 1 << reg;
 			}

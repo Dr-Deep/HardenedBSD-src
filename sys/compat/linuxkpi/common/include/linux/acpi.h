@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2020 Vladimir Kondratyev <wulf@FreeBSD.org>
  *
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _LINUXKPI_LINUX_ACPI_H_
@@ -34,13 +32,17 @@
 #include <linux/device.h>
 #include <linux/uuid.h>
 
-#if defined(__aarch64__) || defined(__amd64__) || defined(__i386__)
+#if defined(__aarch64__) || defined(__amd64__) || defined(__i386__) || defined(__riscv)
 
 #include <acpi/acpi.h>
 #include <acpi/acpi_bus.h>
 
 #define	ACPI_HANDLE(dev)	\
     ((dev)->bsddev != NULL ? bsd_acpi_get_handle((dev)->bsddev) : NULL)
+#define	acpi_device_handle(dev)	\
+    ((dev) != NULL ? bsd_acpi_get_handle(dev) : NULL)
+static inline void acpi_dev_put(struct acpi_device *adev) {}
+#define	acpi_handle_debug(handle, fmt, ...)
 
 #endif
 

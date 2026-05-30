@@ -23,8 +23,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef SUPERIO_H
@@ -49,8 +47,11 @@ typedef enum superio_dev_type {
 superio_vendor_t superio_vendor(device_t dev);
 uint16_t superio_devid(device_t dev);
 uint8_t superio_revid(device_t dev);
+int superio_extid(device_t dev);
 uint8_t superio_read(device_t dev, uint8_t reg);
+uint8_t superio_ldn_read(device_t dev, uint8_t ldn, uint8_t reg);
 void superio_write(device_t dev, uint8_t reg, uint8_t val);
+void superio_ldn_write(device_t dev, uint8_t ldn, uint8_t reg, uint8_t val);
 bool superio_dev_enabled(device_t dev, uint8_t mask);
 void superio_dev_enable(device_t dev, uint8_t mask);
 void superio_dev_disable(device_t dev, uint8_t mask);
@@ -59,7 +60,7 @@ device_t superio_find_dev(device_t superio, superio_dev_type_t type,
     int ldn);
 
 enum superio_ivars {
-	SUPERIO_IVAR_LDN =	10600,
+	SUPERIO_IVAR_LDN =	BUS_IVARS_SUPERIO,
 	SUPERIO_IVAR_TYPE,
 	SUPERIO_IVAR_IOBASE,
 	SUPERIO_IVAR_IOBASE2,

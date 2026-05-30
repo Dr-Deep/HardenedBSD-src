@@ -36,16 +36,12 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	from: @(#)trap.c	7.4 (Berkeley) 5/13/91
  */
 
 #include "opt_capsicum.h"
 #include "opt_ktrace.h"
 #include "opt_pledge.h"
-
-__FBSDID("$FreeBSD$");
-
+#include "opt_pax.h"
 #include <sys/capsicum.h>
 #include <sys/ktr.h>
 #include <sys/vmmeter.h>
@@ -56,14 +52,16 @@ __FBSDID("$FreeBSD$");
 #include <security/audit/audit.h>
 #include <sys/pledge.h>
 
+#include <sys/pax.h>
+
 static inline void
 syscallenter(struct thread *td)
 {
 	struct proc *p;
 	struct syscall_args *sa;
 	struct sysent *se;
-	int error, traced;
-	bool sy_thr_static;
+	int error;
+	bool sy_thr_static, traced;
 
 	VM_CNT_INC(v_syscall);
 	p = td->td_proc;
@@ -75,11 +73,14 @@ syscallenter(struct thread *td)
 	traced = (p->p_flag & P_TRACED) != 0;
 	if (__predict_false(traced || td->td_dbgflags & TDB_USERWR)) {
 		PROC_LOCK(p);
+		MPASS((td->td_dbgflags & TDB_BOUNDARY) == 0);
 		td->td_dbgflags &= ~TDB_USERWR;
 		if (traced)
 			td->td_dbgflags |= TDB_SCE;
 		PROC_UNLOCK(p);
 	}
+	if ((td->td_pflags2 & TDP2_UEXTERR) != 0)
+		td->td_pflags2 &= ~TDP2_EXTERR;
 	error = (p->p_sysent->sv_fetch_syscall_args)(td);
 	se = sa->callp;
 #ifdef KTRACE
@@ -124,10 +125,13 @@ syscallenter(struct thread *td)
 	 * In capability mode, we only allow access to system calls
 	 * flagged with SYF_CAPENABLED.
 	 */
-	if (__predict_false(IN_CAPABILITY_MODE(td) &&
-	    (se->sy_flags & SYF_CAPENABLED) == 0)) {
-		td->td_errno = error = ECAPMODE;
-		goto retval;
+	if ((se->sy_flags & SYF_CAPENABLED) == 0) {
+		if (CAP_TRACING(td))
+			ktrcapfail(CAPFAIL_SYSCALL, NULL);
+		if (IN_CAPABILITY_MODE(td)) {
+			td->td_errno = error = ECAPMODE;
+			goto retval;
+		}
 	}
 #endif
 
@@ -153,11 +157,11 @@ syscallenter(struct thread *td)
 
 	sy_thr_static = (se->sy_thrcnt & SY_THR_STATIC) != 0;
 
-	if (__predict_false(SYSTRACE_ENABLED() ||
-	    AUDIT_SYSCALL_ENTER(sa->code, td) ||
-	    !sy_thr_static)) {
+	if (__predict_false(AUDIT_SYSCALL_ENABLED() ||
+	    SYSTRACE_ENABLED() || !sy_thr_static)) {
 		if (!sy_thr_static) {
-			error = syscall_thread_enter(td, se);
+			error = syscall_thread_enter(td, &se);
+			sy_thr_static = (se->sy_thrcnt & SY_THR_STATIC) != 0;
 			if (error != 0) {
 				td->td_errno = error;
 				goto retval;
@@ -169,6 +173,9 @@ syscallenter(struct thread *td)
 		if (__predict_false(se->sy_entry != 0))
 			(*systrace_probe_func)(sa, SYSTRACE_ENTRY, 0);
 #endif
+
+		AUDIT_SYSCALL_ENTER(sa->code, td);
+
 		error = (se->sy_call)(td, sa->args);
 		/* Save the latest error return value. */
 		if (__predict_false((td->td_pflags & TDP_NERRNO) != 0))
@@ -212,10 +219,12 @@ syscallenter(struct thread *td)
 	    td->td_retval[1]);
 	if (__predict_false(traced)) {
 		PROC_LOCK(p);
-		td->td_dbgflags &= ~TDB_SCE;
+		td->td_dbgflags &= ~(TDB_SCE | TDB_BOUNDARY);
 		PROC_UNLOCK(p);
 	}
 	(p->p_sysent->sv_set_syscall_retval)(td, error);
+	if (error != 0 && (td->td_pflags2 & TDP2_UEXTERR) != 0)
+		exterr_copyout(td);
 }
 
 static inline void
@@ -224,7 +233,7 @@ syscallret(struct thread *td)
 	struct proc *p;
 	struct syscall_args *sa;
 	ksiginfo_t ksi;
-	int traced;
+	bool traced;
 
 	KASSERT(td->td_errno != ERELOOKUP,
 	    ("ERELOOKUP not consumed syscall %d", td->td_sa.code));
@@ -235,6 +244,9 @@ syscallret(struct thread *td)
 	    td->td_errno == ECAPMODE)) {
 		if ((trap_enotcap ||
 		    (p->p_flag2 & P2_TRAPCAP) != 0) && IN_CAPABILITY_MODE(td)) {
+#ifdef PAX_SEGVGUARD
+			pax_segvguard_segfault(td, p->p_comm);
+#endif
 			ksiginfo_init_trap(&ksi);
 			ksi.ksi_signo = SIGTRAP;
 			ksi.ksi_errno = td->td_errno;
@@ -255,9 +267,9 @@ syscallret(struct thread *td)
 	}
 #endif
 
-	traced = 0;
+	traced = false;
 	if (__predict_false(p->p_flag & P_TRACED)) {
-		traced = 1;
+		traced = true;
 		PROC_LOCK(p);
 		td->td_dbgflags |= TDB_SCX;
 		PROC_UNLOCK(p);
@@ -291,9 +303,13 @@ syscallret(struct thread *td)
 		 */
 		if (traced &&
 		    ((td->td_dbgflags & (TDB_FORK | TDB_EXEC)) != 0 ||
-		    (p->p_ptevents & PTRACE_SCX) != 0))
+		    (p->p_ptevents & PTRACE_SCX) != 0)) {
+			MPASS((td->td_dbgflags & TDB_BOUNDARY) == 0);
+			td->td_dbgflags |= TDB_BOUNDARY;
 			ptracestop(td, SIGTRAP, NULL);
-		td->td_dbgflags &= ~(TDB_SCX | TDB_EXEC | TDB_FORK);
+		}
+		td->td_dbgflags &= ~(TDB_SCX | TDB_EXEC | TDB_FORK |
+		    TDB_BOUNDARY);
 		PROC_UNLOCK(p);
 	}
 }

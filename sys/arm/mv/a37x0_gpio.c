@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2018-2019, Rubicon Communications, LLC (Netgate)
  * All rights reserved.
@@ -25,9 +25,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -294,10 +291,11 @@ a37x0_gpio_attach(device_t dev)
 	if (sc->sc_npins > sc->sc_max_pins)
 		return (ENXIO);
 
-	sc->sc_busdev = gpiobus_attach_bus(dev);
+	sc->sc_busdev = gpiobus_add_bus(dev);
 	if (sc->sc_busdev == NULL)
 		return (ENXIO);
 
+	bus_attach_children(dev);
 	return (0);
 }
 

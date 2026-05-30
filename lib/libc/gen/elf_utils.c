@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2010 Konstantin Belousov <kib@freebsd.org>
  * All rights reserved.
@@ -24,22 +24,22 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
-#include <sys/types.h>
+#include <sys/param.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/sysctl.h>
+
+#include <machine/tls.h>
+
 #include <link.h>
 #include <stddef.h>
 #include <string.h>
+
 #include "libc_private.h"
-#include "static_tls.h"
 
 void __pthread_map_stacks_exec(void);
-void __pthread_distribute_static_tls(size_t, void *, size_t, size_t);
 
 int
 __elf_phdr_match_addr(struct dl_phdr_info *phdr_info, void *addr)
@@ -75,21 +75,8 @@ __elf_phdr_match_addr(struct dl_phdr_info *phdr_info, void *addr)
 void
 __libc_map_stacks_exec(void)
 {
-	int mib[2];
-	struct rlimit rlim;
-	u_long usrstack;
-	size_t len;
-	
-	mib[0] = CTL_KERN;
-	mib[1] = KERN_USRSTACK;
-	len = sizeof(usrstack);
-	if (sysctl(mib, sizeof(mib) / sizeof(mib[0]), &usrstack, &len, NULL, 0)
-	    == -1)
-		return;
-	if (getrlimit(RLIMIT_STACK, &rlim) == -1)
-		return;
-	mprotect((void *)(uintptr_t)(usrstack - rlim.rlim_cur),
-	    rlim.rlim_cur, _rtld_get_stack_prot());
+	/* HBSD: No-op since we do not support executable stacks */
+	return;
 }
 
 #pragma weak __pthread_map_stacks_exec
@@ -98,25 +85,4 @@ __pthread_map_stacks_exec(void)
 {
 
 	((void (*)(void))__libc_interposing[INTERPOS_map_stacks_exec])();
-}
-
-void
-__libc_distribute_static_tls(size_t offset, void *src, size_t len,
-    size_t total_len)
-{
-	uintptr_t tlsbase;
-
-	tlsbase = _libc_get_static_tls_base(offset);
-	memcpy((void *)tlsbase, src, len);
-	memset((char *)tlsbase + len, 0, total_len - len);
-}
-
-#pragma weak __pthread_distribute_static_tls
-void
-__pthread_distribute_static_tls(size_t offset, void *src, size_t len,
-    size_t total_len)
-{
-
-	((void (*)(size_t, void *, size_t, size_t))__libc_interposing[
-	    INTERPOS_distribute_static_tls])(offset, src, len, total_len);
 }

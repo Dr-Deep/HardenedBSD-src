@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/* Copyright(c) 2007-2022 Intel Corporation */
-/* $FreeBSD$ */
+/* Copyright(c) 2007-2025 Intel Corporation */
 
 /**
  *****************************************************************************
@@ -43,7 +42,7 @@
  *      hash precomputes
  *
  * @description
- *      This structure contains infomation on the hash precomputes
+ *      This structure contains information on the hash precomputes
  *
  *****************************************************************************/
 typedef struct lac_sym_qat_hash_precompute_info_s {
@@ -63,7 +62,7 @@ typedef struct lac_sym_qat_hash_precompute_info_s {
  *      hash state prefix buffer info
  *
  * @description
- *      This structure contains infomation on the hash state prefix aad buffer
+ *      This structure contains information on the hash state prefix aad buffer
  *
  *****************************************************************************/
 typedef struct lac_sym_qat_hash_state_buffer_info_s {
@@ -126,6 +125,10 @@ typedef struct lac_sym_qat_hash_state_buffer_info_s {
  * @param[in] useOptimisedContentDesc   Indicate if optimised content desc
  *                                      is used for this session.
  *
+ * @param[in] useStatefulSha3ContentDesc
+ *                                      Indicate if stateful SHA3 content desc
+ *                                      is used for this session.
+ *
  * @param[in] pPrecompute               For auth mode, this is the pointer
  *                                      to the precompute data. Otherwise this
  *                                      should be set to NULL
@@ -145,6 +148,7 @@ LacSymQat_HashContentDescInit(icp_qat_la_bulk_req_ftr_t *pMsg,
 			      icp_qat_hw_auth_mode_t qatHashMode,
 			      CpaBoolean useSymConstantsTable,
 			      CpaBoolean useOptimisedContentDesc,
+			      CpaBoolean useStatefulSha3ContentDesc,
 			      lac_sym_qat_hash_precompute_info_t *pPrecompute,
 			      Cpa32U *pHashBlkSizeInBytes);
 

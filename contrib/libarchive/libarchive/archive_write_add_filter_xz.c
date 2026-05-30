@@ -26,10 +26,11 @@
 
 #include "archive_platform.h"
 
-__FBSDID("$FreeBSD: head/lib/libarchive/archive_write_set_compression_xz.c 201108 2009-12-28 03:28:21Z kientzle $");
-
 #ifdef HAVE_ERRNO_H
 #include <errno.h>
+#endif
+#ifdef HAVE_LIMITS_H
+#include <limits.h>
 #endif
 #ifdef HAVE_STDLIB_H
 #include <stdlib.h>
@@ -312,7 +313,7 @@ archive_compressor_xz_open(struct archive_write_filter *f)
 	if (data->compressed == NULL) {
 		size_t bs = 65536, bpb;
 		if (f->archive->magic == ARCHIVE_WRITE_MAGIC) {
-			/* Buffer size should be a multiple number of the of bytes
+			/* Buffer size should be a multiple number of the bytes
 			 * per block for performance. */
 			bpb = archive_write_get_bytes_per_block(f->archive);
 			if (bpb > bs)
@@ -321,8 +322,7 @@ archive_compressor_xz_open(struct archive_write_filter *f)
 				bs -= bs % bpb;
 		}
 		data->compressed_buffer_size = bs;
-		data->compressed
-		    = (unsigned char *)malloc(data->compressed_buffer_size);
+		data->compressed = malloc(data->compressed_buffer_size);
 		if (data->compressed == NULL) {
 			archive_set_error(f->archive, ENOMEM,
 			    "Can't allocate data for compression buffer");
@@ -379,23 +379,33 @@ archive_compressor_xz_options(struct archive_write_filter *f,
 
 	if (strcmp(key, "compression-level") == 0) {
 		if (value == NULL || !(value[0] >= '0' && value[0] <= '9') ||
-		    value[1] != '\0')
-			return (ARCHIVE_WARN);
+		    value[1] != '\0') {
+			archive_set_error(f->archive, ARCHIVE_ERRNO_MISC,
+			    "compression-level invalid");
+			return (ARCHIVE_FAILED);
+		}
 		data->compression_level = value[0] - '0';
 		if (data->compression_level > 9)
 			data->compression_level = 9;
 		return (ARCHIVE_OK);
 	} else if (strcmp(key, "threads") == 0) {
 		char *endptr;
+		unsigned long val;
 
-		if (value == NULL)
-			return (ARCHIVE_WARN);
-		errno = 0;
-		data->threads = (int)strtoul(value, &endptr, 10);
-		if (errno != 0 || *endptr != '\0') {
-			data->threads = 1;
-			return (ARCHIVE_WARN);
+		if (value == NULL) {
+			archive_set_error(f->archive, ARCHIVE_ERRNO_MISC,
+			    "threads option requires an argument");
+			return (ARCHIVE_FAILED);
 		}
+		errno = 0;
+		val = strtoul(value, &endptr, 10);
+		if (errno != 0 || *endptr != '\0' || val > (unsigned)INT_MAX) {
+			data->threads = 1;
+			archive_set_error(f->archive, ARCHIVE_ERRNO_MISC,
+			    "threads invalid");
+			return (ARCHIVE_FAILED);
+		}
+		data->threads = (int)val;
 		if (data->threads == 0) {
 #ifdef HAVE_LZMA_STREAM_ENCODER_MT
 			data->threads = lzma_cputhreads();

@@ -29,8 +29,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef	_MACHINE_VMPARAM_H_
@@ -75,10 +73,7 @@
 #endif
 
 /*
- * The virtual address the kernel is linked to run at.  For armv4/5 platforms
- * the low-order 30 bits of this must match the low-order bits of the physical
- * address the kernel is loaded at, so the value is most often provided as a
- * kernel config option in the std.platform file. For armv6/7 the kernel can
+ * The virtual address the kernel is linked to run at. For armv7 the kernel can
  * be loaded at any 2MB boundary, and KERNVIRTADDR can also be set to any 2MB
  * boundary.  It is typically overridden in the std.platform file only when
  * KERNBASE is also set to a lower address to provide more KVA.
@@ -188,7 +183,8 @@ extern vm_offset_t vm_max_kernel_address;
 #define	SFBUF_MAP
 
 #define	PMAP_HAS_DMAP	0
-#define	PHYS_TO_DMAP(x)	({ panic("No direct map exists"); 0; })
+#define	PHYS_TO_DMAP_ADDR(x)	({ panic("No direct map exists"); 0; })
+#define	PHYS_TO_DMAP(x)		((void *)PHYS_TO_DMAP_ADDR(x))
 #define	DMAP_TO_PHYS(x)	({ panic("No direct map exists"); 0; })
 
 #define	DEVMAP_MAX_VADDR	ARM_VECTORS_HIGH
@@ -202,5 +198,6 @@ extern vm_offset_t vm_max_kernel_address;
  * Need a page dump array for minidump.
  */
 #define MINIDUMP_PAGE_TRACKING	1
+#define MINIDUMP_STARTUP_PAGE_TRACKING 0
 
 #endif	/* _MACHINE_VMPARAM_H_ */

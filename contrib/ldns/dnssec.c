@@ -23,6 +23,11 @@
 #include <openssl/rand.h>
 #include <openssl/err.h>
 #include <openssl/md5.h>
+#include <openssl/bn.h>
+#include <openssl/rsa.h>
+#ifdef USE_DSA
+#include <openssl/dsa.h>
+#endif
 #endif
 
 ldns_rr *
@@ -149,6 +154,7 @@ ldns_dnssec_nsec3_closest_encloser(const ldns_rdf *qname,
 	                LDNS_FREE(salt);
 	                ldns_rdf_deep_free(zone_name);
 	                ldns_rdf_deep_free(sname);
+			ldns_rdf_deep_free(hashed_sname);
                         return NULL;
                 }
 
@@ -279,6 +285,7 @@ ldns_calc_keytag(const ldns_rr *key)
 	}
 
 	if (ldns_rr_get_type(key) != LDNS_RR_TYPE_DNSKEY &&
+	    ldns_rr_get_type(key) != LDNS_RR_TYPE_CDNSKEY &&
 	    ldns_rr_get_type(key) != LDNS_RR_TYPE_KEY
 	    ) {
 		return 0;
@@ -326,6 +333,7 @@ uint16_t ldns_calc_keytag_raw(const uint8_t* key, size_t keysize)
 }
 
 #ifdef HAVE_SSL
+#ifdef USE_DSA
 DSA *
 ldns_key_buf2dsa(const ldns_buffer *key)
 {
@@ -365,7 +373,6 @@ ldns_key_buf2dsa_raw(const unsigned char* key, size_t len)
 	offset += length;
 
 	Y = BN_bin2bn(key+offset, (int)length, NULL);
-	offset += length;
 
 	/* create the key and set its properties */
 	if(!Q || !P || !G || !Y || !(dsa = DSA_new())) {
@@ -375,7 +382,7 @@ ldns_key_buf2dsa_raw(const unsigned char* key, size_t len)
 		BN_free(Y);
 		return NULL;
 	}
-#if OPENSSL_VERSION_NUMBER < 0x10100000 || defined(HAVE_LIBRESSL)
+#if OPENSSL_VERSION_NUMBER < 0x10100000 || (defined(HAVE_LIBRESSL) && LIBRESSL_VERSION_NUMBER < 0x20700000)
 #ifndef S_SPLINT_S
 	dsa->p = P;
 	dsa->q = Q;
@@ -402,6 +409,7 @@ ldns_key_buf2dsa_raw(const unsigned char* key, size_t len)
 #endif /* OPENSSL_VERSION_NUMBER */
 	return dsa;
 }
+#endif /* USE_DSA */
 
 RSA *
 ldns_key_buf2rsa(const ldns_buffer *key)
@@ -427,7 +435,7 @@ ldns_key_buf2rsa_raw(const unsigned char* key, size_t len)
 			return NULL;
 		/* need some smart comment here XXX*/
 		/* the exponent is too large so it's places
-		 * futher...???? */
+		 * further...???? */
 		memmove(&int16, key+1, 2);
 		exp = ntohs(int16);
 		offset = 3;
@@ -461,7 +469,7 @@ ldns_key_buf2rsa_raw(const unsigned char* key, size_t len)
 		BN_free(modulus);
 		return NULL;
 	}
-#if OPENSSL_VERSION_NUMBER < 0x10100000 || defined(HAVE_LIBRESSL)
+#if OPENSSL_VERSION_NUMBER < 0x10100000 || (defined(HAVE_LIBRESSL) && LIBRESSL_VERSION_NUMBER < 0x20700000)
 #ifndef S_SPLINT_S
 	rsa->n = modulus;
 	rsa->e = exponent;
@@ -510,7 +518,8 @@ ldns_key_rr2ds(const ldns_rr *key, ldns_hash h)
 	const EVP_MD* md = NULL;
 #endif
 
-	if (ldns_rr_get_type(key) != LDNS_RR_TYPE_DNSKEY) {
+	if (ldns_rr_get_type(key) != LDNS_RR_TYPE_DNSKEY &&
+	    ldns_rr_get_type(key) != LDNS_RR_TYPE_CDNSKEY) {
 		return NULL;
 	}
 
@@ -905,7 +914,7 @@ ldns_dnssec_create_nsec3(const ldns_dnssec_name *from,
 	cur_rrsets = from->rrsets;
 	while (cur_rrsets) {
 		/* Do not include non-authoritative rrsets on the delegation point
-		 * in the type bitmap. Potentionally not skipping insecure
+		 * in the type bitmap. Potentially not skipping insecure
 		 * delegation should have been done earlier, in function
 		 * ldns_dnssec_zone_create_nsec3s, or even earlier in:
 		 * ldns_dnssec_zone_sign_nsec3_flg .
@@ -952,7 +961,7 @@ ldns_create_nsec(ldns_rdf *cur_owner, ldns_rdf *next_owner, ldns_rr_list *rrs)
 {
 	/* we do not do any check here - garbage in, garbage out */
 
-	/* the the start and end names - get the type from the
+	/* the start and end names - get the type from the
 	 * before rrlist */
 
 	/* inefficient, just give it a name, a next name, and a list of rrs */
@@ -1327,6 +1336,8 @@ ldns_nsec3_salt_data(const ldns_rr *nsec3_rr)
 	ldns_rdf *salt_rdf = ldns_nsec3_salt(nsec3_rr);
 	if (salt_rdf && ldns_rdf_size(salt_rdf) > 0) {
 	    	salt_length = ldns_rdf_data(salt_rdf)[0];
+		if((size_t)salt_length+1 > ldns_rdf_size(salt_rdf))
+			return NULL;
 		salt = LDNS_XMALLOC(uint8_t, salt_length);
                 if(!salt) return NULL;
 		memcpy(salt, &ldns_rdf_data(salt_rdf)[1], salt_length);
@@ -1556,6 +1567,7 @@ ldns_pkt_verify_time(const ldns_pkt *p, ldns_rr_type t, const ldns_rdf *o,
 	ldns_rr_list *sigs_covered;
 	ldns_rdf *rdf_t;
 	ldns_rr_type t_netorder;
+	ldns_status status;
 
 	if (!k) {
 		return LDNS_STATUS_ERR;
@@ -1607,7 +1619,9 @@ ldns_pkt_verify_time(const ldns_pkt *p, ldns_rr_type t, const ldns_rdf *o,
 		}
 		return LDNS_STATUS_ERR;
 	}
-	return ldns_verify_time(rrset, sigs, k, check_time, good_keys);
+	status = ldns_verify_time(rrset, sigs, k, check_time, good_keys);
+	ldns_rr_list_deep_free(rrset);
+	return status;
 }
 
 ldns_status
@@ -1824,8 +1838,10 @@ ldns_convert_dsa_rrsig_rdf2asn1(ldns_buffer *target_buffer,
 		return LDNS_STATUS_MEM_ERR;
 	}
 # ifdef HAVE_DSA_SIG_SET0
-       if (! DSA_SIG_set0(dsasig, R, S))
-	       return LDNS_STATUS_SSL_ERR;
+	if (! DSA_SIG_set0(dsasig, R, S)) {
+		DSA_SIG_free(dsasig);
+		return LDNS_STATUS_SSL_ERR;
+	}
 # else
 	dsasig->r = R;
 	dsasig->s = S;
@@ -1896,7 +1912,7 @@ ldns_convert_ecdsa_rrsig_rdf2asn1(ldns_buffer *target_buffer,
         const ldns_rdf *sig_rdf)
 {
         /* convert from two BIGNUMs in the rdata buffer, to ASN notation.
-	 * ASN preable:  30440220 <R 32bytefor256> 0220 <S 32bytefor256>
+	 * ASN preamble:  30440220 <R 32bytefor256> 0220 <S 32bytefor256>
 	 * the '20' is the length of that field (=bnsize).
 	 * the '44' is the total remaining length.
 	 * if negative, start with leading zero.
@@ -1942,69 +1958,4 @@ ldns_convert_ecdsa_rrsig_rdf2asn1(ldns_buffer *target_buffer,
 
 #endif /* S_SPLINT_S */
 #endif /* USE_ECDSA */
-
-#if defined(USE_ED25519) || defined(USE_ED448)
-/* debug printout routine */
-static void print_hex(const char* str, uint8_t* d, int len)
-{
-	const char hex[] = "0123456789abcdef";
-	int i;
-	printf("%s [len=%d]: ", str, len);
-	for(i=0; i<len; i++) {
-		int x = (d[i]&0xf0)>>4;
-		int y = (d[i]&0x0f);
-		printf("%c%c", hex[x], hex[y]);
-	}
-	printf("\n");
-}
-#endif
-
-#ifdef USE_ED25519
-ldns_rdf *
-ldns_convert_ed25519_rrsig_asn12rdf(const ldns_buffer *sig, long sig_len)
-{
-	unsigned char *data = (unsigned char*)ldns_buffer_begin(sig);
-        ldns_rdf* rdf = NULL;
-
-	/* TODO when Openssl supports signing and you can test this */
-	print_hex("sig in ASN", data, sig_len);
-
-        return rdf;
-}
-
-ldns_status
-ldns_convert_ed25519_rrsig_rdf2asn1(ldns_buffer *target_buffer,
-        const ldns_rdf *sig_rdf)
-{
-	/* TODO when Openssl supports signing and you can test this. */
-	/* convert sig_buf into ASN1 into the target_buffer */
-	print_hex("sig raw", ldns_rdf_data(sig_rdf), ldns_rdf_size(sig_rdf));
-        return ldns_buffer_status(target_buffer);
-}
-#endif /* USE_ED25519 */
-
-#ifdef USE_ED448
-ldns_rdf *
-ldns_convert_ed448_rrsig_asn12rdf(const ldns_buffer *sig, long sig_len)
-{
-	unsigned char *data = (unsigned char*)ldns_buffer_begin(sig);
-        ldns_rdf* rdf = NULL;
-
-	/* TODO when Openssl supports signing and you can test this */
-	print_hex("sig in ASN", data, sig_len);
-
-	return rdf;
-}
-
-ldns_status
-ldns_convert_ed448_rrsig_rdf2asn1(ldns_buffer *target_buffer,
-        const ldns_rdf *sig_rdf)
-{
-	/* TODO when Openssl supports signing and you can test this. */
-	/* convert sig_buf into ASN1 into the target_buffer */
-	print_hex("sig raw", ldns_rdf_data(sig_rdf), ldns_rdf_size(sig_rdf));
-        return ldns_buffer_status(target_buffer);
-}
-#endif /* USE_ED448 */
-
 #endif /* HAVE_SSL */

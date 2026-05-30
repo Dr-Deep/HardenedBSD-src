@@ -23,9 +23,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
-.Dd October 1, 2021
+.Dd August 27, 2025
 .Dt FREEBSD-VERSION 1
 .Os
 .Sh NAME
@@ -75,7 +73,7 @@ If several of the above options are specified,
 will print the installed kernel version first, then the running kernel
 version, next the userland version, and finally the userland version
 of the specified jails, on separate lines.
-If neither is specified, it will print the userland version only.
+If no option is specified, it will print the userland version only.
 .Sh IMPLEMENTATION NOTES
 The
 .Nm
@@ -113,7 +111,7 @@ To determine the version of the currently running userland:
 /bin/freebsd-version -u
 .Ed
 .Pp
-To inspect a system being repaired using a live CD:
+To inspect a system being repaired using a live system:
 .Bd -literal -offset indent
 mount -rt ufs /dev/ada0p2 /mnt
 env ROOT=/mnt /mnt/bin/freebsd-version -ku

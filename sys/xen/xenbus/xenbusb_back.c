@@ -35,8 +35,6 @@
  * XenBus management of the NewBus bus containing the backend instances of
  * Xen split devices.
  */
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -45,13 +43,12 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/module.h>
 #include <sys/sbuf.h>
+#include <sys/stdarg.h>
 #include <sys/sysctl.h>
 #include <sys/syslog.h>
 #include <sys/systm.h>
 #include <sys/sx.h>
 #include <sys/taskqueue.h>
-
-#include <machine/stdarg.h>
 
 #include <xen/xen-os.h>
 #include <xen/gnttab.h>
@@ -307,7 +304,8 @@ static device_method_t xenbusb_back_methods[] = {
 	DEVMETHOD(xenbusb_get_otherend_node, xenbusb_back_get_otherend_node),
 	DEVMETHOD(xenbusb_otherend_changed, xenbusb_back_otherend_changed),
 	DEVMETHOD(xenbusb_localend_changed, xenbusb_back_localend_changed),
-	{ 0, 0 } 
+
+	DEVMETHOD_END
 }; 
 
 DEFINE_CLASS_0(xenbusb_back, xenbusb_back_driver, xenbusb_back_methods,

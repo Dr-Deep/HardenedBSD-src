@@ -1,4 +1,7 @@
-.\" Copyright (c) 2002-2003 David O'Brien <obrien@FreeBSD.org>
+.\"
+.\" SPDX-License-Identifier: BSD-3-Clause
+.\"
+.\" Copyright (c) 2002-2003, 2023, 2025 David O'Brien <deo@NUXI.org>
 .\" All rights reserved.
 .\"
 .\" Redistribution and use in source and binary forms, with or without
@@ -25,17 +28,12 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
-.Dd November 18, 2021
+.Dd October 29, 2025
 .Dt STYLE.MAKEFILE 5
 .Os
 .Sh NAME
 .Nm style.Makefile
-.Nd
-.Fx
-.Pa Makefile
-file style guide
+.Nd FreeBSD Makefile style guide
 .Sh DESCRIPTION
 This file specifies the preferred style for makefiles in the
 .Fx
@@ -43,7 +41,7 @@ source tree.
 .Bl -bullet
 .It
 .Cm .PATH :
-comes next if needed, and is spelled
+comes first if needed, and is spelled
 .Dq Li ".PATH: " ,
 with a single
 .Tn ASCII
@@ -66,7 +64,7 @@ order is:
 .Va PROG Ns / Ns Oo Va SH Oc Ns Va LIB Ns / Ns Va SCRIPTS
 .Va FILES
 .Va LINKS
-.Oo Va NO_ Oc Ns Va MAN
+.Va MAN
 .Va MLINKS
 .Va INCS
 .Va SRCS
@@ -88,7 +86,7 @@ order is:
 .Va INCS
 .Va FILES
 .Va LINKS
-.Oo Va NO_ Oc Ns Va MAN
+.Va MAN
 .Va MLINKS .
 .It
 Omit
@@ -181,6 +179,21 @@ settings between the
 and
 .Fl I Ns 's.
 .It
+Lists that span more than one line should be formatted as follows:
+.Bd -literal -offset indent
+SRCS+=<SP>\\
+<TAB>main.c<SP>\\
+<TAB>trace.c<SP>\\
+<TAB>zoo.c \\
+\&
+.Ed
+Specifically, the last item in the list should have a trailing '\\'.
+This is to avoid causing a "false diff" or "false blame" when
+a new item is appended at the end.
+In general the list should be English language alphabetized.
+A list of libraries or header inclusion paths are notable exceptions
+if needed for proper building.
+.It
 Do not use GCCisms (such as
 .Fl g
 and
@@ -235,16 +248,11 @@ For variables that are only checked with
 .Fn defined ,
 do not provide any fake value.
 .El
-.Pp
-The desire to express a logical grouping often means not obeying some of the
-above.
 .Sh EXAMPLES
 The simplest program
 .Pa Makefile
 is:
 .Bd -literal -offset indent
-# $FreeBSD\&$
-
 PROG=	foo
 
 \&.include <bsd.prog.mk>
@@ -254,8 +262,6 @@ The simplest library
 .Pa Makefile
 is:
 .Bd -literal -offset indent
-# $FreeBSD\&$
-
 LIB=	foo
 SHLIB_MAJOR= 1
 MAN=	libfoo.3
@@ -268,11 +274,15 @@ SRCS=	foo.c
 .Xr make.conf 5 ,
 .Xr style 9
 .Sh HISTORY
-This manual page is inspired from the same source as
+This manual page is inspired from the
 .Xr style 9
-manual page in
-.Fx .
+manual page and first appeared in
+.Fx 5.1 .
+.Sh AUTHORS
+.An David O'Brien Aq deo@NUXI.org
 .Sh BUGS
 There are few hard and fast style rules here.
+The desire to express a logical grouping sometimes means not obeying some of the
+above.
 The style of many things is too dependent on the context of the whole makefile,
 or the lines surrounding it.

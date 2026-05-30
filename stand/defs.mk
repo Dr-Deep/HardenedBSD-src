@@ -1,7 +1,8 @@
-# $FreeBSD$
 
 .if !defined(__BOOT_DEFS_MK__)
 __BOOT_DEFS_MK__=${MFILE}
+
+FORTIFY_SOURCE=	0
 
 # We need to define all the MK_ options before including src.opts.mk
 # because it includes bsd.own.mk which needs the right MK_ values,
@@ -9,10 +10,12 @@ __BOOT_DEFS_MK__=${MFILE}
 
 MK_CTF=		no
 MK_SSP=		no
-MK_PROFILE=	no
 MK_SPECTREV1_FIX=	no
 MK_LTOLIB=		no
 MK_PIE=		no
+MK_RETPOLINE=	no
+_HBSD_EXTRA_HARDENING_DISABLED=	1
+MK_ZEROREGS=	no
 MAN=
 .if !defined(PIC)
 NO_PIC=
@@ -39,9 +42,17 @@ MK_UBSAN:=	no
 WARNS?=		1
 
 BOOTSRC=	${SRCTOP}/stand
+EDK2INC=	${SYSDIR}/contrib/edk2/Include
 EFISRC=		${BOOTSRC}/efi
 EFIINC=		${EFISRC}/include
+# For amd64, there's a bit of mixed bag. Some of the tree (i386, lib*32) is
+# built 32-bit and some 64-bit (lib*, efi). Centralize all the 32-bit magic here
+# and activate it when DO32 is explicitly defined to be 1.
+.if ${MACHINE_ARCH} == "amd64" && ${DO32:U0} == 1
+EFIINCMD=	${EFIINC}/i386
+.else
 EFIINCMD=	${EFIINC}/${MACHINE}
+.endif
 FDTSRC=		${BOOTSRC}/fdt
 FICLSRC=	${BOOTSRC}/ficl
 LDRSRC=		${BOOTSRC}/common
@@ -49,12 +60,11 @@ LIBLUASRC=	${BOOTSRC}/liblua
 LIBOFWSRC=	${BOOTSRC}/libofw
 LUASRC=		${SRCTOP}/contrib/lua/src
 SASRC=		${BOOTSRC}/libsa
+SAZFSSRC=	${SASRC}/zfs
 SYSDIR=		${SRCTOP}/sys
 UBOOTSRC=	${BOOTSRC}/uboot
-ZFSSRC=		${SASRC}/zfs
-OZFS=		${SRCTOP}/sys/contrib/openzfs
-ZFSOSSRC=	${OZFS}/module/os/freebsd/
-ZFSOSINC=	${OZFS}/include/os/freebsd
+ZFSOSSRC=	${ZFSTOP}/module/os/freebsd/
+ZFSOSINC=	${ZFSTOP}/include/os/freebsd
 LIBCSRC=	${SRCTOP}/lib/libc
 
 BOOTOBJ=	${OBJTOP}/stand
@@ -65,9 +75,11 @@ BINDIR?=	/boot
 # LUAPATH is where we search for and install lua scripts.
 LUAPATH?=	/boot/lua
 FLUASRC?=	${SRCTOP}/libexec/flua
+FLUALIB?=	${SRCTOP}/libexec/flua
 
 MK_SAFESTACK=	no
 MK_CFI=		no
+MK_ZERO_REGS=	no
 
 LIBSA=		${BOOTOBJ}/libsa/libsa.a
 .if ${MACHINE} == "i386"
@@ -134,9 +146,6 @@ CFLAGS+=	-m32 -mcpu=powerpc -mbig-endian
 CFLAGS+=	-m32 -mcpu=powerpc -mlittle-endian
 .endif
 
-# For amd64, there's a bit of mixed bag. Some of the tree (i386, lib*32) is
-# build 32-bit and some 64-bit (lib*, efi). Centralize all the 32-bit magic here
-# and activate it when DO32 is explicitly defined to be 1.
 .if ${MACHINE_ARCH} == "amd64" && ${DO32:U0} == 1
 CFLAGS+=	-m32
 # LD_FLAGS is passed directly to ${LD}, not via ${CC}:
@@ -155,11 +164,6 @@ CFLAGS.clang+=	-mcmodel=medium
 CFLAGS.gcc+=	-mcmodel=medany
 .else
 CFLAGS+=	-msoft-float
-.endif
-
-# -msoft-float seems to be insufficient for powerpcspe
-.if ${MACHINE_ARCH} == "powerpcspe"
-CFLAGS+=	-mno-spe
 .endif
 
 .if ${MACHINE_CPUARCH} == "i386" || (${MACHINE_CPUARCH} == "amd64" && ${DO32:U0} == 1)
@@ -206,6 +210,8 @@ LOADER_INTERP?=${LOADER_DEFAULT_INTERP}
 
 # Make sure we use the machine link we're about to create
 CFLAGS+=-I.
+
+.include "${BOOTSRC}/veriexec.mk"
 
 all: ${PROG}
 
@@ -258,4 +264,6 @@ ${_ILINKS}: .NOMETA
 	${ECHO} ${.TARGET} "->" $$path ; \
 	ln -fns $$path ${.TARGET}
 .endif # !NO_OBJ
+
+.-include "local.defs.mk"
 .endif # __BOOT_DEFS_MK__

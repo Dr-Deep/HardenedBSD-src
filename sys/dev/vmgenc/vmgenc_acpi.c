@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2019 Conrad Meyer <cem@FreeBSD.org>.  All rights reserved.
  *
@@ -41,9 +41,6 @@
  * - Xen: https://github.com/xenserver/xen-4.5/blob/master/tools/firmware/hvmloader/acpi/dsdt.asl#L456
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/bus.h>
 #include <sys/eventhandler.h>
@@ -59,6 +56,7 @@ __FBSDID("$FreeBSD$");
 #include <contrib/dev/acpica/include/acpi.h>
 
 #include <dev/acpica/acpivar.h>
+#include <dev/random/randomdev.h>
 #include <dev/random/random_harvestq.h>
 #include <dev/vmgenc/vmgenc_acpi.h>
 
@@ -213,6 +211,11 @@ acpi_GetPackedUINT64(device_t dev, ACPI_HANDLE handle, char *path,
 
 }
 
+static const struct random_source random_vmgenid = {
+	.rs_ident = "VM Generation ID",
+	.rs_source = RANDOM_PURE_VMGENID,
+};
+
 static int
 vmgenc_attach(device_t dev)
 {
@@ -237,7 +240,7 @@ vmgenc_attach(device_t dev)
 	memcpy(sc->vmg_cache_guid, __DEVOLATILE(void *, sc->vmg_pguid),
 	    sizeof(sc->vmg_cache_guid));
 
-	random_harvest_register_source(RANDOM_PURE_VMGENID);
+	random_source_register(&random_vmgenid);
 	vmgenc_harvest_all(sc->vmg_cache_guid, sizeof(sc->vmg_cache_guid));
 
 	AcpiInstallNotifyHandler(h, ACPI_DEVICE_NOTIFY, vmgenc_notify, dev);
@@ -258,4 +261,4 @@ static driver_t vmgenc_driver = {
 
 DRIVER_MODULE(vmgenc, acpi, vmgenc_driver, NULL, NULL);
 MODULE_DEPEND(vmgenc, acpi, 1, 1, 1);
-MODULE_DEPEND(vemgenc, random_harvestq, 1, 1, 1);
+MODULE_DEPEND(vmgenc, random_harvestq, 1, 1, 1);

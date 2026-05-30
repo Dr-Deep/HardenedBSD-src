@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/* Copyright(c) 2007-2022 Intel Corporation */
-/* $FreeBSD$ */
+/* Copyright(c) 2007-2025 Intel Corporation */
 
 /**
  *****************************************************************************
@@ -118,7 +117,7 @@ void LacSymQat_HashAlgLookupGet(CpaInstanceHandle instanceHandle,
 /**
 *******************************************************************************
 * @ingroup LacSymQatHashDefsLookup
-*      get hash defintions from lookup table.
+*      get hash definitions from lookup table.
 *
 * @description
 *      This function looks up the hash lookup array for a structure

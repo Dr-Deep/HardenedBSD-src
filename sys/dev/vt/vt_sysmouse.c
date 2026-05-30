@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1999 Kazutaka YOKOTA <yokota@zodiac.mech.utsunomiya-u.ac.jp>
  * All rights reserved.
@@ -31,9 +31,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include "opt_evdev.h"
 
@@ -130,7 +127,15 @@ sysmouse_evdev_store(int x, int y, int z, int buttons)
 	evdev_push_event(sysmouse_evdev, EV_REL, REL_X, x);
 	evdev_push_event(sysmouse_evdev, EV_REL, REL_Y, y);
 	switch (evdev_sysmouse_t_axis) {
-	case EVDEV_SYSMOUSE_T_AXIS_PSM:
+	case EVDEV_SYSMOUSE_T_AXIS_WSP: /* 3 */
+		if (buttons & (1 << 5)) {
+			evdev_push_rel(sysmouse_evdev, REL_HWHEEL, z);
+			buttons &= ~(1 << 5);
+		} else {
+			evdev_push_rel(sysmouse_evdev, REL_WHEEL, -z);
+		}
+		break;
+	case EVDEV_SYSMOUSE_T_AXIS_PSM: /* 2 */
 		switch (z) {
 		case 1:
 		case -1:
@@ -142,14 +147,14 @@ sysmouse_evdev_store(int x, int y, int z, int buttons)
 			break;
 		}
 		break;
-	case EVDEV_SYSMOUSE_T_AXIS_UMS:
+	case EVDEV_SYSMOUSE_T_AXIS_UMS: /* 1 */
 		if (buttons & (1 << 6))
 			evdev_push_rel(sysmouse_evdev, REL_HWHEEL, 1);
 		else if (buttons & (1 << 5))
 			evdev_push_rel(sysmouse_evdev, REL_HWHEEL, -1);
 		buttons &= ~((1 << 5)|(1 << 6));
 		/* PASSTHROUGH */
-	case EVDEV_SYSMOUSE_T_AXIS_NONE:
+	case EVDEV_SYSMOUSE_T_AXIS_NONE: /* 0 */
 	default:
 		evdev_push_rel(sysmouse_evdev, REL_WHEEL, -z);
 	}
@@ -216,7 +221,9 @@ sysmouse_process_event(mouse_info_t *mi)
 	unsigned char buf[MOUSE_SYS_PACKETSIZE];
 	int x, y, iy, z;
 
+#ifdef RANDOM_ENABLE_MOUSE
 	random_harvest_queue(mi, sizeof *mi, RANDOM_MOUSE);
+#endif
 
 	mtx_lock(&sysmouse_lock);
 	switch (mi->operation) {
@@ -249,6 +256,8 @@ sysmouse_process_event(mouse_info_t *mi)
 
 #ifdef EVDEV_SUPPORT
 	sysmouse_evdev_store(x, y, z, sysmouse_status.button);
+	if (evdev_is_grabbed(sysmouse_evdev))
+		goto done;
 #endif
 
 	/* The first five bytes are compatible with MouseSystems. */

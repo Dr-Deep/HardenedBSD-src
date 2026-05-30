@@ -251,11 +251,14 @@ Metadata:
     allowed_architectures is empty
     allowed_platforms is empty
     description is empty
+    execenv is empty
+    execenv_jail_params is empty
     has_cleanup = false
     is_exclusive = false
     required_configs is empty
     required_disk_space = 0
     required_files is empty
+    required_kmods is empty
     required_memory = 0
     required_programs is empty
     required_user is empty

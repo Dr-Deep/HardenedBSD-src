@@ -2,12 +2,11 @@
  * System call names.
  *
  * DO NOT EDIT-- this file is automatically @generated.
- * $FreeBSD$
  */
 
 const char *syscallnames[] = {
 	"syscall",			/* 0 = syscall */
-	"exit",			/* 1 = exit */
+	"_exit",			/* 1 = _exit */
 	"fork",			/* 2 = fork */
 	"read",			/* 3 = read */
 	"write",			/* 4 = write */
@@ -75,8 +74,8 @@ const char *syscallnames[] = {
 	"vfork",			/* 66 = vfork */
 	"obs_vread",			/* 67 = obsolete vread */
 	"obs_vwrite",			/* 68 = obsolete vwrite */
-	"sbrk",			/* 69 = sbrk */
-	"sstk",			/* 70 = sstk */
+	"obs_sbrk",			/* 69 = obsolete sbrk */
+	"obs_sstk",			/* 70 = obsolete sstk */
 	"compat.mmap",		/* 71 = old mmap */
 	"compat11.vadvise",		/* 72 = freebsd11 vadvise */
 	"munmap",			/* 73 = munmap */
@@ -85,8 +84,8 @@ const char *syscallnames[] = {
 	"obs_vhangup",			/* 76 = obsolete vhangup */
 	"obs_vlimit",			/* 77 = obsolete vlimit */
 	"mincore",			/* 78 = mincore */
-	"getgroups",			/* 79 = getgroups */
-	"setgroups",			/* 80 = setgroups */
+	"compat14.getgroups",		/* 79 = freebsd14 getgroups */
+	"compat14.setgroups",		/* 80 = freebsd14 setgroups */
 	"getpgrp",			/* 81 = getpgrp */
 	"setpgid",			/* 82 = setpgid */
 	"setitimer",			/* 83 = setitimer */
@@ -145,7 +144,7 @@ const char *syscallnames[] = {
 	"mkdir",			/* 136 = mkdir */
 	"rmdir",			/* 137 = rmdir */
 	"utimes",			/* 138 = utimes */
-	"obs_4.2",			/* 139 = obsolete 4.2 sigreturn */
+	"obs_sigreturn",			/* 139 = obsolete sigreturn */
 	"adjtime",			/* 140 = adjtime */
 	"compat.getpeername",		/* 141 = old getpeername */
 	"compat.gethostid",		/* 142 = old gethostid */
@@ -511,7 +510,7 @@ const char *syscallnames[] = {
 	"symlinkat",			/* 502 = symlinkat */
 	"unlinkat",			/* 503 = unlinkat */
 	"posix_openpt",			/* 504 = posix_openpt */
-	"gssd_syscall",			/* 505 = gssd_syscall */
+	"obs_kgssapi",			/* 505 = obsolete kgssapi */
 	"jail_get",			/* 506 = jail_get */
 	"jail_set",			/* 507 = jail_set */
 	"jail_remove",			/* 508 = jail_remove */
@@ -589,4 +588,24 @@ const char *syscallnames[] = {
 	"fspacectl",			/* 580 = fspacectl */
 	"sched_getcpu",			/* 581 = sched_getcpu */
 	"swapoff",			/* 582 = swapoff */
+	"kqueuex",			/* 583 = kqueuex */
+	"membarrier",			/* 584 = membarrier */
+	"timerfd_create",			/* 585 = timerfd_create */
+	"timerfd_gettime",			/* 586 = timerfd_gettime */
+	"timerfd_settime",			/* 587 = timerfd_settime */
+	"kcmp",			/* 588 = kcmp */
+	"getrlimitusage",			/* 589 = getrlimitusage */
+	"fchroot",			/* 590 = fchroot */
+	"setcred",			/* 591 = setcred */
+	"exterrctl",			/* 592 = exterrctl */
+	"inotify_add_watch_at",			/* 593 = inotify_add_watch_at */
+	"inotify_rm_watch",			/* 594 = inotify_rm_watch */
+	"getgroups",			/* 595 = getgroups */
+	"setgroups",			/* 596 = setgroups */
+	"jail_attach_jd",			/* 597 = jail_attach_jd */
+	"jail_remove_jd",			/* 598 = jail_remove_jd */
+	"kexec_load",			/* 599 = kexec_load */
+	"pdrfork",			/* 600 = pdrfork */
+	"pdwait",			/* 601 = pdwait */
+	"renameat2",			/* 602 = renameat2 */
 };

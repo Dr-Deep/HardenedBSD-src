@@ -22,8 +22,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _VMBUS_REG_H_
@@ -32,7 +30,12 @@
 #include <sys/param.h>
 #include <dev/hyperv/include/hyperv.h> /* XXX for hyperv_guid */
 #include <dev/hyperv/include/vmbus.h>
-#include <dev/hyperv/vmbus/hyperv_reg.h>
+#if defined(__aarch64__)
+#include <dev/hyperv/vmbus/aarch64/hyperv_reg.h>
+#else
+#include <dev/hyperv/vmbus/x86/hyperv_reg.h>
+#endif
+#include <dev/hyperv/vmbus/hyperv_common_reg.h>
 
 /*
  * Hyper-V SynIC message format.
@@ -57,16 +60,10 @@ CTASSERT(sizeof(struct vmbus_message) == VMBUS_MSG_SIZE);
  * Hyper-V SynIC event flags
  */
 
-#ifdef __LP64__
-#define VMBUS_EVTFLAGS_MAX	32
-#define VMBUS_EVTFLAG_SHIFT	6
-#else
-#define VMBUS_EVTFLAGS_MAX	64
-#define VMBUS_EVTFLAG_SHIFT	5
-#endif
-#define VMBUS_EVTFLAG_LEN	(1 << VMBUS_EVTFLAG_SHIFT)
+#define VMBUS_EVTFLAG_LEN	(sizeof(u_long) * 8)
 #define VMBUS_EVTFLAG_MASK	(VMBUS_EVTFLAG_LEN - 1)
 #define VMBUS_EVTFLAGS_SIZE	256
+#define VMBUS_EVTFLAGS_MAX	(VMBUS_EVTFLAGS_SIZE / sizeof(u_long))
 
 struct vmbus_evtflags {
 	u_long		evt_flags[VMBUS_EVTFLAGS_MAX];

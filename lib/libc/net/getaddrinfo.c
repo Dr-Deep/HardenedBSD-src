@@ -53,9 +53,6 @@
  * - FreeBSD supported $GAI.  The code does not.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "namespace.h"
 #include <sys/param.h>
 #include <sys/socket.h>
@@ -1953,6 +1950,9 @@ explore_fqdn(const struct addrinfo *pai, const char *hostname,
 	case NS_NOTFOUND:
 		error = EAI_NONAME;
 		goto free;
+	case NS_ADDRFAMILY:
+		error = EAI_ADDRFAMILY;
+		goto free;
 	case NS_SUCCESS:
 		error = 0;
 		for (cur = result; cur; cur = cur->ai_next) {
@@ -2091,7 +2091,7 @@ getanswer(const querybuf *answer, int anslen, const char *qname, int qtype,
 		} else if (type != qtype) {
 #ifdef DEBUG
 			if (type != T_KEY && type != T_SIG &&
-			    type != ns_t_dname)
+			    type != T_DNAME && type != T_RRSIG)
 				syslog(LOG_NOTICE|LOG_AUTH,
 	       "gethostby*.getanswer: asked for \"%s %s %s\", got type \"%s\"",
 				       qname, p_class(C_IN), p_type(qtype),
@@ -2341,7 +2341,14 @@ _dns_getaddrinfo(void *rv, void *cb_data, va_list ap)
 	if (res_searchN(hostname, &q, res) < 0) {
 		free(buf);
 		free(buf2);
-		return NS_NOTFOUND;
+		switch (res->res_h_errno) {
+		case NO_DATA:
+			return (NS_ADDRFAMILY);
+		case TRY_AGAIN:
+			return (NS_TRYAGAIN);
+		default:
+			return (NS_NOTFOUND);
+		}
 	}
 	/* prefer IPv6 */
 	if (q.next) {
@@ -2363,15 +2370,16 @@ _dns_getaddrinfo(void *rv, void *cb_data, va_list ap)
 	if (sentinel.ai_next == NULL)
 		switch (res->res_h_errno) {
 		case HOST_NOT_FOUND:
+			return (NS_NOTFOUND);
 		case NO_DATA:
-			return NS_NOTFOUND;
+			return (NS_ADDRFAMILY);
 		case TRY_AGAIN:
-			return NS_TRYAGAIN;
+			return (NS_TRYAGAIN);
 		default:
-			return NS_UNAVAIL;
+			return (NS_UNAVAIL);
 		}
 	*((struct addrinfo **)rv) = sentinel.ai_next;
-	return NS_SUCCESS;
+	return (NS_SUCCESS);
 }
 
 static void
@@ -2702,9 +2710,18 @@ res_queryN(const char *name, struct res_target *target, res_state res)
 	int n;
 	u_int oflags;
 	struct res_target *t;
-	int rcode;
+	u_int rcode;
 	int ancount;
 
+	/*
+	 * Extend rcode values in the scope of this function.  The DNS header
+	 * rcode we use in this function (hp->rcode) is limited by 4 bits, so
+	 * anything starting from 16 is safe wrt aliasing.  However, nameser.h
+	 * already has extended enum __ns_rcode, so for future safety let's use
+	 * even larger values.
+	 */
+#define	RCODE_UNREACH	32
+#define	RCODE_TIMEDOUT	33
 	rcode = NOERROR;
 	ancount = 0;
 
@@ -2765,7 +2782,29 @@ again:
 					printf(";; res_nquery: retry without EDNS0\n");
 				goto again;
 			}
-			rcode = hp->rcode;	/* record most recent error */
+                        /*
+			 * Historically if a DNS server replied with ICMP port
+			 * unreach res_nsend() would signal that with
+			 * ECONNREFUSED and the upper layers would convert that
+			 * into TRY_AGAIN.  See 3a0b3b673936b and deeper.
+			 * Also, res_nsend() may set errno to ECONNREFUSED due
+			 * to internal failures.  This may not be intentional,
+			 * but we also treat that as soft failures.
+			 *
+			 * A more practical case is when a DNS server(s) were
+			 * queried and didn't respond anything, which usually
+			 * indicates a soft network failure.
+			 */
+			switch (errno) {
+			case ECONNREFUSED:
+				rcode = RCODE_UNREACH;
+				break;
+			case ETIMEDOUT:
+				rcode = RCODE_TIMEDOUT;
+				break;
+			default:
+                                rcode = hp->rcode;
+			}
 #ifdef DEBUG
 			if (res->options & RES_DEBUG)
 				printf(";; res_query: send error\n");
@@ -2797,6 +2836,8 @@ again:
 		case NXDOMAIN:
 			RES_SET_H_ERRNO(res, HOST_NOT_FOUND);
 			break;
+		case RCODE_UNREACH:
+		case RCODE_TIMEDOUT:
 		case SERVFAIL:
 			RES_SET_H_ERRNO(res, TRY_AGAIN);
 			break;
@@ -2859,10 +2900,6 @@ res_searchN(const char *name, struct res_target *target, res_state res)
 		ret = res_querydomainN(name, NULL, target, res);
 		if (ret > 0 || trailing_dot)
 			return (ret);
-		if (errno == ECONNREFUSED) {
-			RES_SET_H_ERRNO(res, TRY_AGAIN);
-			return (-1);
-		}
 		switch (res->res_h_errno) {
 		case NO_DATA:
 		case HOST_NOT_FOUND:
@@ -2903,7 +2940,6 @@ res_searchN(const char *name, struct res_target *target, res_state res)
 			ret = res_querydomainN(name, *domain, target, res);
 			if (ret > 0)
 				return (ret);
-
 			/*
 			 * If no server present, give up.
 			 * If name isn't found in this domain,
@@ -2917,11 +2953,6 @@ res_searchN(const char *name, struct res_target *target, res_state res)
 			 * but try the input name below in case it's
 			 * fully-qualified.
 			 */
-			if (errno == ECONNREFUSED) {
-				RES_SET_H_ERRNO(res, TRY_AGAIN);
-				return (-1);
-			}
-
 			switch (res->res_h_errno) {
 			case NO_DATA:
 				got_nodata++;
@@ -2930,8 +2961,8 @@ res_searchN(const char *name, struct res_target *target, res_state res)
 				/* keep trying */
 				break;
 			case TRY_AGAIN:
-				got_servfail++;
 				if (hp->rcode == SERVFAIL) {
+					got_servfail++;
 					/* try next search element, if any */
 					break;
 				}

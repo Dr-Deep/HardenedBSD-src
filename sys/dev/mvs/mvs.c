@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2010 Alexander Motin <mav@FreeBSD.org>
  * All rights reserved.
@@ -26,9 +26,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/module.h>
 #include <sys/systm.h>
@@ -40,8 +37,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
+#include <sys/stdarg.h>
 #include <vm/uma.h>
-#include <machine/stdarg.h>
 #include <machine/resource.h>
 #include <machine/bus.h>
 #include <sys/rman.h>
@@ -108,7 +105,7 @@ static int
 mvs_ch_probe(device_t dev)
 {
 
-	device_set_desc_copy(dev, "Marvell SATA channel");
+	device_set_desc(dev, "Marvell SATA channel");
 	return (BUS_PROBE_DEFAULT);
 }
 
@@ -582,7 +579,7 @@ static device_method_t mvsch_methods[] = {
 	DEVMETHOD(device_detach,    mvs_ch_detach),
 	DEVMETHOD(device_suspend,   mvs_ch_suspend),
 	DEVMETHOD(device_resume,    mvs_ch_resume),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 static driver_t mvsch_driver = {
         "mvsch",
@@ -772,7 +769,7 @@ mvs_ch_intr(void *data)
 			}
 			mvs_requeue_frozen(dev);
 			for (i = 0; i < MVS_MAX_SLOTS; i++) {
-				/* XXX: reqests in loading state. */
+				/* XXX: requests in loading state. */
 				if (((ch->rslots >> i) & 1) == 0)
 					continue;
 				if (port >= 0 &&
@@ -1801,7 +1798,7 @@ completeall:
 	}
 	xpt_setup_ccb(&ccb->ccb_h, ch->hold[i]->ccb_h.path,
 	    ch->hold[i]->ccb_h.pinfo.priority);
-	if (ccb->ccb_h.func_code == XPT_ATA_IO) {
+	if (ch->hold[i]->ccb_h.func_code == XPT_ATA_IO) {
 		/* READ LOG */
 		ccb->ccb_h.recovery_type = RECOVERY_READ_LOG;
 		ccb->ccb_h.func_code = XPT_ATA_IO;

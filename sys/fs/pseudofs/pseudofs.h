@@ -1,7 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright (c) 2001 Dag-Erling Coïdan Smørgrav
+ * Copyright (c) 2001 Dag-Erling Smørgrav
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,8 +26,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- *      $FreeBSD$
  */
 
 #ifndef _PSEUDOFS_H_INCLUDED
@@ -219,7 +217,6 @@ struct pfs_info {
  * is not enforcable by WITNESS.
  */
 struct pfs_node {
-	char			 pn_name[PFS_NAMELEN];
 	pfs_type_t		 pn_type;
 	int			 pn_flags;
 	struct mtx		 pn_mutex;
@@ -240,6 +237,7 @@ struct pfs_node {
 	struct pfs_node		*pn_nodes;		/* (o) */
 	struct pfs_node		*pn_last_node;		/* (o) */
 	struct pfs_node		*pn_next;		/* (p) */
+	char			 pn_name[];		/* Keep it last */
 };
 
 /*
@@ -257,17 +255,18 @@ int		 pfs_uninit	(struct pfs_info *pi, struct vfsconf *vfc);
 /*
  * Directory structure construction and manipulation
  */
-struct pfs_node	*pfs_create_dir	(struct pfs_node *parent, const char *name,
+int pfs_create_dir		(struct pfs_node *parent, struct pfs_node **opn,
+				 const char *name, pfs_attr_t attr,
+				 pfs_vis_t vis, pfs_destroy_t destroy,
+				 int flags);
+int pfs_create_file		(struct pfs_node *parent, struct pfs_node **opn,
+				 const char *name, pfs_fill_t fill,
 				 pfs_attr_t attr, pfs_vis_t vis,
 				 pfs_destroy_t destroy, int flags);
-struct pfs_node	*pfs_create_file(struct pfs_node *parent, const char *name,
-				 pfs_fill_t fill, pfs_attr_t attr,
-				 pfs_vis_t vis, pfs_destroy_t destroy,
-				 int flags);
-struct pfs_node	*pfs_create_link(struct pfs_node *parent, const char *name,
-				 pfs_fill_t fill, pfs_attr_t attr,
-				 pfs_vis_t vis, pfs_destroy_t destroy,
-				 int flags);
+int pfs_create_link		(struct pfs_node *parent, struct pfs_node **opn,
+				 const char *name, pfs_fill_t fill,
+				 pfs_attr_t attr, pfs_vis_t vis,
+				 pfs_destroy_t destroy, int flags);
 struct pfs_node	*pfs_find_node	(struct pfs_node *parent, const char *name);
 void		 pfs_purge	(struct pfs_node *pn);
 int		 pfs_destroy	(struct pfs_node *pn);

@@ -34,12 +34,7 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)udp_usrreq.c	8.6 (Berkeley) 5/23/95
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include "opt_inet.h"
 #include "opt_inet6.h"
@@ -110,6 +105,11 @@ __FBSDID("$FreeBSD$");
  * Per RFC 3828, July, 2004.
  */
 
+VNET_DEFINE(int, udp_bind_all_fibs) = 1;
+SYSCTL_INT(_net_inet_udp, OID_AUTO, bind_all_fibs, CTLFLAG_VNET | CTLFLAG_RDTUN,
+    &VNET_NAME(udp_bind_all_fibs), 0,
+    "Bound sockets receive traffic from all FIBs");
+
 /*
  * BSD 4.2 defaulted the udp checksum to be off.  Turning off udp checksums
  * removes the only data integrity mechanism for packets and malformed
@@ -154,8 +154,6 @@ SYSCTL_ULONG(_net_inet_udp, UDPCTL_RECVSPACE, recvspace, CTLFLAG_RW,
 
 VNET_DEFINE(struct inpcbinfo, udbinfo);
 VNET_DEFINE(struct inpcbinfo, ulitecbinfo);
-VNET_DEFINE_STATIC(uma_zone_t, udpcb_zone);
-#define	V_udpcb_zone			VNET(udpcb_zone)
 
 #ifndef UDBHASHSIZE
 #define	UDBHASHSIZE	128
@@ -171,12 +169,10 @@ VNET_PCPUSTAT_SYSUNINIT(udpstat);
 #endif /* VIMAGE */
 #ifdef INET
 static void	udp_detach(struct socket *so);
-static int	udp_output(struct inpcb *, struct mbuf *, struct sockaddr *,
-		    struct mbuf *, struct thread *, int);
 #endif
 
-INPCBSTORAGE_DEFINE(udpcbstor, "udpinp", "udp_inpcb", "udp", "udphash");
-INPCBSTORAGE_DEFINE(udplitecbstor, "udpliteinp", "udplite_inpcb", "udplite",
+INPCBSTORAGE_DEFINE(udpcbstor, udpcb, "udpinp", "udp_inpcb", "udphash");
+INPCBSTORAGE_DEFINE(udplitecbstor, udpcb, "udpliteinp", "udplite_inpcb",
     "udplitehash");
 
 static void
@@ -190,15 +186,11 @@ udp_vnet_init(void *arg __unused)
 	 * Once we can calculate the flowid that way and re-establish
 	 * a 4-tuple, flip this to 4-tuple.
 	 */
-	in_pcbinfo_init(&V_udbinfo, &udpcbstor, UDBHASHSIZE, UDBHASHSIZE);
-	V_udpcb_zone = uma_zcreate("udpcb", sizeof(struct udpcb),
-	    NULL, NULL, NULL, NULL, UMA_ALIGN_PTR, 0);
-	uma_zone_set_max(V_udpcb_zone, maxsockets);
-	uma_zone_set_warning(V_udpcb_zone, "kern.ipc.maxsockets limit reached");
-
+	in_pcbinfo_init(&V_udbinfo, &udpcbstor, UDBHASHSIZE, UDBHASHSIZE,
+	    UDBHASHSIZE);
 	/* Additional pcbinfo for UDP-Lite */
 	in_pcbinfo_init(&V_ulitecbinfo, &udplitecbstor, UDBHASHSIZE,
-	    UDBHASHSIZE);
+	    UDBHASHSIZE, UDBHASHSIZE);
 }
 VNET_SYSINIT(udp_vnet_init, SI_SUB_PROTO_DOMAIN, SI_ORDER_FOURTH,
     udp_vnet_init, NULL);
@@ -217,43 +209,15 @@ kmod_udpstat_inc(int statnum)
 	counter_u64_add(VNET(udpstat)[statnum], 1);
 }
 
-int
-udp_newudpcb(struct inpcb *inp)
-{
-	struct udpcb *up;
-
-	up = uma_zalloc(V_udpcb_zone, M_NOWAIT | M_ZERO);
-	if (up == NULL)
-		return (ENOBUFS);
-	inp->inp_ppcb = up;
-	return (0);
-}
-
-void
-udp_discardcb(struct udpcb *up)
-{
-
-	uma_zfree(V_udpcb_zone, up);
-}
-
 #ifdef VIMAGE
 static void
 udp_destroy(void *unused __unused)
 {
 
 	in_pcbinfo_destroy(&V_udbinfo);
-	uma_zdestroy(V_udpcb_zone);
-}
-VNET_SYSUNINIT(udp, SI_SUB_PROTO_DOMAIN, SI_ORDER_FOURTH, udp_destroy, NULL);
-
-static void
-udplite_destroy(void *unused __unused)
-{
-
 	in_pcbinfo_destroy(&V_ulitecbinfo);
 }
-VNET_SYSUNINIT(udplite, SI_SUB_PROTO_DOMAIN, SI_ORDER_FOURTH, udplite_destroy,
-    NULL);
+VNET_SYSUNINIT(udp, SI_SUB_PROTO_DOMAIN, SI_ORDER_FOURTH, udp_destroy, NULL);
 #endif
 
 #ifdef INET
@@ -264,16 +228,18 @@ VNET_SYSUNINIT(udplite, SI_SUB_PROTO_DOMAIN, SI_ORDER_FOURTH, udplite_destroy,
  * udp_append() will convert to a sockaddr_in6 before passing the address
  * into the socket code.
  *
- * In the normal case udp_append() will return 0, indicating that you
- * must unlock the inp. However if a tunneling protocol is in place we increment
- * the inpcb refcnt and unlock the inp, on return from the tunneling protocol we
- * then decrement the reference count. If the inp_rele returns 1, indicating the
- * inp is gone, we return that to the caller to tell them *not* to unlock
- * the inp. In the case of multi-cast this will cause the distribution
- * to stop (though most tunneling protocols known currently do *not* use
- * multicast).
+ * In the normal case udp_append() will return 'false', indicating that you
+ * must unlock the inpcb.  However if a tunneling protocol is in place we
+ * increment the inpcb refcnt and unlock the inpcb, on return from the tunneling
+ * protocol we then decrement the reference count.  If in_pcbrele_rlocked()
+ * returns 'true', indicating the inpcb is gone, we return that to the caller
+ * to tell them *not* to unlock the inpcb.  In the case of multicast this will
+ * cause the distribution to stop (though most tunneling protocols known
+ * currently do *not* use multicast).
+ *
+ * The mbuf is always consumed.
  */
-static int
+static bool
 udp_append(struct inpcb *inp, struct ip *ip, struct mbuf *n, int off,
     struct sockaddr_in *udp_in)
 {
@@ -284,7 +250,6 @@ udp_append(struct inpcb *inp, struct ip *ip, struct mbuf *n, int off,
 	struct sockaddr_in6 udp_in6;
 #endif
 	struct udpcb *up;
-	bool filtered;
 
 	INP_LOCK_ASSERT(inp);
 
@@ -293,13 +258,20 @@ udp_append(struct inpcb *inp, struct ip *ip, struct mbuf *n, int off,
 	 */
 	up = intoudpcb(inp);
 	if (up->u_tun_func != NULL) {
+		bool filtered;
+
 		in_pcbref(inp);
 		INP_RUNLOCK(inp);
-		filtered = (*up->u_tun_func)(n, off, inp, (struct sockaddr *)&udp_in[0],
-		    up->u_tun_ctx);
+		filtered = (*up->u_tun_func)(n, off, inp,
+		    (struct sockaddr *)&udp_in[0], up->u_tun_ctx);
 		INP_RLOCK(inp);
+		if (in_pcbrele_rlocked(inp)) {
+			if (!filtered)
+				m_freem(n);
+			return (true);
+		}
 		if (filtered)
-			return (in_pcbrele_rlocked(inp));
+			return (false);
 	}
 
 	off += sizeof(struct udphdr);
@@ -309,18 +281,18 @@ udp_append(struct inpcb *inp, struct ip *ip, struct mbuf *n, int off,
 	if (IPSEC_ENABLED(ipv4) &&
 	    IPSEC_CHECK_POLICY(ipv4, n, inp) != 0) {
 		m_freem(n);
-		return (0);
+		return (false);
 	}
 	if (up->u_flags & UF_ESPINUDP) {/* IPSec UDP encaps. */
 		if (IPSEC_ENABLED(ipv4) &&
-		    UDPENCAP_INPUT(n, off, AF_INET) != 0)
-			return (0);	/* Consumed. */
+		    UDPENCAP_INPUT(ipv4, n, off, AF_INET) != 0)
+			return (false);
 	}
 #endif /* IPSEC */
 #ifdef MAC
 	if (mac_inpcb_check_deliver(inp, n) != 0) {
 		m_freem(n);
-		return (0);
+		return (false);
 	}
 #endif /* MAC */
 	if (inp->inp_flags & INP_CONTROLOPTS ||
@@ -366,7 +338,7 @@ udp_append(struct inpcb *inp, struct ip *ip, struct mbuf *n, int off,
 		UDPSTAT_INC(udps_fullsock);
 	} else
 		sorwakeup_locked(so);
-	return (0);
+	return (false);
 }
 
 static bool
@@ -405,9 +377,11 @@ udp_multi_input(struct mbuf *m, int proto, struct sockaddr_in *udp_in)
 #endif
 	struct inpcb *inp;
 	struct mbuf *n;
-	int appends = 0;
+	int appends = 0, fib;
 
 	MPASS(ip->ip_hl == sizeof(struct ip) >> 2);
+
+	fib = M_GETFIB(m);
 
 	while ((inp = inp_next(&inpi)) != NULL) {
 		/*
@@ -416,6 +390,14 @@ udp_multi_input(struct mbuf *m, int proto, struct sockaddr_in *udp_in)
 		 * before, we should probably recheck now that the
 		 * inpcb lock is held.
 		 */
+
+		if (V_udp_bind_all_fibs == 0 && fib != inp->inp_inc.inc_fibnum)
+			/*
+			 * Sockets bound to a specific FIB can only receive
+			 * packets from that FIB.
+			 */
+			continue;
+
 		/*
 		 * Handle socket delivery policy for any-source
 		 * and source-specific multicast. [RFC3678]
@@ -451,7 +433,6 @@ udp_multi_input(struct mbuf *m, int proto, struct sockaddr_in *udp_in)
 			else
 				UDP_PROBE(receive, NULL, inp, ip, inp, uh);
 			if (udp_append(inp, ip, n, sizeof(struct ip), udp_in)) {
-				INP_RUNLOCK(inp);
 				break;
 			} else
 				appends++;
@@ -475,7 +456,7 @@ udp_multi_input(struct mbuf *m, int proto, struct sockaddr_in *udp_in)
 		/*
 		 * No matching pcb found; discard datagram.  (No need
 		 * to send an ICMP Port Unreachable for a broadcast
-		 * or multicast datgram.)
+		 * or multicast datagram.)
 		 */
 		UDPSTAT_INC(udps_noport);
 		if (IN_MULTICAST(ntohl(ip->ip_dst.s_addr)))
@@ -500,7 +481,7 @@ udp_input(struct mbuf **mp, int *offp, int proto)
 	struct sockaddr_in udp_in[2];
 	struct mbuf *m;
 	struct m_tag *fwd_tag;
-	int cscov_partial, iphlen;
+	int cscov_partial, iphlen, lookupflags;
 
 	m = *mp;
 	iphlen = *offp;
@@ -587,16 +568,22 @@ udp_input(struct mbuf **mp, int *offp, int proto)
 				    ip->ip_dst.s_addr, htonl((u_short)len +
 				    m->m_pkthdr.csum_data + proto));
 			uh_sum ^= 0xffff;
+		} else if (m->m_pkthdr.csum_flags & CSUM_IP_UDP) {
+			/*
+			 * Packet from local host (maybe from a VM).
+			 * Checksum not required.
+			 */
+			uh_sum = 0;
 		} else {
 			char b[offsetof(struct ipovly, ih_src)];
 			struct ipovly *ipov = (struct ipovly *)ip;
 
-			bcopy(ipov, b, sizeof(b));
+			memcpy(b, ipov, sizeof(b));
 			bzero(ipov, sizeof(ipov->ih_x1));
 			ipov->ih_len = (proto == IPPROTO_UDP) ?
 			    uh->uh_ulen : htons(ip_len);
 			uh_sum = in_cksum(m, len + sizeof (struct ip));
-			bcopy(b, ipov, sizeof(b));
+			memcpy(ipov, b, sizeof(b));
 		}
 		if (uh_sum) {
 			UDPSTAT_INC(udps_badsum);
@@ -615,14 +602,18 @@ udp_input(struct mbuf **mp, int *offp, int proto)
 	}
 
 	if (IN_MULTICAST(ntohl(ip->ip_dst.s_addr)) ||
-	    in_broadcast(ip->ip_dst, ifp))
+	    in_ifnet_broadcast(ip->ip_dst, ifp))
 		return (udp_multi_input(m, proto, udp_in));
 
 	pcbinfo = udp_get_inpcbinfo(proto);
 
 	/*
 	 * Locate pcb for datagram.
-	 *
+	 */
+	lookupflags = INPLOOKUP_RLOCKPCB |
+	    (V_udp_bind_all_fibs ? 0 : INPLOOKUP_FIB);
+
+	/*
 	 * Grab info from PACKET_TAG_IPFORWARD tag prepended to the chain.
 	 */
 	if ((m->m_flags & M_IP_NEXTHOP) &&
@@ -636,7 +627,7 @@ udp_input(struct mbuf **mp, int *offp, int proto)
 		 * Already got one like this?
 		 */
 		inp = in_pcblookup_mbuf(pcbinfo, ip->ip_src, uh->uh_sport,
-		    ip->ip_dst, uh->uh_dport, INPLOOKUP_RLOCKPCB, ifp, m);
+		    ip->ip_dst, uh->uh_dport, lookupflags, ifp, m);
 		if (!inp) {
 			/*
 			 * It's new.  Try to find the ambushing socket.
@@ -646,8 +637,8 @@ udp_input(struct mbuf **mp, int *offp, int proto)
 			inp = in_pcblookup(pcbinfo, ip->ip_src,
 			    uh->uh_sport, next_hop->sin_addr,
 			    next_hop->sin_port ? htons(next_hop->sin_port) :
-			    uh->uh_dport, INPLOOKUP_WILDCARD |
-			    INPLOOKUP_RLOCKPCB, ifp);
+			    uh->uh_dport, INPLOOKUP_WILDCARD | lookupflags,
+			    ifp);
 		}
 		/* Remove the tag from the packet. We don't need it anymore. */
 		m_tag_delete(m, fwd_tag);
@@ -655,7 +646,7 @@ udp_input(struct mbuf **mp, int *offp, int proto)
 	} else
 		inp = in_pcblookup_mbuf(pcbinfo, ip->ip_src, uh->uh_sport,
 		    ip->ip_dst, uh->uh_dport, INPLOOKUP_WILDCARD |
-		    INPLOOKUP_RLOCKPCB, ifp, m);
+		    lookupflags, ifp, m);
 	if (inp == NULL) {
 		if (V_udp_log_in_vain) {
 			char src[INET_ADDRSTRLEN];
@@ -671,7 +662,11 @@ udp_input(struct mbuf **mp, int *offp, int proto)
 		else
 			UDP_PROBE(receive, NULL, NULL, ip, NULL, uh);
 		UDPSTAT_INC(udps_noport);
-		if (m->m_flags & (M_BCAST | M_MCAST)) {
+		if (m->m_flags & M_MCAST) {
+			UDPSTAT_INC(udps_noportmcast);
+			goto badunlocked;
+		}
+		if (m->m_flags & M_BCAST) {
 			UDPSTAT_INC(udps_noportbcast);
 			goto badunlocked;
 		}
@@ -712,7 +707,7 @@ udp_input(struct mbuf **mp, int *offp, int proto)
 		UDPLITE_PROBE(receive, NULL, inp, ip, inp, uh);
 	else
 		UDP_PROBE(receive, NULL, inp, ip, inp, uh);
-	if (udp_append(inp, ip, m, iphlen, udp_in) == 0)
+	if (!udp_append(inp, ip, m, iphlen, udp_in))
 		INP_RUNLOCK(inp);
 	return (IPPROTO_DONE);
 
@@ -745,85 +740,60 @@ udp_notify(struct inpcb *inp, int errno)
 
 #ifdef INET
 static void
-udp_common_ctlinput(int cmd, struct sockaddr *sa, void *vip,
-    struct inpcbinfo *pcbinfo)
+udp_common_ctlinput(struct icmp *icmp, struct inpcbinfo *pcbinfo)
 {
-	struct ip *ip = vip;
+	struct ip *ip = &icmp->icmp_ip;
 	struct udphdr *uh;
-	struct in_addr faddr;
 	struct inpcb *inp;
 
-	faddr = ((struct sockaddr_in *)sa)->sin_addr;
-	if (sa->sa_family != AF_INET || faddr.s_addr == INADDR_ANY)
+	if (icmp_errmap(icmp) == 0)
 		return;
 
-	if (PRC_IS_REDIRECT(cmd)) {
-		/* signal EHOSTDOWN, as it flushes the cached route */
-		in_pcbnotifyall(pcbinfo, faddr, EHOSTDOWN, udp_notify);
-		return;
-	}
-
-	/*
-	 * Hostdead is ugly because it goes linearly through all PCBs.
-	 *
-	 * XXX: We never get this from ICMP, otherwise it makes an excellent
-	 * DoS attack on machines with many connections.
-	 */
-	if (cmd == PRC_HOSTDEAD)
-		ip = NULL;
-	else if ((unsigned)cmd >= PRC_NCMDS || inetctlerrmap[cmd] == 0)
-		return;
-	if (ip != NULL) {
-		uh = (struct udphdr *)((caddr_t)ip + (ip->ip_hl << 2));
-		inp = in_pcblookup(pcbinfo, faddr, uh->uh_dport,
-		    ip->ip_src, uh->uh_sport, INPLOOKUP_WLOCKPCB, NULL);
+	uh = (struct udphdr *)((caddr_t)ip + (ip->ip_hl << 2));
+	inp = in_pcblookup(pcbinfo, ip->ip_dst, uh->uh_dport, ip->ip_src,
+	    uh->uh_sport, INPLOOKUP_WLOCKPCB, NULL);
+	if (inp != NULL) {
+		INP_WLOCK_ASSERT(inp);
+		if (inp->inp_socket != NULL)
+			udp_notify(inp, icmp_errmap(icmp));
+		INP_WUNLOCK(inp);
+	} else {
+		inp = in_pcblookup(pcbinfo, ip->ip_dst, uh->uh_dport,
+		    ip->ip_src, uh->uh_sport,
+		    INPLOOKUP_WILDCARD | INPLOOKUP_RLOCKPCB, NULL);
 		if (inp != NULL) {
-			INP_WLOCK_ASSERT(inp);
-			if (inp->inp_socket != NULL) {
-				udp_notify(inp, inetctlerrmap[cmd]);
-			}
-			INP_WUNLOCK(inp);
-		} else {
-			inp = in_pcblookup(pcbinfo, faddr, uh->uh_dport,
-					   ip->ip_src, uh->uh_sport,
-					   INPLOOKUP_WILDCARD | INPLOOKUP_RLOCKPCB, NULL);
-			if (inp != NULL) {
-				struct udpcb *up;
-				void *ctx;
-				udp_tun_icmp_t func;
+			struct udpcb *up;
+			udp_tun_icmp_t *func;
 
-				up = intoudpcb(inp);
-				ctx = up->u_tun_ctx;
-				func = up->u_icmp_func;
-				INP_RUNLOCK(inp);
-				if (func != NULL)
-					(*func)(cmd, sa, vip, ctx);
-			}
+			up = intoudpcb(inp);
+			func = up->u_icmp_func;
+			INP_RUNLOCK(inp);
+			if (func != NULL)
+				func(icmp);
 		}
-	} else
-		in_pcbnotifyall(pcbinfo, faddr, inetctlerrmap[cmd],
-		    udp_notify);
+	}
 }
 
 static void
-udp_ctlinput(int cmd, struct sockaddr *sa, void *vip)
+udp_ctlinput(struct icmp *icmp)
 {
 
-	return (udp_common_ctlinput(cmd, sa, vip, &V_udbinfo));
+	return (udp_common_ctlinput(icmp, &V_udbinfo));
 }
 
 static void
-udplite_ctlinput(int cmd, struct sockaddr *sa, void *vip)
+udplite_ctlinput(struct icmp *icmp)
 {
 
-	return (udp_common_ctlinput(cmd, sa, vip, &V_ulitecbinfo));
+	return (udp_common_ctlinput(icmp, &V_ulitecbinfo));
 }
 #endif /* INET */
 
 static int
 udp_pcblist(SYSCTL_HANDLER_ARGS)
 {
-	struct inpcb_iterator inpi = INP_ALL_ITERATOR(&V_udbinfo,
+	struct inpcbinfo *pcbinfo = udp_get_inpcbinfo(arg2);
+	struct inpcb_iterator inpi = INP_ALL_ITERATOR(pcbinfo,
 	    INPLOOKUP_RLOCKPCB);
 	struct xinpgen xig;
 	struct inpcb *inp;
@@ -835,7 +805,7 @@ udp_pcblist(SYSCTL_HANDLER_ARGS)
 	if (req->oldptr == 0) {
 		int n;
 
-		n = V_udbinfo.ipi_count;
+		n = pcbinfo->ipi_count;
 		n += imax(n / 8, 10);
 		req->oldidx = 2 * (sizeof xig) + n * sizeof(struct xinpcb);
 		return (0);
@@ -846,8 +816,8 @@ udp_pcblist(SYSCTL_HANDLER_ARGS)
 
 	bzero(&xig, sizeof(xig));
 	xig.xig_len = sizeof xig;
-	xig.xig_count = V_udbinfo.ipi_count;
-	xig.xig_gen = V_udbinfo.ipi_gencnt;
+	xig.xig_count = pcbinfo->ipi_count;
+	xig.xig_gen = pcbinfo->ipi_gencnt;
 	xig.xig_sogen = so_gencnt;
 	error = SYSCTL_OUT(req, &xig, sizeof xig);
 	if (error)
@@ -874,9 +844,9 @@ udp_pcblist(SYSCTL_HANDLER_ARGS)
 		 * that something happened while we were processing this
 		 * request, and it might be necessary to retry.
 		 */
-		xig.xig_gen = V_udbinfo.ipi_gencnt;
+		xig.xig_gen = pcbinfo->ipi_gencnt;
 		xig.xig_sogen = so_gencnt;
-		xig.xig_count = V_udbinfo.ipi_count;
+		xig.xig_count = pcbinfo->ipi_count;
 		error = SYSCTL_OUT(req, &xig, sizeof xig);
 	}
 
@@ -884,9 +854,14 @@ udp_pcblist(SYSCTL_HANDLER_ARGS)
 }
 
 SYSCTL_PROC(_net_inet_udp, UDPCTL_PCBLIST, pcblist,
-    CTLTYPE_OPAQUE | CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, 0,
+    CTLTYPE_OPAQUE | CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, IPPROTO_UDP,
     udp_pcblist, "S,xinpcb",
     "List of active UDP sockets");
+
+SYSCTL_PROC(_net_inet_udplite, OID_AUTO, pcblist,
+    CTLTYPE_OPAQUE | CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, IPPROTO_UDPLITE,
+    udp_pcblist, "S,xinpcb",
+    "List of active UDP-Lite sockets");
 
 #ifdef INET
 static int
@@ -898,6 +873,8 @@ udp_getcred(SYSCTL_HANDLER_ARGS)
 	struct inpcb *inp;
 	int error;
 
+	if (req->newptr == NULL)
+		return (EINVAL);
 	error = priv_check(req->td, PRIV_NETINET_GETCRED);
 	if (error)
 		return (error);
@@ -966,15 +943,32 @@ udp_ctloutput(struct socket *so, struct sockopt *sopt)
 	case SOPT_SET:
 		switch (sopt->sopt_name) {
 #if defined(IPSEC) || defined(IPSEC_SUPPORT)
-#ifdef INET
+#if defined(INET) || defined(INET6)
 		case UDP_ENCAP:
-			if (!IPSEC_ENABLED(ipv4)) {
-				INP_WUNLOCK(inp);
-				return (ENOPROTOOPT);
+#ifdef INET
+			if (INP_SOCKAF(so) == AF_INET) {
+				if (!IPSEC_ENABLED(ipv4)) {
+					INP_WUNLOCK(inp);
+					return (ENOPROTOOPT);
+				}
+				error = UDPENCAP_PCBCTL(ipv4, inp, sopt);
+				break;
 			}
-			error = UDPENCAP_PCBCTL(inp, sopt);
-			break;
 #endif /* INET */
+#ifdef INET6
+			if (INP_SOCKAF(so) == AF_INET6) {
+				if (!IPSEC_ENABLED(ipv6)) {
+					INP_WUNLOCK(inp);
+					return (ENOPROTOOPT);
+				}
+				error = UDPENCAP_PCBCTL(ipv6, inp, sopt);
+				break;
+			}
+#endif /* INET6 */
+			INP_WUNLOCK(inp);
+			return (EINVAL);
+#endif /* INET || INET6 */
+
 #endif /* IPSEC */
 		case UDPLITE_SEND_CSCOV:
 		case UDPLITE_RECV_CSCOV:
@@ -1013,15 +1007,32 @@ udp_ctloutput(struct socket *so, struct sockopt *sopt)
 	case SOPT_GET:
 		switch (sopt->sopt_name) {
 #if defined(IPSEC) || defined(IPSEC_SUPPORT)
-#ifdef INET
+#if defined(INET) || defined(INET6)
 		case UDP_ENCAP:
-			if (!IPSEC_ENABLED(ipv4)) {
-				INP_WUNLOCK(inp);
-				return (ENOPROTOOPT);
+#ifdef INET
+			if (INP_SOCKAF(so) == AF_INET) {
+				if (!IPSEC_ENABLED(ipv4)) {
+					INP_WUNLOCK(inp);
+					return (ENOPROTOOPT);
+				}
+				error = UDPENCAP_PCBCTL(ipv4, inp, sopt);
+				break;
 			}
-			error = UDPENCAP_PCBCTL(inp, sopt);
-			break;
 #endif /* INET */
+#ifdef INET6
+			if (INP_SOCKAF(so) == AF_INET6) {
+				if (!IPSEC_ENABLED(ipv6)) {
+					INP_WUNLOCK(inp);
+					return (ENOPROTOOPT);
+				}
+				error = UDPENCAP_PCBCTL(ipv6, inp, sopt);
+				break;
+			}
+#endif /* INET6 */
+			INP_WUNLOCK(inp);
+			return (EINVAL);
+#endif /* INET || INET6 */
+
 #endif /* IPSEC */
 		case UDPLITE_SEND_CSCOV:
 		case UDPLITE_RECV_CSCOV:
@@ -1060,6 +1071,8 @@ udp_v4mapped_pktinfo(struct cmsghdr *cm, struct sockaddr_in * src,
 	struct in6_pktinfo *pktinfo;
 	struct in_addr ia;
 
+	NET_EPOCH_ASSERT();
+
 	if ((flags & PRUS_IPV6) == 0)
 		return (0);
 
@@ -1081,18 +1094,14 @@ udp_v4mapped_pktinfo(struct cmsghdr *cm, struct sockaddr_in * src,
 
 	/* Validate the interface index if specified. */
 	if (pktinfo->ipi6_ifindex) {
-		struct epoch_tracker et;
-
-		NET_EPOCH_ENTER(et);
 		ifp = ifnet_byindex(pktinfo->ipi6_ifindex);
-		NET_EPOCH_EXIT(et);	/* XXXGL: unsafe ifp */
 		if (ifp == NULL)
 			return (ENXIO);
 	} else
 		ifp = NULL;
 	if (ifp != NULL && !IN6_IS_ADDR_UNSPECIFIED(&pktinfo->ipi6_addr)) {
 		ia.s_addr = pktinfo->ipi6_addr.s6_addr32[3];
-		if (in_ifhasaddr(ifp, ia) == 0)
+		if (!in_ifhasaddr(ifp, ia))
 			return (EADDRNOTAVAIL);
 	}
 
@@ -1104,29 +1113,45 @@ udp_v4mapped_pktinfo(struct cmsghdr *cm, struct sockaddr_in * src,
 
 	return (0);
 }
-#endif
+#endif	/* INET6 */
 
-static int
-udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
-    struct mbuf *control, struct thread *td, int flags)
+int
+udp_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *addr,
+    struct mbuf *control, struct thread *td)
 {
+	struct inpcb *inp;
 	struct udpiphdr *ui;
-	int len = m->m_pkthdr.len;
+	int len, error = 0;
 	struct in_addr faddr, laddr;
 	struct cmsghdr *cm;
-	struct inpcbinfo *pcbinfo;
 	struct sockaddr_in *sin, src;
 	struct epoch_tracker et;
 	int cscov_partial = 0;
-	int error = 0;
 	int ipflags = 0;
 	u_short fport, lport;
-	u_char tos;
+	u_char tos, vflagsav;
 	uint8_t pr;
 	uint16_t cscov = 0;
-	uint32_t flowid = 0;
+	uint32_t hash_val, hash_type, flowid = 0;
 	uint8_t flowtype = M_HASHTYPE_NONE;
+	bool use_cached_route;
 
+	inp = sotoinpcb(so);
+	KASSERT(inp != NULL, ("udp_send: inp == NULL"));
+
+	if (addr != NULL) {
+		if (addr->sa_family != AF_INET)
+			error = EAFNOSUPPORT;
+		else if (addr->sa_len != sizeof(struct sockaddr_in))
+			error = EINVAL;
+		if (__predict_false(error != 0)) {
+			m_freem(control);
+			m_freem(m);
+			return (error);
+		}
+	}
+
+	len = m->m_pkthdr.len;
 	if (len + sizeof(struct udpiphdr) > IP_MAXPACKET) {
 		if (control)
 			m_freem(control);
@@ -1138,21 +1163,32 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 	sin = (struct sockaddr_in *)addr;
 
 	/*
-	 * udp_output() may need to temporarily bind or connect the current
-	 * inpcb.  As such, we don't know up front whether we will need the
-	 * pcbinfo lock or not.  Do any work to decide what is needed up
-	 * front before acquiring any locks.
+	 * udp_send() may need to bind the current inpcb.  As such, we don't
+	 * know up front whether we will need the pcbinfo lock or not.  Do any
+	 * work to decide what is needed up front before acquiring any locks.
 	 *
 	 * We will need network epoch in either case, to safely lookup into
 	 * pcb hash.
 	 */
-	if (sin == NULL ||
-	    (inp->inp_laddr.s_addr == INADDR_ANY && inp->inp_lport == 0))
+	use_cached_route = sin == NULL || (inp->inp_laddr.s_addr == INADDR_ANY && inp->inp_lport == 0);
+	if (use_cached_route || (flags & PRUS_IPV6) != 0)
 		INP_WLOCK(inp);
 	else
 		INP_RLOCK(inp);
 	NET_EPOCH_ENTER(et);
+#ifdef INET6
+	if ((flags & PRUS_IPV6) != 0) {
+		if ((inp->in6p_outputopts != NULL) &&
+		    (inp->in6p_outputopts->ip6po_tclass != -1))
+			tos = (u_char)inp->in6p_outputopts->ip6po_tclass;
+		else
+			tos = 0;
+	} else {
+		tos = inp->inp_ip_tos;
+	}
+#else
 	tos = inp->inp_ip_tos;
+#endif
 	if (control != NULL) {
 		/*
 		 * XXX: Currently, we assume all the optional information is
@@ -1176,6 +1212,23 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 			error = udp_v4mapped_pktinfo(cm, &src, inp, flags);
 			if (error != 0)
 				break;
+			if (((flags & PRUS_IPV6) != 0) &&
+			    (cm->cmsg_level == IPPROTO_IPV6) &&
+			    (cm->cmsg_type == IPV6_TCLASS)) {
+				int tclass;
+
+				if (cm->cmsg_len != CMSG_LEN(sizeof(int))) {
+					error = EINVAL;
+					break;
+				}
+				tclass = *(int *)CMSG_DATA(cm);
+				if (tclass < -1 || tclass > 255) {
+					error = EINVAL;
+					break;
+				}
+				if (tclass != -1)
+					tos = (u_char)tclass;
+			}
 #endif
 			if (cm->cmsg_level != IPPROTO_IP)
 				continue;
@@ -1242,7 +1295,6 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 		goto release;
 
 	pr = inp->inp_socket->so_proto->pr_protocol;
-	pcbinfo = udp_get_inpcbinfo(pr);
 
 	/*
 	 * If the IP_SENDSRCADDR control message was specified, override the
@@ -1258,10 +1310,15 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 			error = EINVAL;
 			goto release;
 		}
-		INP_HASH_WLOCK(pcbinfo);
-		error = in_pcbbind_setup(inp, (struct sockaddr *)&src,
-		    &laddr.s_addr, &lport, td->td_ucred);
-		INP_HASH_WUNLOCK(pcbinfo);
+		if ((flags & PRUS_IPV6) != 0) {
+			vflagsav = inp->inp_vflag;
+			inp->inp_vflag |= INP_IPV4;
+			inp->inp_vflag &= ~INP_IPV6;
+		}
+		error = in_pcbbind_setup(inp, &src, &laddr.s_addr, &lport,
+		    V_udp_bind_all_fibs ? 0 : INPBIND_FIB, td->td_ucred);
+		if ((flags & PRUS_IPV6) != 0)
+			inp->inp_vflag = vflagsav;
 		if (error)
 			goto release;
 	}
@@ -1288,60 +1345,35 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 		error = prison_remote_ip4(td->td_ucred, &sin->sin_addr);
 		if (error)
 			goto release;
-
 		/*
-		 * If a local address or port hasn't yet been selected, or if
-		 * the destination address needs to be rewritten due to using
-		 * a special INADDR_ constant, invoke in_pcbconnect_setup()
-		 * to do the heavy lifting.  Once a port is selected, we
-		 * commit the binding back to the socket; we also commit the
-		 * binding of the address if in jail.
-		 *
-		 * If we already have a valid binding and we're not
-		 * requesting a destination address rewrite, use a fast path.
+		 * sendto(2) on unconnected UDP socket results in implicit
+		 * binding to INADDR_ANY and anonymous port.  This has two
+		 * side effects:
+		 * 1) after first sendto(2) the socket will receive datagrams
+		 *    destined to the selected port.
+		 * 2) subsequent sendto(2) calls will use the same source port.
 		 */
-		if (inp->inp_laddr.s_addr == INADDR_ANY ||
-		    inp->inp_lport == 0 ||
-		    sin->sin_addr.s_addr == INADDR_ANY ||
-		    sin->sin_addr.s_addr == INADDR_BROADCAST) {
-			INP_HASH_WLOCK(pcbinfo);
-			error = in_pcbconnect_setup(inp, addr, &laddr.s_addr,
-			    &lport, &faddr.s_addr, &fport, NULL,
-			    td->td_ucred);
-			if (error) {
-				INP_HASH_WUNLOCK(pcbinfo);
-				goto release;
-			}
+		if (inp->inp_lport == 0) {
+			struct sockaddr_in wild = {
+				.sin_family = AF_INET,
+				.sin_len = sizeof(struct sockaddr_in),
+			};
 
-			/*
-			 * XXXRW: Why not commit the port if the address is
-			 * !INADDR_ANY?
-			 */
-			/* Commit the local port if newly assigned. */
-			if (inp->inp_laddr.s_addr == INADDR_ANY &&
-			    inp->inp_lport == 0) {
-				INP_WLOCK_ASSERT(inp);
-				/*
-				 * Remember addr if jailed, to prevent
-				 * rebinding.
-				 */
-				if (prison_flag(td->td_ucred, PR_IP4))
-					inp->inp_laddr = laddr;
-				inp->inp_lport = lport;
-				error = in_pcbinshash(inp);
-				INP_HASH_WUNLOCK(pcbinfo);
-				if (error != 0) {
-					inp->inp_lport = 0;
-					error = EAGAIN;
-					goto release;
-				}
-				inp->inp_flags |= INP_ANONPORT;
-			} else
-				INP_HASH_WUNLOCK(pcbinfo);
-		} else {
-			faddr = sin->sin_addr;
-			fport = sin->sin_port;
+			error = in_pcbbind(inp, &wild, V_udp_bind_all_fibs ?
+			    0 : INPBIND_FIB, td->td_ucred);
+			if (error)
+				goto release;
+			lport = inp->inp_lport;
+			laddr = inp->inp_laddr;
 		}
+		if (laddr.s_addr == INADDR_ANY) {
+			error = in_pcbladdr(inp, &sin->sin_addr, &laddr,
+			    td->td_ucred);
+			if (error)
+				goto release;
+		}
+		faddr = sin->sin_addr;
+		fport = sin->sin_port;
 	} else {
 		INP_LOCK_ASSERT(inp);
 		faddr = inp->inp_faddr;
@@ -1371,8 +1403,12 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 	 * into network format.
 	 */
 	ui = mtod(m, struct udpiphdr *);
-	bzero(ui->ui_x1, sizeof(ui->ui_x1));	/* XXX still needed? */
-	ui->ui_v = IPVERSION << 4;
+	/*
+	 * Filling only those fields of udpiphdr that participate in the
+	 * checksum calculation. The rest must be zeroed and will be filled
+	 * later.
+	 */
+	bzero(ui->ui_x1, sizeof(ui->ui_x1));
 	ui->ui_pr = pr;
 	ui->ui_src = laddr;
 	ui->ui_dst = faddr;
@@ -1395,16 +1431,6 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 		 * the entire UDPLite packet is covered by the checksum.
 		 */
 		cscov_partial = (cscov == 0) ? 0 : 1;
-	}
-
-	/*
-	 * Set the Don't Fragment bit in the IP header.
-	 */
-	if (inp->inp_flags & INP_DONTFRAG) {
-		struct ip *ip;
-
-		ip = (struct ip *)&ui->ui_i;
-		ip->ip_off |= htons(IP_DF);
 	}
 
 	if (inp->inp_socket->so_options & SO_DONTROUTE)
@@ -1440,9 +1466,16 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 		m->m_pkthdr.csum_flags = CSUM_UDP;
 		m->m_pkthdr.csum_data = offsetof(struct udphdr, uh_sum);
 	}
+	/*
+	 * After finishing the checksum computation, fill the remaining fields
+	 * of udpiphdr.
+	 */
+	((struct ip *)ui)->ip_v = IPVERSION;
+	((struct ip *)ui)->ip_tos = tos;
 	((struct ip *)ui)->ip_len = htons(sizeof(struct udpiphdr) + len);
-	((struct ip *)ui)->ip_ttl = inp->inp_ip_ttl;	/* XXX */
-	((struct ip *)ui)->ip_tos = tos;		/* XXX */
+	if (inp->inp_flags & INP_DONTFRAG)
+		((struct ip *)ui)->ip_off |= htons(IP_DF);
+	((struct ip *)ui)->ip_ttl = inp->inp_ip_ttl;
 	UDPSTAT_INC(udps_opackets);
 
 	/*
@@ -1454,11 +1487,7 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 	if (flowtype != M_HASHTYPE_NONE) {
 		m->m_pkthdr.flowid = flowid;
 		M_HASHTYPE_SET(m, flowtype);
-	}
-#if defined(ROUTE_MPATH) || defined(RSS)
-	else if (CALC_FLOWID_OUTBOUND_SENDTO) {
-		uint32_t hash_val, hash_type;
-
+	} else if (CALC_FLOWID_OUTBOUND_SENDTO) {
 		hash_val = fib4_calc_packet_hash(laddr, faddr,
 		    lport, fport, pr, &hash_type);
 		m->m_pkthdr.flowid = hash_val;
@@ -1477,14 +1506,13 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 	 * hash value based on the packet contents.
 	 */
 	ipflags |= IP_NODEFAULTFLOWID;
-#endif	/* RSS */
 
 	if (pr == IPPROTO_UDPLITE)
 		UDPLITE_PROBE(send, NULL, inp, &ui->ui_i, inp, &ui->ui_u);
 	else
 		UDP_PROBE(send, NULL, inp, &ui->ui_i, inp, &ui->ui_u);
 	error = ip_output(m, inp->inp_options,
-	    INP_WLOCKED(inp) ? &inp->inp_route : NULL, ipflags,
+	    use_cached_route ? &inp->inp_route : NULL, ipflags,
 	    inp->inp_moptions, inp);
 	INP_UNLOCK(inp);
 	NET_EPOCH_EXIT(et);
@@ -1497,22 +1525,17 @@ release:
 	return (error);
 }
 
-pr_abort_t udp_abort;			/* shared with udp6_usrreq.c */
 void
 udp_abort(struct socket *so)
 {
 	struct inpcb *inp;
-	struct inpcbinfo *pcbinfo;
 
-	pcbinfo = udp_get_inpcbinfo(so->so_proto->pr_protocol);
 	inp = sotoinpcb(so);
 	KASSERT(inp != NULL, ("udp_abort: inp == NULL"));
 	INP_WLOCK(inp);
 	if (inp->inp_faddr.s_addr != INADDR_ANY) {
-		INP_HASH_WLOCK(pcbinfo);
 		in_pcbdisconnect(inp);
 		inp->inp_laddr.s_addr = INADDR_ANY;
-		INP_HASH_WUNLOCK(pcbinfo);
 		soisdisconnected(so);
 	}
 	INP_WUNLOCK(inp);
@@ -1522,8 +1545,9 @@ static int
 udp_attach(struct socket *so, int proto, struct thread *td)
 {
 	static uint32_t udp_flowid;
-	struct inpcb *inp;
 	struct inpcbinfo *pcbinfo;
+	struct inpcb *inp;
+	struct udpcb *up;
 	int error;
 
 	pcbinfo = udp_get_inpcbinfo(so->so_proto->pr_protocol);
@@ -1540,13 +1564,8 @@ udp_attach(struct socket *so, int proto, struct thread *td)
 	inp->inp_ip_ttl = V_ip_defttl;
 	inp->inp_flowid = atomic_fetchadd_int(&udp_flowid, 1);
 	inp->inp_flowtype = M_HASHTYPE_OPAQUE;
-
-	error = udp_newudpcb(inp);
-	if (error) {
-		in_pcbdetach(inp);
-		in_pcbfree(inp);
-		return (error);
-	}
+	up = intoudpcb(inp);
+	bzero(&up->u_start_zero, u_zero_size);
 	INP_WUNLOCK(inp);
 
 	return (0);
@@ -1582,11 +1601,9 @@ static int
 udp_bind(struct socket *so, struct sockaddr *nam, struct thread *td)
 {
 	struct inpcb *inp;
-	struct inpcbinfo *pcbinfo;
 	struct sockaddr_in *sinp;
 	int error;
 
-	pcbinfo = udp_get_inpcbinfo(so->so_proto->pr_protocol);
 	inp = sotoinpcb(so);
 	KASSERT(inp != NULL, ("udp_bind: inp == NULL"));
 
@@ -1605,9 +1622,8 @@ udp_bind(struct socket *so, struct sockaddr *nam, struct thread *td)
 		return (EINVAL);
 
 	INP_WLOCK(inp);
-	INP_HASH_WLOCK(pcbinfo);
-	error = in_pcbbind(inp, nam, td->td_ucred);
-	INP_HASH_WUNLOCK(pcbinfo);
+	error = in_pcbbind(inp, sinp, V_udp_bind_all_fibs ? 0 : INPBIND_FIB,
+	    td->td_ucred);
 	INP_WUNLOCK(inp);
 	return (error);
 }
@@ -1616,17 +1632,13 @@ static void
 udp_close(struct socket *so)
 {
 	struct inpcb *inp;
-	struct inpcbinfo *pcbinfo;
 
-	pcbinfo = udp_get_inpcbinfo(so->so_proto->pr_protocol);
 	inp = sotoinpcb(so);
 	KASSERT(inp != NULL, ("udp_close: inp == NULL"));
 	INP_WLOCK(inp);
 	if (inp->inp_faddr.s_addr != INADDR_ANY) {
-		INP_HASH_WLOCK(pcbinfo);
 		in_pcbdisconnect(inp);
 		inp->inp_laddr.s_addr = INADDR_ANY;
-		INP_HASH_WUNLOCK(pcbinfo);
 		soisdisconnected(so);
 	}
 	INP_WUNLOCK(inp);
@@ -1637,11 +1649,9 @@ udp_connect(struct socket *so, struct sockaddr *nam, struct thread *td)
 {
 	struct epoch_tracker et;
 	struct inpcb *inp;
-	struct inpcbinfo *pcbinfo;
 	struct sockaddr_in *sin;
 	int error;
 
-	pcbinfo = udp_get_inpcbinfo(so->so_proto->pr_protocol);
 	inp = sotoinpcb(so);
 	KASSERT(inp != NULL, ("udp_connect: inp == NULL"));
 
@@ -1662,9 +1672,7 @@ udp_connect(struct socket *so, struct sockaddr *nam, struct thread *td)
 		return (error);
 	}
 	NET_EPOCH_ENTER(et);
-	INP_HASH_WLOCK(pcbinfo);
-	error = in_pcbconnect(inp, nam, td->td_ucred, true);
-	INP_HASH_WUNLOCK(pcbinfo);
+	error = in_pcbconnect(inp, sin, td->td_ucred);
 	NET_EPOCH_EXIT(et);
 	if (error == 0)
 		soisconnected(so);
@@ -1676,29 +1684,20 @@ static void
 udp_detach(struct socket *so)
 {
 	struct inpcb *inp;
-	struct udpcb *up;
 
 	inp = sotoinpcb(so);
 	KASSERT(inp != NULL, ("udp_detach: inp == NULL"));
 	KASSERT(inp->inp_faddr.s_addr == INADDR_ANY,
 	    ("udp_detach: not disconnected"));
 	INP_WLOCK(inp);
-	up = intoudpcb(inp);
-	KASSERT(up != NULL, ("%s: up == NULL", __func__));
-	inp->inp_ppcb = NULL;
-	in_pcbdetach(inp);
 	in_pcbfree(inp);
-	udp_discardcb(up);
 }
 
-pr_disconnect_t udp_disconnect;		/* shared with udp6_usrreq.c */
 int
 udp_disconnect(struct socket *so)
 {
 	struct inpcb *inp;
-	struct inpcbinfo *pcbinfo;
 
-	pcbinfo = udp_get_inpcbinfo(so->so_proto->pr_protocol);
 	inp = sotoinpcb(so);
 	KASSERT(inp != NULL, ("udp_disconnect: inp == NULL"));
 	INP_WLOCK(inp);
@@ -1706,55 +1705,53 @@ udp_disconnect(struct socket *so)
 		INP_WUNLOCK(inp);
 		return (ENOTCONN);
 	}
-	INP_HASH_WLOCK(pcbinfo);
 	in_pcbdisconnect(inp);
 	inp->inp_laddr.s_addr = INADDR_ANY;
-	INP_HASH_WUNLOCK(pcbinfo);
 	SOCK_LOCK(so);
 	so->so_state &= ~SS_ISCONNECTED;		/* XXX */
 	SOCK_UNLOCK(so);
 	INP_WUNLOCK(inp);
 	return (0);
 }
-
-pr_send_t udp_send;			/* shared with udp6_usrreq.c */
-int
-udp_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *addr,
-    struct mbuf *control, struct thread *td)
-{
-	struct inpcb *inp;
-	int error;
-
-	inp = sotoinpcb(so);
-	KASSERT(inp != NULL, ("udp_send: inp == NULL"));
-
-	if (addr != NULL) {
-		error = 0;
-		if (addr->sa_family != AF_INET)
-			error = EAFNOSUPPORT;
-		else if (addr->sa_len != sizeof(struct sockaddr_in))
-			error = EINVAL;
-		if (__predict_false(error != 0)) {
-			m_freem(control);
-			m_freem(m);
-			return (error);
-		}
-	}
-	return (udp_output(inp, m, addr, control, td, flags));
-}
 #endif /* INET */
 
 int
-udp_shutdown(struct socket *so)
+udp_shutdown(struct socket *so, enum shutdown_how how)
 {
-	struct inpcb *inp;
+	int error;
 
-	inp = sotoinpcb(so);
-	KASSERT(inp != NULL, ("udp_shutdown: inp == NULL"));
-	INP_WLOCK(inp);
-	socantsendmore(so);
-	INP_WUNLOCK(inp);
-	return (0);
+	SOCK_LOCK(so);
+	if (!(so->so_state & SS_ISCONNECTED))
+		/*
+		 * POSIX mandates us to just return ENOTCONN when shutdown(2) is
+		 * invoked on a datagram sockets, however historically we would
+		 * actually tear socket down.  This is known to be leveraged by
+		 * some applications to unblock process waiting in recv(2) by
+		 * other process that it shares that socket with.  Try to meet
+		 * both backward-compatibility and POSIX requirements by forcing
+		 * ENOTCONN but still flushing buffers and performing wakeup(9).
+		 *
+		 * XXXGL: it remains unknown what applications expect this
+		 * behavior and is this isolated to unix/dgram or inet/dgram or
+		 * both.  See: D10351, D3039.
+		 */
+		error = ENOTCONN;
+	else
+		error = 0;
+	SOCK_UNLOCK(so);
+
+	switch (how) {
+	case SHUT_RD:
+		sorflush(so);
+		break;
+	case SHUT_RDWR:
+		sorflush(so);
+		/* FALLTHROUGH */
+	case SHUT_WR:
+		socantsendmore(so);
+	}
+
+	return (error);
 }
 
 #ifdef INET

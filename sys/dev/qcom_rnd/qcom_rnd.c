@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2021, Adrian Chadd <adrian@FreeBSD.org>
  *
@@ -26,9 +26,6 @@
  */
 
 /* Driver for Qualcomm MSM entropy device. */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -66,7 +63,7 @@ static int	qcom_rnd_detach(device_t);
 static int	qcom_rnd_harvest(struct qcom_rnd_softc *, void *, size_t *);
 static unsigned	qcom_rnd_read(void *, unsigned);
 
-static struct random_source random_qcom_rnd = {
+static const struct random_source random_qcom_rnd = {
 	.rs_ident = "Qualcomm Entropy Adapter",
 	.rs_source = RANDOM_PURE_QUALCOMM,
 	.rs_read = qcom_rnd_read,

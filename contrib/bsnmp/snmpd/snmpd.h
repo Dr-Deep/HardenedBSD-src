@@ -152,12 +152,12 @@ struct port_input {
 	int		fd;		/* socket */
 	void		*id;		/* evSelect handle */
 
-	int		stream : 1;	/* stream socket */
-	int		cred : 1;	/* want credentials */
+	u_int		stream : 1;	/* stream socket */
+	u_int		cred : 1;	/* want credentials */
 
 	struct sockaddr	*peer;		/* last received packet */
 	socklen_t	peerlen;
-	int		priv : 1;	/* peer is privileged */
+	u_int		priv : 1;	/* peer is privileged */
 
 	u_char		*buf;		/* receive buffer */
 	size_t		buflen;		/* buffer length */
@@ -192,12 +192,8 @@ struct transport_def {
 	int		(*init_port)(struct tport *);
 
 	ssize_t		(*send)(struct tport *, const u_char *, size_t,
-			    const struct sockaddr *, size_t);
-	ssize_t         (*recv)(struct tport *, struct port_input *);
-
-	/** send via a multi-socket port */
-	ssize_t		(*send2)(struct tport *, const u_char *, size_t,
 			    struct port_input *);
+	ssize_t         (*recv)(struct tport *, struct port_input *);
 };
 struct transport {
 	struct asn_oid	index;		/* transport table index */

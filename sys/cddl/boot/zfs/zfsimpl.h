@@ -94,6 +94,7 @@ typedef enum { B_FALSE, B_TRUE } boolean_t;
 #define	P2END(x, align)			(-(~(x) & -(align)))
 #define	P2PHASEUP(x, align, phase)	((phase) - (((phase) - (x)) & -(align)))
 #define	P2BOUNDARY(off, len, align)	(((off) ^ ((off) + (len) - 1)) > (align) - 1)
+#define	IS_P2ALIGNED(v, a)		((((uintptr_t)(v)) & ((uintptr_t)(a) - 1)) == 0)
 
 /*
  * General-purpose 32-bit and 64-bit bitfield encodings.
@@ -498,19 +499,7 @@ typedef struct zio_eck {
  * Gang block headers are self-checksumming and contain an array
  * of block pointers.
  */
-#define	SPA_GANGBLOCKSIZE	SPA_MINBLOCKSIZE
-#define	SPA_GBH_NBLKPTRS	((SPA_GANGBLOCKSIZE - \
-	sizeof (zio_eck_t)) / sizeof (blkptr_t))
-#define	SPA_GBH_FILLER		((SPA_GANGBLOCKSIZE - \
-	sizeof (zio_eck_t) - \
-	(SPA_GBH_NBLKPTRS * sizeof (blkptr_t))) /\
-	sizeof (uint64_t))
-
-typedef struct zio_gbh {
-	blkptr_t		zg_blkptr[SPA_GBH_NBLKPTRS];
-	uint64_t		zg_filler[SPA_GBH_FILLER];
-	zio_eck_t		zg_tail;
-} zio_gbh_phys_t;
+#define	SPA_OLD_GANGBLOCKSIZE	SPA_MINBLOCKSIZE
 
 #define	VDEV_RAIDZ_MAXPARITY	3
 
@@ -535,6 +524,12 @@ typedef struct zio_gbh {
 #define	VDEV_UBERBLOCK_OFFSET(vd, n)	\
 	offsetof(vdev_label_t, vl_uberblock[(n) << VDEV_UBERBLOCK_SHIFT(vd)])
 #define	VDEV_UBERBLOCK_SIZE(vd)		(1ULL << VDEV_UBERBLOCK_SHIFT(vd))
+
+#define	ASHIFT_UBERBLOCK_SHIFT(ashift)  \
+	MIN(MAX(ashift, UBERBLOCK_SHIFT), \
+	MAX_UBERBLOCK_SHIFT)
+#define	ASHIFT_UBERBLOCK_SIZE(ashift) \
+	(1ULL << ASHIFT_UBERBLOCK_SHIFT(ashift))
 
 typedef struct vdev_phys {
 	char		vp_nvlist[VDEV_PHYS_SIZE - sizeof (zio_eck_t)];
@@ -1406,6 +1401,17 @@ typedef enum {
 #define	SM2_RUN_MAX		SM2_RUN_DECODE(~0ULL)
 #define	SM2_OFFSET_MAX		SM2_OFFSET_DECODE(~0ULL)
 
+typedef enum dd_used {
+	DD_USED_HEAD,
+	DD_USED_SNAP,
+	DD_USED_CHILD,
+	DD_USED_CHILD_RSRV,
+	DD_USED_REFRSRV,
+	DD_USED_NUM
+} dd_used_t;
+
+#define	DD_FLAG_USED_BREAKDOWN (1 << 0)
+
 typedef struct dsl_dir_phys {
 	uint64_t dd_creation_time; /* not actually used */
 	uint64_t dd_head_dataset_obj;
@@ -1424,7 +1430,9 @@ typedef struct dsl_dir_phys {
 	/* Administrative reservation setting */
 	uint64_t dd_reserved;
 	uint64_t dd_props_zapobj;
-	uint64_t dd_pad[7];
+	uint64_t dd_pad[1];
+	uint64_t dd_flags;
+	uint64_t dd_used_breakdown[DD_USED_NUM];
 	uint64_t dd_clones;
 	uint64_t dd_pad1[13]; /* pad out to 256 bytes for good measure */
 } dsl_dir_phys_t;
@@ -1452,7 +1460,10 @@ typedef struct dsl_dataset_phys {
 	uint64_t ds_guid;
 	uint64_t ds_flags;
 	blkptr_t ds_bp;
-	uint64_t ds_pad[8]; /* pad out to 320 bytes for good measure */
+	uint64_t ds_next_clones_obj;	/* DMU_OT_DSL_CLONES */
+	uint64_t ds_props_obj;		/* DMU_OT_DSL_PROPS for snaps */
+	uint64_t ds_userrefs_obj;	/* DMU_OT_USERREFS */
+	uint64_t ds_pad[5]; /* pad out to 320 bytes for good measure */
 } dsl_dataset_phys_t;
 
 typedef struct dsl_deadlist_phys {
@@ -1999,10 +2010,11 @@ typedef struct vdev_indirect_config {
 
 typedef struct vdev {
 	STAILQ_ENTRY(vdev) v_childlink;	/* link in parent's child list */
-	STAILQ_ENTRY(vdev) v_alllink;	/* link in global vdev list */
 	vdev_list_t	v_children;	/* children of this vdev */
 	const char	*v_name;	/* vdev name */
 	uint64_t	v_guid;		/* vdev guid */
+	uint64_t	v_label;	/* label instantiated from (top vdev) */
+	uint64_t	v_txg;		/* most recent transaction (top vdev) */
 	uint64_t	v_id;		/* index in parent */
 	uint64_t	v_psize;	/* physical device capacity */
 	int		v_ashift;	/* offset to block shift */
@@ -2032,7 +2044,6 @@ typedef struct spa {
 	STAILQ_ENTRY(spa) spa_link;	/* link in global pool list */
 	char		*spa_name;	/* pool name */
 	uint64_t	spa_guid;	/* pool guid */
-	uint64_t	spa_txg;	/* most recent transaction */
 	struct uberblock *spa_uberblock;	/* best uberblock so far */
 	vdev_t		*spa_root_vdev;	/* toplevel vdev container */
 	objset_phys_t	*spa_mos;	/* MOS for this pool */

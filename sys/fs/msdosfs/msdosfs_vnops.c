@@ -1,4 +1,3 @@
-/* $FreeBSD$ */
 /*	$NetBSD: msdosfs_vnops.c,v 1.68 1998/02/10 14:10:04 mrg Exp $	*/
 
 /*-
@@ -50,12 +49,12 @@
  * October 1992
  */
 
-#include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bio.h>
 #include <sys/buf.h>
 #include <sys/clock.h>
 #include <sys/dirent.h>
+#include <sys/fcntl.h>
 #include <sys/lock.h>
 #include <sys/lockf.h>
 #include <sys/malloc.h>
@@ -127,8 +126,7 @@ static vop_vptofh_t	msdosfs_vptofh;
 /*
  * Create a regular file. On entry the directory to contain the file being
  * created is locked.  We must release before we return. We must also free
- * the pathname buffer pointed at by cnp->cn_pnbuf, always on error, or
- * only if the SAVESTART bit in cn_flags is clear on success.
+ * the pathname buffer pointed at by cnp->cn_pnbuf, always on error.
  */
 static int
 msdosfs_create(struct vop_create_args *ap)
@@ -161,10 +159,6 @@ msdosfs_create(struct vop_create_args *ap)
 	 * use the absence of the owner write bit to make the file
 	 * readonly.
 	 */
-#ifdef DIAGNOSTIC
-	if ((cnp->cn_flags & HASBUF) == 0)
-		panic("msdosfs_create: no name");
-#endif
 	memset(&ndirent, 0, sizeof(ndirent));
 	error = uniqdosname(pdep, cnp, ndirent.de_Name);
 	if (error)
@@ -318,8 +312,11 @@ msdosfs_getattr(struct vop_getattr_args *ap)
 		vap->va_flags |= UF_SYSTEM;
 	vap->va_gen = 0;
 	vap->va_blocksize = pmp->pm_bpcluster;
-	vap->va_bytes =
-	    (dep->de_FileSize + pmp->pm_crbomask) & ~pmp->pm_crbomask;
+	if (dep->de_StartCluster != MSDOSFSROOT)
+		vap->va_bytes =
+		    (dep->de_FileSize + pmp->pm_crbomask) & ~pmp->pm_crbomask;
+	else
+		vap->va_bytes = 0; /* FAT12/FAT16 root dir in reserved area */
 	vap->va_type = ap->a_vp->v_type;
 	vap->va_filerev = dep->de_modrev;
 	return (0);
@@ -460,6 +457,9 @@ msdosfs_setattr(struct vop_setattr_args *ap)
 			 */
 			break;
 		}
+		error = vn_rlimit_trunc(vap->va_size, td);
+		if (error != 0)
+			return (error);
 		error = detrunc(dep, vap->va_size, 0, cred);
 		if (error)
 			return error;
@@ -615,7 +615,7 @@ msdosfs_write(struct vop_write_args *ap)
 {
 	int n;
 	int croffset;
-	ssize_t resid;
+	ssize_t resid, r;
 	u_long osize;
 	int error = 0;
 	u_long count;
@@ -660,15 +660,15 @@ msdosfs_write(struct vop_write_args *ap)
 	/*
 	 * The caller is supposed to ensure that
 	 * uio->uio_offset >= 0 and uio->uio_resid >= 0.
-	 */
-	if ((uoff_t)uio->uio_offset + uio->uio_resid > MSDOSFS_FILESIZE_MAX)
-		return (EFBIG);
-
-	/*
+	 *
 	 * If they've exceeded their filesize limit, tell them about it.
 	 */
-	if (vn_rlimit_fsize(vp, uio, uio->uio_td))
-		return (EFBIG);
+	error = vn_rlimit_fsizex(vp, uio, MSDOSFS_FILESIZE_MAX, &r,
+	    uio->uio_td);
+	if (error != 0) {
+		vn_rlimit_fsizex_res(uio, r);
+		return (error);
+	}
 
 	/*
 	 * If the offset we are starting the write at is beyond the end of
@@ -678,8 +678,10 @@ msdosfs_write(struct vop_write_args *ap)
 	 */
 	if (uio->uio_offset > dep->de_FileSize) {
 		error = deextend(dep, uio->uio_offset, cred);
-		if (error)
+		if (error != 0) {
+			vn_rlimit_fsizex_res(uio, r);
 			return (error);
+		}
 	}
 
 	/*
@@ -822,6 +824,7 @@ errexit:
 		}
 	} else if (ioflag & IO_SYNC)
 		error = deupdat(dep, 1);
+	vn_rlimit_fsizex_res(uio, r);
 	return (error);
 }
 
@@ -942,7 +945,7 @@ msdosfs_rename(struct vop_rename_args *ap)
 	struct denode *fdip, *fip, *tdip, *tip, *nip;
 	u_char toname[12], oldname[11];
 	u_long to_diroffset;
-	bool checkpath_locked, doingdirectory, newparent;
+	bool doingdirectory, newparent;
 	int error;
 	u_long cn, pcl, blkoff;
 	daddr_t bn, wait_scn, scn;
@@ -958,17 +961,17 @@ msdosfs_rename(struct vop_rename_args *ap)
 	fcnp = ap->a_fcnp;
 	pmp = VFSTOMSDOSFS(fdvp->v_mount);
 
-#ifdef DIAGNOSTIC
-	if ((tcnp->cn_flags & HASBUF) == 0 ||
-	    (fcnp->cn_flags & HASBUF) == 0)
-		panic("msdosfs_rename: no name");
-#endif
 	/*
 	 * Check for cross-device rename.
 	 */
 	if (fvp->v_mount != tdvp->v_mount ||
 	    (tvp != NULL && fvp->v_mount != tvp->v_mount)) {
 		error = EXDEV;
+		goto abortit;
+	}
+
+	if ((ap->a_flags & ~(AT_RENAME_NOREPLACE)) != 0) {
+		error = EOPNOTSUPP;
 		goto abortit;
 	}
 
@@ -987,8 +990,6 @@ msdosfs_rename(struct vop_rename_args *ap)
 	VOP_UNLOCK(tdvp);
 	if (tvp != NULL && tvp != tdvp)
 		VOP_UNLOCK(tvp);
-
-	checkpath_locked = false;
 
 relock:
 	doingdirectory = newparent = false;
@@ -1039,6 +1040,11 @@ relock:
 	if (error == EJUSTRETURN && tvp != NULL) {
 		vrele(tvp);
 		tvp = NULL;
+	}
+	if (error == 0 && tvp != NULL &&
+	    (ap->a_flags & AT_RENAME_NOREPLACE) != 0) {
+		error = EEXIST;
+		goto unlock;
 	}
 	if (error == 0) {
 		nip = NULL;
@@ -1110,12 +1116,8 @@ relock:
 	if (doingdirectory && newparent) {
 		if (error != 0)	/* write access check above */
 			goto unlock;
-		lockmgr(&pmp->pm_checkpath_lock, LK_EXCLUSIVE, NULL);
-		checkpath_locked = true;
 		error = doscheckpath(fip, tdip, &wait_scn);
 		if (wait_scn != 0) {
-			lockmgr(&pmp->pm_checkpath_lock, LK_RELEASE, NULL);
-			checkpath_locked = false;
 			VOP_UNLOCK(fdvp);
 			VOP_UNLOCK(tdvp);
 			VOP_UNLOCK(fvp);
@@ -1130,8 +1132,6 @@ relock:
 		}
 		if (error != 0)
 			goto unlock;
-		if ((tcnp->cn_flags & SAVESTART) == 0)
-			panic("msdosfs_rename: lost to startdir");
 	}
 
 	if (tip != NULL) {
@@ -1184,8 +1184,10 @@ relock:
 	memcpy(oldname, fip->de_Name, 11);
 	memcpy(fip->de_Name, toname, 11);	/* update denode */
 	error = msdosfs_lookup_ino(tdvp, NULL, tcnp, &scn, &blkoff);
-	MPASS(error == EJUSTRETURN);
-	error = createde(fip, tdip, NULL, tcnp);
+	if (error == EJUSTRETURN) {
+		tdip->de_fndoffset = to_diroffset;
+		error = createde(fip, tdip, NULL, tcnp);
+	}
 	if (error != 0) {
 		memcpy(fip->de_Name, oldname, 11);
 		goto unlock;
@@ -1207,7 +1209,10 @@ relock:
 	MPASS(error == 0);
 	error = removede(fdip, fip);
 	if (error != 0) {
-		/* XXX should downgrade to ro here, fs is corrupt */
+		printf("%s: removede %s %s err %d\n",
+		    pmp->pm_mountp->mnt_stat.f_mntonname,
+		    fdip->de_Name, fip->de_Name, error);
+		msdosfs_integrity_error(pmp);
 		goto unlock;
 	}
 	if (!doingdirectory) {
@@ -1241,7 +1246,10 @@ relock:
 		error = bread(pmp->pm_devvp, bn, pmp->pm_bpcluster,
 		    NOCRED, &bp);
 		if (error != 0) {
-			/* XXX should downgrade to ro here, fs is corrupt */
+			printf("%s: block read error %d while renaming dir\n",
+			    pmp->pm_mountp->mnt_stat.f_mntonname,
+			    error);
+			msdosfs_integrity_error(pmp);
 			goto unlock;
 		}
 		dotdotp = (struct direntry *)bp->b_data + 1;
@@ -1254,7 +1262,10 @@ relock:
 		if (DOINGASYNC(fvp))
 			bdwrite(bp);
 		else if ((error = bwrite(bp)) != 0) {
-			/* XXX should downgrade to ro here, fs is corrupt */
+			printf("%s: block write error %d while renaming dir\n",
+			    pmp->pm_mountp->mnt_stat.f_mntonname,
+			    error);
+			msdosfs_integrity_error(pmp);
 			goto unlock;
 		}
 	}
@@ -1269,8 +1280,6 @@ relock:
 	cache_purge(fvp);
 
 unlock:
-	if (checkpath_locked)
-		lockmgr(&pmp->pm_checkpath_lock, LK_RELEASE, NULL);
 	vput(fdvp);
 	vput(fvp);
 	if (tvp != NULL) {
@@ -1282,7 +1291,6 @@ unlock:
 	vput(tdvp);
 	return (error);
 releout:
-	MPASS(!checkpath_locked);
 	vrele(tdvp);
 	if (tvp != NULL)
 		vrele(tvp);
@@ -1414,10 +1422,6 @@ msdosfs_mkdir(struct vop_mkdir_args *ap)
 	 * cluster.  This will be written to an empty slot in the parent
 	 * directory.
 	 */
-#ifdef DIAGNOSTIC
-	if ((cnp->cn_flags & HASBUF) == 0)
-		panic("msdosfs_mkdir: no name");
-#endif
 	error = uniqdosname(pdep, cnp, ndirent.de_Name);
 	if (error)
 		goto bad;
@@ -1527,6 +1531,9 @@ msdosfs_readdir(struct vop_readdir_args *ap)
 	    ap->a_vp, uio, ap->a_cred, ap->a_eofflag);
 #endif
 
+	if (ap->a_eofflag != NULL)
+		*ap->a_eofflag = 0;
+
 	/*
 	 * msdosfs_readdir() won't operate properly on regular files since
 	 * it does i/o only with the filesystem vnode, and hence can
@@ -1620,8 +1627,11 @@ msdosfs_readdir(struct vop_readdir_args *ap)
 		on = (offset - bias) & pmp->pm_crbomask;
 		n = min(pmp->pm_bpcluster - on, uio->uio_resid);
 		diff = dep->de_FileSize - (offset - bias);
-		if (diff <= 0)
-			break;
+		if (diff <= 0) {
+			if (ap->a_eofflag != NULL)
+				*ap->a_eofflag = 1;
+			goto out;
+		}
 		n = min(n, diff);
 		error = pcbmap(dep, lbn, &bn, &cn, &blsize);
 		if (error)
@@ -1652,6 +1662,8 @@ msdosfs_readdir(struct vop_readdir_args *ap)
 			 */
 			if (dentp->deName[0] == SLOT_EMPTY) {
 				brelse(bp);
+				if (ap->a_eofflag != NULL)
+					*ap->a_eofflag = 1;
 				goto out;
 			}
 			/*
@@ -1749,15 +1761,6 @@ out:
 
 	uio->uio_offset = off;
 
-	/*
-	 * Set the eofflag (NFS uses it)
-	 */
-	if (ap->a_eofflag) {
-		if (dep->de_FileSize - (offset - bias) <= 0)
-			*ap->a_eofflag = 1;
-		else
-			*ap->a_eofflag = 0;
-	}
 	return (error);
 }
 
@@ -1948,6 +1951,12 @@ msdosfs_pathconf(struct vop_pathconf_args *ap)
 	case _PC_NO_TRUNC:
 		*ap->a_retval = 0;
 		return (0);
+	case _PC_HAS_HIDDENSYSTEM:
+		*ap->a_retval = 1;
+		return (0);
+	case _PC_CASE_INSENSITIVE:
+		*ap->a_retval = 1;
+		return (0);
 	default:
 		return (vop_stdpathconf(ap));
 	}
@@ -1959,6 +1968,8 @@ msdosfs_vptofh(struct vop_vptofh_args *ap)
 {
 	struct denode *dep;
 	struct defid *defhp;
+	_Static_assert(sizeof(struct defid) <= sizeof(struct fid),
+	    "struct defid cannot be larger than struct fid");
 
 	dep = VTODE(ap->a_vp);
 	defhp = (struct defid *)ap->a_fhp;

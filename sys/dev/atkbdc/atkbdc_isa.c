@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1999 Kazutaka YOKOTA <yokota@zodiac.mech.utsunomiya-u.ac.jp>
  * All rights reserved.
@@ -27,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_kbd.h"
 
 #include <sys/param.h>
@@ -52,10 +50,10 @@ static int	atkbdc_isa_attach(device_t dev);
 static device_t	atkbdc_isa_add_child(device_t bus, u_int order, const char *name,
 		    int unit);
 static struct resource *atkbdc_isa_alloc_resource(device_t dev, device_t child,
-		    int type, int *rid, rman_res_t start, rman_res_t end,
+		    int type, int rid, rman_res_t start, rman_res_t end,
 		    rman_res_t count, u_int flags);
 static int	atkbdc_isa_release_resource(device_t dev, device_t child,
-		    int type, int rid, struct resource *r);
+		    struct resource *r);
 
 static device_method_t atkbdc_isa_methods[] = {
 	DEVMETHOD(device_probe,		atkbdc_isa_probe),
@@ -77,7 +75,7 @@ static device_method_t atkbdc_isa_methods[] = {
 	DEVMETHOD(bus_delete_resource,	bus_generic_rl_delete_resource),
 	DEVMETHOD(bus_setup_intr,	bus_generic_setup_intr),
 	DEVMETHOD(bus_teardown_intr,	bus_generic_teardown_intr),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t atkbdc_isa_driver = {
@@ -240,8 +238,8 @@ atkbdc_isa_attach(device_t dev)
 	}
 	*(atkbdc_softc_t **)device_get_softc(dev) = sc;
 
-	bus_generic_probe(dev);
-	bus_generic_attach(dev);
+	bus_identify_children(dev);
+	bus_attach_children(dev);
 
 	return 0;
 }
@@ -295,28 +293,27 @@ atkbdc_isa_add_child(device_t bus, u_int order, const char *name, int unit)
 }
 
 struct resource *
-atkbdc_isa_alloc_resource(device_t dev, device_t child, int type, int *rid,
+atkbdc_isa_alloc_resource(device_t dev, device_t child, int type, int rid,
     rman_res_t start, rman_res_t end, rman_res_t count, u_int flags)
 {
 	atkbdc_softc_t	*sc;
 
 	sc = *(atkbdc_softc_t **)device_get_softc(dev);
-	if (type == SYS_RES_IRQ && *rid == KBDC_RID_KBD && sc->irq != NULL)
+	if (type == SYS_RES_IRQ && rid == KBDC_RID_KBD && sc->irq != NULL)
 		return (sc->irq);
 	return (bus_generic_rl_alloc_resource(dev, child, type, rid, start,
 	    end, count, flags));
 }
 
 static int
-atkbdc_isa_release_resource(device_t dev, device_t child, int type, int rid,
-    struct resource *r)
+atkbdc_isa_release_resource(device_t dev, device_t child, struct resource *r)
 {
 	atkbdc_softc_t	*sc;
 
 	sc = *(atkbdc_softc_t **)device_get_softc(dev);
-	if (type == SYS_RES_IRQ && rid == KBDC_RID_KBD && r == sc->irq)
+	if (r == sc->irq)
 		return (0);
-	return (bus_generic_rl_release_resource(dev, child, type, rid, r));
+	return (bus_generic_rl_release_resource(dev, child, r));
 }
 
 DRIVER_MODULE(atkbdc, isa, atkbdc_isa_driver, 0, 0);

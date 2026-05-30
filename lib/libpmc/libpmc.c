@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2003-2008 Joseph Koshy
  * All rights reserved.
@@ -26,14 +26,15 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/types.h>
 #include <sys/param.h>
 #include <sys/module.h>
 #include <sys/pmc.h>
 #include <sys/syscall.h>
+
+#if defined(__amd64__) || defined(__i386__)
+#include <machine/cpufunc.h>
+#endif
 
 #include <ctype.h>
 #include <errno.h>
@@ -53,8 +54,8 @@ __FBSDID("$FreeBSD$");
 #if defined(__amd64__) || defined(__i386__)
 static int k8_allocate_pmc(enum pmc_event _pe, char *_ctrspec,
     struct pmc_op_pmcallocate *_pmc_config);
-#endif
-#if defined(__amd64__) || defined(__i386__)
+static int ibs_allocate_pmc(enum pmc_event _pe, char *_ctrspec,
+    struct pmc_op_pmcallocate *_pmc_config);
 static int tsc_allocate_pmc(enum pmc_event _pe, char *_ctrspec,
     struct pmc_op_pmcallocate *_pmc_config);
 #endif
@@ -78,8 +79,7 @@ static int powerpc_allocate_pmc(enum pmc_event _pe, char* ctrspec,
 			     struct pmc_op_pmcallocate *_pmc_config);
 #endif /* __powerpc__ */
 
-#define PMC_CALL(cmd, params)				\
-	syscall(pmc_syscall, PMC_OP_##cmd, (params))
+#define PMC_CALL(op, params)	syscall(pmc_syscall, (op), (params))
 
 /*
  * Event aliases provide a way for the user to ask for generic events
@@ -136,6 +136,7 @@ struct pmc_class_descr {
 
 PMC_CLASSDEP_TABLE(iaf, IAF);
 PMC_CLASSDEP_TABLE(k8, K8);
+PMC_CLASSDEP_TABLE(ibs, IBS);
 PMC_CLASSDEP_TABLE(armv7, ARMV7);
 PMC_CLASSDEP_TABLE(armv8, ARMV8);
 PMC_CLASSDEP_TABLE(cmn600_pmu, CMN600_PMU);
@@ -205,8 +206,7 @@ static const struct pmc_class_descr NAME##_class_table_descr =	\
 
 #if	defined(__i386__) || defined(__amd64__)
 PMC_CLASS_TABLE_DESC(k8, K8, k8, k8);
-#endif
-#if	defined(__i386__) || defined(__amd64__)
+PMC_CLASS_TABLE_DESC(ibs, IBS, ibs, ibs);
 PMC_CLASS_TABLE_DESC(tsc, TSC, tsc, tsc);
 #endif
 #if	defined(__arm__)
@@ -695,9 +695,123 @@ k8_allocate_pmc(enum pmc_event pe, char *ctrspec,
 	return (0);
 }
 
-#endif
+static int
+ibs_allocate_pmc(enum pmc_event pe, char *ctrspec,
+    struct pmc_op_pmcallocate *pmc_config)
+{
+	char *e, *p, *q;
+	uint64_t ctl, ldlat;
+	u_int ibs_features;
+	u_int regs[4];
 
-#if	defined(__i386__) || defined(__amd64__)
+	pmc_config->pm_caps |=
+	    (PMC_CAP_SYSTEM | PMC_CAP_EDGE | PMC_CAP_PRECISE);
+	pmc_config->pm_md.pm_ibs.ibs_ctl = 0;
+
+	/* setup parsing tables */
+	switch (pe) {
+	case PMC_EV_IBS_FETCH:
+		pmc_config->pm_md.pm_ibs.ibs_type = IBS_PMC_FETCH;
+		break;
+	case PMC_EV_IBS_OP:
+		pmc_config->pm_md.pm_ibs.ibs_type = IBS_PMC_OP;
+		break;
+	default:
+		return (-1);
+	}
+
+	/* IBS only supports sampling mode */
+	if (!PMC_IS_SAMPLING_MODE(pmc_config->pm_mode)) {
+		return (-1);
+	}
+
+	/* Read the ibs feature flags */
+	ibs_features = 0;
+	do_cpuid(0x80000000, regs);
+	if (regs[0] >= CPUID_IBSID) {
+		do_cpuid(CPUID_IBSID, regs);
+		ibs_features = regs[0];
+	}
+
+	/* parse parameters */
+	ctl = 0;
+	if (pe == PMC_EV_IBS_FETCH) {
+		while ((p = strsep(&ctrspec, ",")) != NULL) {
+			if (KWMATCH(p, "l3miss")) {
+				if ((ibs_features & CPUID_IBSID_ZEN4IBSEXTENSIONS) == 0)
+					return (-1);
+
+				ctl |= IBS_FETCH_CTL_L3MISSONLY;
+			} else if (KWMATCH(p, "randomize")) {
+				ctl |= IBS_FETCH_CTL_RANDOMIZE;
+			} else {
+				return (-1);
+			}
+		}
+
+		if (pmc_config->pm_count < IBS_FETCH_MIN_RATE ||
+		    pmc_config->pm_count > IBS_FETCH_MAX_RATE)
+			return (-1);
+
+		ctl |= IBS_FETCH_INTERVAL_TO_CTL(pmc_config->pm_count);
+	} else {
+		while ((p = strsep(&ctrspec, ",")) != NULL) {
+			if (KWMATCH(p, "l3miss")) {
+				ctl |= IBS_OP_CTL_L3MISSONLY;
+			} else if (KWPREFIXMATCH(p, "ldlat=")) {
+				if ((ibs_features & CPUID_IBSID_IBSLOADLATENCYFILT) == 0)
+					return (-1);
+
+				q = strchr(p, '=');
+				if (*++q == '\0') /* skip '=' */
+					return (-1);
+
+				ldlat = strtoull(q, &e, 0);
+				if (e == q || *e != '\0')
+					return (-1);
+
+				/*
+				 * IBS load latency filtering requires the
+				 * latency to be a multiple of 128 and between
+				 * 128 and 2048.  The latency is stored in the
+				 * IbsOpLatThrsh field, which only contains
+				 * four bits so the processor computes
+				 * (IbsOpLatThrsh+1)*128 as the value.
+				 *
+				 * AMD PPR Vol 1 for AMD Family 1Ah Model 02h
+				 * C1 (57238) 2026-03-06 Revision 0.49.
+				 */
+				if (ldlat < 128 || ldlat > 2048)
+					return (-1);
+				ctl |= IBS_OP_CTL_LDLAT_TO_CTL(ldlat);
+				ctl |= IBS_OP_CTL_L3MISSONLY | IBS_OP_CTL_LATFLTEN;
+			} else if (KWMATCH(p, "opcount")) {
+				if ((ibs_features & CPUID_IBSID_OPCNT) == 0)
+					return (-1);
+
+				ctl |= IBS_OP_CTL_COUNTERCONTROL;
+			} else {
+				return (-1);
+			}
+		}
+
+		if (pmc_config->pm_count < IBS_OP_MIN_RATE ||
+		    pmc_config->pm_count > IBS_OP_MAX_RATE)
+			return (-1);
+
+		if (((ibs_features & CPUID_IBSID_OPCNTEXT) == 0) &&
+		    (pmc_config->pm_count > IBS_OP_MAX_RATE_PREEXT))
+			return (-1);
+
+		ctl |= IBS_OP_INTERVAL_TO_CTL(pmc_config->pm_count);
+	}
+
+
+	pmc_config->pm_md.pm_ibs.ibs_ctl |= ctl;
+
+	return (0);
+}
+
 static int
 tsc_allocate_pmc(enum pmc_event pe, char *ctrspec,
     struct pmc_op_pmcallocate *pmc_config)
@@ -1085,13 +1199,11 @@ pmc_allocate(const char *ctrspec, enum pmc_mode mode,
 	r = spec_copy = strdup(ctrspec);
 	ctrname = strsep(&r, ",");
 	if (pmc_pmu_enabled()) {
-		if (pmc_pmu_pmcallocate(ctrname, &pmc_config) == 0)
+		errno = pmc_pmu_pmcallocate(ctrname, &pmc_config);
+		if (errno == 0)
 			goto found;
-
-		/* Otherwise, reset any changes */
-		pmc_config.pm_ev = 0;
-		pmc_config.pm_caps = 0;
-		pmc_config.pm_class = 0;
+		if (errno == EOPNOTSUPP)
+			goto out;
 	}
 	free(spec_copy);
 	spec_copy = NULL;
@@ -1152,7 +1264,7 @@ pmc_allocate(const char *ctrspec, enum pmc_mode mode,
 	}
 
 found:
-	if (PMC_CALL(PMCALLOCATE, &pmc_config) == 0) {
+	if (PMC_CALL(PMC_OP_PMCALLOCATE, &pmc_config) == 0) {
 		*pmcid = pmc_config.pm_pmcid;
 		retval = 0;
 	}
@@ -1171,23 +1283,22 @@ pmc_attach(pmc_id_t pmc, pid_t pid)
 	pmc_attach_args.pm_pmc = pmc;
 	pmc_attach_args.pm_pid = pid;
 
-	return (PMC_CALL(PMCATTACH, &pmc_attach_args));
+	return (PMC_CALL(PMC_OP_PMCATTACH, &pmc_attach_args));
 }
 
 int
 pmc_capabilities(pmc_id_t pmcid, uint32_t *caps)
 {
-	unsigned int i;
-	enum pmc_class cl;
+	struct pmc_op_caps args;
+	int status;
 
-	cl = PMC_ID_TO_CLASS(pmcid);
-	for (i = 0; i < cpu_info.pm_nclass; i++)
-		if (cpu_info.pm_classes[i].pm_class == cl) {
-			*caps = cpu_info.pm_classes[i].pm_caps;
-			return (0);
-		}
-	errno = EINVAL;
-	return (-1);
+	args.pm_pmcid = pmcid;
+	args.pm_caps = 0;
+
+	status = PMC_CALL(PMC_OP_GETCAPS, &args);
+	*caps = args.pm_caps;
+
+	return (status);
 }
 
 int
@@ -1195,8 +1306,9 @@ pmc_configure_logfile(int fd)
 {
 	struct pmc_op_configurelog cla;
 
+	cla.pm_flags = 0;
 	cla.pm_logfd = fd;
-	if (PMC_CALL(CONFIGURELOG, &cla) < 0)
+	if (PMC_CALL(PMC_OP_CONFIGURELOG, &cla) < 0)
 		return (-1);
 	return (0);
 }
@@ -1220,7 +1332,7 @@ pmc_detach(pmc_id_t pmc, pid_t pid)
 
 	pmc_detach_args.pm_pmc = pmc;
 	pmc_detach_args.pm_pid = pid;
-	return (PMC_CALL(PMCDETACH, &pmc_detach_args));
+	return (PMC_CALL(PMC_OP_PMCDETACH, &pmc_detach_args));
 }
 
 int
@@ -1231,7 +1343,7 @@ pmc_disable(int cpu, int pmc)
 	ssa.pm_cpu = cpu;
 	ssa.pm_pmc = pmc;
 	ssa.pm_state = PMC_STATE_DISABLED;
-	return (PMC_CALL(PMCADMIN, &ssa));
+	return (PMC_CALL(PMC_OP_PMCADMIN, &ssa));
 }
 
 int
@@ -1242,7 +1354,7 @@ pmc_enable(int cpu, int pmc)
 	ssa.pm_cpu = cpu;
 	ssa.pm_pmc = pmc;
 	ssa.pm_state = PMC_STATE_FREE;
-	return (PMC_CALL(PMCADMIN, &ssa));
+	return (PMC_CALL(PMC_OP_PMCADMIN, &ssa));
 }
 
 /*
@@ -1275,6 +1387,10 @@ pmc_event_names_of_class(enum pmc_class cl, const char ***eventnames,
 	case PMC_CLASS_K8:
 		ev = k8_event_table;
 		count = PMC_EVENT_TABLE_SIZE(k8);
+		break;
+	case PMC_CLASS_IBS:
+		ev = ibs_event_table;
+		count = PMC_EVENT_TABLE_SIZE(ibs);
 		break;
 	case PMC_CLASS_ARMV7:
 		switch (cpu_info.pm_cputype) {
@@ -1354,13 +1470,13 @@ pmc_event_names_of_class(enum pmc_class cl, const char ***eventnames,
 int
 pmc_flush_logfile(void)
 {
-	return (PMC_CALL(FLUSHLOG,0));
+	return (PMC_CALL(PMC_OP_FLUSHLOG, 0));
 }
 
 int
 pmc_close_logfile(void)
 {
-	return (PMC_CALL(CLOSELOG,0));
+	return (PMC_CALL(PMC_OP_CLOSELOG, 0));
 }
 
 int
@@ -1368,7 +1484,7 @@ pmc_get_driver_stats(struct pmc_driverstats *ds)
 {
 	struct pmc_op_getdriverstats gms;
 
-	if (PMC_CALL(GETDRIVERSTATS, &gms) < 0)
+	if (PMC_CALL(PMC_OP_GETDRIVERSTATS, &gms) < 0)
 		return (-1);
 
 	/* copy out fields in the current userland<->library interface */
@@ -1389,7 +1505,7 @@ pmc_get_msr(pmc_id_t pmc, uint32_t *msr)
 	struct pmc_op_getmsr gm;
 
 	gm.pm_pmcid = pmc;
-	if (PMC_CALL(PMCGETMSR, &gm) < 0)
+	if (PMC_CALL(PMC_OP_PMCGETMSR, &gm) < 0)
 		return (-1);
 	*msr = gm.pm_msr;
 	return (0);
@@ -1419,7 +1535,7 @@ pmc_init(void)
 
 	/* check the kernel module's ABI against our compiled-in version */
 	abi_version = PMC_VERSION;
-	if (PMC_CALL(GETMODULEVERSION, &abi_version) < 0)
+	if (PMC_CALL(PMC_OP_GETMODULEVERSION, &abi_version) < 0)
 		return (pmc_syscall = -1);
 
 	/* ignore patch & minor numbers for the comparison */
@@ -1429,7 +1545,7 @@ pmc_init(void)
 	}
 
 	bzero(&op_cpu_info, sizeof(op_cpu_info));
-	if (PMC_CALL(GETCPUINFO, &op_cpu_info) < 0)
+	if (PMC_CALL(PMC_OP_GETCPUINFO, &op_cpu_info) < 0)
 		return (pmc_syscall = -1);
 
 	cpu_info.pm_cputype = op_cpu_info.pm_cputype;
@@ -1440,20 +1556,17 @@ pmc_init(void)
 		memcpy(&cpu_info.pm_classes[n], &op_cpu_info.pm_classes[n],
 		    sizeof(cpu_info.pm_classes[n]));
 
-	pmc_class_table = malloc(PMC_CLASS_TABLE_SIZE *
+	pmc_class_table = calloc(PMC_CLASS_TABLE_SIZE,
 	    sizeof(struct pmc_class_descr *));
 
 	if (pmc_class_table == NULL)
 		return (-1);
 
-	for (n = 0; n < PMC_CLASS_TABLE_SIZE; n++)
-		pmc_class_table[n] = NULL;
-
 	/*
 	 * Get soft events list.
 	 */
 	soft_event_info.pm_class = PMC_CLASS_SOFT;
-	if (PMC_CALL(GETDYNEVENTINFO, &soft_event_info) < 0)
+	if (PMC_CALL(PMC_OP_GETDYNEVENTINFO, &soft_event_info) < 0)
 		return (pmc_syscall = -1);
 
 	/* Map soft events to static list. */
@@ -1472,19 +1585,101 @@ pmc_init(void)
 	 * Fill in the class table.
 	 */
 	n = 0;
+	for (unsigned i = 0; i < PMC_CLASS_TABLE_SIZE; i++) {
+		switch (cpu_info.pm_classes[i].pm_class) {
+#if defined(__amd64__) || defined(__i386__)
+		case PMC_CLASS_TSC:
+			pmc_class_table[n++] = &tsc_class_table_descr;
+			break;
 
-	/* Fill soft events information. */
-	pmc_class_table[n++] = &soft_class_table_descr;
+		case PMC_CLASS_K8:
+			pmc_class_table[n++] = &k8_class_table_descr;
+			break;
+
+		case PMC_CLASS_IBS:
+			pmc_class_table[n++] = &ibs_class_table_descr;
+			break;
+#endif
+
+		case PMC_CLASS_SOFT:
+			pmc_class_table[n++] = &soft_class_table_descr;
+			break;
+
+#if defined(__arm__)
+		case PMC_CLASS_ARMV7:
+			switch (cpu_info.pm_cputype) {
+			case PMC_CPU_ARMV7_CORTEX_A8:
+				pmc_class_table[n++] =
+				    &cortex_a8_class_table_descr;
+				break;
+			case PMC_CPU_ARMV7_CORTEX_A9:
+				pmc_class_table[n++] =
+				    &cortex_a9_class_table_descr;
+				break;
+			default:
+				errno = ENXIO;
+				return (pmc_syscall = -1);
+			}
+			break;
+#endif
 
 #if defined(__aarch64__)
-	pmc_class_table[n++] = &cmn600_pmu_class_table_descr;
-	pmc_class_table[n++] = &dmc620_pmu_cd2_class_table_descr;
-	pmc_class_table[n++] = &dmc620_pmu_c_class_table_descr;
+		case PMC_CLASS_ARMV8:
+			switch (cpu_info.pm_cputype) {
+			case PMC_CPU_ARMV8_CORTEX_A53:
+				pmc_class_table[n++] =
+				    &cortex_a53_class_table_descr;
+				break;
+			case PMC_CPU_ARMV8_CORTEX_A57:
+				pmc_class_table[n++] =
+				    &cortex_a57_class_table_descr;
+				break;
+			case PMC_CPU_ARMV8_CORTEX_A76:
+				pmc_class_table[n++] =
+				    &cortex_a76_class_table_descr;
+				break;
+			default:
+				errno = ENXIO;
+				return (pmc_syscall = -1);
+			}
+			break;
+
+		case PMC_CLASS_DMC620_PMU_CD2:
+			pmc_class_table[n++] =
+			    &dmc620_pmu_cd2_class_table_descr;
+			break;
+
+		case PMC_CLASS_DMC620_PMU_C:
+			pmc_class_table[n++] = &dmc620_pmu_c_class_table_descr;
+			break;
+
+		case PMC_CLASS_CMN600_PMU:
+			pmc_class_table[n++] = &cmn600_pmu_class_table_descr;
+			break;
 #endif
-#if defined(__amd64__) || defined(__i386__)
-	if (cpu_info.pm_cputype != PMC_CPU_GENERIC)
-		pmc_class_table[n++] = &tsc_class_table_descr;
+
+#if defined(__powerpc__)
+		case PMC_CLASS_PPC7450:
+			pmc_class_table[n++] = &ppc7450_class_table_descr;
+			break;
+
+		case PMC_CLASS_PPC970:
+			pmc_class_table[n++] = &ppc970_class_table_descr;
+			break;
+
+		case PMC_CLASS_E500:
+			pmc_class_table[n++] = &e500_class_table_descr;
+			break;
 #endif
+
+		default:
+#if defined(DEBUG)
+			printf("pm_class: 0x%x\n",
+			    cpu_info.pm_classes[i].pm_class);
+#endif
+			break;
+		}
+	}
 
 #define	PMC_MDEP_INIT(C) pmc_mdep_event_aliases = C##_aliases
 
@@ -1493,7 +1688,6 @@ pmc_init(void)
 #if defined(__amd64__) || defined(__i386__)
 	case PMC_CPU_AMD_K8:
 		PMC_MDEP_INIT(k8);
-		pmc_class_table[n] = &k8_class_table_descr;
 		break;
 #endif
 	case PMC_CPU_GENERIC:
@@ -1502,39 +1696,31 @@ pmc_init(void)
 #if defined(__arm__)
 	case PMC_CPU_ARMV7_CORTEX_A8:
 		PMC_MDEP_INIT(cortex_a8);
-		pmc_class_table[n] = &cortex_a8_class_table_descr;
 		break;
 	case PMC_CPU_ARMV7_CORTEX_A9:
 		PMC_MDEP_INIT(cortex_a9);
-		pmc_class_table[n] = &cortex_a9_class_table_descr;
 		break;
 #endif
 #if defined(__aarch64__)
 	case PMC_CPU_ARMV8_CORTEX_A53:
 		PMC_MDEP_INIT(cortex_a53);
-		pmc_class_table[n] = &cortex_a53_class_table_descr;
 		break;
 	case PMC_CPU_ARMV8_CORTEX_A57:
 		PMC_MDEP_INIT(cortex_a57);
-		pmc_class_table[n] = &cortex_a57_class_table_descr;
 		break;
 	case PMC_CPU_ARMV8_CORTEX_A76:
 		PMC_MDEP_INIT(cortex_a76);
-		pmc_class_table[n] = &cortex_a76_class_table_descr;
 		break;
 #endif
 #if defined(__powerpc__)
 	case PMC_CPU_PPC_7450:
 		PMC_MDEP_INIT(ppc7450);
-		pmc_class_table[n] = &ppc7450_class_table_descr;
 		break;
 	case PMC_CPU_PPC_970:
 		PMC_MDEP_INIT(ppc970);
-		pmc_class_table[n] = &ppc970_class_table_descr;
 		break;
 	case PMC_CPU_PPC_E500:
 		PMC_MDEP_INIT(e500);
-		pmc_class_table[n] = &e500_class_table_descr;
 		break;
 #endif
 	default:
@@ -1618,7 +1804,9 @@ _pmc_name_of_event(enum pmc_event pe, enum pmc_cputype cpu)
 	if (pe >= PMC_EV_K8_FIRST && pe <= PMC_EV_K8_LAST) {
 		ev = k8_event_table;
 		evfence = k8_event_table + PMC_EVENT_TABLE_SIZE(k8);
-
+	} else if (pe >= PMC_EV_IBS_FIRST && pe <= PMC_EV_IBS_LAST) {
+		ev = ibs_event_table;
+		evfence = ibs_event_table + PMC_EVENT_TABLE_SIZE(ibs);
 	} else if (pe >= PMC_EV_ARMV7_FIRST && pe <= PMC_EV_ARMV7_LAST) {
 		switch (cpu) {
 		case PMC_CPU_ARMV7_CORTEX_A8:
@@ -1766,7 +1954,7 @@ pmc_pmcinfo(int cpu, struct pmc_pmcinfo **ppmci)
 
 	pmci->pm_cpu  = cpu;
 
-	if (PMC_CALL(GETPMCINFO, pmci) < 0) {
+	if (PMC_CALL(PMC_OP_GETPMCINFO, pmci) < 0) {
 		free(pmci);
 		return (-1);
 	}
@@ -1785,7 +1973,7 @@ pmc_read(pmc_id_t pmc, pmc_value_t *value)
 	pmc_read_op.pm_flags = PMC_F_OLDVALUE;
 	pmc_read_op.pm_value = -1;
 
-	if (PMC_CALL(PMCRW, &pmc_read_op) < 0)
+	if (PMC_CALL(PMC_OP_PMCRW, &pmc_read_op) < 0)
 		return (-1);
 
 	*value = pmc_read_op.pm_value;
@@ -1798,7 +1986,7 @@ pmc_release(pmc_id_t pmc)
 	struct pmc_op_simple	pmc_release_args;
 
 	pmc_release_args.pm_pmcid = pmc;
-	return (PMC_CALL(PMCRELEASE, &pmc_release_args));
+	return (PMC_CALL(PMC_OP_PMCRELEASE, &pmc_release_args));
 }
 
 int
@@ -1810,7 +1998,7 @@ pmc_rw(pmc_id_t pmc, pmc_value_t newvalue, pmc_value_t *oldvaluep)
 	pmc_rw_op.pm_flags = PMC_F_NEWVALUE | PMC_F_OLDVALUE;
 	pmc_rw_op.pm_value = newvalue;
 
-	if (PMC_CALL(PMCRW, &pmc_rw_op) < 0)
+	if (PMC_CALL(PMC_OP_PMCRW, &pmc_rw_op) < 0)
 		return (-1);
 
 	*oldvaluep = pmc_rw_op.pm_value;
@@ -1825,7 +2013,7 @@ pmc_set(pmc_id_t pmc, pmc_value_t value)
 	sc.pm_pmcid = pmc;
 	sc.pm_count = value;
 
-	if (PMC_CALL(PMCSETCOUNT, &sc) < 0)
+	if (PMC_CALL(PMC_OP_PMCSETCOUNT, &sc) < 0)
 		return (-1);
 	return (0);
 }
@@ -1836,7 +2024,7 @@ pmc_start(pmc_id_t pmc)
 	struct pmc_op_simple	pmc_start_args;
 
 	pmc_start_args.pm_pmcid = pmc;
-	return (PMC_CALL(PMCSTART, &pmc_start_args));
+	return (PMC_CALL(PMC_OP_PMCSTART, &pmc_start_args));
 }
 
 int
@@ -1845,7 +2033,7 @@ pmc_stop(pmc_id_t pmc)
 	struct pmc_op_simple	pmc_stop_args;
 
 	pmc_stop_args.pm_pmcid = pmc;
-	return (PMC_CALL(PMCSTOP, &pmc_stop_args));
+	return (PMC_CALL(PMC_OP_PMCSTOP, &pmc_stop_args));
 }
 
 int
@@ -1872,7 +2060,7 @@ pmc_write(pmc_id_t pmc, pmc_value_t value)
 	pmc_write_op.pm_pmcid = pmc;
 	pmc_write_op.pm_flags = PMC_F_NEWVALUE;
 	pmc_write_op.pm_value = value;
-	return (PMC_CALL(PMCRW, &pmc_write_op));
+	return (PMC_CALL(PMC_OP_PMCRW, &pmc_write_op));
 }
 
 int
@@ -1881,5 +2069,5 @@ pmc_writelog(uint32_t userdata)
 	struct pmc_op_writelog wl;
 
 	wl.pm_userdata = userdata;
-	return (PMC_CALL(WRITELOG, &wl));
+	return (PMC_CALL(PMC_OP_WRITELOG, &wl));
 }

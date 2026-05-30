@@ -22,9 +22,7 @@
 .\" ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 .\" POSSIBILITY OF SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
-.Dd December 12, 2019
+.Dd August 7, 2025
 .Dt CPUSET 9
 .Os
 .Sh NAME
@@ -47,12 +45,15 @@
 .Nm CPU_OVERLAP ,
 .Nm CPU_CMP ,
 .Nm CPU_OR ,
+.Nm CPU_ORNOT ,
 .Nm CPU_AND ,
 .Nm CPU_ANDNOT ,
 .Nm CPU_XOR ,
 .Nm CPU_CLR_ATOMIC ,
+.Nm CPU_TEST_CLR_ATOMIC ,
 .Nm CPU_SET_ATOMIC ,
 .Nm CPU_SET_ATOMIC_ACQ ,
+.Nm CPU_TEST_SET_ATOMIC ,
 .Nm CPU_AND_ATOMIC ,
 .Nm CPU_OR_ATOMIC ,
 .Nm CPU_COPY_STORE_REL
@@ -88,13 +89,16 @@
 .Ft bool
 .Fn CPU_CMP "cpuset_t *cpuset1" "cpuset_t *cpuset2"
 .Fn CPU_OR "cpuset_t *dst" "cpuset_t *src1" "cpuset_t *src2"
+.Fn CPU_ORNOT "cpuset_t *dst" "cpuset_t *src1" "cpuset_t *src2"
 .Fn CPU_AND "cpuset_t *dst" "cpuset_t *src1" "cpuset_t *src2"
 .Fn CPU_ANDNOT "cpuset_t *dst" "cpuset_t *src1" "cpuset_t *src2"
 .Fn CPU_XOR "cpuset_t *dst" "cpuset_t *src1" "cpuset_t *src2"
 .\"
 .Fn CPU_CLR_ATOMIC "size_t cpu_idx" "cpuset_t *cpuset"
+.Fn CPU_TEST_CLR_ATOMIC "size_t cpu_idx" "cpuset_t *cpuset"
 .Fn CPU_SET_ATOMIC "size_t cpu_idx" "cpuset_t *cpuset"
 .Fn CPU_SET_ATOMIC_ACQ "size_t cpu_idx" "cpuset_t *cpuset"
+.Fn CPU_TEST_SET_ATOMIC "size_t cpu_idx" "cpuset_t *cpuset"
 .\"
 .Fn CPU_AND_ATOMIC "cpuset_t *dst" "cpuset_t *src"
 .Fn CPU_OR_ATOMIC "cpuset_t *dst" "cpuset_t *src"
@@ -110,9 +114,9 @@ Each CPU is represented by a single bit.
 The maximum number of CPUs representable by
 .Vt cpuset_t
 is
-.Va MAXCPU .
+.Va CPU_SETSIZE .
 Individual CPUs in cpusets are referenced with indices zero through
-.Fa MAXCPU - 1 .
+.Fa CPU_SETSIZE - 1 .
 .Pp
 The
 .Fn CPUSET_T_INITIALIZER
@@ -143,6 +147,10 @@ The
 .Fn CPU_CLR_ATOMIC
 macro is identical, but the bit representing the CPU is cleared with atomic
 machine instructions.
+The
+.Fn CPU_TEST_CLR_ATOMIC
+macro atomically clears the bit representing the CPU and returns whether it
+was set.
 .Pp
 The
 .Fn CPU_COPY
@@ -176,6 +184,10 @@ machine instructions.
 The
 .Fn CPU_SET_ATOMIC_ACQ
 macro sets the bit representing the CPU with atomic acquire semantics.
+The
+.Fn CPU_TEST_SET_ATOMIC
+macro atomically sets the bit representing the CPU and returns whether it was
+set.
 .Pp
 The
 .Fn CPU_ISSET
@@ -296,6 +308,19 @@ with atomic machine instructions.
 is composed of multiple machine words,
 .Fn CPU_OR_ATOMIC
 performs multiple individually atomic operations.)
+.Pp
+The
+.Fn CPU_ORNOT
+macro add CPUs not in
+.Fa src
+to
+.Fa dst .
+(It is the
+.Nm
+equivalent of the scalar:
+.Fa dst
+|=
+.Fa ~ src . )
 .Pp
 The
 .Fn CPU_AND

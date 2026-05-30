@@ -29,12 +29,7 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)vfs_cluster.c	8.7 (Berkeley) 2/13/94
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -265,8 +260,10 @@ cluster_read(struct vnode *vp, u_quad_t filesize, daddr_t lblkno, long size,
 	 */
 	while (lblkno < (origblkno + maxra)) {
 		error = VOP_BMAP(vp, lblkno, NULL, &blkno, &ncontig, NULL);
-		if (error)
+		if (error) {
+			error = 0;
 			break;
+		}
 
 		if (blkno == -1)
 			break;
@@ -542,8 +539,7 @@ clean_sbusy:
 		    bp->b_bufsize, bp->b_kvasize);
 
 	if (buf_mapped(bp)) {
-		pmap_qenter(trunc_page((vm_offset_t) bp->b_data),
-		    (vm_page_t *)bp->b_pages, bp->b_npages);
+		pmap_qenter(trunc_page(bp->b_data), bp->b_pages, bp->b_npages);
 	}
 	return (bp);
 }
@@ -567,8 +563,7 @@ cluster_callback(struct buf *bp)
 		error = bp->b_error;
 
 	if (buf_mapped(bp)) {
-		pmap_qremove(trunc_page((vm_offset_t) bp->b_data),
-		    bp->b_npages);
+		pmap_qremove(trunc_page(bp->b_data), bp->b_npages);
 	}
 	/*
 	 * Move memory from the large cluster buffer into the component
@@ -1023,8 +1018,8 @@ cluster_wbuild(struct vnode *vp, long size, daddr_t start_lbn, int len,
 		}
 	finishcluster:
 		if (buf_mapped(bp)) {
-			pmap_qenter(trunc_page((vm_offset_t) bp->b_data),
-			    (vm_page_t *)bp->b_pages, bp->b_npages);
+			pmap_qenter(trunc_page(bp->b_data), bp->b_pages,
+			    bp->b_npages);
 		}
 		if (bp->b_bufsize > bp->b_kvasize)
 			panic(

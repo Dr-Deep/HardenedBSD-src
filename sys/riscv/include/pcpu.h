@@ -33,7 +33,6 @@
  * SUCH DAMAGE.
  *
  *	from: FreeBSD: src/sys/i386/include/globaldata.h,v 1.27 2001/04/27
- * $FreeBSD$
  */
 
 #ifndef	_MACHINE_PCPU_H_
@@ -42,14 +41,13 @@
 #include <machine/cpu.h>
 #include <machine/cpufunc.h>
 
-#define	ALT_STACK_SIZE	128
-
 /* Keep in sync with db_show_mdpcpu() */
 #define	PCPU_MD_FIELDS							\
 	struct pmap *pc_curpmap;	/* Currently active pmap */	\
 	uint32_t pc_pending_ipis;	/* IPIs pending to this CPU */	\
 	uint32_t pc_hart;		/* Hart ID */			\
-	char __pad[56]			/* Pad to factor of PAGE_SIZE */
+	uint64_t pc_clock;						\
+	char __pad[48]			/* Pad to factor of PAGE_SIZE */
 
 #ifdef _KERNEL
 

@@ -21,6 +21,7 @@
 #define cl_khr_subgroup_shuffle 1
 #define cl_khr_subgroup_shuffle_relative 1
 #define cl_khr_subgroup_clustered_reduce 1
+#define cl_khr_subgroup_rotate 1
 #define cl_khr_extended_bit_ops 1
 #define cl_khr_integer_dot_product 1
 #define __opencl_c_integer_dot_product_input_4x8bit 1
@@ -44,6 +45,13 @@
 #define __opencl_c_ext_fp32_local_atomic_add 1
 #define __opencl_c_ext_fp32_global_atomic_min_max 1
 #define __opencl_c_ext_fp32_local_atomic_min_max 1
+#define __opencl_c_ext_image_raw10_raw12 1
+#define __opencl_c_ext_image_unorm_int_2_101010 1
+#define __opencl_c_ext_image_unsigned_10x6_12x4_14x2 1
+#define cl_khr_kernel_clock 1
+#define __opencl_c_kernel_clock_scope_device 1
+#define __opencl_c_kernel_clock_scope_work_group 1
+#define __opencl_c_kernel_clock_scope_sub_group 1
 
 #endif // defined(__SPIR__) || defined(__SPIRV__)
 #endif // (defined(__OPENCL_CPP_VERSION__) || __OPENCL_C_VERSION__ >= 200)
@@ -67,11 +75,31 @@
 #if (__OPENCL_CPP_VERSION__ == 202100 || __OPENCL_C_VERSION__ == 300)
 // For the SPIR and SPIR-V target all features are supported.
 #if defined(__SPIR__) || defined(__SPIRV__)
+#define __opencl_c_work_group_collective_functions 1
 #define __opencl_c_atomic_order_seq_cst 1
 #define __opencl_c_atomic_scope_device 1
 #define __opencl_c_atomic_scope_all_devices 1
 #define __opencl_c_read_write_images 1
 #endif // defined(__SPIR__)
+
+// Undefine any feature macros that have been explicitly disabled using
+// an __undef_<feature> macro.
+#ifdef __undef___opencl_c_work_group_collective_functions
+#undef __opencl_c_work_group_collective_functions
+#endif
+#ifdef __undef___opencl_c_atomic_order_seq_cst
+#undef __opencl_c_atomic_order_seq_cst
+#endif
+#ifdef __undef___opencl_c_atomic_scope_device
+#undef __opencl_c_atomic_scope_device
+#endif
+#ifdef __undef___opencl_c_atomic_scope_all_devices
+#undef __opencl_c_atomic_scope_all_devices
+#endif
+#ifdef __undef___opencl_c_read_write_images
+#undef __opencl_c_read_write_images
+#endif
+
 #endif // (__OPENCL_CPP_VERSION__ == 202100 || __OPENCL_C_VERSION__ == 300)
 
 #if !defined(__opencl_c_generic_address_space)
@@ -79,6 +107,11 @@
 // space overloads for builtin functions that take a pointer argument.
 #define __opencl_c_named_address_space_builtins 1
 #endif // !defined(__opencl_c_generic_address_space)
+
+#if defined(cl_intel_subgroups) || defined(cl_khr_subgroups) || defined(__opencl_c_subgroups)
+// Internal feature macro to provide subgroup builtins.
+#define __opencl_subgroup_builtins 1
+#endif
 
 // built-in scalar data types:
 
@@ -196,6 +229,9 @@ typedef double double4 __attribute__((ext_vector_type(4)));
 typedef double double8 __attribute__((ext_vector_type(8)));
 typedef double double16 __attribute__((ext_vector_type(16)));
 #endif
+
+// An internal alias for half, for use by OpenCLBuiltins.td.
+#define __half half
 
 #if defined(__OPENCL_CPP_VERSION__)
 #define NULL nullptr
@@ -445,6 +481,24 @@ typedef enum memory_order
 #define CLK_HALF_FLOAT        0x10DD
 #define CLK_FLOAT             0x10DE
 #define CLK_UNORM_INT24       0x10DF
+#if __OPENCL_C_VERSION__ >= CL_VERSION_3_0
+#define CLK_UNORM_INT_101010_2 0x10E0
+#endif // __OPENCL_C_VERSION__ >= CL_VERSION_3_0
+#ifdef __opencl_c_ext_image_raw10_raw12
+#define CLK_UNSIGNED_INT_RAW10_EXT 0x10E3
+#define CLK_UNSIGNED_INT_RAW12_EXT 0x10E4
+#endif // __opencl_c_ext_image_raw10_raw12
+#ifdef __opencl_c_ext_image_unorm_int_2_101010
+#define CLK_UNORM_INT_2_101010_EXT 0x10E5
+#endif // __opencl_c_ext_image_unorm_int_2_101010
+#ifdef __opencl_c_ext_image_unsigned_10x6_12x4_14x2
+#define CLK_UNSIGNED_INT10X6_EXT 0x10E6
+#define CLK_UNSIGNED_INT12X4_EXT 0x10E7
+#define CLK_UNSIGNED_INT14X2_EXT 0x10E8
+#define CLK_UNORM_10X6_EXT 0x10E1
+#define CLK_UNORM_12X4_EXT 0x10E9
+#define CLK_UNORM_14X2_EXT 0x10EA
+#endif // __opencl_c_ext_image_unsigned_10x6_12x4_14x2
 
 // Channel order, numbering must be aligned with cl_channel_order in cl.h
 //
@@ -643,7 +697,16 @@ template <typename _Tp> struct __remove_address_space<__constant _Tp> {
 #if defined(__OPENCL_CPP_VERSION__) || (__OPENCL_C_VERSION__ >= CL_VERSION_1_2)
 // OpenCL v1.2 s6.12.13, v2.0 s6.13.13 - printf
 
-int printf(__constant const char* st, ...) __attribute__((format(printf, 1, 2)));
+#ifdef __OPENCL_CPP_VERSION__
+#define CLINKAGE extern "C"
+#else
+#define CLINKAGE
+#endif
+
+CLINKAGE int printf(__constant const char *st, ...)
+    __attribute__((format(printf, 1, 2)));
+
+#undef CLINKAGE
 #endif
 
 #ifdef cl_intel_device_side_avc_motion_estimation

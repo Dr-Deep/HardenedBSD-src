@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2015 Dmitry Chagin <dchagin@FreeBSD.org>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -21,14 +23,33 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _LINUX_MI_H_
 #define _LINUX_MI_H_
 
-#include <sys/queue.h>
+typedef uint32_t	l_dev_t;
+
+static __inline int
+linux_decode_major(l_dev_t _dev)
+{
+
+	return ((_dev & 0xfff00) >> 8);
+}
+
+static __inline int
+linux_decode_minor(l_dev_t _dev)
+{
+
+	return ((_dev & 0xff) | ((_dev & 0xfff00000) >> 12));
+}
+
+static __inline dev_t
+linux_decode_dev(l_dev_t _dev)
+{
+
+	return (makedev(linux_decode_major(_dev), linux_decode_minor(_dev)));
+}
 
 /*
  * Private Brandinfo flags
@@ -264,11 +285,33 @@ struct l_statx {
 	uint64_t __spare2[13];
 };
 
+/*
+ * statfs f_flags
+ */
+#define	LINUX_ST_RDONLY			0x0001
+#define	LINUX_ST_NOSUID			0x0002
+#define	LINUX_ST_NODEV			0x0004	/* No native analogue */
+#define	LINUX_ST_NOEXEC			0x0008
+#define	LINUX_ST_SYNCHRONOUS		0x0010
+#define	LINUX_ST_VALID			0x0020
+#define	LINUX_ST_MANDLOCK		0x0040	/* No native analogue */
+#define	LINUX_ST_NOATIME		0x0400
+#define	LINUX_ST_NODIRATIME		0x0800	/* No native analogue */
+#define	LINUX_ST_RELATIME		0x1000	/* No native analogue */
+#define	LINUX_ST_NOSYMFOLLOW		0x2000
+
+#ifndef lower_32_bits
 #define	lower_32_bits(n)	((uint32_t)((n) & 0xffffffff))
+#endif
 
 #ifdef KTRACE
 #define	linux_ktrsigset(s, l)	\
 	ktrstruct("l_sigset_t", (s), l)
 #endif
+
+void linux_ifnet_init(void);
+void linux_ifnet_uninit(void);
+void linux_netlink_register(void);
+void linux_netlink_deregister(void);
 
 #endif /* _LINUX_MI_H_ */

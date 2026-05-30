@@ -38,20 +38,6 @@
  * SUCH DAMAGE.
  */
 
-#if 0
-#ifndef lint
-static const char copyright[] =
-"@(#) Copyright (c) 1983, 1989, 1993, 1994\n\
-	The Regents of the University of California.  All rights reserved.\n";
-#endif /* not lint */
-
-#ifndef lint
-static char sccsid[] = "@(#)newfs.c	8.13 (Berkeley) 5/1/95";
-#endif /* not lint */
-#endif
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * newfs: friendly front end to mkfs
  */
@@ -90,7 +76,7 @@ int	Lflag;			/* add a volume label */
 int	Nflag;			/* run without writing file system */
 int	Oflag = 2;		/* file system format (1 => UFS1, 2 => UFS2) */
 int	Rflag;			/* regression test */
-int	Uflag;			/* enable soft updates for file system */
+int	Uflag = -1;		/* enable soft updates for file system */
 int	jflag;			/* enable soft updates journaling for filesys */
 int	Xflag = 0;		/* exit in middle of newfs for testing */
 int	Jflag;			/* enable gjournal for file system */
@@ -119,12 +105,11 @@ struct uufsd disk;		/* libufs disk structure */
 static char	device[MAXPATHLEN];
 static u_char   bootarea[BBSIZE];
 static int	is_file;		/* work on a file, not a device */
-static char	*dkname;
 static char	*disktype;
 
 static void getfssize(intmax_t *, const char *p, intmax_t, intmax_t);
 static struct disklabel *getdisklabel(void);
-static void usage(void);
+static void usage(void) __dead2;
 static int expand_number_int(const char *buf, int *num);
 
 ufs2_daddr_t part_ofs; /* partition offset in blocks, used with files */
@@ -137,13 +122,14 @@ main(int argc, char *argv[])
 	struct stat st;
 	char *cp, *special;
 	intmax_t reserved;
-	int ch, i, rval;
+	int ch, rval;
+	size_t i;
 	char part_name;		/* partition name, default to full disk */
 
 	part_name = 'c';
 	reserved = 0;
 	while ((ch = getopt(argc, argv,
-	    "EJL:NO:RS:T:UXa:b:c:d:e:f:g:h:i:jk:lm:no:p:r:s:t")) != -1)
+	    "EJL:NO:RS:T:UXa:b:c:d:e:f:g:h:i:jk:lm:no:p:r:s:tu")) != -1)
 		switch (ch) {
 		case 'E':
 			Eflag = 1;
@@ -153,9 +139,10 @@ main(int argc, char *argv[])
 			break;
 		case 'L':
 			volumelabel = optarg;
-			i = -1;
-			while (isalnum(volumelabel[++i]) ||
-			    volumelabel[i] == '_' || volumelabel[i] == '-');
+			for (i = 0; isalnum(volumelabel[i]) ||
+			    volumelabel[i] == '_' || volumelabel[i] == '-';
+			    i++)
+				continue;
 			if (volumelabel[i] != '\0') {
 				errx(1, "bad volume label. Valid characters "
 				    "are alphanumerics, dashes, and underscores.");
@@ -191,6 +178,9 @@ main(int argc, char *argv[])
 			/* FALLTHROUGH */
 		case 'U':
 			Uflag = 1;
+			break;
+		case 'u':
+			Uflag = 0;
 			break;
 		case 'X':
 			Xflag++;
@@ -340,9 +330,7 @@ main(int argc, char *argv[])
 	if (fstat(disk.d_fd, &st) < 0)
 		err(1, "%s", special);
 	if ((st.st_mode & S_IFMT) != S_IFCHR) {
-		warn("%s: not a character-special device", special);
 		is_file = 1;	/* assume it is a file */
-		dkname = special;
 		if (sectorsize == 0)
 			sectorsize = 512;
 		mediasize = st.st_size;
@@ -356,6 +344,11 @@ main(int argc, char *argv[])
 	}
 	pp = NULL;
 	lp = getdisklabel();
+	/*
+	 * set filesystem size from file size when a bsdlabel isn't present
+	 */
+	if (lp == NULL && is_file)
+		fssize = mediasize / sectorsize;
 	if (lp != NULL) {
 		if (!is_file) /* already set for files */
 			part_name = special[strlen(special) - 1];
@@ -395,6 +388,11 @@ main(int argc, char *argv[])
 		fprintf(stderr, "because minfree is less than %d%%\n", MINFREE);
 		opt = FS_OPTSPACE;
 	}
+	/* Use soft updates by default for UFS2 and above */
+	if (Uflag < 0)
+		Uflag = Oflag > 1 && !Jflag;
+	if (Uflag && Jflag)
+		errx(1, "Cannot enable both soft updates and GEOM journaling");
 	realsectorsize = sectorsize;
 	if (sectorsize != DEV_BSIZE) {		/* XXX */
 		int secperblk = sectorsize / DEV_BSIZE;
@@ -442,7 +440,7 @@ getdisklabel(void)
 		    bootarea + (0 /* labeloffset */ +
 				1 /* labelsoffset */ * sectorsize),
 		    &lab, MAXPARTITIONS))
-			errx(1, "no valid label found");
+			return (NULL);
 
 		lp = &lab;
 		return &lab;

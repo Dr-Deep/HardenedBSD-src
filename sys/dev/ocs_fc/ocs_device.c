@@ -27,8 +27,6 @@
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /**
@@ -827,7 +825,7 @@ __ocs_d_init(ocs_sm_ctx_t *ctx, ocs_sm_event_t evt, void *arg)
 			ocs_node_transition(node, __ocs_d_wait_topology_notify, NULL);
 			break;
 		default:
-			node_printf(node, "received PLOGI, with unexpectd topology %d\n",
+			node_printf(node, "received PLOGI, with unexpected topology %d\n",
 				    node->sport->topology);
 			ocs_assert(FALSE, NULL);
 			break;

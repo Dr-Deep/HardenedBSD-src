@@ -27,9 +27,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)sockio.h	8.1 (Berkeley) 3/28/94
- * $FreeBSD$
  */
 
 #ifndef _SYS_SOCKIO_H_
@@ -102,6 +99,7 @@
 #define	SIOCSIFLLADDR	 _IOW('i', 60, struct ifreq)	/* set linklevel addr */
 #define	SIOCGI2C	_IOWR('i', 61, struct ifreq)	/* get I2C data  */
 #define	SIOCGHWADDR	_IOWR('i', 62, struct ifreq)	/* get hardware lladdr */
+#define	SIOCGI2CPB	_IOWR('i', 64, struct ifreq)	/* get I2C data*/
 
 #define	SIOCSIFPHYADDR	 _IOW('i', 70, struct ifaliasreq) /* set gif address */
 #define	SIOCGIFPSRCADDR	_IOWR('i', 71, struct ifreq)	/* get gif psrc addr */
@@ -149,5 +147,9 @@
 
 #define	SIOCSIFCAPNV	_IOW('i', 155, struct ifreq)	/* set IF features */
 #define	SIOCGIFCAPNV	_IOWR('i', 156, struct ifreq)	/* get IF features */
+
+#define	SIOCGUMBINFO	_IOWR('i', 157, struct ifreq)	/* get MBIM info */
+#define	SIOCSUMBPARAM	 _IOW('i', 158, struct ifreq)	/* set MBIM param */
+#define	SIOCGUMBPARAM	_IOWR('i', 159, struct ifreq)	/* get MBIM param */
 
 #endif /* !_SYS_SOCKIO_H_ */

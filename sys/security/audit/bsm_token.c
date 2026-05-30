@@ -33,9 +33,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/types.h>
 #include <sys/endian.h>
@@ -1068,7 +1065,7 @@ au_to_sock_inet128(struct sockaddr_in6 *so)
 	ADD_U_CHAR(dptr, 0);
 	ADD_U_CHAR(dptr, so->sin6_family);
 
-	ADD_U_INT16(dptr, so->sin6_port);
+	ADD_MEM(dptr, &so->sin6_port, sizeof(uint16_t));
 	ADD_MEM(dptr, &so->sin6_addr, 4 * sizeof(uint32_t));
 
 	return (t);

@@ -9,7 +9,7 @@
 #include <string.h>
 #include "cbor.h"
 
-void usage() {
+void usage(void) {
   printf("Usage: streaming_parser [input file]\n");
   exit(1);
 }
@@ -24,7 +24,7 @@ void usage() {
 const char* key = "a secret key";
 bool key_found = false;
 
-void find_string(void* _ctx, cbor_data buffer, size_t len) {
+void find_string(void* _ctx _CBOR_UNUSED, cbor_data buffer, uint64_t len) {
   if (key_found) {
     printf("Found the value: %.*s\n", (int)len, buffer);
     key_found = false;

@@ -26,8 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 #include <sys/param.h>
 
 #include <stand.h>
@@ -37,22 +35,25 @@ __FBSDID("$FreeBSD$");
 #include "glue.h"
 #include "libuboot.h"
 
-#ifndef nitems
-#define	nitems(x)	(sizeof((x)) / sizeof((x)[0]))
-#endif
-
 #ifndef HEAP_SIZE
 #define	HEAP_SIZE	(2 * 1024 * 1024)
 #endif
 
 struct uboot_devdesc currdev;
-struct arch_switch archsw;		/* MI/MD interface boundary */
+struct arch_switch archsw = {		/* MI/MD interface boundary */
+	.arch_getdev = uboot_getdev,
+	.arch_copyin = uboot_copyin,
+	.arch_copyout = uboot_copyout,
+	.arch_readin = uboot_readin,
+	.arch_autoload = uboot_autoload,
+};
+
 int devs_no;
 
 uintptr_t uboot_heap_start;
 uintptr_t uboot_heap_end;
 
-struct device_type { 
+struct device_type {
 	const char *name;
 	int type;
 } device_types[] = {
@@ -67,8 +68,6 @@ struct device_type {
 
 extern char end[];
 
-extern unsigned char _etext[];
-extern unsigned char _edata[];
 extern unsigned char __bss_start[];
 extern unsigned char __sbss_start[];
 extern unsigned char __sbss_end[];
@@ -206,7 +205,7 @@ device_typename(int type)
 static void
 get_load_device(int *type, int *unit, int *slice, int *partition)
 {
-	struct disk_devdesc dev;
+	struct disk_devdesc *dev;
 	char *devstr;
 	const char *p;
 	char *endp;
@@ -233,14 +232,21 @@ get_load_device(int *type, int *unit, int *slice, int *partition)
 	 * parse the remainder of the string as such, and if it works, return
 	 * those results. Otherwise we'll fall through to the code that parses
 	 * the legacy format.
+	 *
+	 * disk_parsedev now assumes that it points to the start of the device
+	 * name, but since it doesn't know about uboot's usage, just subtract 4
+	 * since it always adds 4. This is the least-bad solution since it makes
+	 * all the other loader code easier (might be better to create a fake
+	 * 'disk...' string, but that's more work than uboot is worth).
 	 */
 	if (*type & DEV_TYP_STOR) {
 		size_t len = strlen(p);
 		if (strcspn(p, " .") == len && strcspn(p, ":") >= len - 1 &&
-		    disk_parsedev(&dev, p, NULL) == 0) {
-			*unit = dev.dd.d_unit;
-			*slice = dev.d_slice;
-			*partition = dev.d_partition;
+		    disk_parsedev((struct devdesc **)&dev, p - 4, NULL) == 0) { /* Hack */
+			*unit = dev->dd.d_unit;
+			*slice = dev->d_slice;
+			*partition = dev->d_partition;
+			free(dev);
 			return;
 		}
 	}
@@ -331,10 +337,10 @@ get_load_device(int *type, int *unit, int *slice, int *partition)
 	*unit = -1;
 	*slice = D_SLICEWILD;
 	*partition = D_PARTWILD;
-} 
+}
 
 static void
-print_disk_probe_info()
+print_disk_probe_info(void)
 {
 	char slice[32];
 	char partition[32];
@@ -360,7 +366,7 @@ print_disk_probe_info()
 }
 
 static int
-probe_disks(int devidx, int load_type, int load_unit, int load_slice, 
+probe_disks(int devidx, int load_type, int load_unit, int load_slice,
     int load_partition)
 {
 	int open_result, unit;
@@ -475,13 +481,6 @@ main(int argc, char **argv)
 
 	meminfo();
 
-	archsw.arch_loadaddr = uboot_loadaddr;
-	archsw.arch_getdev = uboot_getdev;
-	archsw.arch_copyin = uboot_copyin;
-	archsw.arch_copyout = uboot_copyout;
-	archsw.arch_readin = uboot_readin;
-	archsw.arch_autoload = uboot_autoload;
-
 	/* Set up currdev variable to have hooks in place. */
 	env_setenv("currdev", EV_VOLATILE, "", uboot_setcurrdev, env_nounset);
 
@@ -513,7 +512,7 @@ main(int argc, char **argv)
 
 		if ((load_type == DEV_TYP_NONE || (load_type & DEV_TYP_STOR)) &&
 		    strcmp(devsw[i]->dv_name, "disk") == 0) {
-			if (probe_disks(i, load_type, load_unit, load_slice, 
+			if (probe_disks(i, load_type, load_unit, load_slice,
 			    load_partition) == 0)
 				break;
 		}
@@ -629,7 +628,7 @@ handle_uboot_env_var(enum ubenv_action action, const char * var)
 	 * import the uboot variable ubname into the loader variable ldname,
 	 * otherwise the historical behavior is to import to uboot.ubname.
 	 */
-	if (action == UBENV_IMPORT) { 
+	if (action == UBENV_IMPORT) {
 		len = strcspn(var, "=");
 		if (len == 0) {
 			printf("name cannot start with '=': '%s'\n", var);

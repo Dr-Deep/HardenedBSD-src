@@ -27,15 +27,15 @@
 using namespace clang;
 
 namespace {
-class ChainedIncludesSourceImpl : public ExternalSemaSource {
+class ChainedIncludesSource : public ExternalSemaSource {
 public:
-  ChainedIncludesSourceImpl(std::vector<std::unique_ptr<CompilerInstance>> CIs)
+  ChainedIncludesSource(std::vector<std::unique_ptr<CompilerInstance>> CIs)
       : CIs(std::move(CIs)) {}
 
 protected:
-  //===----------------------------------------------------------------------===//
+  //===--------------------------------------------------------------------===//
   // ExternalASTSource interface.
-  //===----------------------------------------------------------------------===//
+  //===--------------------------------------------------------------------===//
 
   /// Return the amount of memory used by memory buffers, breaking down
   /// by heap-backed versus mmap'ed memory.
@@ -51,30 +51,7 @@ protected:
 private:
   std::vector<std::unique_ptr<CompilerInstance>> CIs;
 };
-
-/// Members of ChainedIncludesSource, factored out so we can initialize
-/// them before we initialize the ExternalSemaSource base class.
-struct ChainedIncludesSourceMembers {
-  ChainedIncludesSourceMembers(
-      std::vector<std::unique_ptr<CompilerInstance>> CIs,
-      IntrusiveRefCntPtr<ExternalSemaSource> FinalReader)
-      : Impl(std::move(CIs)), FinalReader(std::move(FinalReader)) {}
-  ChainedIncludesSourceImpl Impl;
-  IntrusiveRefCntPtr<ExternalSemaSource> FinalReader;
-};
-
-/// Use MultiplexExternalSemaSource to dispatch all ExternalSemaSource
-/// calls to the final reader.
-class ChainedIncludesSource
-    : private ChainedIncludesSourceMembers,
-      public MultiplexExternalSemaSource {
-public:
-  ChainedIncludesSource(std::vector<std::unique_ptr<CompilerInstance>> CIs,
-                        IntrusiveRefCntPtr<ExternalSemaSource> FinalReader)
-      : ChainedIncludesSourceMembers(std::move(CIs), std::move(FinalReader)),
-        MultiplexExternalSemaSource(Impl, *this->FinalReader) {}
-};
-}
+} // end anonymous namespace
 
 static ASTReader *
 createASTReader(CompilerInstance &CI, StringRef pchFile,
@@ -140,17 +117,16 @@ IntrusiveRefCntPtr<ExternalSemaSource> clang::createChainedIncludesSource(
     CInvok->getFrontendOpts().Inputs.push_back(InputFile);
 
     TextDiagnosticPrinter *DiagClient =
-      new TextDiagnosticPrinter(llvm::errs(), new DiagnosticOptions());
+        new TextDiagnosticPrinter(llvm::errs(), CI.getDiagnosticOpts());
     IntrusiveRefCntPtr<DiagnosticIDs> DiagID(new DiagnosticIDs());
     IntrusiveRefCntPtr<DiagnosticsEngine> Diags(
-        new DiagnosticsEngine(DiagID, &CI.getDiagnosticOpts(), DiagClient));
+        new DiagnosticsEngine(DiagID, CI.getDiagnosticOpts(), DiagClient));
 
-    std::unique_ptr<CompilerInstance> Clang(
-        new CompilerInstance(CI.getPCHContainerOperations()));
-    Clang->setInvocation(std::move(CInvok));
+    auto Clang = std::make_unique<CompilerInstance>(
+        std::move(CInvok), CI.getPCHContainerOperations());
     Clang->setDiagnostics(Diags.get());
     Clang->setTarget(TargetInfo::CreateTargetInfo(
-        Clang->getDiagnostics(), Clang->getInvocation().TargetOpts));
+        Clang->getDiagnostics(), Clang->getInvocation().getTargetOpts()));
     Clang->createFileManager();
     Clang->createSourceManager(Clang->getFileManager());
     Clang->createPreprocessor(TU_Prefix);
@@ -182,7 +158,7 @@ IntrusiveRefCntPtr<ExternalSemaSource> clang::createChainedIncludesSource(
       std::string pchName = includes[i-1];
       llvm::raw_string_ostream os(pchName);
       os << ".pch" << i-1;
-      serialBufNames.push_back(os.str());
+      serialBufNames.push_back(pchName);
 
       IntrusiveRefCntPtr<ASTReader> Reader;
       Reader = createASTReader(
@@ -214,6 +190,8 @@ IntrusiveRefCntPtr<ExternalSemaSource> clang::createChainedIncludesSource(
   if (!Reader)
     return nullptr;
 
-  return IntrusiveRefCntPtr<ChainedIncludesSource>(
-      new ChainedIncludesSource(std::move(CIs), Reader));
+  auto ChainedSrc =
+      llvm::makeIntrusiveRefCnt<ChainedIncludesSource>(std::move(CIs));
+  return llvm::makeIntrusiveRefCnt<MultiplexExternalSemaSource>(
+      ChainedSrc.get(), Reader.get());
 }

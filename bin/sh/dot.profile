@@ -1,7 +1,4 @@
-# $FreeBSD$
 #
-HOME=/root
-export HOME
 PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin:~/bin
 export PATH
 TERM=${TERM:-xterm}

@@ -1,6 +1,6 @@
 #! /bin/sh
 #
-# Copyright (c) 2018-2021 Gavin D. Howard and contributors.
+# Copyright (c) 2018-2025 Gavin D. Howard and contributors.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
@@ -34,7 +34,21 @@ testdir=$(dirname "$script")
 
 outputdir=${BC_TEST_OUTPUT_DIR:-$testdir/..}
 
-# Gets the timeconst script, which could be a command-line argument.
+# Just print the usage and exit with an error. This can receive a message to
+# print.
+# @param 1  A message to print.
+usage() {
+	if [ $# -eq 1 ]; then
+		printf '%s\n\n' "$1"
+	fi
+	printf 'usage: %s [timeconst_script] [exec args...]\n' "$0"
+	exit 1
+}
+
+. "$testdir/../../scripts/functions.sh"
+
+# Gets the timeconst script, which could be a command-line argument. I don't
+# need to check for error because we just skip if it doesn't work.
 if [ "$#" -gt 0 ]; then
 	timeconst="$1"
 	shift
@@ -46,8 +60,10 @@ fi
 if [ "$#" -gt 0 ]; then
 	bc="$1"
 	shift
+	check_exec_arg "$bc"
 else
 	bc="$testdir/../../bin/bc"
+	check_exec_arg "$bc"
 fi
 
 out1="$outputdir/bc_outputs/bc_timeconst.txt"
@@ -65,6 +81,9 @@ base=$(basename "$timeconst")
 # If the script does not exist, just skip. Running this test is not necessary.
 if [ ! -f "$timeconst" ]; then
 	printf 'Warning: %s does not exist\n' "$timeconst"
+	printf '%s is not part of this bc because of license incompatibility\n' "$timeconst"
+	printf 'Get it at https://github.com/torvalds/linux/blob/master/kernel/time/timeconst.bc\n'
+	printf 'if you want to test it\n'
 	printf 'Skipping...\n'
 	exit 0
 fi

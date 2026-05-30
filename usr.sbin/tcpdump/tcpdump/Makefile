@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 .include <src.opts.mk>
 
 TCPDUMP_DISTDIR?= ${SRCTOP}/contrib/tcpdump
@@ -13,14 +11,16 @@ SRCS=	addrtoname.c \
 	ascii_strcasecmp.c \
 	checksum.c \
 	cpack.c \
+	fptype.c \
 	gmpls.c \
-	gmt2local.c \
 	in_cksum.c \
 	ipproto.c \
 	l2vpn.c \
 	machdep.c \
 	netdissect.c \
+	netdissect-alloc.c \
 	nlpid.c \
+	ntp.c \
 	oui.c \
 	parsenfsfh.c \
 	print.c \
@@ -99,7 +99,6 @@ SRCS=	addrtoname.c \
 	print-lwapp.c \
 	print-lwres.c \
 	print-m3ua.c \
-	print-medsa.c \
 	print-mobile.c \
 	print-mobility.c \
 	print-mpcp.c \
@@ -107,6 +106,7 @@ SRCS=	addrtoname.c \
 	print-mptcp.c \
 	print-msdp.c \
 	print-msnlb.c \
+	print-nflog.c \
 	print-nfs.c \
 	print-nsh.c \
 	print-ntp.c \
@@ -116,7 +116,6 @@ SRCS=	addrtoname.c \
 	print-openflow-1.0.c \
 	print-ospf.c \
 	print-ospf6.c \
-	print-otv.c \
 	print-pgm.c \
 	print-pim.c \
 	print-pktap.c \
@@ -130,7 +129,6 @@ SRCS=	addrtoname.c \
 	print-rip.c \
 	print-ripng.c \
 	print-rpki-rtr.c \
-	print-rrcp.c \
 	print-rsvp.c \
 	print-rt6.c \
 	print-rtsp.c \
@@ -157,6 +155,7 @@ SRCS=	addrtoname.c \
 	print-token.c \
 	print-udld.c \
 	print-udp.c \
+	print-usb.c \
 	print-vjc.c \
 	print-vqp.c \
 	print-vrrp.c \
@@ -166,14 +165,29 @@ SRCS=	addrtoname.c \
 	print-wb.c \
 	print-zephyr.c \
 	print-zeromq.c \
-	setsignal.c \
 	signature.c \
 	smbutil.c \
 	strtoaddr.c \
 	tcpdump.c \
 	util-print.c \
-	version.c
-CLEANFILES+=	version.c ${MAN}
+	print-arista.c \
+	print-bcm-li.c \
+	print-brcmtag.c \
+	print-dsa.c \
+	print-ip-demux.c \
+	print-ipoib.c \
+	print-macsec.c \
+	print-openflow-1.3.c \
+	print-ptp.c \
+	print-realtek.c \
+	print-someip.c \
+	print-ssh.c \
+	print-unsupported.c \
+	print-vsock.c \
+	print-whois.c \
+	print-zep.c
+
+CLEANFILES+=	${MAN}
 
 CFLAGS+= -I${.CURDIR} -I${TCPDUMP_DISTDIR}
 CFLAGS+= -DHAVE_CONFIG_H
@@ -181,9 +195,6 @@ CFLAGS+= -D_U_="__attribute__((unused))"
 
 .if ${MK_INET6_SUPPORT} != "no"
 CFLAGS+=	-DINET6 -DHAVE_OS_IPV6_SUPPORT
-.endif
-.if ${MACHINE_CPUARCH} != "i386"
-CFLAGS+=	-DLBL_ALIGN
 .endif
 
 LIBADD=	pcap
@@ -196,6 +207,7 @@ CFLAGS+=-DHAVE_CASPER
 LIBADD+=	crypto
 CFLAGS+= -I${SYSROOT:U${DESTDIR}}/usr/include/openssl
 CFLAGS+= -DHAVE_LIBCRYPTO -DHAVE_OPENSSL_EVP_H
+CFLAGS+= -DOPENSSL_API_COMPAT=0x10100000L
 .endif
 
 .if ${MK_PF} != "no"
@@ -203,11 +215,6 @@ SRCS+=	print-pflog.c \
 	print-pfsync.c
 CFLAGS+= -DHAVE_NET_PFVAR_H -DHAVE_NET_IF_PFLOG_H
 .endif
-
-version.c: ${TCPDUMP_DISTDIR}/VERSION
-	rm -f version.c ; \
-	    sed 's/.*/char version[] = "&";/' ${TCPDUMP_DISTDIR}/VERSION \
-		> version.c
 
 .include <bsd.prog.mk>
 

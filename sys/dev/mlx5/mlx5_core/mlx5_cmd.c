@@ -21,8 +21,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include "opt_rss.h"
@@ -249,7 +247,7 @@ static void poll_timeout(struct mlx5_cmd_work_ent *ent)
 {
 	struct mlx5_core_dev *dev = container_of(ent->cmd,
 						 struct mlx5_core_dev, cmd);
-	int poll_end = jiffies +
+	long poll_end = jiffies +
 				msecs_to_jiffies(MLX5_CMD_TIMEOUT_MSEC + 1000);
 	u8 own;
 
@@ -419,6 +417,7 @@ static int mlx5_internal_err_ret_value(struct mlx5_core_dev *dev, u16 op,
 	case MLX5_CMD_OP_QUERY_VPORT_COUNTER:
 	case MLX5_CMD_OP_ALLOC_Q_COUNTER:
 	case MLX5_CMD_OP_QUERY_Q_COUNTER:
+	case MLX5_CMD_OP_QUERY_FLOW_COUNTER:
 	case MLX5_CMD_OP_ALLOC_PD:
 	case MLX5_CMD_OP_ALLOC_UAR:
 	case MLX5_CMD_OP_CONFIG_INT_MODERATION:
@@ -616,6 +615,9 @@ const char *mlx5_command_str(int command)
 	MLX5_COMMAND_STR_CASE(MODIFY_GENERAL_OBJ);
 	MLX5_COMMAND_STR_CASE(QUERY_GENERAL_OBJ);
 	MLX5_COMMAND_STR_CASE(DESTROY_GENERAL_OBJ);
+	MLX5_COMMAND_STR_CASE(ALLOC_FLOW_COUNTER);
+	MLX5_COMMAND_STR_CASE(DEALLOC_FLOW_COUNTER);
+	MLX5_COMMAND_STR_CASE(QUERY_FLOW_COUNTER);
 	default: return "unknown command opcode";
 	}
 }
@@ -800,6 +802,15 @@ static void cb_timeout_handler(struct work_struct *work)
         mlx5_cmd_comp_handler(dev, 1UL << ent->idx, MLX5_CMD_MODE_EVENTS);
 }
 
+static void
+cmd_free_work(struct work_struct *work)
+{
+	struct mlx5_cmd_work_ent *ent = container_of(work,
+	    struct mlx5_cmd_work_ent, freew);
+
+	free_cmd(ent);
+}
+
 static void complete_command(struct mlx5_cmd_work_ent *ent)
 {
 	struct mlx5_cmd *cmd = ent->cmd;
@@ -854,7 +865,8 @@ static void complete_command(struct mlx5_cmd_work_ent *ent)
 		free_msg(dev, ent->in);
 
 		err = err ? err : ent->status;
-		free_cmd(ent);
+		INIT_WORK(&ent->freew, cmd_free_work);
+		schedule_work(&ent->freew);
 		callback(err, context);
 	} else {
 		complete(&ent->done);
@@ -937,7 +949,7 @@ static const char *deliv_status_to_str(u8 status)
 	case MLX5_CMD_DELIVERY_STAT_IN_LENGTH_ERR:
 		return "command input length error";
 	case MLX5_CMD_DELIVERY_STAT_OUT_LENGTH_ERR:
-		return "command ouput length error";
+		return "command output length error";
 	case MLX5_CMD_DELIVERY_STAT_RES_FLD_NOT_CLR_ERR:
 		return "reserved fields not cleared";
 	case MLX5_CMD_DELIVERY_STAT_CMD_DESCR_ERR:
@@ -949,7 +961,7 @@ static const char *deliv_status_to_str(u8 status)
 
 static int wait_func(struct mlx5_core_dev *dev, struct mlx5_cmd_work_ent *ent)
 {
-	int timeout = msecs_to_jiffies(MLX5_CMD_TIMEOUT_MSEC);
+	unsigned long timeout = msecs_to_jiffies(MLX5_CMD_TIMEOUT_MSEC);
 	int err;
 
 	if (ent->polling) {
@@ -1115,11 +1127,16 @@ mlx5_alloc_cmd_msg(struct mlx5_core_dev *dev, gfp_t flags, size_t size)
 
 		block = mlx5_fwp_get_virt(msg, i * MLX5_CMD_MBOX_SIZE);
 
-		memset(block, 0, MLX5_CMD_MBOX_SIZE);
-
 		if (i != (n - 1)) {
+			memset(block, 0, MLX5_CMD_MBOX_SIZE);
+
 			u64 dma = mlx5_fwp_get_dma(msg, (i + 1) * MLX5_CMD_MBOX_SIZE);
 			block->next = cpu_to_be64(dma);
+		} else {
+			/* Zero the rest of the page to satisfy KMSAN. */
+			memset(block, 0, MLX5_ADAPTER_PAGE_SIZE -
+			    (i % MLX5_NUM_CMDS_IN_ADAPTER_PAGE) *
+			    MLX5_CMD_MBOX_SIZE);
 		}
 		block->block_num = cpu_to_be32(i);
 	}
@@ -1510,6 +1527,7 @@ alloc_cmd_page(struct mlx5_core_dev *dev, struct mlx5_cmd *cmd)
 	}
 	cmd->dma = mlx5_fwp_get_dma(cmd->cmd_page, 0);
 	cmd->cmd_buf = mlx5_fwp_get_virt(cmd->cmd_page, 0);
+	memset(cmd->cmd_buf, 0, MLX5_ADAPTER_PAGE_SIZE);
 	return (0);
 
 failure_alloc_page:

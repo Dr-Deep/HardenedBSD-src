@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -222,7 +223,7 @@ zfs_kobj_add(zfs_mod_kobj_t *zkobj, struct kobject *parent, const char *name)
 {
 	/* zko_default_group.attrs must be NULL terminated */
 	ASSERT(zkobj->zko_default_group.attrs != NULL);
-	ASSERT(zkobj->zko_default_group.attrs[zkobj->zko_attr_count] == NULL);
+	ASSERT0P(zkobj->zko_default_group.attrs[zkobj->zko_attr_count]);
 
 	kobject_init(&zkobj->zko_kobj, &zkobj->zko_kobj_type);
 	return (kobject_add(&zkobj->zko_kobj, parent, name));
@@ -279,11 +280,11 @@ zprop_sysfs_show(const char *attr_name, const zprop_desc_t *property,
 
 		for (int i = 0; i < ARRAY_SIZE(type_map); i++) {
 			if (type_map[i].ztm_type & property->pd_types)  {
-				len += snprintf(buf + len, buflen - len, "%s ",
-				    type_map[i].ztm_name);
+				len += kmem_scnprintf(buf + len, buflen - len,
+				    "%s ", type_map[i].ztm_name);
 			}
 		}
-		len += snprintf(buf + len, buflen - len, "\n");
+		len += kmem_scnprintf(buf + len, buflen - len, "\n");
 		return (len);
 	}
 

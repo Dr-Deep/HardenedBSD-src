@@ -1,6 +1,8 @@
+# SPDX-License-Identifier: CDDL-1.0
 CLEANFILES =
 dist_noinst_DATA =
 INSTALL_DATA_HOOKS =
+INSTALL_EXEC_HOOKS =
 ALL_LOCAL =
 CLEAN_LOCAL =
 CHECKS = shellcheck checkbashisms
@@ -9,6 +11,7 @@ include $(top_srcdir)/config/Rules.am
 include $(top_srcdir)/config/CppCheck.am
 include $(top_srcdir)/config/Shellcheck.am
 include $(top_srcdir)/config/Substfiles.am
+include $(top_srcdir)/scripts/Makefile.am
 
 ACLOCAL_AMFLAGS = -I config
 
@@ -23,7 +26,6 @@ include $(srcdir)/%D%/contrib/Makefile.am
 include $(srcdir)/%D%/etc/Makefile.am
 include $(srcdir)/%D%/lib/Makefile.am
 include $(srcdir)/%D%/man/Makefile.am
-include $(srcdir)/%D%/scripts/Makefile.am
 include $(srcdir)/%D%/tests/Makefile.am
 if BUILD_LINUX
 include $(srcdir)/%D%/udev/Makefile.am
@@ -71,6 +73,9 @@ all: gitrev
 PHONY += install-data-hook $(INSTALL_DATA_HOOKS)
 install-data-hook: $(INSTALL_DATA_HOOKS)
 
+PHONY += install-exec-hook $(INSTALL_EXEC_HOOKS)
+install-exec-hook: $(INSTALL_EXEC_HOOKS)
+
 PHONY += maintainer-clean-local
 maintainer-clean-local:
 	-$(RM) $(GITREV)
@@ -112,6 +117,10 @@ commitcheck:
 		${top_srcdir}/scripts/commitcheck.sh; \
 	fi
 
+CHECKS += spdxcheck
+spdxcheck:
+	$(AM_V_at)$(top_srcdir)/scripts/spdxcheck.pl
+
 if HAVE_PARALLEL
 cstyle_line = -print0 | parallel -X0 ${top_srcdir}/scripts/cstyle.pl -cpP {}
 else
@@ -124,6 +133,7 @@ cstyle:
 		! -name 'zfs_config.*' ! -name '*.mod.c' \
 		! -name 'opt_global.h' ! -name '*_if*.h' \
 		! -name 'zstd_compat_wrapper.h' \
+		! -path './module/zstd/zstd-in.c' \
 		! -path './module/zstd/lib/*' \
 		! -path './include/sys/lua/*' \
 		! -path './module/lua/l*.[ch]' \

@@ -1,14 +1,12 @@
-# $FreeBSD$
-
 .include <bsd.init.mk>
 
-.PATH:		${BOOTSRC}/i386/boot2 ${BOOTSRC}/i386/common ${SASRC}
+.PATH:		${BOOTSRC}/i386/boot2 ${BOOTSRC}/i386/common
 
 FILES=		gptboot
 MAN=		gptboot.8
 
 BOOT_COMCONSOLE_PORT?= 0x3f8
-BOOT_COMCONSOLE_SPEED?= 9600
+BOOT_COMCONSOLE_SPEED?= 115200
 B2SIOFMT?=	0x3
 
 REL1=	0x700
@@ -36,7 +34,8 @@ CFLAGS+=-DBOOTPROG=\"gptboot\" \
 	-Wpointer-arith -Wshadow -Wstrict-prototypes -Wwrite-strings \
 	-Wno-pointer-sign
 
-CFLAGS.gcc+=	--param max-inline-insns-single=100
+CFLAGS.gcc+=	--param max-inline-insns-single=100 \
+		--param min-pagesize=1024
 
 LD_FLAGS+=${LD_FLAGS_BIN}
 
@@ -55,12 +54,12 @@ gptldr.out: gptldr.o
 	${LD} ${LD_FLAGS} -e start --defsym ORG=${ORG1} -T ${LDSCRIPT} -o ${.TARGET} gptldr.o
 
 CLEANFILES+=	gptboot.bin gptboot.out gptboot.o sio.o drv.o \
-		cons.o ${OPENCRYPTO_XTS}
+		cons.o
 
 gptboot.bin: gptboot.out
 	${OBJCOPY} -S -O binary gptboot.out ${.TARGET}
 
-gptboot.out: ${BTXCRT} gptboot.o sio.o drv.o cons.o ${OPENCRYPTO_XTS}
+gptboot.out: ${BTXCRT} gptboot.o sio.o drv.o cons.o
 	${LD} ${LD_FLAGS} --defsym ORG=${ORG2} -T ${LDSCRIPT} -o ${.TARGET} ${.ALLSRC} ${LIBSA32}
 
 .include <bsd.prog.mk>

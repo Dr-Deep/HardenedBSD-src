@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008 Isilon Inc http://www.isilon.com/
  * Authors: Doug Rabson <dfr@rabson.org>
@@ -27,9 +27,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/kobj.h>
@@ -53,9 +50,6 @@ gss_delete_sec_context(OM_uint32 *minor_status, gss_ctx_id_t *context_handle,
 	CLIENT *cl;
 
 	*minor_status = 0;
-
-	if (!kgss_gssd_handle)
-		return (GSS_S_FAILURE);
 
 	if (*context_handle) {
 		ctx = *context_handle;

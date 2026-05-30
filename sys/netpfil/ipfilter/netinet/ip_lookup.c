@@ -1,4 +1,3 @@
-/* $FreeBSD$ */
 /*
  * Copyright (C) 2012 by Darren Reed.
  *
@@ -53,9 +52,6 @@
 #include "netinet/ip_dstlist.h"
 /* END OF INCLUDES */
 
-#if !defined(lint)
-static const char rcsid[] = "@(#)$Id$";
-#endif
 
 /*
  * In this file, ip_pool.c, ip_htable.c and ip_dstlist.c, you will find the
@@ -234,12 +230,10 @@ ipf_lookup_soft_destroy(ipf_main_softc_t *softc, void *arg)
 /* ------------------------------------------------------------------------ */
 int
 ipf_lookup_ioctl(ipf_main_softc_t *softc, caddr_t data, ioctlcmd_t cmd,
-	int mode, int uid, void *ctx)
+	int mode __unused, int uid, void *ctx)
 {
 	int err;
 	SPL_INT(s);
-
-	mode = mode;	/* LINT */
 
 	SPL_NET(s);
 

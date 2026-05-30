@@ -1,3 +1,6 @@
+.\"
+.\" SPDX-License-Identifier: BSD-3-Clause
+.\"
 .\" Copyright (c) 2009-2020 Alexander Motin <mav@FreeBSD.org>
 .\" Copyright (c) 2006 Marcus Alves Grando
 .\" Copyright (c) 1998-2001 Matthew Jacob, for NASA/Ames Research Center
@@ -24,9 +27,7 @@
 .\" (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 .\" THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
-.Dd November 19, 2020
+.Dd April 8, 2025
 .Dt ISP 4
 .Os
 .Sh NAME
@@ -81,31 +82,33 @@ the tape drive.
 FC-Tape is automatically enabled when connecting controller that supports
 it to a target that supports it.
 It may be disabled using configuration and hint options described below.
+.Sh HARDWARE
+The
+.Nm
+driver supports the following optical Fibre Channel adapters:
+.Bl -column "Qlogic 2690/2692/2694 (2684/2692)" "Speed" "PCI-X"
+.It Model: Ta Speed: Ta Bus:
+.It Qlogic QLE2874 (2814) Ta 64Gb Ta PCIe
+.It Qlogic QLE2870/QLE2872 (2812) Ta 64Gb Ta PCIe
+.It Qlogic QLE2774 (2814) Ta 32Gb Ta PCIe
+.It Qlogic QLE2770/QLE2772 (2812) Ta 32Gb Ta PCIe
+.It Qlogic 2740/2742/2764 (2722/2714) Ta 32Gb Ta PCIe
+.It Qlogic 2690/2692/2694 (2684/2692) Ta 16Gb Ta PCIe
+.It Qlogic 267x/836x (2031/8031) FCoE Ta 16Gb Ta PCIe
+.It Qlogic 256x (2532) Ta 8Gb Ta PCIe
+.It Qlogic 246x (2432) Ta 4Gb Ta PCIe
+.It Qlogic 2422 Ta 4Gb Ta PCI-X
+.El
 .Sh FIRMWARE
-Firmware loading is supported if the
+Firmware loading is supported and handled by
+.Xr firmware 9 .
+The correct firmware is either loaded automatically, if available for this
+type of adapter, or by manually loading the
 .Xr ispfw 4
-module is loaded.
+module.
 It is strongly recommended that you use the firmware available from
 .Xr ispfw 4
-as it is the most likely to have been tested with this driver.
-.Sh HARDWARE
-Cards supported by the
-.Nm
-driver include:
-.Bl -tag -width xxxxxx -offset indent
-.It Qlogic 2422
-Optical 4Gb Fibre Channel PCI-X cards.
-.It Qlogic 246x (aka 2432)
-Optical 4Gb Fibre Channel PCIe cards.
-.It Qlogic 256x (aka 2532)
-Optical 8Gb Fibre Channel PCIe cards.
-.It Qlogic 267x/836x (aka 2031/8031)
-Optical 16Gb FC/FCoE PCIe cards.
-.It Qlogic 2690/2692/2694 (aka 2684/2692)
-Optical 16Gb Fibre Channel PCIe cards.
-.It Qlogic 2740/2742/2764 (aka 2722/2714)
-Optical 32Gb Fibre Channel PCIe cards.
-.El
+as it is the one that most likely has been tested with this driver.
 .Sh CONFIGURATION OPTIONS
 Target mode support for Fibre Channel adapters may be enabled with the
 .Pp
@@ -130,8 +133,23 @@ Limit on number of Message Signaled Interrupts (MSI) to be used.
 .It Va hint.isp. Ns Ar N Ns Va .msix
 Limit on number of Extended Message Signaled Interrupts (MSI-X) to be used.
 .It Va hint.isp. Ns Ar N Ns Va .fwload_disable
-A hint value to disable loading of firmware
+A hint value to disable loading of firmware provided by
 .Xr ispfw 4 .
+.It Va hint.isp. Ns Ar N Ns Va .fwload_force
+A hint value to prefer firmware provided by
+.Xr ispfw 4 ,
+even if it is older than the firmware in flash on the board.
+If fwload_disable is also specified, fwload_force will be ignored.
+.Pp
+By default, with 27XX and newer controllers, the
+.Xr isp 4
+driver will use the newer
+firmware.
+For older controllers, the
+.Xr isp 4
+driver will use the firmware provided by
+.Xr ispfw 4
+if it is available, and otherwise use the firmware in flash on the board.
 .It Va hint.isp. Ns Ar N Ns Va .ignore_nvram
 A hint value to ignore board NVRAM settings for.
 Otherwise use NVRAM settings.
@@ -143,11 +161,11 @@ Supported values are:
 .Pp
 .Bl -tag -width ".Li lport-only" -compact
 .It Li lport
-Prefer loopback and fallback to point to point.
+Prefer arbitrated loop and fallback to point to point.
 .It Li nport
-Prefer point to point and fallback to loopback.
+Prefer point to point and fallback to arbitrated loop.
 .It Li lport-only
-Loopback only.
+Arbitrated loop only.
 .It Li nport-only
 Point to point only.
 .El
@@ -204,6 +222,14 @@ The default is 1 (enabled).
 This is the readonly World Wide Node Name value for this port.
 .It Va dev.isp. Ns Ar N Ns Va .wwpn
 This is the readonly World Wide Port Name value for this port.
+.It Va dev.isp. Ns Ar N Ns Va .fw_version_flash
+The readonly flash firmware version value in the active region of the
+controller.
+.It Va dev.isp. Ns Ar N Ns Va .fw_version_ispfw
+The readonly firmware version value provided by
+.Xr ispfw 4 .
+.It Va dev.isp. Ns Ar N Ns Va .fw_version_run
+The readonly firmware version value currently executed on the controller.
 .El
 .Sh SEE ALSO
 .Xr da 4 ,

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (C) 2012-2013 Intel Corporation
  * All rights reserved.
@@ -25,9 +25,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/ioccom.h>
@@ -174,7 +171,7 @@ perftest(const struct cmd *f, int argc, char *argv[])
 		arg_help(argc, argv, f);
 	}
 	if (opt.time == 0) {
-		fprintf(stderr, "No time speciifed\n");
+		fprintf(stderr, "No time specified\n");
 		arg_help(argc, argv, f);
 	}
 	io_test.time = opt.time;

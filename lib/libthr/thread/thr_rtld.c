@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2006, David Xu <davidxu@freebsd.org>
  * All rights reserved.
@@ -26,13 +26,9 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
  /*
   * A lockless rwlock for rtld.
   */
-#include <sys/cdefs.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <link.h>
@@ -43,8 +39,7 @@ __FBSDID("$FreeBSD$");
 #include "rtld_lock.h"
 #include "thr_private.h"
 
-#undef errno
-extern int errno;
+extern int __libsys_errno;
 
 static int	_thr_rtld_clr_flag(int);
 static void	*_thr_rtld_lock_create(void);
@@ -55,8 +50,11 @@ static int	_thr_rtld_set_flag(int);
 static void	_thr_rtld_wlock_acquire(void *);
 
 struct rtld_lock {
-	struct	urwlock	lock;
-	char		_pad[CACHE_LINE_SIZE - sizeof(struct urwlock)];
+	struct urwlock lock;
+	struct pthread *wowner;
+	u_int rlocks;
+	char _pad[CACHE_LINE_SIZE - sizeof(struct urwlock) -
+	    sizeof(struct pthread *) - sizeof(u_int)];
 };
 
 static struct rtld_lock lock_place[MAX_RTLD_LOCKS] __aligned(CACHE_LINE_SIZE);
@@ -100,14 +98,14 @@ _thr_rtld_lock_destroy(void *lock)
 	if (curthread != _thr_initial)		\
 		errsave = curthread->error;	\
 	else					\
-		errsave = errno;		\
+		errsave = __libsys_errno;	\
 }
 
 #define RESTORE_ERRNO()	{ 			\
 	if (curthread != _thr_initial)  	\
 		curthread->error = errsave;	\
 	else					\
-		errno = errsave;		\
+		__libsys_errno = errsave;	\
 }
 
 static void
@@ -121,9 +119,13 @@ _thr_rtld_rlock_acquire(void *lock)
 	SAVE_ERRNO();
 	l = (struct rtld_lock *)lock;
 
-	THR_CRITICAL_ENTER(curthread);
-	while (_thr_rwlock_rdlock(&l->lock, 0, NULL) != 0)
-		;
+	if (l->wowner == curthread) {
+		l->rlocks++;
+	} else {
+		THR_CRITICAL_ENTER(curthread);
+		while (_thr_rwlock_rdlock(&l->lock, 0, NULL) != 0)
+			;
+	}
 	curthread->rdlock_count++;
 	RESTORE_ERRNO();
 }
@@ -142,6 +144,7 @@ _thr_rtld_wlock_acquire(void *lock)
 	THR_CRITICAL_ENTER(curthread);
 	while (_thr_rwlock_wrlock(&l->lock, NULL) != 0)
 		;
+	l->wowner = curthread;
 	RESTORE_ERRNO();
 }
 
@@ -158,6 +161,25 @@ _thr_rtld_lock_release(void *lock)
 	l = (struct rtld_lock *)lock;
 	
 	state = l->lock.rw_state;
+	if (__predict_false(_thr_after_fork)) {
+		/*
+		 * After fork, only this thread is running, there is no
+		 * waiters.  Keeping waiters recorded in rwlock breaks
+		 * wake logic.
+		 */
+		atomic_clear_int(&l->lock.rw_state,
+		    URWLOCK_WRITE_WAITERS | URWLOCK_READ_WAITERS);
+		l->lock.rw_blocked_readers = 0;
+		l->lock.rw_blocked_writers = 0;
+	}
+	if ((state & URWLOCK_WRITE_OWNER) != 0) {
+		if (l->rlocks > 0) {
+			l->rlocks--;
+			return;
+		} else {
+			l->wowner = NULL;
+		}
+	}
 	if (_thr_rwlock_unlock(&l->lock) == 0) {
 		if ((state & URWLOCK_WRITE_OWNER) == 0)
 			curthread->rdlock_count--;
@@ -213,22 +235,23 @@ _thr_rtld_init(void)
 	struct RtldLockInfo	li;
 	struct pthread		*curthread;
 	ucontext_t *uc;
-	long dummy = -1;
 	int uc_len;
+	char dummy[2] = {};
 
 	curthread = _get_curthread();
 
 	/* force to resolve _umtx_op PLT */
-	_umtx_op_err((struct umtx *)&dummy, UMTX_OP_WAKE, 1, 0, 0);
+	_umtx_op_err(&dummy, UMTX_OP_WAKE, 1, 0, 0);
 	
 	/* force to resolve errno() PLT */
 	__error();
 
 	/* force to resolve memcpy PLT */
-	memcpy(&dummy, &dummy, sizeof(dummy));
+	memcpy(&dummy[0], &dummy[1], 1);
 
 	mprotect(NULL, 0, 0);
 	_rtld_get_stack_prot();
+	thr_wake(-1);
 
 	li.rtli_version = RTLI_VERSION;
 	li.lock_create  = _thr_rtld_lock_create;
@@ -267,6 +290,9 @@ _thr_rtld_init(void)
 	_thr_signal_unblock(curthread);
 	_thr_signal_block_check_fast();
 	_thr_signal_block_setup(curthread);
+
+	/* resolve machine depended functions, if any */
+	_thr_resolve_machdep();
 
 	uc_len = __getcontextx_size();
 	uc = alloca(uc_len);

@@ -1,6 +1,5 @@
-/* $FreeBSD$ */
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008 Hans Petter Selasky. All rights reserved.
  *
@@ -43,6 +42,7 @@
 #define	USB_HAVE_TT_SUPPORT 1
 #define	USB_HAVE_POWERD 1
 #define	USB_HAVE_MSCTEST 1
+#define	USB_HAVE_MSCTEST_AUTOQUIRK 0
 #define	USB_HAVE_MSCTEST_DETACH 1
 #define	USB_HAVE_PF 1
 #define	USB_HAVE_ROOT_MOUNT_HOLD 1
@@ -64,10 +64,10 @@
 #if (!defined(USB_HOST_ALIGN)) || (USB_HOST_ALIGN <= 0)
 /* Use default value. */
 #undef USB_HOST_ALIGN
-#if defined(__arm__) || defined(__mips__) || defined(__powerpc__)
-#define USB_HOST_ALIGN	32		/* Arm and MIPS need at least this much, if not more */
+#if defined(__arm__) || defined(__powerpc__)
+#define USB_HOST_ALIGN	32		/* Arm and PowerPC need at least this much, if not more */
 #else
-#define	USB_HOST_ALIGN    8		/* bytes, must be power of two */
+#define	USB_HOST_ALIGN	8		/* bytes, must be power of two */
 #endif
 #endif
 /* Sanity check for USB_HOST_ALIGN: Verify power of two. */

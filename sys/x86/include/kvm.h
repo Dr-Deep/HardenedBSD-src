@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2014 Bryan Venteicher <bryanv@FreeBSD.org>
  * Copyright (c) 2021 Mathieu Chouquet-Stringer
@@ -26,8 +26,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -51,6 +49,7 @@
 
 #define	KVM_FEATURE_CLOCKSOURCE			0x00000001
 #define	KVM_FEATURE_CLOCKSOURCE2		0x00000008
+#define	KVM_FEATURE_MSI_EXT_DEST_ID		0x00008000
 #define	KVM_FEATURE_CLOCKSOURCE_STABLE_BIT	0x01000000
 
 /* Deprecated: for the CLOCKSOURCE feature. */

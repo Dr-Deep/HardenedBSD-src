@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2009 Stanislav Sedov <stas@FreeBSD.org>
  * Copyright (c) 2017 Dell EMC
@@ -25,8 +25,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _LIBPROCSTAT_H_
@@ -73,6 +71,7 @@
 #define	PS_FST_TYPE_PROCDESC	13
 #define	PS_FST_TYPE_DEV		14
 #define	PS_FST_TYPE_EVENTFD	15
+#define	PS_FST_TYPE_INOTIFY	16
 
 /*
  * Special descriptor numbers.
@@ -104,9 +103,15 @@
 #define	PS_FST_FFLAG_EXEC	0x2000
 #define	PS_FST_FFLAG_HASLOCK	0x4000
 
+#if !defined(__ILP32__) && !defined(__riscv)
+/* Target architecture supports 32-bit compat */
+#define	PS_ARCH_HAS_FREEBSD32	1
+#endif
+
 struct kinfo_kstack;
 struct kinfo_proc;
 struct kinfo_vmentry;
+struct kinfo_knote;
 struct procstat;
 struct ptrace_lwpinfo;
 struct rlimit;
@@ -151,7 +156,6 @@ struct shmstat {
 	uint16_t	mode;
 };
 struct sockstat {
-	uint64_t	inp_ppcb;
 	uint64_t	so_addr;
 	uint64_t	so_pcb;
 	uint64_t	unp_conn;
@@ -202,6 +206,7 @@ void	procstat_freeauxv(struct procstat *procstat, Elf_Auxinfo *auxv);
 #endif
 void	procstat_freeenvv(struct procstat *procstat);
 void	procstat_freegroups(struct procstat *procstat, gid_t *groups);
+void	procstat_freekqinfo(struct procstat *procstat, struct kinfo_knote *kni);
 void	procstat_freekstack(struct procstat *procstat,
     struct kinfo_kstack *kkstp);
 void	procstat_freeprocs(struct procstat *procstat, struct kinfo_proc *p);
@@ -209,6 +214,7 @@ void	procstat_freefiles(struct procstat *procstat,
     struct filestat_list *head);
 void	procstat_freeptlwpinfo(struct procstat *procstat,
     struct ptrace_lwpinfo *pl);
+void	procstat_freerlimitusage(struct procstat *procstat, rlim_t *resusage);
 void	procstat_freevmmap(struct procstat *procstat,
     struct kinfo_vmentry *vmmap);
 struct advlock_list	*procstat_getadvlock(struct procstat *procstat);
@@ -216,6 +222,8 @@ struct filestat_list	*procstat_getfiles(struct procstat *procstat,
     struct kinfo_proc *kp, int mmapped);
 struct kinfo_proc	*procstat_getprocs(struct procstat *procstat,
     int what, int arg, unsigned int *count);
+struct kinfo_knote	*procstat_get_kqueue_info(struct procstat *procstat,
+    struct kinfo_proc *kp, int kqfd, unsigned int *count, char *errbuf);
 int	procstat_get_pipe_info(struct procstat *procstat, struct filestat *fst,
     struct pipestat *pipe, char *errbuf);
 int	procstat_get_pts_info(struct procstat *procstat, struct filestat *fst,
@@ -248,6 +256,8 @@ int	procstat_getpathname(struct procstat *procstat, struct kinfo_proc *kp,
     char *pathname, size_t maxlen);
 int	procstat_getrlimit(struct procstat *procstat, struct kinfo_proc *kp,
     int which, struct rlimit* rlimit);
+rlim_t	*procstat_getrlimitusage(struct procstat *procstat,
+    struct kinfo_proc *kp, unsigned int *cntp);
 int	procstat_getumask(struct procstat *procstat, struct kinfo_proc *kp,
     unsigned short* umask);
 struct kinfo_vmentry	*procstat_getvmmap(struct procstat *procstat,

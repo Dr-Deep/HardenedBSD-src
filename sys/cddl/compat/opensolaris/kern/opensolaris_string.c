@@ -17,8 +17,6 @@
  * information: Portions Copyright [yyyy] [name of copyright owner]
  *
  * CDDL HEADER END
- *
- * $FreeBSD$
  */
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
@@ -28,7 +26,7 @@
 #include <sys/param.h>
 #include <sys/string.h>
 #include <sys/kmem.h>
-#include <machine/stdarg.h>
+#include <sys/stdarg.h>
 
 #define	IS_DIGIT(c)	((c) >= '0' && (c) <= '9')
 

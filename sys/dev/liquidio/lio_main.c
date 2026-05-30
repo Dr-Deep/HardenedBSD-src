@@ -30,7 +30,6 @@
  *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-/*$FreeBSD$*/
 
 #include "lio_bsd.h"
 #include "lio_common.h"
@@ -65,10 +64,8 @@ static int	num_queues_per_pf1;
 TUNABLE_INT("hw.lio.num_queues_per_pf0", &num_queues_per_pf0);
 TUNABLE_INT("hw.lio.num_queues_per_pf1", &num_queues_per_pf1);
 
-#ifdef RSS
 static int	lio_rss = 1;
 TUNABLE_INT("hw.lio.rss", &lio_rss);
-#endif	/* RSS */
 
 /* Hardware LRO */
 unsigned int	lio_hwlro = 0;
@@ -105,20 +102,20 @@ static int	lio_setup_nic_devices(struct octeon_device *octeon_dev);
 static int	lio_link_info(struct lio_recv_info *recv_info, void *ptr);
 static void	lio_if_cfg_callback(struct octeon_device *oct, uint32_t status,
 				    void *buf);
-static int	lio_set_rxcsum_command(struct ifnet *ifp, int command,
+static int	lio_set_rxcsum_command(if_t ifp, int command,
 				       uint8_t rx_cmd);
 static int	lio_setup_glists(struct octeon_device *oct, struct lio *lio,
 				 int num_iqs);
 static void	lio_destroy_nic_device(struct octeon_device *oct, int ifidx);
-static inline void	lio_update_link_status(struct ifnet *ifp,
+static inline void	lio_update_link_status(if_t ifp,
 					       union octeon_link_status *ls);
 static void	lio_send_rx_ctrl_cmd(struct lio *lio, int start_stop);
 static int	lio_stop_nic_module(struct octeon_device *oct);
 static void	lio_destroy_resources(struct octeon_device *oct);
-static int	lio_setup_rx_oom_poll_fn(struct ifnet *ifp);
+static int	lio_setup_rx_oom_poll_fn(if_t ifp);
 
-static void	lio_vlan_rx_add_vid(void *arg, struct ifnet *ifp, uint16_t vid);
-static void	lio_vlan_rx_kill_vid(void *arg, struct ifnet *ifp,
+static void	lio_vlan_rx_add_vid(void *arg, if_t ifp, uint16_t vid);
+static void	lio_vlan_rx_kill_vid(void *arg, if_t ifp,
 				     uint16_t vid);
 static struct octeon_device *
 	lio_get_other_octeon_device(struct octeon_device *oct);
@@ -201,7 +198,6 @@ lio_probe(device_t dev)
 	uint16_t	device_id;
 	uint16_t	subdevice_id;
 	uint8_t		revision_id;
-	char		device_ver[256];
 
 	vendor_id = pci_get_vendor(dev);
 	if (vendor_id != PCI_VENDOR_ID_CAVIUM)
@@ -217,9 +213,8 @@ lio_probe(device_t dev)
 		    (device_id == tbl->device_id) &&
 		    (subdevice_id == tbl->subdevice_id) &&
 		    (revision_id == tbl->revision_id)) {
-			sprintf(device_ver, "%s, Version - %s",
-				lio_strings[tbl->index], LIO_VERSION);
-			device_set_desc_copy(dev, device_ver);
+			device_set_descf(dev, "%s, Version - %s",
+			    lio_strings[tbl->index], LIO_VERSION);
 			return (BUS_PROBE_DEFAULT);
 		}
 
@@ -965,7 +960,7 @@ lio_init_failure:
 }
 
 static int
-lio_ifmedia_update(struct ifnet *ifp)
+lio_ifmedia_update(if_t ifp)
 {
 	struct lio	*lio = if_getsoftc(ifp);
 	struct ifmedia	*ifm;
@@ -1030,7 +1025,7 @@ lio_get_baudrate(struct octeon_device *oct)
 }
 
 static void
-lio_ifmedia_status(struct ifnet *ifp, struct ifmediareq *ifmr)
+lio_ifmedia_status(if_t ifp, struct ifmediareq *ifmr)
 {
 	struct lio	*lio = if_getsoftc(ifp);
 
@@ -1129,7 +1124,7 @@ static int
 lio_init_ifnet(struct lio *lio)
 {
 	struct octeon_device	*oct = lio->oct_dev;
-	if_t ifp = lio->ifp;
+	if_t			ifp = lio->ifp;
 
 	/* ifconfig entrypoint for media type/status reporting */
 	ifmedia_init(&lio->ifmedia, IFM_IMASK, lio_ifmedia_update,
@@ -1172,7 +1167,7 @@ lio_init_ifnet(struct lio *lio)
 }
 
 static void
-lio_tcp_lro_free(struct octeon_device *octeon_dev, struct ifnet *ifp)
+lio_tcp_lro_free(struct octeon_device *octeon_dev, if_t ifp)
 {
 	struct lio	*lio = if_getsoftc(ifp);
 	struct lio_droq	*droq;
@@ -1190,7 +1185,7 @@ lio_tcp_lro_free(struct octeon_device *octeon_dev, struct ifnet *ifp)
 }
 
 static int
-lio_tcp_lro_init(struct octeon_device *octeon_dev, struct ifnet *ifp)
+lio_tcp_lro_init(struct octeon_device *octeon_dev, if_t ifp)
 {
 	struct lio	*lio = if_getsoftc(ifp);
 	struct lio_droq	*droq;
@@ -1224,7 +1219,7 @@ lio_setup_nic_devices(struct octeon_device *octeon_dev)
 {
 	union		octeon_if_cfg if_cfg;
 	struct lio	*lio = NULL;
-	struct ifnet	*ifp = NULL;
+	if_t		ifp = NULL;
 	struct lio_version		*vdata;
 	struct lio_soft_command		*sc;
 	struct lio_if_cfg_context	*ctx;
@@ -1235,7 +1230,7 @@ lio_setup_nic_devices(struct octeon_device *octeon_dev)
 	unsigned int	gmx_port_id;
 	uint32_t	ctx_size, data_size;
 	uint32_t	ifidx_or_pfnum, resp_size;
-	uint8_t		mac[ETHER_HDR_LEN], i, j;
+	uint8_t		mac[ETHER_ADDR_LEN], i, j;
 
 	/* This is to handle link status changes */
 	lio_register_dispatch_fn(octeon_dev, LIO_OPCODE_NIC,
@@ -1330,11 +1325,6 @@ lio_setup_nic_devices(struct octeon_device *octeon_dev)
 
 		ifp = if_alloc(IFT_ETHER);
 
-		if (ifp == NULL) {
-			lio_dev_err(octeon_dev, "Device allocation failed\n");
-			goto setup_nic_dev_fail;
-		}
-
 		lio = malloc(sizeof(struct lio), M_DEVBUF, M_NOWAIT | M_ZERO);
 
 		if (lio == NULL) {
@@ -1344,9 +1334,9 @@ lio_setup_nic_devices(struct octeon_device *octeon_dev)
 
 		if_setsoftc(ifp, lio);
 
-		ifp->if_hw_tsomax = LIO_MAX_FRAME_SIZE;
-		ifp->if_hw_tsomaxsegcount = LIO_MAX_SG;
-		ifp->if_hw_tsomaxsegsize = PAGE_SIZE;
+		if_sethwtsomax(ifp, LIO_MAX_FRAME_SIZE);
+		if_sethwtsomaxsegcount(ifp, LIO_MAX_SG);
+		if_sethwtsomaxsegsize(ifp, PAGE_SIZE);
 
 		lio->ifidx = ifidx_or_pfnum;
 
@@ -1383,9 +1373,7 @@ lio_setup_nic_devices(struct octeon_device *octeon_dev)
 		lio_init_ifnet(lio);
 		/* 64-bit swap required on LE machines */
 		lio_swap_8B_data(&lio->linfo.hw_addr, 1);
-		for (j = 0; j < 6; j++)
-			mac[j] = *((uint8_t *)(
-				   ((uint8_t *)&lio->linfo.hw_addr) + 2 + j));
+		memcpy(mac, (uint8_t *)&lio->linfo.hw_addr + 2, ETHER_ADDR_LEN);
 
 		ether_ifattach(ifp, mac);
 
@@ -1445,13 +1433,10 @@ lio_setup_nic_devices(struct octeon_device *octeon_dev)
 		lio_set_feature(ifp, LIO_CMD_TNL_TX_CSUM_CTL,
 				LIO_CMD_TXCSUM_ENABLE);
 
-#ifdef RSS
 		if (lio_rss) {
 			if (lio_send_rss_param(lio))
 				goto setup_nic_dev_fail;
 		} else
-#endif	/* RSS */
-
 			lio_set_feature(ifp, LIO_CMD_SET_FNV,
 					LIO_CMD_FNV_ENABLE);
 
@@ -1590,9 +1575,9 @@ void
 lio_open(void *arg)
 {
 	struct lio	*lio = arg;
-	struct ifnet	*ifp = lio->ifp;
+	if_t		ifp = lio->ifp;
 	struct octeon_device	*oct = lio->oct_dev;
-	uint8_t	*mac_new, mac_old[ETHER_HDR_LEN];
+	uint8_t	*mac_new, mac_old[ETHER_ADDR_LEN];
 	int	ret = 0;
 
 	lio_ifstate_set(lio, LIO_IFSTATE_RUNNING);
@@ -1605,8 +1590,8 @@ lio_open(void *arg)
 	/* tell Octeon to start forwarding packets to host */
 	lio_send_rx_ctrl_cmd(lio, 1);
 
-	mac_new = IF_LLADDR(ifp);
-	memcpy(mac_old, ((uint8_t *)&lio->linfo.hw_addr) + 2, ETHER_HDR_LEN);
+	mac_new = if_getlladdr(ifp);
+	memcpy(mac_old, ((uint8_t *)&lio->linfo.hw_addr) + 2, ETHER_ADDR_LEN);
 
 	if (lio_is_mac_changed(mac_new, mac_old)) {
 		ret = lio_set_mac(ifp, mac_new);
@@ -1621,7 +1606,7 @@ lio_open(void *arg)
 }
 
 static int
-lio_set_rxcsum_command(struct ifnet *ifp, int command, uint8_t rx_cmd)
+lio_set_rxcsum_command(if_t ifp, int command, uint8_t rx_cmd)
 {
 	struct lio_ctrl_pkt	nctrl;
 	struct lio		*lio = if_getsoftc(ifp);
@@ -1786,7 +1771,7 @@ lio_setup_glists(struct octeon_device *oct, struct lio *lio, int num_iqs)
 }
 
 void
-lio_stop(struct ifnet *ifp)
+lio_stop(if_t ifp)
 {
 	struct lio	*lio = if_getsoftc(ifp);
 	struct octeon_device	*oct = lio->oct_dev;
@@ -1851,7 +1836,7 @@ lio_poll_check_rx_oom_status(void *arg, int pending __unused)
 }
 
 static int
-lio_setup_rx_oom_poll_fn(struct ifnet *ifp)
+lio_setup_rx_oom_poll_fn(if_t ifp)
 {
 	struct lio	*lio = if_getsoftc(ifp);
 	struct octeon_device	*oct = lio->oct_dev;
@@ -1862,10 +1847,6 @@ lio_setup_rx_oom_poll_fn(struct ifnet *ifp)
 	rx_status_tq->tq = taskqueue_create("lio_rx_oom_status", M_WAITOK,
 					    taskqueue_thread_enqueue,
 					    &rx_status_tq->tq);
-	if (rx_status_tq->tq == NULL) {
-		lio_dev_err(oct, "unable to create lio rx oom status tq\n");
-		return (-1);
-	}
 
 	TIMEOUT_TASK_INIT(rx_status_tq->tq, &rx_status_tq->work, 0,
 			  lio_poll_check_rx_oom_status, (void *)rx_status_tq);
@@ -1883,7 +1864,7 @@ lio_setup_rx_oom_poll_fn(struct ifnet *ifp)
 }
 
 static void
-lio_cleanup_rx_oom_poll_fn(struct ifnet *ifp)
+lio_cleanup_rx_oom_poll_fn(if_t ifp)
 {
 	struct lio	*lio = if_getsoftc(ifp);
 
@@ -1902,7 +1883,7 @@ lio_cleanup_rx_oom_poll_fn(struct ifnet *ifp)
 static void
 lio_destroy_nic_device(struct octeon_device *oct, int ifidx)
 {
-	struct ifnet	*ifp = oct->props.ifp;
+	if_t		ifp = oct->props.ifp;
 	struct lio	*lio;
 
 	if (ifp == NULL) {
@@ -1951,7 +1932,7 @@ lio_destroy_nic_device(struct octeon_device *oct, int ifidx)
 }
 
 static void
-print_link_info(struct ifnet *ifp)
+print_link_info(if_t ifp)
 {
 	struct lio	*lio = if_getsoftc(ifp);
 
@@ -1970,7 +1951,7 @@ print_link_info(struct ifnet *ifp)
 }
 
 static inline void
-lio_update_link_status(struct ifnet *ifp, union octeon_link_status *ls)
+lio_update_link_status(if_t ifp, union octeon_link_status *ls)
 {
 	struct lio	*lio = if_getsoftc(ifp);
 	int	changed = (lio->linfo.link.link_status64 != ls->link_status64);
@@ -2066,7 +2047,7 @@ lio_send_rx_ctrl_cmd(struct lio *lio, int start_stop)
 }
 
 static void
-lio_vlan_rx_add_vid(void *arg, struct ifnet *ifp, uint16_t vid)
+lio_vlan_rx_add_vid(void *arg, if_t ifp, uint16_t vid)
 {
 	struct lio_ctrl_pkt	nctrl;
 	struct lio		*lio = if_getsoftc(ifp);
@@ -2097,7 +2078,7 @@ lio_vlan_rx_add_vid(void *arg, struct ifnet *ifp, uint16_t vid)
 }
 
 static void
-lio_vlan_rx_kill_vid(void *arg, struct ifnet *ifp, uint16_t vid)
+lio_vlan_rx_kill_vid(void *arg, if_t ifp, uint16_t vid)
 {
 	struct lio_ctrl_pkt	nctrl;
 	struct lio		*lio = if_getsoftc(ifp);

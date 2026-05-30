@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2001 Chris D. Faulhaber
  * All rights reserved.
  *
@@ -23,9 +25,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/acl.h>
@@ -478,7 +477,6 @@ main(int argc, char *argv[])
 			break;
 		default:
 			usage();
-			break;
 		}
 	argc -= optind;
 	argv += optind;

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2002 Mike Barcroft <mike@FreeBSD.org>
  * All rights reserved.
@@ -24,14 +24,10 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _SYS__TYPES_H_
 #define _SYS__TYPES_H_
-
-#include <sys/cdefs.h>
 
 /*
  * Basic types upon which most other types are built.
@@ -44,18 +40,23 @@
  */
 typedef	signed char		__int8_t;
 typedef	unsigned char		__uint8_t;
+#define	__SIZEOF_INT8_T		__SIZEOF_CHAR__
 typedef	short			__int16_t;
 typedef	unsigned short		__uint16_t;
+#define	__SIZEOF_INT16_T	__SIZEOF_SHORT__
 typedef	int			__int32_t;
 typedef	unsigned int		__uint32_t;
+#define	__SIZEOF_INT32_T	__SIZEOF_INT__
 #if __SIZEOF_LONG__ == 8
 typedef	long			__int64_t;
 typedef	unsigned long		__uint64_t;
+#define	__SIZEOF_INT64_T	__SIZEOF_LONG__
 #elif __SIZEOF_LONG__ == 4
 __extension__
 typedef	long long		__int64_t;
 __extension__
 typedef	unsigned long long	__uint64_t;
+#define	__SIZEOF_INT64_T	__SIZEOF_LONG_LONG__
 #else
 #error unsupported long size
 #endif
@@ -71,20 +72,27 @@ typedef	__uint32_t	__uint_least32_t;
 typedef	__uint64_t	__uint_least64_t;
 typedef	__uint64_t	__uintmax_t;
 
-#if __SIZEOF_POINTER__ == 8
+#ifdef __CHERI__
+typedef	__intcap_t	__intptr_t;
+typedef	__intcap_t	__intfptr_t;
+typedef	__intptr_t	__int64ptr_t;
+typedef	__uintcap_t	__uintptr_t;
+typedef	__uintcap_t	__uintfptr_t;
+typedef	__uintptr_t	__uint64ptr_t;
+#elif __SIZEOF_POINTER__ == 8
 typedef	__int64_t	__intptr_t;
 typedef	__int64_t	__intfptr_t;
+typedef	__int64_t	__int64ptr_t;
 typedef	__uint64_t	__uintptr_t;
 typedef	__uint64_t	__uintfptr_t;
-typedef	__uint64_t	__vm_offset_t;
-typedef	__uint64_t	__vm_size_t;
+typedef	__uint64_t	__uint64ptr_t;
 #elif __SIZEOF_POINTER__ == 4
 typedef	__int32_t	__intptr_t;
 typedef	__int32_t	__intfptr_t;
+typedef	__int64_t	__int64ptr_t;
 typedef	__uint32_t	__uintptr_t;
 typedef	__uint32_t	__uintfptr_t;
-typedef	__uint32_t	__vm_offset_t;
-typedef	__uint32_t	__vm_size_t;
+typedef	__uint64_t	__uint64ptr_t;
 #else
 #error unsupported pointer size
 #endif
@@ -106,6 +114,15 @@ typedef	__int32_t	__ptrdiff_t;	/* ptr1 - ptr2 */
 #else
 #error unsupported ptrdiff_t size
 #endif
+
+#ifdef __PTRADDR_TYPE__
+typedef	__PTRADDR_TYPE__	__ptraddr_t;
+#else
+typedef	__size_t		__ptraddr_t;
+#endif
+
+typedef	__ptraddr_t	__vm_offset_t;
+typedef	__size_t	__vm_size_t;
 
 /*
  * Target-dependent type definitions.
@@ -149,6 +166,17 @@ typedef	int		__cpulevel_t;	/* level parameter for cpuset. */
 typedef int		__cpusetid_t;	/* cpuset identifier. */
 typedef __int64_t	__daddr_t;	/* bwrite(3), FIOBMAP2, etc */
 
+#ifndef __SIZEOF_INTCAP__
+/*
+ * On non-CHERI systems, define __(u)intcap_t to __(u)intptr_t so that
+ * hybrid-C code which needs to be explicitly aware of capabilities can
+ * use it.  These types may be present in some third-party code and
+ * should not generally be used in FreeBSD code.
+ */
+typedef	__intptr_t	__intcap_t;
+typedef	__uintptr_t	__uintcap_t;
+#endif
+
 /*
  * Unusual type definitions.
  */
@@ -181,13 +209,29 @@ typedef	__uint_least32_t __char32_t;
 #define	_CHAR16_T_DECLARED
 #define	_CHAR32_T_DECLARED
 #endif
+/* and so is char8_t in C++20 */
+#if defined(__cplusplus) && __cplusplus >= 202002L
+#define _CHAR8_T_DECLARED
+#endif
 
 typedef struct {
-	long long __max_align1 __aligned(_Alignof(long long));
+	long long __max_align1
+	    __attribute__((__aligned__(__alignof__(long long))));
 #ifndef _STANDALONE
-	long double __max_align2 __aligned(_Alignof(long double));
+	long double __max_align2
+	    __attribute__((__aligned__(__alignof__(long double))));
 #endif
+	void *__max_align3 __attribute__((__aligned__(__alignof__(void *))));
 } __max_align_t;
+
+/* Types for sys/acl.h */
+typedef __uint32_t	__acl_tag_t;
+typedef __uint32_t	__acl_perm_t;
+typedef __uint16_t	__acl_entry_type_t;
+typedef __uint16_t	__acl_flag_t;
+typedef __uint32_t	__acl_type_t;
+typedef __uint32_t	*__acl_permset_t;
+typedef __uint16_t	*__acl_flagset_t;
 
 typedef	__uint64_t	__dev_t;	/* device number */
 
@@ -200,6 +244,7 @@ typedef	__uint32_t	__fixpt_t;	/* fixed point number */
 typedef union {
 	char		__mbstate8[128];
 	__int64_t	_mbstateL;	/* for alignment */
+	__intptr_t	_mbstateP;	/* for alignment */
 } __mbstate_t;
 
 typedef __uintmax_t     __rman_res_t;

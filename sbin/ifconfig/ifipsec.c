@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2016 Yandex LLC
  * Copyright (c) 2016 Andrey V. Elsukov <ae@FreeBSD.org>
  * All rights reserved.
@@ -25,9 +27,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -51,30 +50,29 @@ __FBSDID("$FreeBSD$");
 #include "ifconfig.h"
 
 static void
-ipsec_status(int s)
+ipsec_status(if_ctx *ctx)
 {
 	uint32_t reqid;
+	struct ifreq ifr = { .ifr_data = (caddr_t)&reqid };
 
-	ifr.ifr_data = (caddr_t)&reqid;
-	if (ioctl(s, IPSECGREQID, &ifr) == -1)
+	if (ioctl_ctx_ifr(ctx, IPSECGREQID, &ifr) == -1)
 		return;
 	printf("\treqid: %u\n", reqid);
 }
 
-static
-DECL_CMD_FUNC(setreqid, val, arg)
+static void
+setreqid(if_ctx *ctx, const char *val, int dummy __unused)
 {
 	char *ep;
 	uint32_t v;
+	struct ifreq ifr = { .ifr_data = (caddr_t)&v };
 
 	v = strtoul(val, &ep, 0);
 	if (*ep != '\0') {
 		warn("Invalid reqid value %s", val);
 		return;
 	}
-	strlcpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
-	ifr.ifr_data = (char *)&v;
-	if (ioctl(s, IPSECSREQID, &ifr) == -1) {
+	if (ioctl_ctx_ifr(ctx, IPSECSREQID, &ifr) == -1) {
 		warn("ioctl(IPSECSREQID)");
 		return;
 	}

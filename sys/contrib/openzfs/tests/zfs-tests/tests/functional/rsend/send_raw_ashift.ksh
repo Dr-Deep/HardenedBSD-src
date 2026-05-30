@@ -1,4 +1,5 @@
 #!/bin/ksh
+# SPDX-License-Identifier: CDDL-1.0
 
 #
 # This file and its contents are supplied under the terms of the
@@ -36,6 +37,7 @@
 verify_runnable "both"
 
 log_assert "Verify raw sending to pools with greater ashift succeeds"
+
 
 function cleanup
 {

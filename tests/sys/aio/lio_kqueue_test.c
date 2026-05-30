@@ -21,8 +21,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -42,7 +40,6 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "freebsd_test_suite/macros.h"
 #include "local.h"
 
 #define PATH_TEMPLATE   "aio.XXXXXXXXXX"
@@ -70,7 +67,6 @@ main(int argc, char *argv[])
 	char *file, pathname[sizeof(PATH_TEMPLATE)];
 	int tmp_file = 0, failed = 0;
 
-	PLAIN_REQUIRE_KERNEL_MODULE("aio", 0);
 	PLAIN_REQUIRE_UNSAFE_AIO(0);
 
 	max_queue_per_proc_size = sizeof(max_queue_per_proc);

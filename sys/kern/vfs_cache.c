@@ -30,12 +30,7 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)vfs_cache.c	8.5 (Berkeley) 3/22/95
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include "opt_ddb.h"
 #include "opt_ktrace.h"
@@ -46,6 +41,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/counter.h>
 #include <sys/filedesc.h>
 #include <sys/fnv_hash.h>
+#include <sys/inotify.h>
 #include <sys/kernel.h>
 #include <sys/ktr.h>
 #include <sys/lock.h>
@@ -71,8 +67,6 @@ __FBSDID("$FreeBSD$");
 #include <machine/_inttypes.h>
 #endif
 
-#include <sys/capsicum.h>
-
 #include <security/audit/audit.h>
 #include <security/mac/mac_framework.h>
 
@@ -92,7 +86,7 @@ __FBSDID("$FreeBSD$");
  *
  * This fundamental choice needs to be revisited. In the meantime, the current
  * state is described below. Significance of all notable routines is explained
- * in comments placed above their implementation. Scattered thoroughout the
+ * in comments placed above their implementation. Scattered throughout the
  * file are TODO comments indicating shortcomings which can be fixed without
  * reworking everything (most of the fixes will likely be reusable). Various
  * details are omitted from this explanation to not clutter the overview, they
@@ -115,18 +109,19 @@ __FBSDID("$FreeBSD$");
  * The (directory vnode; name) tuple reliably determines the target entry if
  * it exists.
  *
- * Since there are no small locks at this time (all are 32 bytes in size on
- * LP64), the code works around the problem by introducing lock arrays to
- * protect hash buckets and vnode lists.
+ * Since there were no small locks at the time of writing this comment (all are
+ * 32 bytes in size on LP64), the code works around the problem by introducing
+ * lock arrays to protect hash buckets and vnode lists.
  *
  * II. Filesystem integration
  *
  * Filesystems participating in name caching do the following:
  * - set vop_lookup routine to vfs_cache_lookup
- * - set vop_cachedlookup to whatever can perform the lookup if the above fails
- * - if they support lockless lookup (see below), vop_fplookup_vexec and
- *   vop_fplookup_symlink are set along with the MNTK_FPLOOKUP flag on the
- *   mount point
+ * - set vop_cachedlookup to a routine which can perform the lookup if the
+ *   above fails
+ * - if they support lockless lookup (see below), they set vop_fplookup_vexec
+ *   and vop_fplookup_symlink along with the MNTK_FPLOOKUP flag on the mount
+ *   point
  * - call cache_purge or cache_vop_* routines to eliminate stale entries as
  *   applicable
  * - call cache_enter to add entries depending on the MAKEENTRY flag
@@ -140,11 +135,15 @@ __FBSDID("$FreeBSD$");
  * ... -> namei -> cache_fplookup -> cache_fplookup_noentry -> VOP_LOOKUP ->
  * vfs_cache_lookup -> VOP_CACHEDLOOKUP -> ufs_lookup_ino -> cache_enter
  *
+ * You may notice a degree of CPU waste in this callchain.
+ *
  * III. Performance considerations
  *
  * For lockless case forward lookup avoids any writes to shared areas apart
  * from the terminal path component. In other words non-modifying lookups of
- * different files don't suffer any scalability problems in the namecache.
+ * different files don't suffer any scalability problems in the namecache
+ * itself.
+ *
  * Looking up the same file is limited by VFS and goes beyond the scope of this
  * file.
  *
@@ -164,8 +163,10 @@ __FBSDID("$FreeBSD$");
  *
  * IV. Observability
  *
- * Note not everything has an explicit dtrace probe nor it should have, thus
- * some of the one-liners below depend on implementation details.
+ * Several statistics are collected in the vfs.cache sysctl tree.
+ *
+ * Some of the state can be checked for with explicit dtrace probes, must of it
+ * depends on implementation details.
  *
  * Examples:
  *
@@ -173,7 +174,7 @@ __FBSDID("$FreeBSD$");
  * # line number, column 2 is status code (see cache_fpl_status)
  * dtrace -n 'vfs:fplookup:lookup:done { @[arg1, arg2] = count(); }'
  *
- * # Lengths of names added by binary name
+ * # Histogram of lengths of names added, aggregated by which programs are doing it
  * dtrace -n 'fbt::cache_enter_time:entry { @[execname] = quantize(args[2]->cn_namelen); }'
  *
  * # Same as above but only those which exceed 64 characters
@@ -201,10 +202,111 @@ __FBSDID("$FreeBSD$");
  * - vnodes are subject to being recycled even if target inode is left in memory,
  *   which loses the name cache entries when it perhaps should not. in case of tmpfs
  *   names get duplicated -- kept by filesystem itself and namecache separately
- * - struct namecache has a fixed size and comes in 2 variants, often wasting space.
- *   now hard to replace with malloc due to dependence on SMR.
+ * - vnode reclamation (see vnlru in kern/vfs_subr.c) defaults to skipping
+ *   directories for this very reason, which arguably further reducing quality
+ *   of vnode LRU. Per the above this is done to avoid breaking vnode -> path
+ *   resolution (it becomes expensive for directories and impossible for the rest)
+ *   This would not be a factor if namecache entries could persist without vnodes.
+ * - struct namecache has a fixed size and comes in 2 variants, often wasting
+ *   space.  now hard to replace with malloc due to dependence on SMR, which
+ *   requires UMA zones to opt in
  * - lack of better integration with the kernel also turns nullfs into a layered
  *   filesystem instead of something which can take advantage of caching
+ *
+ * Appendix A: where is the time lost, expanding on paragraph III
+ *
+ * While some care went into optimizing lookups, there is still plenty of
+ * performance left on the table, most notably from single-threaded standpoint.
+ * Below is a woefully incomplete list of changes which can help.  Ideas are
+ * mostly sketched out, no claim is made all kinks or prerequisites are laid
+ * out. The name of the game is eliding branches altogether and hopefully some
+ * of memory accesses.
+ *
+ * Note there is performance lost all over VFS.
+ *
+ * === SMR-only lookup
+ *
+ * For commonly used ops like stat(2), when the terminal vnode *is* cached,
+ * lockless lookup could refrain from refing/locking the found vnode and
+ * instead return while within the SMR section. Then a call to, say,
+ * vop_stat_smr could do the work (or fail with EAGAIN), finally the result
+ * would be validated with seqc not changing. This would be faster
+ * single-threaded as it dodges atomics and would provide full scalability for
+ * multicore uses. This would *not* work for open(2) or other calls which need
+ * the vnode to hang around for the long haul, but would work for aforementioned
+ * stat(2) but also access(2), readlink(2), realpathat(2) and probably more.
+ *
+ * === copyinstr
+ *
+ * On all architectures it operates one byte at a time, while it could be
+ * word-sized instead thanks to the Mycroft trick.
+ *
+ * API itself is rather pessimal for path lookup, accepting arbitrary sizes and
+ * *optionally* filling in the length parameter.
+ *
+ * Instead a new routine (copyinpath?) could be introduced, demanding a buffer
+ * size which is a multiply of the word (and never zero), with the length
+ * always returned. On top of it the routine could be allowed to transform the
+ * buffer in arbitrary ways, most notably writing past the found length (not to
+ * be confused with writing past buffer size) -- this would allow word-sized
+ * movs while checking for '\0' later.
+ *
+ * === detour through namei
+ *
+ * Currently one suffers being called from namei, which then has to check if
+ * things worked out locklessly. Instead the lockless lookup could be the
+ * actual entry point which calls what is currently namei as a fallback.
+ *
+ * It could be hotpatched if lockless lookup is disabled.
+ *
+ * === avoidable branches in cache_can_fplookup
+ *
+ * The cache_fast_lookup_enabled flag check could be hotpatchable (in fact if
+ * this is off, none of fplookup code should execute, see above).
+ *
+ * Both audit and capsicum branches can be combined into one, but it requires
+ * paying off a lot of tech debt first.
+ *
+ * ni_startdir could be indicated with a flag in cn_flags, eliminating the
+ * branch.
+ *
+ * === mount stacks
+ *
+ * Crossing a mount requires checking if perhaps something is mounted on top.
+ * Instead, an additional entry could be added to struct mount with a pointer
+ * to the final mount on the stack. This would be recalculated on each
+ * mount/unmount.
+ *
+ * === root vnodes
+ *
+ * It could become part of the API contract to *always* have a rootvnode set in
+ * mnt_rootvnode. Such vnodes are annotated with VV_ROOT and vnlru would have
+ * to be modified to always skip them.
+ *
+ * === inactive on v_usecount reaching 0
+ *
+ * VOP_NEED_INACTIVE should not exist. Filesystems can indicate need for such
+ * processing with a bit in usecount and adding a hold count. Then vput fast path
+ * would become as simple as (ACHTUNG: locking ignored):
+ *
+ * ref = atomic_fetchadd_int(&vp->v_count, -1) - 1;
+ * if ((ref & MAGIC_BIT) == 0) // common case
+ *	return;
+ * if (ref != 0) // the bit is set but this was not the last user
+ *	return;
+ * // do inactive here
+ *
+ * Also see below.
+ *
+ * === v_holdcnt
+ *
+ * Hold count should probably get eliminated, but one can argue it is a useful
+ * feature. Even if so, handling of v_usecount could be decoupled from it --
+ * vnlru et al would consider the vnode not-freeable if has either hold or
+ * usecount on it.
+ *
+ * This would eliminate 2 atomics in the common case of securing a vnode and
+ * undoing it.
  */
 
 static SYSCTL_NODE(_vfs, OID_AUTO, cache, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
@@ -249,7 +351,8 @@ SDT_PROBE_DEFINE2(vfs, namecache, evict_negative, done, "struct vnode *",
     "char *");
 SDT_PROBE_DEFINE1(vfs, namecache, symlink, alloc__fail, "size_t");
 
-SDT_PROBE_DEFINE3(vfs, fplookup, lookup, done, "struct nameidata", "int", "bool");
+SDT_PROBE_DEFINE3(vfs, fplookup, lookup, done, "struct nameidata *", "int",
+    "enum cache_fpl_status");
 SDT_PROBE_DECLARE(vfs, namei, lookup, entry);
 SDT_PROBE_DECLARE(vfs, namei, lookup, return);
 
@@ -281,14 +384,10 @@ struct	namecache {
 };
 
 /*
- * struct namecache_ts repeats struct namecache layout up to the
- * nc_nlen member.
  * struct namecache_ts is used in place of struct namecache when time(s) need
  * to be stored.  The nc_dotdottime field is used when a cache entry is mapping
  * both a non-dotdot directory name plus dotdot for the directory's
  * parent.
- *
- * See below for alignment requirement.
  */
 struct	namecache_ts {
 	struct	timespec nc_time;	/* timespec provided by fs */
@@ -301,43 +400,52 @@ struct	namecache_ts {
 TAILQ_HEAD(cache_freebatch, namecache);
 
 /*
- * At least mips n32 performs 64-bit accesses to timespec as found
- * in namecache_ts and requires them to be aligned. Since others
- * may be in the same spot suffer a little bit and enforce the
- * alignment for everyone. Note this is a nop for 64-bit platforms.
+ * Ensure all zones are sufficently aligned to hold both
+ * struct namecache and struct namecache_ts.
  */
-#define CACHE_ZONE_ALIGNMENT	UMA_ALIGNOF(time_t)
+#define CACHE_ZONE_ALIGN_MASK	UMA_ALIGNOF(struct namecache_ts)
 
 /*
- * TODO: the initial value of CACHE_PATH_CUTOFF was inherited from the
- * 4.4 BSD codebase. Later on struct namecache was tweaked to become
- * smaller and the value was bumped to retain the total size, but it
- * was never re-evaluated for suitability. A simple test counting
- * lengths during package building shows that the value of 45 covers
- * about 86% of all added entries, reaching 99% at 65.
+ * TODO: CACHE_PATH_CUTOFF was initially introduced with an arbitrary
+ * value of 32 in FreeBSD 5.2.0.  It was bumped to 35 and the path was
+ * NUL terminated with the introduction of DTrace probes.  Later, it was
+ * expanded to match the alignment allowing an increase to 39, but it
+ * was not re-evaluated for suitability.  It was again bumped to 45 on
+ * 64-bit systems and 41 on 32-bit systems (the current values, now
+ * computed at compile time rather than hardcoded).  A simple test
+ * counting lengths during package building in 2020 showed that the
+ * value of 45 covers about 86% of all added entries, reaching 99%
+ * at 65.
  *
  * Regardless of the above, use of dedicated zones instead of malloc may be
  * inducing additional waste. This may be hard to address as said zones are
  * tied to VFS SMR. Even if retaining them, the current split should be
  * re-evaluated.
  */
-#ifdef __LP64__
-#define	CACHE_PATH_CUTOFF	45
-#define	CACHE_LARGE_PAD		6
-#else
-#define	CACHE_PATH_CUTOFF	41
-#define	CACHE_LARGE_PAD		2
-#endif
+#define CACHE_PATH_CUTOFF_MIN    40
+#define CACHE_STRUCT_LEN(pathlen)	\
+    (offsetof(struct namecache, nc_name) + (pathlen) + 1)
+#define CACHE_PATH_CUTOFF						\
+    (roundup2(CACHE_STRUCT_LEN(CACHE_PATH_CUTOFF_MIN),			\
+    _Alignof(struct namecache_ts)) - CACHE_STRUCT_LEN(0))
 
-#define CACHE_ZONE_SMALL_SIZE		(offsetof(struct namecache, nc_name) + CACHE_PATH_CUTOFF + 1)
-#define CACHE_ZONE_SMALL_TS_SIZE	(offsetof(struct namecache_ts, nc_nc) + CACHE_ZONE_SMALL_SIZE)
-#define CACHE_ZONE_LARGE_SIZE		(offsetof(struct namecache, nc_name) + NAME_MAX + 1 + CACHE_LARGE_PAD)
-#define CACHE_ZONE_LARGE_TS_SIZE	(offsetof(struct namecache_ts, nc_nc) + CACHE_ZONE_LARGE_SIZE)
+#define CACHE_ZONE_SMALL_SIZE						\
+    CACHE_STRUCT_LEN(CACHE_PATH_CUTOFF)
+#define CACHE_ZONE_SMALL_TS_SIZE					\
+    (offsetof(struct namecache_ts, nc_nc) + CACHE_ZONE_SMALL_SIZE)
+#define CACHE_ZONE_LARGE_SIZE						\
+    roundup2(CACHE_STRUCT_LEN(NAME_MAX), _Alignof(struct namecache_ts))
+#define CACHE_ZONE_LARGE_TS_SIZE					\
+    (offsetof(struct namecache_ts, nc_nc) + CACHE_ZONE_LARGE_SIZE)
 
-_Static_assert((CACHE_ZONE_SMALL_SIZE % (CACHE_ZONE_ALIGNMENT + 1)) == 0, "bad zone size");
-_Static_assert((CACHE_ZONE_SMALL_TS_SIZE % (CACHE_ZONE_ALIGNMENT + 1)) == 0, "bad zone size");
-_Static_assert((CACHE_ZONE_LARGE_SIZE % (CACHE_ZONE_ALIGNMENT + 1)) == 0, "bad zone size");
-_Static_assert((CACHE_ZONE_LARGE_TS_SIZE % (CACHE_ZONE_ALIGNMENT + 1)) == 0, "bad zone size");
+_Static_assert((CACHE_ZONE_SMALL_SIZE % (CACHE_ZONE_ALIGN_MASK + 1)) == 0,
+    "bad zone size");
+_Static_assert((CACHE_ZONE_SMALL_TS_SIZE % (CACHE_ZONE_ALIGN_MASK + 1)) == 0,
+    "bad zone size");
+_Static_assert((CACHE_ZONE_LARGE_SIZE % (CACHE_ZONE_ALIGN_MASK + 1)) == 0,
+    "bad zone size");
+_Static_assert((CACHE_ZONE_LARGE_TS_SIZE % (CACHE_ZONE_ALIGN_MASK + 1)) == 0,
+    "bad zone size");
 
 #define	nc_vp		n_un.nu_vp
 #define	nc_neg		n_un.nu_neg
@@ -377,6 +485,18 @@ cache_ncp_invalidate(struct namecache *ncp)
 }
 
 /*
+ * Does this entry match the given directory and name?
+ */
+static bool
+cache_ncp_match(struct namecache *ncp, struct vnode *dvp,
+    struct componentname *cnp)
+{
+	return (ncp->nc_dvp == dvp &&
+	    ncp->nc_nlen == cnp->cn_namelen &&
+	    bcmp(ncp->nc_name, cnp->cn_nameptr, cnp->cn_namelen) == 0);
+}
+
+/*
  * Check whether the entry can be safely used.
  *
  * All places which elide locks are supposed to call this after they are
@@ -409,7 +529,7 @@ static SYSCTL_NODE(_vfs_cache, OID_AUTO, param, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "Name cache parameters");
 
 static u_int __read_mostly	ncsize; /* the size as computed on creation or resizing */
-SYSCTL_UINT(_vfs_cache_param, OID_AUTO, size, CTLFLAG_RW, &ncsize, 0,
+SYSCTL_UINT(_vfs_cache_param, OID_AUTO, size, CTLFLAG_RD, &ncsize, 0,
     "Total namecache capacity");
 
 u_int ncsizefactor = 2;
@@ -491,6 +611,24 @@ VP2VNODELOCK(struct vnode *vp)
 	return (&vnodelocks[(((uintptr_t)(vp) >> 8) & ncvnodehash)]);
 }
 
+/*
+ * Search the hash table for a namecache entry.  Either the corresponding bucket
+ * must be locked, or the caller must be in an SMR read section.
+ */
+static struct namecache *
+cache_ncp_find(struct vnode *dvp, struct componentname *cnp, uint32_t hash)
+{
+	struct namecache *ncp;
+
+	KASSERT(mtx_owned(HASH2BUCKETLOCK(hash)) || VFS_SMR_ENTERED(),
+	    ("%s: hash %u not locked", __func__, hash));
+	CK_SLIST_FOREACH(ncp, NCHHASH(hash), nc_hash) {
+		if (cache_ncp_match(ncp, dvp, cnp))
+			break;
+	}
+	return (ncp);
+}
+
 static void
 cache_out_ts(struct namecache *ncp, struct timespec *tsp, int *ticksp)
 {
@@ -515,8 +653,7 @@ SYSCTL_INT(_debug, OID_AUTO, vfscache, CTLFLAG_RW, &doingcache, 0,
 #endif
 
 /* Export size information to userland */
-SYSCTL_INT(_debug_sizeof, OID_AUTO, namecache, CTLFLAG_RD, SYSCTL_NULL_INT_PTR,
-    sizeof(struct namecache), "sizeof(struct namecache)");
+SYSCTL_SIZEOF_STRUCT(namecache);
 
 /*
  * The new name cache statistics
@@ -534,11 +671,9 @@ STATNODE_ULONG(neg, numneg, "Number of negative cache entries");
 STATNODE_ULONG(count, numcache, "Number of cache entries");
 STATNODE_COUNTER(heldvnodes, numcachehv, "Number of namecache entries with vnodes held");
 STATNODE_COUNTER(drops, numdrops, "Number of dropped entries due to reaching the limit");
-STATNODE_COUNTER(dothits, dothits, "Number of '.' hits");
-STATNODE_COUNTER(dotdothis, dotdothits, "Number of '..' hits");
 STATNODE_COUNTER(miss, nummiss, "Number of cache misses");
 STATNODE_COUNTER(misszap, nummisszap, "Number of cache misses we do not want to cache");
-STATNODE_COUNTER(posszaps, numposzaps,
+STATNODE_COUNTER(poszaps, numposzaps,
     "Number of cache hits (positive) we do not want to cache");
 STATNODE_COUNTER(poshits, numposhits, "Number of cache hits (positive)");
 STATNODE_COUNTER(negzaps, numnegzaps,
@@ -546,7 +681,6 @@ STATNODE_COUNTER(negzaps, numnegzaps,
 STATNODE_COUNTER(neghits, numneghits, "Number of cache hits (negative)");
 /* These count for vn_getcwd(), too. */
 STATNODE_COUNTER(fullpathcalls, numfullpathcalls, "Number of fullpath search calls");
-STATNODE_COUNTER(fullpathfail1, numfullpathfail1, "Number of fullpath search errors (ENOTDIR)");
 STATNODE_COUNTER(fullpathfail2, numfullpathfail2,
     "Number of fullpath search errors (VOP_VPTOCNP failures)");
 STATNODE_COUNTER(fullpathfail4, numfullpathfail4, "Number of fullpath search errors (ENOMEM)");
@@ -560,17 +694,14 @@ static SYSCTL_NODE(_vfs_cache, OID_AUTO, debug, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "Name cache debugging");
 #define DEBUGNODE_ULONG(name, varname, descr)					\
 	SYSCTL_ULONG(_vfs_cache_debug, OID_AUTO, name, CTLFLAG_RD, &varname, 0, descr);
-#define DEBUGNODE_COUNTER(name, varname, descr)					\
-	static COUNTER_U64_DEFINE_EARLY(varname);				\
-	SYSCTL_COUNTER_U64(_vfs_cache_debug, OID_AUTO, name, CTLFLAG_RD, &varname, \
-	    descr);
-DEBUGNODE_COUNTER(zap_bucket_relock_success, zap_bucket_relock_success,
+static u_long zap_bucket_relock_success;
+DEBUGNODE_ULONG(zap_bucket_relock_success, zap_bucket_relock_success,
     "Number of successful removals after relocking");
-static long zap_bucket_fail;
+static u_long zap_bucket_fail;
 DEBUGNODE_ULONG(zap_bucket_fail, zap_bucket_fail, "");
-static long zap_bucket_fail2;
+static u_long zap_bucket_fail2;
 DEBUGNODE_ULONG(zap_bucket_fail2, zap_bucket_fail2, "");
-static long cache_lock_vnodes_cel_3_failures;
+static u_long cache_lock_vnodes_cel_3_failures;
 DEBUGNODE_ULONG(vnodes_cel_3_failures, cache_lock_vnodes_cel_3_failures,
     "Number of times 3-way vnode locking failed");
 
@@ -994,11 +1125,31 @@ SYSCTL_PROC(_vfs_cache, OID_AUTO, nchstats, CTLTYPE_OPAQUE | CTLFLAG_RD |
     CTLFLAG_MPSAFE, 0, 0, sysctl_nchstats, "LU",
     "VFS cache effectiveness statistics");
 
+static int
+sysctl_hitpct(SYSCTL_HANDLER_ARGS)
+{
+	long poshits, neghits, miss, total;
+	long pct;
+
+	poshits = counter_u64_fetch(numposhits);
+	neghits = counter_u64_fetch(numneghits);
+	miss = counter_u64_fetch(nummiss);
+	total = poshits + neghits + miss;
+
+	pct = 0;
+	if (total != 0)
+		pct = ((poshits + neghits) * 100) / total;
+	return (sysctl_handle_int(oidp, 0, pct, req));
+}
+SYSCTL_PROC(_vfs_cache_stats, OID_AUTO, hitpct,
+    CTLTYPE_INT | CTLFLAG_MPSAFE | CTLFLAG_RD, NULL, 0, sysctl_hitpct,
+    "I", "Percentage of hits");
+
 static void
-cache_recalc_neg_min(u_int val)
+cache_recalc_neg_min(void)
 {
 
-	neg_min = (ncsize * val) / 100;
+	neg_min = (ncsize * ncnegminpct) / 100;
 }
 
 static int
@@ -1017,7 +1168,7 @@ sysctl_negminpct(SYSCTL_HANDLER_ARGS)
 	if (val < 0 || val > 99)
 		return (EINVAL);
 	ncnegminpct = val;
-	cache_recalc_neg_min(val);
+	cache_recalc_neg_min();
 	return (0);
 }
 
@@ -1316,8 +1467,7 @@ cache_neg_promote_cond(struct vnode *dvp, struct componentname *cnp,
 	/*
 	 * The newly found entry may be something different...
 	 */
-	if (!(ncp->nc_dvp == dvp && ncp->nc_nlen == cnp->cn_namelen &&
-	    !bcmp(ncp->nc_name, cnp->cn_nameptr, ncp->nc_nlen))) {
+	if (!cache_ncp_match(ncp, dvp, cnp)) {
 		goto out_abort;
 	}
 
@@ -1655,6 +1805,7 @@ cache_zap_unlocked_bucket(struct namecache *ncp, struct componentname *cnp,
     struct mtx *blp)
 {
 	struct namecache *rncp;
+	struct mtx *rvlp;
 
 	cache_assert_bucket_unlocked(ncp);
 
@@ -1662,19 +1813,26 @@ cache_zap_unlocked_bucket(struct namecache *ncp, struct componentname *cnp,
 	cache_lock_vnodes(dvlp, vlp);
 	mtx_lock(blp);
 	CK_SLIST_FOREACH(rncp, (NCHHASH(hash)), nc_hash) {
-		if (rncp == ncp && rncp->nc_dvp == dvp &&
-		    rncp->nc_nlen == cnp->cn_namelen &&
-		    !bcmp(rncp->nc_name, cnp->cn_nameptr, rncp->nc_nlen))
+		if (rncp == ncp && cache_ncp_match(rncp, dvp, cnp))
 			break;
 	}
-	if (rncp != NULL) {
-		cache_zap_locked(rncp);
-		mtx_unlock(blp);
-		cache_unlock_vnodes(dvlp, vlp);
-		counter_u64_add(zap_bucket_relock_success, 1);
-		return (0);
-	}
+	if (rncp == NULL)
+		goto out_mismatch;
 
+	if (!(ncp->nc_flag & NCF_NEGATIVE))
+		rvlp = VP2VNODELOCK(rncp->nc_vp);
+	else
+		rvlp = NULL;
+	if (rvlp != vlp)
+		goto out_mismatch;
+
+	cache_zap_locked(rncp);
+	mtx_unlock(blp);
+	cache_unlock_vnodes(dvlp, vlp);
+	atomic_add_long(&zap_bucket_relock_success, 1);
+	return (0);
+
+out_mismatch:
 	mtx_unlock(blp);
 	cache_unlock_vnodes(dvlp, vlp);
 	return (EAGAIN);
@@ -1746,6 +1904,15 @@ retry_dotdot:
 		return (1);
 	}
 
+	/*
+	 * XXX note that access here is completely unlocked with no provisions
+	 * to keep the hash allocated. If one is sufficiently unlucky a
+	 * parallel cache resize can reallocate the hash, unmap backing pages
+	 * and cause the empty check below to fault.
+	 *
+	 * Fixing this has epsilon priority, but can be done with no overhead
+	 * for this codepath with sufficient effort.
+	 */
 	hash = cache_get_hash(cnp->cn_nameptr, cnp->cn_namelen, dvp);
 	blp = HASH2BUCKETLOCK(hash);
 retry:
@@ -1753,13 +1920,7 @@ retry:
 		goto out_no_entry;
 
 	mtx_lock(blp);
-
-	CK_SLIST_FOREACH(ncp, (NCHHASH(hash)), nc_hash) {
-		if (ncp->nc_dvp == dvp && ncp->nc_nlen == cnp->cn_namelen &&
-		    !bcmp(ncp->nc_name, cnp->cn_nameptr, ncp->nc_nlen))
-			break;
-	}
-
+	ncp = cache_ncp_find(dvp, cnp, hash);
 	if (ncp == NULL) {
 		mtx_unlock(blp);
 		goto out_no_entry;
@@ -1767,7 +1928,7 @@ retry:
 
 	error = cache_zap_locked_bucket(ncp, cnp, hash, blp);
 	if (__predict_false(error != 0)) {
-		zap_bucket_fail++;
+		atomic_add_long(&zap_bucket_fail, 1);
 		goto retry;
 	}
 	counter_u64_add(numposzaps, 1);
@@ -1787,7 +1948,6 @@ cache_lookup_dot(struct vnode *dvp, struct vnode **vpp, struct componentname *cn
 	int ltype;
 
 	*vpp = dvp;
-	counter_u64_add(dothits, 1);
 	SDT_PROBE3(vfs, namecache, lookup, hit, dvp, ".", *vpp);
 	if (tsp != NULL)
 		timespecclear(tsp);
@@ -1832,7 +1992,6 @@ cache_lookup_dotdot(struct vnode *dvp, struct vnode **vpp, struct componentname 
 		return (0);
 	}
 
-	counter_u64_add(dotdothits, 1);
 retry:
 	dvlp = VP2VNODELOCK(dvp);
 	mtx_lock(dvlp);
@@ -1957,12 +2116,7 @@ retry:
 	blp = HASH2BUCKETLOCK(hash);
 	mtx_lock(blp);
 
-	CK_SLIST_FOREACH(ncp, (NCHHASH(hash)), nc_hash) {
-		if (ncp->nc_dvp == dvp && ncp->nc_nlen == cnp->cn_namelen &&
-		    !bcmp(ncp->nc_name, cnp->cn_nameptr, ncp->nc_nlen))
-			break;
-	}
-
+	ncp = cache_ncp_find(dvp, cnp, hash);
 	if (__predict_false(ncp == NULL)) {
 		mtx_unlock(blp);
 		SDT_PROBE2(vfs, namecache, lookup, miss, dvp, cnp->cn_nameptr);
@@ -1995,7 +2149,7 @@ negative_success:
 			counter_u64_add(numnegzaps, 1);
 			error = cache_zap_locked_bucket(ncp, cnp, hash, blp);
 			if (__predict_false(error != 0)) {
-				zap_bucket_fail2++;
+				atomic_add_long(&zap_bucket_fail2, 1);
 				goto retry;
 			}
 			cache_free(ncp);
@@ -2052,12 +2206,7 @@ cache_lookup(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 	hash = cache_get_hash(cnp->cn_nameptr, cnp->cn_namelen, dvp);
 	vfs_smr_enter();
 
-	CK_SLIST_FOREACH(ncp, (NCHHASH(hash)), nc_hash) {
-		if (ncp->nc_dvp == dvp && ncp->nc_nlen == cnp->cn_namelen &&
-		    !bcmp(ncp->nc_name, cnp->cn_nameptr, ncp->nc_nlen))
-			break;
-	}
-
+	ncp = cache_ncp_find(dvp, cnp, hash);
 	if (__predict_false(ncp == NULL)) {
 		vfs_smr_exit();
 		SDT_PROBE2(vfs, namecache, lookup, miss, dvp, cnp->cn_nameptr);
@@ -2193,8 +2342,8 @@ cache_lock_vnodes_cel_3(struct celockstate *cel, struct vnode *vp)
 	} else {
 		if (mtx_trylock(vlp))
 			goto out;
-		cache_lock_vnodes_cel_3_failures++;
 		cache_unlock_vnodes_cel(cel);
+		atomic_add_long(&cache_lock_vnodes_cel_3_failures, 1);
 		if (vlp < cel->vlp[0]) {
 			mtx_lock(vlp);
 			mtx_lock(cel->vlp[0]);
@@ -2375,7 +2524,6 @@ cache_enter_time(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 	struct celockstate cel;
 	struct namecache *ncp, *n2, *ndd;
 	struct namecache_ts *ncp_ts;
-	struct nchashhead *ncpp;
 	uint32_t hash;
 	int flag;
 	int len;
@@ -2452,47 +2600,46 @@ cache_enter_time(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 	 * with this name.  This can happen with concurrent lookups of
 	 * the same path name.
 	 */
-	ncpp = NCHHASH(hash);
-	CK_SLIST_FOREACH(n2, ncpp, nc_hash) {
-		if (n2->nc_dvp == dvp &&
-		    n2->nc_nlen == cnp->cn_namelen &&
-		    !bcmp(n2->nc_name, cnp->cn_nameptr, n2->nc_nlen)) {
-			MPASS(cache_ncp_canuse(n2));
-			if ((n2->nc_flag & NCF_NEGATIVE) != 0)
-				KASSERT(vp == NULL,
-				    ("%s: found entry pointing to a different vnode (%p != %p) ; name [%s]",
-				    __func__, NULL, vp, cnp->cn_nameptr));
-			else
-				KASSERT(n2->nc_vp == vp,
-				    ("%s: found entry pointing to a different vnode (%p != %p) ; name [%s]",
-				    __func__, n2->nc_vp, vp, cnp->cn_nameptr));
-			/*
-			 * Entries are supposed to be immutable unless in the
-			 * process of getting destroyed. Accommodating for
-			 * changing timestamps is possible but not worth it.
-			 * This should be harmless in terms of correctness, in
-			 * the worst case resulting in an earlier expiration.
-			 * Alternatively, the found entry can be replaced
-			 * altogether.
-			 */
-			MPASS((n2->nc_flag & (NCF_TS | NCF_DTS)) == (ncp->nc_flag & (NCF_TS | NCF_DTS)));
+	n2 = cache_ncp_find(dvp, cnp, hash);
+	if (n2 != NULL) {
+		MPASS(cache_ncp_canuse(n2));
+		if ((n2->nc_flag & NCF_NEGATIVE) != 0)
+			KASSERT(vp == NULL,
+			    ("%s: found entry pointing to a different vnode "
+			    "(%p != %p); name [%s]",
+			    __func__, NULL, vp, cnp->cn_nameptr));
+		else
+			KASSERT(n2->nc_vp == vp,
+			    ("%s: found entry pointing to a different vnode "
+			    "(%p != %p); name [%s]",
+			    __func__, n2->nc_vp, vp, cnp->cn_nameptr));
+		/*
+		 * Entries are supposed to be immutable unless in the
+		 * process of getting destroyed. Accommodating for
+		 * changing timestamps is possible but not worth it.
+		 * This should be harmless in terms of correctness, in
+		 * the worst case resulting in an earlier expiration.
+		 * Alternatively, the found entry can be replaced
+		 * altogether.
+		 */
+		MPASS((n2->nc_flag & (NCF_TS | NCF_DTS)) ==
+		    (ncp->nc_flag & (NCF_TS | NCF_DTS)));
 #if 0
-			if (tsp != NULL) {
-				KASSERT((n2->nc_flag & NCF_TS) != 0,
-				    ("no NCF_TS"));
-				n2_ts = __containerof(n2, struct namecache_ts, nc_nc);
-				n2_ts->nc_time = ncp_ts->nc_time;
-				n2_ts->nc_ticks = ncp_ts->nc_ticks;
-				if (dtsp != NULL) {
-					n2_ts->nc_dotdottime = ncp_ts->nc_dotdottime;
-					n2_ts->nc_nc.nc_flag |= NCF_DTS;
-				}
+		if (tsp != NULL) {
+			KASSERT((n2->nc_flag & NCF_TS) != 0,
+			    ("no NCF_TS"));
+			n2_ts = __containerof(n2, struct namecache_ts, nc_nc);
+			n2_ts->nc_time = ncp_ts->nc_time;
+			n2_ts->nc_ticks = ncp_ts->nc_ticks;
+			if (dtsp != NULL) {
+				n2_ts->nc_dotdottime = ncp_ts->nc_dotdottime;
+				n2_ts->nc_nc.nc_flag |= NCF_DTS;
 			}
-#endif
-			SDT_PROBE3(vfs, namecache, enter, duplicate, dvp, ncp->nc_name,
-			    vp);
-			goto out_unlock_free;
 		}
+#endif
+		SDT_PROBE3(vfs, namecache, enter, duplicate, dvp, ncp->nc_name,
+		    vp);
+		goto out_unlock_free;
 	}
 
 	if (flag == NCF_ISDOTDOT) {
@@ -2506,28 +2653,28 @@ cache_enter_time(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 		    ("wrong vnode type %p", vp));
 		atomic_thread_fence_rel();
 		atomic_store_ptr(&dvp->v_cache_dd, ncp);
-	}
+	} else if (vp != NULL) {
+		/*
+		 * Take the slow path in INOTIFY().  This flag will be lazily
+		 * cleared by cache_vop_inotify() once all directories referring
+		 * to vp are unwatched.
+		 */
+		if (__predict_false((vn_irflag_read(dvp) & VIRF_INOTIFY) != 0))
+			vn_irflag_set_cond(vp, VIRF_INOTIFY_PARENT);
 
-	if (vp != NULL) {
-		if (flag != NCF_ISDOTDOT) {
-			/*
-			 * For this case, the cache entry maps both the
-			 * directory name in it and the name ".." for the
-			 * directory's parent.
-			 */
-			if ((ndd = vp->v_cache_dd) != NULL) {
-				if ((ndd->nc_flag & NCF_ISDOTDOT) != 0)
-					cache_zap_locked(ndd);
-				else
-					ndd = NULL;
-			}
-			atomic_thread_fence_rel();
-			atomic_store_ptr(&vp->v_cache_dd, ncp);
-		} else if (vp->v_type != VDIR) {
-			if (vp->v_cache_dd != NULL) {
-				atomic_store_ptr(&vp->v_cache_dd, NULL);
-			}
+		/*
+		 * For this case, the cache entry maps both the
+		 * directory name in it and the name ".." for the
+		 * directory's parent.
+		 */
+		if ((ndd = vp->v_cache_dd) != NULL) {
+			if ((ndd->nc_flag & NCF_ISDOTDOT) != 0)
+				cache_zap_locked(ndd);
+			else
+				ndd = NULL;
 		}
+		atomic_thread_fence_rel();
+		atomic_store_ptr(&vp->v_cache_dd, ncp);
 	}
 
 	if (flag != NCF_ISDOTDOT) {
@@ -2558,7 +2705,7 @@ cache_enter_time(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 	 * Insert the new namecache entry into the appropriate chain
 	 * within the cache entries table.
 	 */
-	CK_SLIST_INSERT_HEAD(ncpp, ncp, nc_hash);
+	CK_SLIST_INSERT_HEAD(NCHHASH(hash), ncp, nc_hash);
 
 	atomic_thread_fence_rel();
 	/*
@@ -2601,10 +2748,10 @@ cache_enter_time_flags(struct vnode *dvp, struct vnode *vp, struct componentname
 	cache_enter_time(dvp, vp, cnp, tsp, dtsp);
 }
 
-static u_int
-cache_roundup_2(u_int val)
+static u_long
+cache_roundup_2(u_long val)
 {
-	u_int res;
+	u_long res;
 
 	for (res = 1; res <= val; res <<= 1)
 		continue;
@@ -2620,7 +2767,7 @@ nchinittbl(u_long elements, u_long *hashmask)
 
 	hashsize = cache_roundup_2(elements) / 2;
 
-	hashtbl = malloc((u_long)hashsize * sizeof(*hashtbl), M_VFSCACHE, M_WAITOK);
+	hashtbl = malloc(hashsize * sizeof(*hashtbl), M_VFSCACHE, M_WAITOK);
 	for (i = 0; i < hashsize; i++)
 		CK_SLIST_INIT(&hashtbl[i]);
 	*hashmask = hashsize - 1;
@@ -2643,13 +2790,13 @@ nchinit(void *dummy __unused)
 	u_int i;
 
 	cache_zone_small = uma_zcreate("S VFS Cache", CACHE_ZONE_SMALL_SIZE,
-	    NULL, NULL, NULL, NULL, CACHE_ZONE_ALIGNMENT, UMA_ZONE_ZINIT);
+	    NULL, NULL, NULL, NULL, CACHE_ZONE_ALIGN_MASK, UMA_ZONE_ZINIT);
 	cache_zone_small_ts = uma_zcreate("STS VFS Cache", CACHE_ZONE_SMALL_TS_SIZE,
-	    NULL, NULL, NULL, NULL, CACHE_ZONE_ALIGNMENT, UMA_ZONE_ZINIT);
+	    NULL, NULL, NULL, NULL, CACHE_ZONE_ALIGN_MASK, UMA_ZONE_ZINIT);
 	cache_zone_large = uma_zcreate("L VFS Cache", CACHE_ZONE_LARGE_SIZE,
-	    NULL, NULL, NULL, NULL, CACHE_ZONE_ALIGNMENT, UMA_ZONE_ZINIT);
+	    NULL, NULL, NULL, NULL, CACHE_ZONE_ALIGN_MASK, UMA_ZONE_ZINIT);
 	cache_zone_large_ts = uma_zcreate("LTS VFS Cache", CACHE_ZONE_LARGE_TS_SIZE,
-	    NULL, NULL, NULL, NULL, CACHE_ZONE_ALIGNMENT, UMA_ZONE_ZINIT);
+	    NULL, NULL, NULL, NULL, CACHE_ZONE_ALIGN_MASK, UMA_ZONE_ZINIT);
 
 	VFS_SMR_ZONE_SET(cache_zone_small);
 	VFS_SMR_ZONE_SET(cache_zone_small_ts);
@@ -2657,8 +2804,8 @@ nchinit(void *dummy __unused)
 	VFS_SMR_ZONE_SET(cache_zone_large_ts);
 
 	ncsize = desiredvnodes * ncsizefactor;
-	cache_recalc_neg_min(ncnegminpct);
-	nchashtbl = nchinittbl(desiredvnodes * 2, &nchash);
+	cache_recalc_neg_min();
+	nchashtbl = nchinittbl(ncsize, &nchash);
 	ncbuckethash = cache_roundup_2(mp_ncpus * mp_ncpus) - 1;
 	if (ncbuckethash < 7) /* arbitrarily chosen to avoid having one lock */
 		ncbuckethash = 7;
@@ -2766,7 +2913,7 @@ cache_changesize(u_long newmaxvnodes)
 	struct namecache *ncp;
 	uint32_t hash;
 	u_long newncsize;
-	int i;
+	u_long i;
 
 	newncsize = newmaxvnodes * ncsizefactor;
 	newmaxvnodes = cache_roundup_2(newmaxvnodes * 2);
@@ -2801,7 +2948,7 @@ cache_changesize(u_long newmaxvnodes)
 		}
 	}
 	ncsize = newncsize;
-	cache_recalc_neg_min(ncnegminpct);
+	cache_recalc_neg_min();
 	cache_changesize_set_new(new_nchashtbl, new_nchash);
 	cache_unlock_all_buckets();
 	cache_unlock_all_vnodes();
@@ -2988,15 +3135,21 @@ cache_validate(struct vnode *dvp, struct vnode *vp, struct componentname *cnp)
 		return;
 	blp = HASH2BUCKETLOCK(hash);
 	mtx_lock(blp);
-	CK_SLIST_FOREACH(ncp, (NCHHASH(hash)), nc_hash) {
-		if (ncp->nc_dvp == dvp && ncp->nc_nlen == cnp->cn_namelen &&
-		    !bcmp(ncp->nc_name, cnp->cn_nameptr, ncp->nc_nlen)) {
-			if (ncp->nc_vp != vp)
-				panic("%s: mismatch (%p != %p); ncp %p [%s] dvp %p\n",
-				    __func__, vp, ncp->nc_vp, ncp, ncp->nc_name, ncp->nc_dvp);
-		}
+	ncp = cache_ncp_find(dvp, cnp, hash);
+	if (ncp != NULL && ncp->nc_vp != vp) {
+		panic("%s: mismatch (%p != %p); ncp %p [%s] dvp %p\n",
+		    __func__, vp, ncp->nc_vp, ncp, ncp->nc_name, ncp->nc_dvp);
 	}
 	mtx_unlock(blp);
+}
+
+void
+cache_assert_no_entries(struct vnode *vp)
+{
+
+	VNPASS(TAILQ_EMPTY(&vp->v_cache_dst), vp);
+	VNPASS(LIST_EMPTY(&vp->v_cache_src), vp);
+	VNPASS(vp->v_cache_dd == NULL, vp);
 }
 #endif
 
@@ -3007,7 +3160,7 @@ void
 cache_purgevfs(struct mount *mp)
 {
 	struct vnode *vp, *mvp;
-	size_t visited, purged;
+	size_t visited __sdt_used, purged __sdt_used;
 
 	visited = purged = 0;
 	/*
@@ -3134,17 +3287,53 @@ kern___realpathat(struct thread *td, int fd, const char *path, char *buf,
 
 	if (flags != 0)
 		return (EINVAL);
-	NDINIT_ATRIGHTS(&nd, LOOKUP, FOLLOW | SAVENAME | WANTPARENT | AUDITVNODE1,
+	NDINIT_ATRIGHTS(&nd, LOOKUP, FOLLOW | WANTPARENT | AUDITVNODE1,
 	    pathseg, path, fd, &cap_fstat_rights);
 	if ((error = namei(&nd)) != 0)
 		return (error);
-	error = vn_fullpath_hardlink(nd.ni_vp, nd.ni_dvp, nd.ni_cnd.cn_nameptr,
-	    nd.ni_cnd.cn_namelen, &retbuf, &freebuf, &size);
+
+	if (nd.ni_vp->v_type == VREG && nd.ni_dvp->v_type != VDIR &&
+	    (nd.ni_vp->v_vflag & VV_ROOT) != 0) {
+		struct vnode *covered_vp;
+
+		/*
+		 * This happens if vp is a file mount. The call to
+		 * vn_fullpath_hardlink can panic if path resolution can't be
+		 * handled without the directory.
+		 *
+		 * To resolve this, we find the vnode which was mounted on -
+		 * this should have a unique global path since we disallow
+		 * mounting on linked files.
+		 */
+		error = vn_lock(nd.ni_vp, LK_SHARED);
+		if (error != 0)
+			goto out;
+		covered_vp = nd.ni_vp->v_mount->mnt_vnodecovered;
+		vref(covered_vp);
+		VOP_UNLOCK(nd.ni_vp);
+		error = vn_fullpath(covered_vp, &retbuf, &freebuf);
+		vrele(covered_vp);
+	} else {
+		error = vn_fullpath_hardlink(nd.ni_vp, nd.ni_dvp,
+		    nd.ni_cnd.cn_nameptr, nd.ni_cnd.cn_namelen, &retbuf,
+		    &freebuf, &size);
+	}
 	if (error == 0) {
-		error = copyout(retbuf, buf, size);
+		size_t len;
+
+		len = strlen(retbuf) + 1;
+		if (size < len)
+			error = ENAMETOOLONG;
+		else if (pathseg == UIO_USERSPACE)
+			error = copyout(retbuf, buf, len);
+		else
+			memcpy(buf, retbuf, len);
 		free(freebuf, M_TEMP);
 	}
-	NDFREE(&nd, 0);
+out:
+	vrele(nd.ni_vp);
+	vrele(nd.ni_dvp);
+	NDFREE_PNBUF(&nd);
 	return (error);
 }
 
@@ -3156,12 +3345,10 @@ sys___realpathat(struct thread *td, struct __realpathat_args *uap)
 	    uap->flags, UIO_USERSPACE));
 }
 
-/*
- * Retrieve the full filesystem path that correspond to a vnode from the name
- * cache (if available)
- */
-int
-vn_fullpath(struct vnode *vp, char **retbuf, char **freebuf)
+static int
+vn_fullpath_up_to_pwd_vnode(struct vnode *vp,
+    struct vnode *(*const get_pwd_vnode)(const struct pwd *),
+    char **retbuf, char **freebuf)
 {
 	struct pwd *pwd;
 	char *buf;
@@ -3175,11 +3362,13 @@ vn_fullpath(struct vnode *vp, char **retbuf, char **freebuf)
 	buf = malloc(buflen, M_TEMP, M_WAITOK);
 	vfs_smr_enter();
 	pwd = pwd_get_smr();
-	error = vn_fullpath_any_smr(vp, pwd->pwd_rdir, buf, retbuf, &buflen, 0);
+	error = vn_fullpath_any_smr(vp, get_pwd_vnode(pwd), buf, retbuf,
+	    &buflen, 0);
 	VFS_SMR_ASSERT_NOT_ENTERED();
 	if (error < 0) {
 		pwd = pwd_hold(curthread);
-		error = vn_fullpath_any(vp, pwd->pwd_rdir, buf, retbuf, &buflen);
+		error = vn_fullpath_any(vp, get_pwd_vnode(pwd), buf, retbuf,
+		    &buflen);
 		pwd_drop(pwd);
 	}
 	if (error == 0)
@@ -3187,6 +3376,42 @@ vn_fullpath(struct vnode *vp, char **retbuf, char **freebuf)
 	else
 		free(buf, M_TEMP);
 	return (error);
+}
+
+static inline struct vnode *
+get_rdir(const struct pwd *pwd)
+{
+	return (pwd->pwd_rdir);
+}
+
+/*
+ * Produce a filesystem path that starts from the current chroot directory and
+ * corresponds to the passed vnode, using the name cache (if available).
+ */
+int
+vn_fullpath(struct vnode *vp, char **retbuf, char **freebuf)
+{
+	return (vn_fullpath_up_to_pwd_vnode(vp, get_rdir, retbuf, freebuf));
+}
+
+static inline struct vnode *
+get_jdir(const struct pwd *pwd)
+{
+	return (pwd->pwd_jdir);
+}
+
+/*
+ * Produce a filesystem path that starts from the current jail's root directory
+ * and corresponds to the passed vnode, using the name cache (if available).
+ *
+ * This function allows to ignore chroots done inside a jail (or the host),
+ * allowing path checks to remain unaffected by privileged or unprivileged
+ * chroot calls.
+ */
+int
+vn_fullpath_jail(struct vnode *vp, char **retbuf, char **freebuf)
+{
+	return (vn_fullpath_up_to_pwd_vnode(vp, get_jdir, retbuf, freebuf));
 }
 
 /*
@@ -3369,14 +3594,7 @@ vn_fullpath_dir(struct vnode *vp, struct vnode *rdir, char *buf, char **retbuf,
 			vp = vp1;
 			continue;
 		}
-		if (vp->v_type != VDIR) {
-			vrele(vp);
-			counter_u64_add(numfullpathfail1, 1);
-			error = ENOTDIR;
-			SDT_PROBE3(vfs, namecache, fullpath, return,
-			    error, vp, NULL);
-			break;
-		}
+		VNPASS(vp->v_type == VDIR || VN_IS_DOOMED(vp), vp);
 		error = vn_vptocnp(&vp, buf, &buflen);
 		if (error)
 			break;
@@ -3600,9 +3818,9 @@ vn_fullpath_any(struct vnode *vp, struct vnode *rdir, char *buf, char **retbuf,
 /*
  * Resolve an arbitrary vnode to a pathname (taking care of hardlinks).
  *
- * Since the namecache does not track hardlinks, the caller is
- * expected to first look up the target vnode with SAVENAME |
- * WANTPARENT flags passed to namei to get dvp and vp.
+ * Since the namecache does not track hardlinks, the caller is expected to
+ * first look up the target vnode with WANTPARENT flag passed to namei to get
+ * dvp and vp.
  *
  * Then we have 2 cases:
  * - if the found vnode is a directory, the path can be constructed just by
@@ -3619,7 +3837,7 @@ vn_fullpath_hardlink(struct vnode *vp, struct vnode *dvp,
 	struct pwd *pwd;
 	size_t addend;
 	int error;
-	enum vtype type;
+	__enum_uint8(vtype) type;
 
 	if (*buflen < 2)
 		return (EINVAL);
@@ -3641,15 +3859,8 @@ vn_fullpath_hardlink(struct vnode *vp, struct vnode *dvp,
 	 * before we get to evaluate the condition. If this happens, we will
 	 * populate part of the buffer and descend to vn_fullpath_dir with
 	 * vp == vp_crossmp. Prevent the problem by checking for VBAD.
-	 *
-	 * This should be atomic_load(&vp->v_type) but it is illegal to take
-	 * an address of a bit field, even if said field is sized to char.
-	 * Work around the problem by reading the value into a full-sized enum
-	 * and then re-reading it with atomic_load which will still prevent
-	 * the compiler from re-reading down the road.
 	 */
-	type = vp->v_type;
-	type = atomic_load_int(&type);
+	type = atomic_load_8(&vp->v_type);
 	if (type == VBAD) {
 		error = ENOENT;
 		goto out_bad;
@@ -3801,6 +4012,122 @@ out:
 	return (error);
 }
 
+/*
+ * This is similar to vn_path_to_global_path but allows for regular
+ * files which may not be present in the cache.
+ *
+ * Requires a locked, referenced vnode.
+ * Vnode is re-locked on success or ENODEV, otherwise unlocked.
+ */
+int
+vn_path_to_global_path_hardlink(struct thread *td, struct vnode *vp,
+    struct vnode *dvp, char *path, u_int pathlen, const char *leaf_name,
+    size_t leaf_length)
+{
+	struct nameidata nd;
+	struct vnode *vp1;
+	char *rpath, *fbuf;
+	size_t len;
+	int error;
+
+	ASSERT_VOP_ELOCKED(vp, __func__);
+
+	/*
+	 * Construct global filesystem path from dvp, vp and leaf
+	 * name.
+	 */
+	VOP_UNLOCK(vp);
+	len = pathlen;
+	error = vn_fullpath_hardlink(vp, dvp, leaf_name, leaf_length,
+	    &rpath, &fbuf, &len);
+
+	if (error != 0) {
+		vrele(vp);
+		return (error);
+	}
+
+	if (strlen(rpath) >= pathlen) {
+		vrele(vp);
+		error = ENAMETOOLONG;
+		goto out;
+	}
+
+	/*
+	 * Re-lookup the vnode by path to detect a possible rename.
+	 * As a side effect, the vnode is relocked.
+	 * If vnode was renamed, return ENOENT.
+	 */
+	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | AUDITVNODE1, UIO_SYSSPACE, path);
+	error = namei(&nd);
+	if (error != 0) {
+		vrele(vp);
+		goto out;
+	}
+	NDFREE_PNBUF(&nd);
+	vp1 = nd.ni_vp;
+	vrele(vp);
+	if (vp1 == vp)
+		strcpy(path, rpath);
+	else {
+		vput(vp1);
+		error = ENOENT;
+	}
+
+out:
+	free(fbuf, M_TEMP);
+	return (error);
+}
+
+void
+cache_vop_inotify(struct vnode *vp, int event, uint32_t cookie)
+{
+	struct mtx *vlp;
+	struct namecache *ncp;
+	int isdir;
+	bool logged, self;
+
+	isdir = vp->v_type == VDIR ? IN_ISDIR : 0;
+	self = (vn_irflag_read(vp) & VIRF_INOTIFY) != 0 &&
+	    (vp->v_type != VDIR || (event & ~_IN_DIR_EVENTS) != 0);
+
+	if (self) {
+		int selfevent;
+
+		if (event == _IN_ATTRIB_LINKCOUNT)
+			selfevent = IN_ATTRIB;
+		else
+			selfevent = event;
+		inotify_log(vp, NULL, 0, selfevent | isdir, cookie);
+	}
+	if ((event & IN_ALL_EVENTS) == 0)
+		return;
+
+	logged = false;
+	vlp = VP2VNODELOCK(vp);
+	mtx_lock(vlp);
+	TAILQ_FOREACH(ncp, &vp->v_cache_dst, nc_dst) {
+		if ((ncp->nc_flag & NCF_ISDOTDOT) != 0)
+			continue;
+		if ((vn_irflag_read(ncp->nc_dvp) & VIRF_INOTIFY) != 0) {
+			/*
+			 * XXX-MJ if the vnode has two links in the same
+			 * dir, we'll log the same event twice.
+			 */
+			inotify_log(ncp->nc_dvp, ncp->nc_name, ncp->nc_nlen,
+			    event | isdir, cookie);
+			logged = true;
+		}
+	}
+	if (!logged && (vn_irflag_read(vp) & VIRF_INOTIFY_PARENT) != 0) {
+		/*
+		 * We didn't find a watched directory that contains this vnode,
+		 * so stop calling VOP_INOTIFY for operations on the vnode.
+		 */
+		vn_irflag_unset(vp, VIRF_INOTIFY_PARENT);
+	}
+	mtx_unlock(vlp);
+}
+
 #ifdef DDB
 static void
 db_print_vpath(struct vnode *vp)
@@ -3856,6 +4183,76 @@ static int cache_fast_lookup = 1;
 
 #define CACHE_FPL_FAILED	-2020
 
+static int
+cache_vop_bad_vexec(struct vop_fplookup_vexec_args *v)
+{
+	vn_printf(v->a_vp, "no proper vop_fplookup_vexec\n");
+	panic("no proper vop_fplookup_vexec");
+}
+
+static int
+cache_vop_bad_symlink(struct vop_fplookup_symlink_args *v)
+{
+	vn_printf(v->a_vp, "no proper vop_fplookup_symlink\n");
+	panic("no proper vop_fplookup_symlink");
+}
+
+void
+cache_vop_vector_register(struct vop_vector *v)
+{
+	size_t ops;
+
+	ops = 0;
+	if (v->vop_fplookup_vexec != NULL) {
+		ops++;
+	}
+	if (v->vop_fplookup_symlink != NULL) {
+		ops++;
+	}
+
+	if (ops == 2) {
+		return;
+	}
+
+	if (ops == 0) {
+		v->vop_fplookup_vexec = cache_vop_bad_vexec;
+		v->vop_fplookup_symlink = cache_vop_bad_symlink;
+		return;
+	}
+
+	printf("%s: invalid vop vector %p -- either all or none fplookup vops "
+	    "need to be provided",  __func__, v);
+	if (v->vop_fplookup_vexec == NULL) {
+		printf("%s: missing vop_fplookup_vexec\n", __func__);
+	}
+	if (v->vop_fplookup_symlink == NULL) {
+		printf("%s: missing vop_fplookup_symlink\n", __func__);
+	}
+	panic("bad vop vector %p", v);
+}
+
+#ifdef INVARIANTS
+void
+cache_validate_vop_vector(struct mount *mp, struct vop_vector *vops)
+{
+	if (mp == NULL)
+		return;
+
+	if ((mp->mnt_kern_flag & MNTK_FPLOOKUP) == 0)
+		return;
+
+	if (vops->vop_fplookup_vexec == NULL ||
+	    vops->vop_fplookup_vexec == cache_vop_bad_vexec)
+		panic("bad vop_fplookup_vexec on vector %p for filesystem %s",
+		    vops, mp->mnt_vfc->vfc_name);
+
+	if (vops->vop_fplookup_symlink == NULL ||
+	    vops->vop_fplookup_symlink == cache_vop_bad_symlink)
+		panic("bad vop_fplookup_symlink on vector %p for filesystem %s",
+		    vops, mp->mnt_vfc->vfc_name);
+}
+#endif
+
 void
 cache_fast_lookup_enabled_recalc(void)
 {
@@ -3888,7 +4285,7 @@ syscal_vfs_cache_fast_lookup(SYSCTL_HANDLER_ARGS)
 		cache_fast_lookup_enabled_recalc();
 	return (error);
 }
-SYSCTL_PROC(_vfs, OID_AUTO, cache_fast_lookup, CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_MPSAFE,
+SYSCTL_PROC(_vfs_cache_param, OID_AUTO, fast_lookup, CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_MPSAFE,
     &cache_fast_lookup, 0, syscal_vfs_cache_fast_lookup, "IU", "");
 
 /*
@@ -3897,7 +4294,7 @@ SYSCTL_PROC(_vfs, OID_AUTO, cache_fast_lookup, CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_MP
  */
 struct nameidata_outer {
 	size_t ni_pathlen;
-	int cn_flags;
+	uint64_t cn_flags;
 };
 
 struct nameidata_saved {
@@ -3928,7 +4325,6 @@ struct cache_fpl {
 	enum cache_fpl_status status:8;
 	bool in_smr;
 	bool fsearch;
-	bool savename;
 	struct pwd **pwd;
 #ifdef INVARIANTS
 	struct cache_fpl_debug debug;
@@ -3951,10 +4347,8 @@ cache_fpl_cleanup_cnp(struct componentname *cnp)
 {
 
 	uma_zfree(namei_zone, cnp->cn_pnbuf);
-#ifdef DIAGNOSTIC
 	cnp->cn_pnbuf = NULL;
 	cnp->cn_nameptr = NULL;
-#endif
 }
 
 static struct vnode *
@@ -4166,7 +4560,6 @@ cache_fpl_handled_error_impl(struct cache_fpl *fpl, int error, int line)
 	fpl->line = line;
 	fpl->dvp = NULL;
 	fpl->tvp = NULL;
-	fpl->savename = false;
 	return (error);
 }
 
@@ -4181,9 +4574,9 @@ cache_fpl_terminated(struct cache_fpl *fpl)
 
 #define CACHE_FPL_SUPPORTED_CN_FLAGS \
 	(NC_NOMAKEENTRY | NC_KEEPPOSENTRY | LOCKLEAF | LOCKPARENT | WANTPARENT | \
-	 FAILIFEXISTS | FOLLOW | EMPTYPATH | LOCKSHARED | SAVENAME | SAVESTART | \
-	 WILLBEDIR | ISOPEN | NOMACCHECK | AUDITVNODE1 | AUDITVNODE2 | NOCAPCHECK | \
-	 OPENREAD | OPENWRITE | WANTIOCTLCAPS)
+	 FAILIFEXISTS | FOLLOW | EMPTYPATH | LOCKSHARED | ISRESTARTED | WILLBEDIR | \
+	 ISOPEN | NOMACCHECK | AUDITVNODE1 | AUDITVNODE2 | NOCAPCHECK | OPENREAD | \
+	 OPENWRITE | WANTIOCTLCAPS | NAMEILOOKUP)
 
 #define CACHE_FPL_INTERNAL_CN_FLAGS \
 	(ISDOTDOT | MAKEENTRY | ISLASTCN)
@@ -4235,7 +4628,7 @@ cache_can_fplookup(struct cache_fpl *fpl)
 		cache_fpl_aborted_early(fpl);
 		return (false);
 	}
-	if (IN_CAPABILITY_MODE(td)) {
+	if (IN_CAPABILITY_MODE(td) || CAP_TRACING(td)) {
 		cache_fpl_aborted_early(fpl);
 		return (false);
 	}
@@ -4255,17 +4648,23 @@ cache_fplookup_dirfd(struct cache_fpl *fpl, struct vnode **vpp)
 {
 	struct nameidata *ndp;
 	struct componentname *cnp;
-	int error;
-	bool fsearch;
+	int error, flags;
 
 	ndp = fpl->ndp;
 	cnp = fpl->cnp;
 
-	error = fgetvp_lookup_smr(ndp->ni_dirfd, ndp, vpp, &fsearch);
+	error = fgetvp_lookup_smr(ndp, vpp, &flags);
 	if (__predict_false(error != 0)) {
 		return (cache_fpl_aborted(fpl));
 	}
-	fpl->fsearch = fsearch;
+	if (__predict_false((flags & O_RESOLVE_BENEATH) != 0)) {
+		_Static_assert((CACHE_FPL_SUPPORTED_CN_FLAGS & RBENEATH) == 0,
+		    "RBENEATH supported by fplookup");
+		cache_fpl_smr_exit(fpl);
+		cache_fpl_aborted(fpl);
+		return (EOPNOTSUPP);
+	}
+	fpl->fsearch = (flags & FSEARCH) != 0;
 	if ((*vpp)->v_type != VDIR) {
 		if (!((cnp->cn_flags & EMPTYPATH) != 0 && cnp->cn_pnbuf[0] == '\0')) {
 			cache_fpl_smr_exit(fpl);
@@ -4293,7 +4692,7 @@ cache_fplookup_negative_promote(struct cache_fpl *fpl, struct namecache *oncp,
 }
 
 /*
- * The target vnode is not supported, prepare for the slow path to take over.
+ * Prepare fallback to the locked lookup while trying to retain the progress.
  */
 static int __noinline
 cache_fplookup_partial_setup(struct cache_fpl *fpl)
@@ -4417,7 +4816,7 @@ cache_fplookup_final_child(struct cache_fpl *fpl, enum vgetstate tvs)
 static int __noinline
 cache_fplookup_final_modifying(struct cache_fpl *fpl)
 {
-	struct nameidata *ndp;
+	struct nameidata *ndp __diagused;
 	struct componentname *cnp;
 	enum vgetstate dvs;
 	struct vnode *dvp, *tvp;
@@ -4530,15 +4929,8 @@ cache_fplookup_final_modifying(struct cache_fpl *fpl)
 	}
 
 	fpl->tvp = tvp;
-	fpl->savename = (cnp->cn_flags & SAVENAME) != 0;
 
 	if (tvp == NULL) {
-		if ((cnp->cn_flags & SAVESTART) != 0) {
-			ndp->ni_startdir = dvp;
-			vrefact(ndp->ni_startdir);
-			cnp->cn_flags |= SAVENAME;
-			fpl->savename = true;
-		}
 		MPASS(error == EJUSTRETURN);
 		if ((cnp->cn_flags & LOCKPARENT) == 0) {
 			VOP_UNLOCK(dvp);
@@ -4593,13 +4985,6 @@ cache_fplookup_final_modifying(struct cache_fpl *fpl)
 
 	if ((cnp->cn_flags & LOCKPARENT) == 0) {
 		VOP_UNLOCK(dvp);
-	}
-
-	if ((cnp->cn_flags & SAVESTART) != 0) {
-		ndp->ni_startdir = dvp;
-		vrefact(ndp->ni_startdir);
-		cnp->cn_flags |= SAVENAME;
-		fpl->savename = true;
 	}
 
 	return (cache_fpl_handled(fpl));
@@ -4756,8 +5141,6 @@ cache_fplookup_degenerate(struct cache_fpl *fpl)
 		return (cache_fpl_handled_error(fpl, EISDIR));
 	}
 
-	MPASS((cnp->cn_flags & SAVESTART) == 0);
-
 	if ((cnp->cn_flags & (LOCKPARENT|WANTPARENT)) != 0) {
 		return (cache_fplookup_final_withparent(fpl));
 	}
@@ -4878,8 +5261,6 @@ cache_fplookup_noentry(struct cache_fpl *fpl)
 		return (cache_fplookup_modifying(fpl));
 	}
 
-	MPASS((cnp->cn_flags & SAVESTART) == 0);
-
 	/*
 	 * Only try to fill in the component if it is the last one,
 	 * otherwise not only there may be several to handle but the
@@ -4944,9 +5325,6 @@ cache_fplookup_noentry(struct cache_fpl *fpl)
 	}
 
 	fpl->tvp = tvp;
-	if (!fpl->savename) {
-		MPASS((cnp->cn_flags & SAVENAME) == 0);
-	}
 
 	if (tvp == NULL) {
 		MPASS(error == EJUSTRETURN);
@@ -4990,6 +5368,12 @@ cache_fplookup_dot(struct cache_fpl *fpl)
 	int error;
 
 	MPASS(!seqc_in_modify(fpl->dvp_seqc));
+
+	if (__predict_false(fpl->dvp->v_type != VDIR)) {
+		cache_fpl_smr_exit(fpl);
+		return (cache_fpl_handled_error(fpl, ENOTDIR));
+	}
+
 	/*
 	 * Just re-assign the value. seqc will be checked later for the first
 	 * non-dot path component in line and/or before deciding to return the
@@ -4998,7 +5382,6 @@ cache_fplookup_dot(struct cache_fpl *fpl)
 	fpl->tvp = fpl->dvp;
 	fpl->tvp_seqc = fpl->dvp_seqc;
 
-	counter_u64_add(dothits, 1);
 	SDT_PROBE3(vfs, namecache, lookup, hit, fpl->dvp, ".", fpl->dvp);
 
 	error = 0;
@@ -5012,30 +5395,19 @@ static int __noinline
 cache_fplookup_dotdot(struct cache_fpl *fpl)
 {
 	struct nameidata *ndp;
-	struct componentname *cnp;
 	struct namecache *ncp;
 	struct vnode *dvp;
-	struct prison *pr;
 	u_char nc_flag;
 
 	ndp = fpl->ndp;
-	cnp = fpl->cnp;
 	dvp = fpl->dvp;
 
-	MPASS(cache_fpl_isdotdot(cnp));
+	MPASS(cache_fpl_isdotdot(fpl->cnp));
 
 	/*
 	 * XXX this is racy the same way regular lookup is
 	 */
-	for (pr = cnp->cn_cred->cr_prison; pr != NULL;
-	    pr = pr->pr_parent)
-		if (dvp == pr->pr_root)
-			break;
-
-	if (dvp == ndp->ni_rootdir ||
-	    dvp == ndp->ni_topdir ||
-	    dvp == rootvnode ||
-	    pr != NULL) {
+	if (vfs_lookup_isroot(ndp, dvp)) {
 		fpl->tvp = dvp;
 		fpl->tvp_seqc = vn_seqc_read_any(dvp);
 		if (seqc_in_modify(fpl->tvp_seqc)) {
@@ -5050,6 +5422,11 @@ cache_fplookup_dotdot(struct cache_fpl *fpl)
 		 * The opposite of climb mount is needed here.
 		 */
 		return (cache_fpl_partial(fpl));
+	}
+
+	if (__predict_false(dvp->v_type != VDIR)) {
+		cache_fpl_smr_exit(fpl);
+		return (cache_fpl_handled_error(fpl, ENOTDIR));
 	}
 
 	ncp = atomic_load_consume_ptr(&dvp->v_cache_dd);
@@ -5082,7 +5459,6 @@ cache_fplookup_dotdot(struct cache_fpl *fpl)
 		return (cache_fpl_aborted(fpl));
 	}
 
-	counter_u64_add(dotdothits, 1);
 	return (0);
 }
 
@@ -5188,12 +5564,14 @@ cache_fplookup_symlink(struct cache_fpl *fpl)
 	struct nameidata *ndp;
 	struct componentname *cnp;
 	struct vnode *dvp, *tvp;
+	struct pwd *pwd;
 	int error;
 
 	ndp = fpl->ndp;
 	cnp = fpl->cnp;
 	dvp = fpl->dvp;
 	tvp = fpl->tvp;
+	pwd = *(fpl->pwd);
 
 	if (cache_fpl_islastcn(ndp)) {
 		if ((cnp->cn_flags & FOLLOW) == 0) {
@@ -5249,6 +5627,9 @@ cache_fplookup_symlink(struct cache_fpl *fpl)
 			cache_fpl_checkpoint(fpl);
 			return (cache_fpl_partial(fpl));
 		}
+		if (__predict_false(pwd->pwd_adir != pwd->pwd_rdir)) {
+			return (cache_fpl_aborted(fpl));
+		}
 	}
 	return (0);
 }
@@ -5278,12 +5659,7 @@ cache_fplookup_next(struct cache_fpl *fpl)
 
 	MPASS(!cache_fpl_isdotdot(cnp));
 
-	CK_SLIST_FOREACH(ncp, (NCHHASH(hash)), nc_hash) {
-		if (ncp->nc_dvp == dvp && ncp->nc_nlen == cnp->cn_namelen &&
-		    !bcmp(ncp->nc_name, cnp->cn_nameptr, ncp->nc_nlen))
-			break;
-	}
-
+	ncp = cache_ncp_find(dvp, cnp, hash);
 	if (__predict_false(ncp == NULL)) {
 		return (cache_fplookup_noentry(fpl));
 	}
@@ -5353,7 +5729,7 @@ cache_fplookup_climb_mount(struct cache_fpl *fpl)
 	vp = fpl->tvp;
 	vp_seqc = fpl->tvp_seqc;
 
-	VNPASS(vp->v_type == VDIR || vp->v_type == VBAD, vp);
+	VNPASS(vp->v_type == VDIR || vp->v_type == VREG || vp->v_type == VBAD, vp);
 	mp = atomic_load_ptr(&vp->v_mountedhere);
 	if (__predict_false(mp == NULL)) {
 		return (0);
@@ -5361,7 +5737,7 @@ cache_fplookup_climb_mount(struct cache_fpl *fpl)
 
 	prev_mp = NULL;
 	for (;;) {
-		if (!vfs_op_thread_enter_crit(mp, mpcpu)) {
+		if (!vfs_op_thread_enter_crit(mp, &mpcpu)) {
 			if (prev_mp != NULL)
 				vfs_op_thread_exit_crit(prev_mp, prev_mpcpu);
 			return (cache_fpl_partial(fpl));
@@ -5410,13 +5786,13 @@ cache_fplookup_cross_mount(struct cache_fpl *fpl)
 	vp = fpl->tvp;
 	vp_seqc = fpl->tvp_seqc;
 
-	VNPASS(vp->v_type == VDIR || vp->v_type == VBAD, vp);
+	VNPASS(vp->v_type == VDIR || vp->v_type == VREG || vp->v_type == VBAD, vp);
 	mp = atomic_load_ptr(&vp->v_mountedhere);
 	if (__predict_false(mp == NULL)) {
 		return (0);
 	}
 
-	if (!vfs_op_thread_enter_crit(mp, mpcpu)) {
+	if (!vfs_op_thread_enter_crit(mp, &mpcpu)) {
 		return (cache_fpl_partial(fpl));
 	}
 	if (!vn_seqc_consistent(vp, vp_seqc)) {
@@ -5973,53 +6349,90 @@ cache_fplookup_impl(struct vnode *dvp, struct cache_fpl *fpl)
  * Note: all VOP_FPLOOKUP_VEXEC routines have a comment referencing this one.
  *
  * Filesystems can opt in by setting the MNTK_FPLOOKUP flag and meeting criteria
- * outlined below.
+ * outlined at the end.
  *
- * Traditional vnode lookup conceptually looks like this:
+ * Traversing from one vnode to another requires atomicity with regard to
+ * permissions, mount points and of course their relative placement (if you are
+ * looking up "bar" in "foo" and you found it, it better be in that directory
+ * at the time).
  *
- * vn_lock(current);
- * for (;;) {
- *	next = find();
- *	vn_lock(next);
- *	vn_unlock(current);
- *	current = next;
- *	if (last)
- *	    break;
- * }
- * return (current);
- *
- * Each jump to the next vnode is safe memory-wise and atomic with respect to
- * any modifications thanks to holding respective locks.
+ * Normally this is accomplished with locking, but it comes with a significant
+ * performance hit and is untenable as a fast path even in a moderate core
+ * count environment (at the time of writing this comment this would be a
+ * little south of 100).
  *
  * The same guarantee can be provided with a combination of safe memory
  * reclamation and sequence counters instead. If all operations which affect
  * the relationship between the current vnode and the one we are looking for
  * also modify the counter, we can verify whether all the conditions held as
- * we made the jump. This includes things like permissions, mount points etc.
- * Counter modification is provided by enclosing relevant places in
- * vn_seqc_write_begin()/end() calls.
+ * we made the jump.
  *
- * Thus this translates to:
+ * See places which issue vn_seqc_write_begin()/vn_seqc_write_end() for
+ * operations affected.
+ *
+ * Suppose the variable "cnp" contains lookup metadata (the path etc.), then
+ * locked lookup conceptually looks like this:
+ *
+ * // lock the current directory
+ * vn_lock(dvp);
+ * for (;;) {
+ *      // permission check
+ * 	if (!canlookup(dvp, cnp))
+ * 	    abort();
+ * 	// look for the target name inside dvp
+ *	tvp = findnext(dvp, cnp);
+ *	vn_lock(tvp);
+ *	// tvp is still guaranteed to be inside of dvp because of the lock on dvp
+ *	vn_unlock(dvp);
+ *      // dvp is unlocked. its state is now arbitrary, but that's fine as we
+ *      // made the jump while everything relevant was correct, continue with tvp
+ *      // as the directory to look up names in
+ *	tvp = dvp;
+ *	if (last)
+ *	    break;
+ *	// if not last loop back and continue until done
+ * }
+ * vget(tvp);
+ * return (tvp);
+ *
+ * Lockless lookup replaces locking with sequence counter checks:
  *
  * vfs_smr_enter();
  * dvp_seqc = seqc_read_any(dvp);
- * if (seqc_in_modify(dvp_seqc)) // someone is altering the vnode
+ * // fail if someone is altering the directory vnode
+ * if (seqc_in_modify(dvp_seqc))
  *     abort();
  * for (;;) {
- * 	tvp = find();
+ *      // permission check. note it can race, but we will validate the outcome
+ *      // with a seqc
+ * 	if (!canlookup_smr(dvp, cnp)) {
+ * 	    // has dvp changed from under us? if so, the denial may be invalid
+ *	    if (!seqc_consistent(dvp, dvp_seqc)
+ * 	        fallback_to_locked();
+ * 	    // nothing changed, lookup denial is valid
+ * 	    fail();
+ * 	}
+ * 	// look for the target name inside dvp
+ * 	tvp = findnext(dvp, cnp);
  * 	tvp_seqc = seqc_read_any(tvp);
- * 	if (seqc_in_modify(tvp_seqc)) // someone is altering the target vnode
- * 	    abort();
- * 	if (!seqc_consistent(dvp, dvp_seqc) // someone is altering the vnode
- * 	    abort();
- * 	dvp = tvp; // we know nothing of importance has changed
- * 	dvp_seqc = tvp_seqc; // store the counter for the tvp iteration
+ *	// bail if someone is altering the target vnode
+ * 	if (seqc_in_modify(tvp_seqc))
+ * 	    fallback_to_locked();
+ *	// bail if someone is altering the directory vnode
+ * 	if (!seqc_consistent(dvp, dvp_seqc)
+ * 	    fallback_to_locked();
+ * 	// we confirmed neither dvp nor tvp changed while we were making the
+ * 	// jump to the next component, thus the result is the same as if we
+ *      // held the lock on dvp and tvp the entire time, continue with tvp
+ *      // as the directory to look up names in
+ * 	dvp = tvp;
+ * 	dvp_seqc = tvp_seqc;
  * 	if (last)
  * 	    break;
  * }
  * vget(); // secure the vnode
  * if (!seqc_consistent(tvp, tvp_seqc) // final check
- * 	    abort();
+ *     fallback_to_locked();
  * // at this point we know nothing has changed for any parent<->child pair
  * // as they were crossed during the lookup, meaning we matched the guarantee
  * // of the locked variant
@@ -6061,10 +6474,8 @@ cache_fplookup(struct nameidata *ndp, enum cache_fpl_status *status,
 	KASSERT ((cnp->cn_flags & CACHE_FPL_INTERNAL_CN_FLAGS) == 0,
 	    ("%s: internal flags found in cn_flags %" PRIx64, __func__,
 	    cnp->cn_flags));
-	if ((cnp->cn_flags & SAVESTART) != 0) {
-		MPASS(cnp->cn_nameiop != LOOKUP);
-	}
 	MPASS(cnp->cn_nameptr == cnp->cn_pnbuf);
+	MPASS(ndp->ni_resflags == 0);
 
 	if (__predict_false(!cache_can_fplookup(&fpl))) {
 		*status = fpl.status;
@@ -6080,17 +6491,15 @@ cache_fplookup(struct nameidata *ndp, enum cache_fpl_status *status,
 #endif
 	fpl.nulchar = &cnp->cn_nameptr[ndp->ni_pathlen - 1];
 	fpl.fsearch = false;
-	fpl.savename = (cnp->cn_flags & SAVENAME) != 0;
 	fpl.tvp = NULL; /* for degenerate path handling */
 	fpl.pwd = pwdp;
 	pwd = pwd_get_smr();
 	*(fpl.pwd) = pwd;
-	ndp->ni_rootdir = pwd->pwd_rdir;
+	namei_setup_rootdir(ndp, cnp, pwd);
 	ndp->ni_topdir = pwd->pwd_jdir;
 
 	if (cnp->cn_pnbuf[0] == '/') {
 		dvp = cache_fpl_handle_root(&fpl);
-		MPASS(ndp->ni_resflags == 0);
 		ndp->ni_resflags = NIRES_ABS;
 	} else {
 		if (ndp->ni_dirfd == AT_FDCWD) {
@@ -6109,27 +6518,18 @@ out:
 	cache_fpl_smr_assert_not_entered(&fpl);
 	cache_fpl_assert_status(&fpl);
 	*status = fpl.status;
-	if (SDT_PROBES_ENABLED()) {
-		SDT_PROBE3(vfs, fplookup, lookup, done, ndp, fpl.line, fpl.status);
-		if (fpl.status == CACHE_FPL_STATUS_HANDLED)
-			SDT_PROBE4(vfs, namei, lookup, return, error, ndp->ni_vp, true,
-			    ndp);
-	}
-
+	SDT_PROBE3(vfs, fplookup, lookup, done, ndp, fpl.line, fpl.status);
 	if (__predict_true(fpl.status == CACHE_FPL_STATUS_HANDLED)) {
 		MPASS(error != CACHE_FPL_FAILED);
+		SDT_PROBE4(vfs, namei, lookup, return, error, ndp->ni_vp, true,
+		    ndp);
 		if (error != 0) {
+			cache_fpl_cleanup_cnp(fpl.cnp);
 			MPASS(fpl.dvp == NULL);
 			MPASS(fpl.tvp == NULL);
-			MPASS(fpl.savename == false);
 		}
 		ndp->ni_dvp = fpl.dvp;
 		ndp->ni_vp = fpl.tvp;
-		if (fpl.savename) {
-			cnp->cn_flags |= HASBUF;
-		} else {
-			cache_fpl_cleanup_cnp(cnp);
-		}
 	}
 	return (error);
 }

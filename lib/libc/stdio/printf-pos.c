@@ -32,12 +32,6 @@
  * SUCH DAMAGE.
  */
 
-#if defined(LIBC_SCCS) && !defined(lint)
-static char sccsid[] = "@(#)vfprintf.c	8.1 (Berkeley) 6/4/93";
-#endif /* LIBC_SCCS and not lint */
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * This is the code responsible for handling positional arguments
  * (%m$ and %m$.n$) for vfprintf() and vfwprintf().
@@ -317,11 +311,9 @@ reswitch:	switch (ch) {
 				goto rflag;
 			}
 			goto reswitch;
-#ifndef NO_FLOATING_POINT
 		case 'L':
 			flags |= LONGDBL;
 			goto rflag;
-#endif
 		case 'h':
 			if (flags & SHORTINT) {
 				flags &= ~SHORTINT;
@@ -365,7 +357,6 @@ reswitch:	switch (ch) {
 			if ((error = addsarg(&types, flags)))
 				goto error;
 			break;
-#ifndef NO_FLOATING_POINT
 		case 'a':
 		case 'A':
 		case 'e':
@@ -378,7 +369,6 @@ reswitch:	switch (ch) {
 			if (error)
 				goto error;
 			break;
-#endif /* !NO_FLOATING_POINT */
 		case 'n':
 			if (flags & INTMAXT)
 				error = addtype(&types, TP_INTMAXT);
@@ -510,11 +500,9 @@ reswitch:	switch (ch) {
 				goto rflag;
 			}
 			goto reswitch;
-#ifndef NO_FLOATING_POINT
 		case 'L':
 			flags |= LONGDBL;
 			goto rflag;
-#endif
 		case 'h':
 			if (flags & SHORTINT) {
 				flags &= ~SHORTINT;
@@ -558,7 +546,6 @@ reswitch:	switch (ch) {
 			if ((error = addsarg(&types, flags)))
 				goto error;
 			break;
-#ifndef NO_FLOATING_POINT
 		case 'a':
 		case 'A':
 		case 'e':
@@ -571,7 +558,6 @@ reswitch:	switch (ch) {
 			if (error)
 				goto error;
 			break;
-#endif /* !NO_FLOATING_POINT */
 		case 'n':
 			if (flags & INTMAXT)
 				error = addtype(&types, TP_INTMAXT);
@@ -750,14 +736,10 @@ build_arg_table(struct typetable *types, va_list ap, union arg **argtable)
 			(*argtable) [n].pintmaxarg = va_arg (ap, intmax_t *);
 			break;
 		    case T_DOUBLE:
-#ifndef NO_FLOATING_POINT
 			(*argtable) [n].doublearg = va_arg (ap, double);
-#endif
 			break;
 		    case T_LONG_DOUBLE:
-#ifndef NO_FLOATING_POINT
 			(*argtable) [n].longdoublearg = va_arg (ap, long double);
-#endif
 			break;
 		    case TP_CHAR:
 			(*argtable) [n].pchararg = va_arg (ap, char *);

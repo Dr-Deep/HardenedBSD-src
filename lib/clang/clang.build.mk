@@ -1,4 +1,3 @@
-# $FreeBSD$
 
 .include <src.opts.mk>
 
@@ -9,7 +8,6 @@
 CFLAGS+=	-I${CLANG_SRCS}/include
 
 .if ${MK_CLANG_FULL} != "no"
-CFLAGS+=	-DCLANG_ENABLE_ARCMT
 CFLAGS+=	-DCLANG_ENABLE_STATIC_ANALYZER
 .endif
 

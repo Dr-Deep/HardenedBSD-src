@@ -15,15 +15,14 @@
  * purpose.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/dirent.h>
 #include <sys/endian.h>
+#include <sys/stdarg.h>
+
 #include <machine/elf.h>
-#include <machine/stdarg.h>
 #include <machine/md_var.h>
+
 #include <ufs/ffs/fs.h>
 
 #include "paths.h"
@@ -58,7 +57,7 @@ static void exit(int) __dead2;
 static void load(const char *);
 static int dskread(void *, uint64_t, int);
 
-static void usage(void);
+static void usage(void) __dead2;
 
 static void bcopy(const void *src, void *dst, size_t len);
 static void bzero(void *b, size_t len);
@@ -103,14 +102,11 @@ ofwh_t bootdevh;
 ofwh_t stdinh, stdouth;
 
 /*
- * Note about the entry point:
+ * Our entrypoint.
  *
- * For some odd reason, the first page of the load appears to have trouble
- * when entering in LE. The first five instructions decode weirdly.
- * I suspect it is some cache weirdness between the ELF headers and .text.
- *
- * Ensure we have a gap between the start of .text and the entry as a
- * workaround.
+ * A bug in the SLOF shipped with some versions of QEMU causes the first
+ * 32 bytes of .text to be wrongly byte-swapped when loading LE programs.
+ * As a workaround, we add some padding at the start of the text section.
  */
 __asm("                         \n\
         .data                   \n\
@@ -119,7 +115,7 @@ stack:                          \n\
         .space  16384           \n\
                                 \n\
         .text                   \n\
-        /* SLOF cache hack */   \n\
+        /* SLOF workaround */   \n\
         .space 4096             \n\
         .globl  _start          \n\
 _start:                         \n\

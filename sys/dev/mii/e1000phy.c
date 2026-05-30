@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Principal Author: Parag Patel
  * Copyright (c) 2001
@@ -32,8 +32,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * driver for the Marvell 88E1000 series external 1000/100/10-BT PHY.
  */
@@ -186,6 +184,11 @@ static void
 e1000phy_reset(struct mii_softc *sc)
 {
 	uint16_t reg, page;
+
+	/* Undo power-down / isolate */
+	reg = PHY_READ(sc, E1000_CR);
+	reg &= ~(E1000_CR_ISOLATE | E1000_CR_POWER_DOWN);
+	PHY_WRITE(sc, E1000_CR, reg);
 
 	reg = PHY_READ(sc, E1000_SCR);
 	if ((sc->mii_flags & MIIF_HAVEFIBER) != 0) {
@@ -355,6 +358,8 @@ e1000phy_service(struct mii_softc *sc, struct mii_data *mii, int cmd)
 
 		reg = PHY_READ(sc, E1000_CR);
 		reg &= ~E1000_CR_AUTO_NEG_ENABLE;
+		/* Undo power-down / isolate */
+		reg &= ~(E1000_CR_ISOLATE | E1000_CR_POWER_DOWN);
 		PHY_WRITE(sc, E1000_CR, reg | E1000_CR_RESET);
 
 		if (IFM_SUBTYPE(ife->ifm_media) == IFM_1000_T) {

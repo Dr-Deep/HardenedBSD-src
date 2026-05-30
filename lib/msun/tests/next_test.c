@@ -29,8 +29,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <fenv.h>
 #include <float.h>
 #include <math.h>
@@ -81,6 +79,9 @@ static const long double ldbl_eps = LDBL_EPSILON;
 ATF_TC_WITHOUT_HEAD(zeros);
 ATF_TC_BODY(zeros, tc)
 {
+#if defined(__aarch64__) || defined(__riscv)
+	atf_tc_expect_fail("https://bugs.freebsd.org/290099");
+#endif
 	long double ldbl_small;
 
 #ifdef	__i386__
@@ -166,6 +167,9 @@ ATF_TC_BODY(ordinary, tc)
 ATF_TC_WITHOUT_HEAD(boundaries);
 ATF_TC_BODY(boundaries, tc)
 {
+#if defined(__aarch64__) || defined(__riscv)
+	atf_tc_expect_fail("https://bugs.freebsd.org/290099");
+#endif
 	/*
 	 * Tests at word boundaries, normalization boundaries, etc.
 	 */
@@ -213,6 +217,9 @@ ATF_TC_BODY(boundaries, tc)
 ATF_TC_WITHOUT_HEAD(overflow);
 ATF_TC_BODY(overflow, tc)
 {
+#if defined(__aarch64__) || defined(__riscv)
+	atf_tc_expect_fail("https://bugs.freebsd.org/290099");
+#endif
 	long double ldbl_max;
 	/*
 	 * We can't use a compile-time constant here because gcc on

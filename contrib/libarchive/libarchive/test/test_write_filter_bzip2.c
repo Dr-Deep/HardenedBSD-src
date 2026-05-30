@@ -25,7 +25,6 @@
  */
 
 #include "test.h"
-__FBSDID("$FreeBSD: head/lib/libarchive/test/test_write_compress_bzip2.c 191183 2009-04-17 01:06:31Z kientzle $");
 
 /*
  * A basic exercise of bzip2 reading and writing.
@@ -41,15 +40,16 @@ DEFINE_TEST(test_write_filter_bzip2)
 	size_t buffsize, datasize;
 	char path[16];
 	size_t used1, used2;
-	int i, r, use_prog;
+	ssize_t r;
+	int i, use_prog;
 
 	buffsize = 2000000;
-	assert(NULL != (buff = (char *)malloc(buffsize)));
+	assert(NULL != (buff = malloc(buffsize)));
 	if (buff == NULL)
 		return;
 
 	datasize = 10000;
-	assert(NULL != (data = (char *)malloc(datasize)));
+	assert(NULL != (data = malloc(datasize)));
 	if (data == NULL) {
 		free(buff);
 		return;
@@ -83,7 +83,7 @@ DEFINE_TEST(test_write_filter_bzip2)
 	archive_entry_set_filetype(ae, AE_IFREG);
 	archive_entry_set_size(ae, datasize);
 	for (i = 0; i < 999; i++) {
-		sprintf(path, "file%03d", i);
+		snprintf(path, sizeof(path), "file%03d", i);
 		archive_entry_copy_pathname(ae, path);
 		assertEqualIntA(a, ARCHIVE_OK, archive_write_header(a, ae));
 		assertA(datasize
@@ -99,7 +99,7 @@ DEFINE_TEST(test_write_filter_bzip2)
 	assertEqualIntA(a, ARCHIVE_OK,
 	    archive_read_open_memory(a, buff, used1));
 	for (i = 0; i < 999; i++) {
-		sprintf(path, "file%03d", i);
+		snprintf(path, sizeof(path), "file%03d", i);
 		if (!assertEqualInt(0, archive_read_next_header(a, &ae)))
 			break;
 		assertEqualString(path, archive_entry_pathname(ae));
@@ -133,7 +133,7 @@ DEFINE_TEST(test_write_filter_bzip2)
 	assertEqualIntA(a, ARCHIVE_OK,
 	    archive_write_open_memory(a, buff, buffsize, &used2));
 	for (i = 0; i < 999; i++) {
-		sprintf(path, "file%03d", i);
+		snprintf(path, sizeof(path), "file%03d", i);
 		assert((ae = archive_entry_new()) != NULL);
 		archive_entry_copy_pathname(ae, path);
 		archive_entry_set_size(ae, datasize);
@@ -160,7 +160,7 @@ DEFINE_TEST(test_write_filter_bzip2)
 	assertEqualIntA(a, ARCHIVE_OK,
 	    archive_read_open_memory(a, buff, used2));
 	for (i = 0; i < 999; i++) {
-		sprintf(path, "file%03d", i);
+		snprintf(path, sizeof(path), "file%03d", i);
 		if (!assertEqualInt(0, archive_read_next_header(a, &ae)))
 			break;
 		assertEqualString(path, archive_entry_pathname(ae));
@@ -187,7 +187,7 @@ DEFINE_TEST(test_write_filter_bzip2)
 	assertEqualIntA(a, ARCHIVE_OK,
 	    archive_write_open_memory(a, buff, buffsize, &used2));
 	for (i = 0; i < 999; i++) {
-		sprintf(path, "file%03d", i);
+		snprintf(path, sizeof(path), "file%03d", i);
 		assert((ae = archive_entry_new()) != NULL);
 		archive_entry_copy_pathname(ae, path);
 		archive_entry_set_size(ae, datasize);
@@ -212,7 +212,7 @@ DEFINE_TEST(test_write_filter_bzip2)
 	assertEqualIntA(a, ARCHIVE_OK,
 	    archive_read_open_memory(a, buff, used2));
 	for (i = 0; i < 999; i++) {
-		sprintf(path, "file%03d", i);
+		snprintf(path, sizeof(path), "file%03d", i);
 		if (!assertEqualInt(0, archive_read_next_header(a, &ae)))
 			break;
 		assertEqualString(path, archive_entry_pathname(ae));
@@ -267,6 +267,35 @@ DEFINE_TEST(test_write_filter_bzip2)
 	    archive_write_open_memory(a, buff, buffsize, &used2));
 	assertEqualInt(ARCHIVE_OK, archive_write_close(a));
 	assertEqualInt(ARCHIVE_OK, archive_write_free(a));
+
+	/*
+	 * Test behavior after a fatal error (triggered by giving
+	 * archive_write_open_memory() a very small buffer).
+	 */
+	if (!use_prog) {
+		used1 = 0;
+		assert((a = archive_write_new()) != NULL);
+		assertEqualIntA(a, ARCHIVE_OK,
+		    archive_write_set_format_ustar(a));
+		assertEqualIntA(a, ARCHIVE_OK,
+		    archive_write_add_filter_bzip2(a));
+		assertEqualIntA(a, ARCHIVE_OK,
+		    archive_write_open_memory(a, buff, 100, &used1));
+		assert((ae = archive_entry_new()) != NULL);
+		archive_entry_set_filetype(ae, AE_IFREG);
+		archive_entry_set_size(ae, 4000000);
+		archive_entry_copy_pathname(ae, "file");
+		assertEqualIntA(a, ARCHIVE_OK,
+		    archive_write_header(a, ae));
+		for (i = 0; i < 1000000; i++) {
+			r = archive_write_data(a, &i, 4);
+			if (r == ARCHIVE_FATAL)
+				break;
+		}
+		assertEqualIntA(a, ARCHIVE_FATAL, r);
+		archive_entry_free(ae);
+		assertEqualInt(ARCHIVE_OK, archive_write_free(a));
+	}
 
 	/*
 	 * Clean up.

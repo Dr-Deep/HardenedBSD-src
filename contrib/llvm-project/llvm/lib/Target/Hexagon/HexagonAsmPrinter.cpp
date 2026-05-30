@@ -13,7 +13,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "HexagonAsmPrinter.h"
-#include "Hexagon.h"
 #include "HexagonInstrInfo.h"
 #include "HexagonRegisterInfo.h"
 #include "HexagonSubtarget.h"
@@ -21,6 +20,7 @@
 #include "MCTargetDesc/HexagonMCExpr.h"
 #include "MCTargetDesc/HexagonMCInstrInfo.h"
 #include "MCTargetDesc/HexagonMCTargetDesc.h"
+#include "MCTargetDesc/HexagonTargetStreamer.h"
 #include "TargetInfo/HexagonTargetInfo.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -43,10 +43,10 @@
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
-#include <algorithm>
+#include "llvm/Target/TargetMachine.h"
 #include <cassert>
 #include <cstdint>
 #include <string>
@@ -66,8 +66,7 @@ void HexagonLowerToMC(const MCInstrInfo &MCII, const MachineInstr *MI,
 inline static unsigned getHexagonRegisterPair(unsigned Reg,
       const MCRegisterInfo *RI) {
   assert(Hexagon::IntRegsRegClass.contains(Reg));
-  MCSuperRegIterator SR(Reg, RI, false);
-  unsigned Pair = *SR;
+  unsigned Pair = *RI->superregs(Reg).begin();
   assert(Hexagon::DoubleRegsRegClass.contains(Pair));
   return Pair;
 }
@@ -202,14 +201,14 @@ static MCSymbol *smallData(AsmPrinter &AP, const MachineInstr &MI,
 
     MCSectionELF *Section = OutStreamer.getContext().getELFSection(
         sectionName, ELF::SHT_PROGBITS, ELF::SHF_WRITE | ELF::SHF_ALLOC);
-    OutStreamer.SwitchSection(Section);
+    OutStreamer.switchSection(Section);
 
     Sym = AP.OutContext.getOrCreateSymbol(Twine(symbolName));
     if (Sym->isUndefined()) {
       OutStreamer.emitLabel(Sym);
       OutStreamer.emitSymbolAttribute(Sym, MCSA_Global);
       OutStreamer.emitIntValue(Value, AlignSize);
-      OutStreamer.emitCodeAlignment(AlignSize, &STI);
+      OutStreamer.emitCodeAlignment(Align(AlignSize), &STI);
     }
   } else {
     assert(Imm.isExpr() && "Expected expression and found none");
@@ -231,13 +230,13 @@ static MCSymbol *smallData(AsmPrinter &AP, const MachineInstr &MI,
     MCSectionELF *Section = OutStreamer.getContext().getELFSection(
         ".lita", ELF::SHT_PROGBITS, ELF::SHF_WRITE | ELF::SHF_ALLOC);
 
-    OutStreamer.SwitchSection(Section);
+    OutStreamer.switchSection(Section);
     Sym = AP.OutContext.getOrCreateSymbol(Twine(LitaName));
     if (Sym->isUndefined()) {
       OutStreamer.emitLabel(Sym);
       OutStreamer.emitSymbolAttribute(Sym, MCSA_Local);
       OutStreamer.emitValue(Imm.getExpr(), AlignSize);
-      OutStreamer.emitCodeAlignment(AlignSize, &STI);
+      OutStreamer.emitCodeAlignment(Align(AlignSize), &STI);
     }
   }
   return Sym;
@@ -331,7 +330,7 @@ void HexagonAsmPrinter::HexagonProcessInstruction(MCInst &Inst,
       MCSymbol *Sym =
           smallData(*this, MI, *OutStreamer, Imm, 8, getSubtargetInfo());
 
-      OutStreamer->SwitchSection(Current.first, Current.second);
+      OutStreamer->switchSection(Current.first, Current.second);
       MCInst TmpInst;
       MCOperand &Reg = MappedInst.getOperand(0);
       TmpInst.setOpcode(Hexagon::L2_loadrdgp);
@@ -348,7 +347,7 @@ void HexagonAsmPrinter::HexagonProcessInstruction(MCInst &Inst,
       MCSectionSubPair Current = OutStreamer->getCurrentSection();
       MCSymbol *Sym =
           smallData(*this, MI, *OutStreamer, Imm, 4, getSubtargetInfo());
-      OutStreamer->SwitchSection(Current.first, Current.second);
+      OutStreamer->switchSection(Current.first, Current.second);
       MCInst TmpInst;
       MCOperand &Reg = MappedInst.getOperand(0);
       TmpInst.setOpcode(Hexagon::L2_loadrigp);
@@ -462,8 +461,8 @@ void HexagonAsmPrinter::HexagonProcessInstruction(MCInst &Inst,
       TmpInst.setOpcode(Hexagon::A2_combinew);
       TmpInst.addOperand(MappedInst.getOperand(0));
       MCOperand &MO1 = MappedInst.getOperand(1);
-      unsigned High = RI->getSubReg(MO1.getReg(), Hexagon::isub_hi);
-      unsigned Low = RI->getSubReg(MO1.getReg(), Hexagon::isub_lo);
+      MCRegister High = RI->getSubReg(MO1.getReg(), Hexagon::isub_hi);
+      MCRegister Low = RI->getSubReg(MO1.getReg(), Hexagon::isub_lo);
       // Add a new operand for the second register in the pair.
       TmpInst.addOperand(MCOperand::createReg(High));
       TmpInst.addOperand(MCOperand::createReg(Low));
@@ -539,8 +538,8 @@ void HexagonAsmPrinter::HexagonProcessInstruction(MCInst &Inst,
   // Translate a "$Rdd = $Rss" to "$Rdd = combine($Rs, $Rt)"
   case Hexagon::A2_tfrp: {
     MCOperand &MO = MappedInst.getOperand(1);
-    unsigned High = RI->getSubReg(MO.getReg(), Hexagon::isub_hi);
-    unsigned Low = RI->getSubReg(MO.getReg(), Hexagon::isub_lo);
+    MCRegister High = RI->getSubReg(MO.getReg(), Hexagon::isub_hi);
+    MCRegister Low = RI->getSubReg(MO.getReg(), Hexagon::isub_lo);
     MO.setReg(High);
     // Add a new operand for the second register in the pair.
     MappedInst.addOperand(MCOperand::createReg(Low));
@@ -551,8 +550,8 @@ void HexagonAsmPrinter::HexagonProcessInstruction(MCInst &Inst,
   case Hexagon::A2_tfrpt:
   case Hexagon::A2_tfrpf: {
     MCOperand &MO = MappedInst.getOperand(2);
-    unsigned High = RI->getSubReg(MO.getReg(), Hexagon::isub_hi);
-    unsigned Low = RI->getSubReg(MO.getReg(), Hexagon::isub_lo);
+    MCRegister High = RI->getSubReg(MO.getReg(), Hexagon::isub_hi);
+    MCRegister Low = RI->getSubReg(MO.getReg(), Hexagon::isub_lo);
     MO.setReg(High);
     // Add a new operand for the second register in the pair.
     MappedInst.addOperand(MCOperand::createReg(Low));
@@ -565,8 +564,8 @@ void HexagonAsmPrinter::HexagonProcessInstruction(MCInst &Inst,
   case Hexagon::A2_tfrptnew:
   case Hexagon::A2_tfrpfnew: {
     MCOperand &MO = MappedInst.getOperand(2);
-    unsigned High = RI->getSubReg(MO.getReg(), Hexagon::isub_hi);
-    unsigned Low = RI->getSubReg(MO.getReg(), Hexagon::isub_lo);
+    MCRegister High = RI->getSubReg(MO.getReg(), Hexagon::isub_hi);
+    MCRegister Low = RI->getSubReg(MO.getReg(), Hexagon::isub_lo);
     MO.setReg(High);
     // Add a new operand for the second register in the pair.
     MappedInst.addOperand(MCOperand::createReg(Low));
@@ -743,6 +742,9 @@ void HexagonAsmPrinter::HexagonProcessInstruction(MCInst &Inst,
 
 /// Print out a single Hexagon MI to the current output stream.
 void HexagonAsmPrinter::emitInstruction(const MachineInstr *MI) {
+  Hexagon_MC::verifyInstructionPredicates(MI->getOpcode(),
+                                          getSubtargetInfo().getFeatureBits());
+
   MCInst MCB;
   MCB.setOpcode(Hexagon::BUNDLE);
   MCB.addOperand(MCOperand::createImm(0));
@@ -771,6 +773,24 @@ void HexagonAsmPrinter::emitInstruction(const MachineInstr *MI) {
   if (HexagonMCInstrInfo::bundleSize(MCB) == 0)
     return;
   OutStreamer->emitInstruction(MCB, getSubtargetInfo());
+}
+
+void HexagonAsmPrinter::emitStartOfAsmFile(Module &M) {
+  if (TM.getTargetTriple().isOSBinFormatELF())
+    emitAttributes();
+}
+
+void HexagonAsmPrinter::emitEndOfAsmFile(Module &M) {
+  HexagonTargetStreamer &HTS =
+      static_cast<HexagonTargetStreamer &>(*OutStreamer->getTargetStreamer());
+  if (TM.getTargetTriple().isOSBinFormatELF())
+    HTS.finishAttributeSection();
+}
+
+void HexagonAsmPrinter::emitAttributes() {
+  HexagonTargetStreamer &HTS =
+      static_cast<HexagonTargetStreamer &>(*OutStreamer->getTargetStreamer());
+  HTS.emitTargetAttributes(*TM.getMCSubtargetInfo());
 }
 
 void HexagonAsmPrinter::EmitSled(const MachineInstr &MI, SledKind Kind) {
@@ -819,7 +839,7 @@ void HexagonAsmPrinter::EmitSled(const MachineInstr &MI, SledKind Kind) {
   emitNops(NoopsInSledCount);
 
   OutStreamer->emitLabel(PostSled);
-  recordSled(CurSled, MI, Kind, 0);
+  recordSled(CurSled, MI, Kind, 2);
 }
 
 void HexagonAsmPrinter::LowerPATCHABLE_FUNCTION_ENTER(const MachineInstr &MI) {
@@ -834,6 +854,12 @@ void HexagonAsmPrinter::LowerPATCHABLE_TAIL_CALL(const MachineInstr &MI) {
   EmitSled(MI, SledKind::TAIL_CALL);
 }
 
-extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeHexagonAsmPrinter() {
+char HexagonAsmPrinter::ID = 0;
+
+INITIALIZE_PASS(HexagonAsmPrinter, "hexagon-asm-printer",
+                "Hexagon Assembly Printer", false, false)
+
+extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void
+LLVMInitializeHexagonAsmPrinter() {
   RegisterAsmPrinter<HexagonAsmPrinter> X(getTheHexagonTarget());
 }

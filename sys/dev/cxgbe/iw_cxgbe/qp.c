@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2009-2013 Chelsio, Inc. All rights reserved.
  *
@@ -32,8 +32,6 @@
  * SOFTWARE.
  */
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_inet.h"
 
 #ifdef TCP_OFFLOAD
@@ -66,7 +64,7 @@ struct cpl_set_tcb_rpl;
 #include "iw_cxgbe.h"
 #include "user.h"
 
-static int creds(struct toepcb *toep, struct inpcb *inp, size_t wrsize);
+static int creds(struct toepcb *toep, struct tcpcb *tp, size_t wrsize);
 static int max_fr_immd = T4_MAX_FR_IMMD;//SYSCTL parameter later...
 
 static int alloc_ird(struct c4iw_dev *dev, u32 ird)
@@ -139,6 +137,9 @@ static int create_qp(struct c4iw_rdev *rdev, struct t4_wq *wq,
 	int eqsize;
 	struct wrqe *wr;
 	u64 sq_bar2_qoffset = 0, rq_bar2_qoffset = 0;
+
+	if (__predict_false(c4iw_stopped(rdev)))
+		return -EIO;
 
 	wq->sq.qid = c4iw_get_qpid(rdev, uctx);
 	if (!wq->sq.qid)
@@ -787,6 +788,8 @@ int c4iw_post_send(struct ib_qp *ibqp, const struct ib_send_wr *wr,
 
 	qhp = to_c4iw_qp(ibqp);
 	rdev = &qhp->rhp->rdev;
+	if (__predict_false(c4iw_stopped(rdev)))
+		return -EIO;
 	spin_lock_irqsave(&qhp->lock, flag);
 	if (t4_wq_in_error(&qhp->wq)) {
 		spin_unlock_irqrestore(&qhp->lock, flag);
@@ -922,6 +925,8 @@ int c4iw_post_receive(struct ib_qp *ibqp, const struct ib_recv_wr *wr,
 	u16 idx = 0;
 
 	qhp = to_c4iw_qp(ibqp);
+	if (__predict_false(c4iw_stopped(&qhp->rhp->rdev)))
+		return -EIO;
 	spin_lock_irqsave(&qhp->lock, flag);
 	if (t4_wq_in_error(&qhp->wq)) {
 		spin_unlock_irqrestore(&qhp->lock, flag);
@@ -1144,7 +1149,7 @@ static void post_terminate(struct c4iw_qp *qhp, struct t4_cqe *err_cqe,
 		term->ecode = qhp->attr.ecode;
 	} else
 		build_term_codes(err_cqe, &term->layer_etype, &term->ecode);
-	ret = creds(toep, inp, sizeof(*wqe));
+	ret = creds(toep, tp, sizeof(*wqe));
 	if (ret) {
 		free_wrqe(wr);
 		return;
@@ -1248,8 +1253,7 @@ rdma_fini(struct c4iw_dev *rhp, struct c4iw_qp *qhp, struct c4iw_ep *ep)
 	int ret;
 	struct wrqe *wr;
 	struct socket *so = ep->com.so;
-        struct inpcb *inp = sotoinpcb(so);
-        struct tcpcb *tp = intotcpcb(inp);
+        struct tcpcb *tp = intotcpcb(sotoinpcb(so));
         struct toepcb *toep = tp->t_toe;
 
 	KASSERT(rhp == qhp->rhp && ep == qhp->ep, ("%s: EDOOFUS", __func__));
@@ -1272,7 +1276,7 @@ rdma_fini(struct c4iw_dev *rhp, struct c4iw_qp *qhp, struct c4iw_ep *ep)
 
 	c4iw_init_wr_wait(&ep->com.wr_wait);
 
-	ret = creds(toep, inp, sizeof(*wqe));
+	ret = creds(toep, tp, sizeof(*wqe));
 	if (ret) {
 		free_wrqe(wr);
 		return ret;
@@ -1310,17 +1314,19 @@ static void build_rtr_msg(u8 p2p_type, struct fw_ri_init *init)
 }
 
 static int
-creds(struct toepcb *toep, struct inpcb *inp, size_t wrsize)
+creds(struct toepcb *toep, struct tcpcb *tp, size_t wrsize)
 {
 	struct ofld_tx_sdesc *txsd;
 
 	CTR3(KTR_IW_CXGBE, "%s:creB  %p %u", __func__, toep , wrsize);
-	INP_WLOCK(inp);
-	if ((inp->inp_flags & (INP_DROPPED | INP_TIMEWAIT)) != 0) {
-		INP_WUNLOCK(inp);
+	INP_WLOCK(tptoinpcb(tp));
+	if (tp->t_flags & TF_DISCONNECTED) {
+		INP_WUNLOCK(tptoinpcb(tp));
 		return (EINVAL);
 	}
 	txsd = &toep->txsd[toep->txsd_pidx];
+	KASSERT(howmany(wrsize, 16) <= MAX_OFLD_TX_SDESC_CREDITS,
+	    ("%s: tx_credits %zu too large", __func__, howmany(wrsize, 16)));
 	txsd->tx_credits = howmany(wrsize, 16);
 	txsd->plen = 0;
 	KASSERT(toep->tx_credits >= txsd->tx_credits && toep->txsd_avail > 0,
@@ -1329,7 +1335,7 @@ creds(struct toepcb *toep, struct inpcb *inp, size_t wrsize)
 	if (__predict_false(++toep->txsd_pidx == toep->txsd_total))
 		toep->txsd_pidx = 0;
 	toep->txsd_avail--;
-	INP_WUNLOCK(inp);
+	INP_WUNLOCK(tptoinpcb(tp));
 	CTR5(KTR_IW_CXGBE, "%s:creE  %p %u %u %u", __func__, toep ,
 	    txsd->tx_credits, toep->tx_credits, toep->txsd_pidx);
 	return (0);
@@ -1344,8 +1350,7 @@ static int rdma_init(struct c4iw_dev *rhp, struct c4iw_qp *qhp)
 	struct c4iw_rdev *rdev = &qhp->rhp->rdev;
 	struct adapter *sc = rdev->adap;
 	struct socket *so = ep->com.so;
-        struct inpcb *inp = sotoinpcb(so);
-        struct tcpcb *tp = intotcpcb(inp);
+        struct tcpcb *tp = intotcpcb(sotoinpcb(so));
         struct toepcb *toep = tp->t_toe;
 
 	CTR5(KTR_IW_CXGBE, "%s qhp %p qid 0x%x ep %p tid %u", __func__, qhp,
@@ -1409,7 +1414,7 @@ static int rdma_init(struct c4iw_dev *rhp, struct c4iw_qp *qhp)
 
 	c4iw_init_wr_wait(&ep->com.wr_wait);
 
-	ret = creds(toep, inp, sizeof(*wqe));
+	ret = creds(toep, tp, sizeof(*wqe));
 	if (ret) {
 		free_wrqe(wr);
 		free_ird(rhp, qhp->attr.max_ird);
@@ -1536,7 +1541,7 @@ int c4iw_modify_qp(struct c4iw_dev *rhp, struct c4iw_qp *qhp,
 	case C4IW_QP_STATE_RTS:
 		switch (attrs->next_state) {
 		case C4IW_QP_STATE_CLOSING:
-			BUG_ON(atomic_read(&qhp->ep->com.kref.refcount) < 2);
+			BUG_ON(kref_read(&qhp->ep->com.kref) < 2);
 			t4_set_wq_in_error(&qhp->wq);
 			set_state(qhp, C4IW_QP_STATE_CLOSING);
 			ep = qhp->ep;

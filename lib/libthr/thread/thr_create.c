@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2003 Daniel M. Eischen <deischen@gdeb.com>
  * Copyright (c) 2005, David Xu <davidxu@freebsd.org>
@@ -27,13 +27,12 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
+#define _WANT_P_OSREL
 #include "namespace.h"
 #include <sys/types.h>
 #include <sys/rtprio.h>
 #include <sys/signalvar.h>
+#include <sys/exterrvar.h>
 #include <errno.h>
 #include <link.h>
 #include <stdlib.h>
@@ -46,8 +45,12 @@ __FBSDID("$FreeBSD$");
 #include "libc_private.h"
 #include "thr_private.h"
 
+int __getosreldate(void);
+
 static int  create_stack(struct pthread_attr *pattr);
 static void thread_start(struct pthread *curthread);
+
+int __thr_new_flags = THR_C_RUNTIME;
 
 __weak_reference(_pthread_create, pthread_create);
 
@@ -149,7 +152,7 @@ _pthread_create(pthread_t * __restrict thread,
 		_thr_stack_fix_protection(new_thread);
 
 	/* Return thread pointer eariler so that new thread can use it. */
-	(*thread) = new_thread;
+	*thread = new_thread;
 	if (SHOULD_REPORT_EVENT(curthread, TD_CREATE) || cpusetp != NULL) {
 		THR_THREAD_LOCK(curthread, new_thread);
 		locked = 1;
@@ -163,7 +166,7 @@ _pthread_create(pthread_t * __restrict thread,
 	param.tls_size = sizeof(struct tcb);
 	param.child_tid = &new_thread->tid;
 	param.parent_tid = &new_thread->tid;
-	param.flags = 0;
+	param.flags = __thr_new_flags;
 	if (new_thread->attr.flags & PTHREAD_SCOPE_SYSTEM)
 		param.flags |= THR_SYSTEM_SCOPE;
 	if (new_thread->attr.sched_inherit == PTHREAD_INHERIT_SCHED)
@@ -229,8 +232,8 @@ _pthread_create(pthread_t * __restrict thread,
 		THR_THREAD_UNLOCK(curthread, new_thread);
 	}
 out:
-	if (ret)
-		(*thread) = 0;
+	if (ret != 0)
+		*thread = NULL;
 	return (ret);
 }
 
@@ -287,6 +290,10 @@ thread_start(struct pthread *curthread)
 	curthread->unwind_stackend = (char *)curthread->attr.stackaddr_attr +
 		curthread->attr.stacksize_attr;
 #endif
+
+	curthread->uexterr.ver = UEXTERROR_VER;
+	if (__getosreldate() >= P_OSREL_EXTERRCTL)
+		exterrctl(EXTERRCTL_ENABLE, 0, &curthread->uexterr);
 
 	/* Run the current thread's start routine with argument: */
 	_pthread_exit(curthread->start_routine(curthread->arg));

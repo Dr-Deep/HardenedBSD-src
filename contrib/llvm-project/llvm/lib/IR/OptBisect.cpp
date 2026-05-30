@@ -20,36 +20,39 @@
 
 using namespace llvm;
 
+static OptBisect &getOptBisector() {
+  static OptBisect OptBisector;
+  return OptBisector;
+}
+
 static cl::opt<int> OptBisectLimit("opt-bisect-limit", cl::Hidden,
                                    cl::init(OptBisect::Disabled), cl::Optional,
                                    cl::cb<void, int>([](int Limit) {
-                                     llvm::OptBisector->setLimit(Limit);
+                                     getOptBisector().setLimit(Limit);
                                    }),
                                    cl::desc("Maximum optimization to perform"));
 
-static void printPassMessage(const StringRef &Name, int PassNum,
-                             StringRef TargetDesc, bool Running) {
+static cl::opt<bool> OptBisectVerbose(
+    "opt-bisect-verbose",
+    cl::desc("Show verbose output when opt-bisect-limit is set"), cl::Hidden,
+    cl::init(true), cl::Optional);
+
+static void printPassMessage(StringRef Name, int PassNum, StringRef TargetDesc,
+                             bool Running) {
   StringRef Status = Running ? "" : "NOT ";
-  errs() << "BISECT: " << Status << "running pass "
-         << "(" << PassNum << ") " << Name << " on " << TargetDesc << "\n";
+  errs() << "BISECT: " << Status << "running pass (" << PassNum << ") " << Name
+         << " on " << TargetDesc << '\n';
 }
 
-bool OptBisect::shouldRunPass(const Pass *P, StringRef IRDescription) {
-  assert(isEnabled());
-
-  return checkPass(P->getPassName(), IRDescription);
-}
-
-bool OptBisect::checkPass(const StringRef PassName,
-                          const StringRef TargetDesc) {
+bool OptBisect::shouldRunPass(StringRef PassName,
+                              StringRef IRDescription) const {
   assert(isEnabled());
 
   int CurBisectNum = ++LastBisectNum;
   bool ShouldRun = (BisectLimit == -1 || CurBisectNum <= BisectLimit);
-  printPassMessage(PassName, CurBisectNum, TargetDesc, ShouldRun);
+  if (OptBisectVerbose)
+    printPassMessage(PassName, CurBisectNum, IRDescription, ShouldRun);
   return ShouldRun;
 }
 
-const int OptBisect::Disabled;
-
-ManagedStatic<OptBisect> llvm::OptBisector;
+OptPassGate &llvm::getGlobalPassGate() { return getOptBisector(); }

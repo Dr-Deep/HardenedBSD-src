@@ -27,8 +27,6 @@
  * SUCH DAMAGE.
  *
  * Broadcom Inc. (LSI) MPT-Fusion Host Adapter FreeBSD
- *
- * $FreeBSD$
  */
 
 #ifndef _MPRVAR_H
@@ -368,6 +366,7 @@ struct mpr_softc {
 	int				spinup_wait_time;
 	int				use_phynum;
 	int				dump_reqs_alltypes;
+	int                             encl_min_slots;
 	uint64_t			chain_alloc_fail;
 	uint64_t			prp_page_alloc_fail;
 	struct sysctl_ctx_list		sysctl_ctx;

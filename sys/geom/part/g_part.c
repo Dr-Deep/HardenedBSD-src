@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2002, 2005-2009 Marcel Moolenaar
  * All rights reserved.
@@ -25,9 +25,6 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/bio.h>
@@ -125,18 +122,20 @@ struct g_part_alias_list {
 	{ "ntfs", G_PART_ALIAS_MS_NTFS },
 	{ "openbsd-data", G_PART_ALIAS_OPENBSD_DATA },
 	{ "prep-boot", G_PART_ALIAS_PREP_BOOT },
-        { "solaris-boot", G_PART_ALIAS_SOLARIS_BOOT },
-        { "solaris-root", G_PART_ALIAS_SOLARIS_ROOT },
-        { "solaris-swap", G_PART_ALIAS_SOLARIS_SWAP },
-        { "solaris-backup", G_PART_ALIAS_SOLARIS_BACKUP },
-        { "solaris-var", G_PART_ALIAS_SOLARIS_VAR },
-        { "solaris-home", G_PART_ALIAS_SOLARIS_HOME },
-        { "solaris-altsec", G_PART_ALIAS_SOLARIS_ALTSEC },
+	{ "solaris-boot", G_PART_ALIAS_SOLARIS_BOOT },
+	{ "solaris-root", G_PART_ALIAS_SOLARIS_ROOT },
+	{ "solaris-swap", G_PART_ALIAS_SOLARIS_SWAP },
+	{ "solaris-backup", G_PART_ALIAS_SOLARIS_BACKUP },
+	{ "solaris-var", G_PART_ALIAS_SOLARIS_VAR },
+	{ "solaris-home", G_PART_ALIAS_SOLARIS_HOME },
+	{ "solaris-altsec", G_PART_ALIAS_SOLARIS_ALTSEC },
 	{ "solaris-reserved", G_PART_ALIAS_SOLARIS_RESERVED },
+	{ "u-boot-env", G_PART_ALIAS_U_BOOT_ENV },
 	{ "vmware-reserved", G_PART_ALIAS_VMRESERVED },
 	{ "vmware-vmfs", G_PART_ALIAS_VMFS },
 	{ "vmware-vmkdiag", G_PART_ALIAS_VMKDIAG },
 	{ "vmware-vsanhdr", G_PART_ALIAS_VMVSANHDR },
+	{ "xbootldr", G_PART_ALIAS_XBOOTLDR },
 };
 
 SYSCTL_DECL(_kern_geom);
@@ -554,8 +553,6 @@ g_part_parm_provider(struct gctl_req *req, const char *name,
 	pname = gctl_get_asciiparam(req, name);
 	if (pname == NULL)
 		return (ENOATTR);
-	if (strncmp(pname, _PATH_DEV, sizeof(_PATH_DEV) - 1) == 0)
-		pname += sizeof(_PATH_DEV) - 1;
 	pp = g_provider_by_name(pname);
 	if (pp == NULL) {
 		gctl_error(req, "%d %s '%s'", EINVAL, name, pname);
@@ -1000,14 +997,14 @@ g_part_ctl_create(struct gctl_req *req, struct g_part_parms *gpp)
 	}
 
 	if (null == NULL)
-		gp = g_new_geomf(&g_part_class, "%s", pp->name);
+		gp = g_new_geom(&g_part_class, pp->name);
 	gp->softc = kobj_create((kobj_class_t)gpp->gpp_scheme, M_GEOM,
 	    M_WAITOK);
 	table = gp->softc;
 	table->gpt_gp = gp;
 	table->gpt_scheme = gpp->gpp_scheme;
 	table->gpt_entries = (gpp->gpp_parms & G_PART_PARM_ENTRIES) ?
-	    gpp->gpp_entries : scheme->gps_minent;
+	    gpp->gpp_entries : scheme->gps_defent;
 	LIST_INIT(&table->gpt_entry);
 	if (null == NULL) {
 		cp = g_new_consumer(gp);
@@ -1048,7 +1045,7 @@ g_part_ctl_create(struct gctl_req *req, struct g_part_parms *gpp)
 	/*
 	 * Synthesize a disk geometry. Some partitioning schemes
 	 * depend on it and since some file systems need it even
-	 * when the partitition scheme doesn't, we do it here in
+	 * when the partition scheme doesn't, we do it here in
 	 * scheme-independent code.
 	 */
 	g_part_geometry(table, cp, pp->mediasize / pp->sectorsize);
@@ -1541,7 +1538,7 @@ g_part_ctl_undo(struct gctl_req *req, struct g_part_parms *gpp)
 		/*
 		 * Synthesize a disk geometry. Some partitioning schemes
 		 * depend on it and since some file systems need it even
-		 * when the partitition scheme doesn't, we do it here in
+		 * when the partition scheme doesn't, we do it here in
 		 * scheme-independent code.
 		 */
 		pp = cp->provider;
@@ -1981,7 +1978,7 @@ g_part_taste(struct g_class *mp, struct g_provider *pp, int flags __unused)
 	 * With that we become part of the topology. Obtain read access
 	 * to the provider.
 	 */
-	gp = g_new_geomf(mp, "%s", pp->name);
+	gp = g_new_geom(mp, pp->name);
 	cp = g_new_consumer(gp);
 	cp->flags |= G_CF_DIRECT_SEND | G_CF_DIRECT_RECEIVE;
 	error = g_attach(cp, pp);
@@ -2025,7 +2022,7 @@ g_part_taste(struct g_class *mp, struct g_provider *pp, int flags __unused)
 	/*
 	 * Synthesize a disk geometry. Some partitioning schemes
 	 * depend on it and since some file systems need it even
-	 * when the partitition scheme doesn't, we do it here in
+	 * when the partition scheme doesn't, we do it here in
 	 * scheme-independent code.
 	 */
 	g_part_geometry(table, cp, pp->mediasize / pp->sectorsize);

@@ -27,14 +27,10 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)ip_input.c	8.2 (Berkeley) 1/4/94
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_bootp.h"
+#include "opt_inet.h"
 #include "opt_ipstealth.h"
 #include "opt_ipsec.h"
 #include "opt_pax.h"
@@ -58,11 +54,13 @@ __FBSDID("$FreeBSD$");
 #include <sys/sdt.h>
 #include <sys/syslog.h>
 #include <sys/sysctl.h>
+#include <sys/hash.h>
 
 #include <net/if.h>
 #include <net/if_types.h>
 #include <net/if_var.h>
 #include <net/if_dl.h>
+#include <net/if_private.h>
 #include <net/pfil.h>
 #include <net/route.h>
 #include <net/route/nhop.h>
@@ -86,6 +84,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/in_cksum.h>
 #include <netinet/ip_carp.h>
 #include <netinet/in_rss.h>
+#include <netinet/ip_mroute.h>
 #ifdef SCTP
 #include <netinet/sctp_var.h>
 #endif
@@ -135,7 +134,9 @@ SYSCTL_BOOL(_net_inet_ip, OID_AUTO, source_address_validation,
     CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(ip_sav), true,
     "Drop incoming packets with source address that is a local address");
 
-VNET_DEFINE(pfil_head_t, inet_pfil_head);	/* Packet filter hooks */
+/* Packet filter hooks */
+VNET_DEFINE(pfil_head_t, inet_pfil_head);
+VNET_DEFINE(pfil_head_t, inet_local_pfil_head);
 
 static struct netisr_handler ip_nh = {
 	.nh_name = "ip",
@@ -176,9 +177,6 @@ ipproto_ctlinput_t	*ip_ctlprotox[IPPROTO_MAX] = {
 VNET_DEFINE(struct in_ifaddrhead, in_ifaddrhead);  /* first inet address */
 VNET_DEFINE(struct in_ifaddrhashhead *, in_ifaddrhashtbl); /* inet addr hash table  */
 VNET_DEFINE(u_long, in_ifaddrhmask);		/* mask for hash table */
-
-/* Make sure it is safe to use hashinit(9) on CK_LIST. */
-CTASSERT(sizeof(struct in_ifaddrhashhead) == sizeof(LIST_HEAD(, in_addr)));
 
 #ifdef IPCTL_DEFMTU
 SYSCTL_INT(_net_inet_ip, IPCTL_DEFMTU, mtu, CTLFLAG_RW,
@@ -311,20 +309,32 @@ SYSCTL_PROC(_net_inet_ip, IPCTL_INTRDQDROPS, intr_direct_queue_drops,
 static void
 ip_vnet_init(void *arg __unused)
 {
-	struct pfil_head_args args;
-
 	CK_STAILQ_INIT(&V_in_ifaddrhead);
-	V_in_ifaddrhashtbl = hashinit(INADDR_NHASH, M_IFADDR, &V_in_ifaddrhmask);
+
+	struct hashalloc_args ha = {
+		.size = INADDR_NHASH,
+		.mtype = M_IFADDR,
+		.mflags = M_WAITOK,
+		.head = HASH_HEAD_CK_LIST,
+	};
+	V_in_ifaddrhashtbl = hashalloc(&ha);
+	V_in_ifaddrhmask = ha.size - 1;
 
 	/* Initialize IP reassembly queue. */
 	ipreass_vnet_init();
 
 	/* Initialize packet filter hooks. */
-	args.pa_version = PFIL_VERSION;
-	args.pa_flags = PFIL_IN | PFIL_OUT;
-	args.pa_type = PFIL_TYPE_IP4;
-	args.pa_headname = PFIL_INET_NAME;
-	V_inet_pfil_head = pfil_head_register(&args);
+	struct pfil_head_args pa = {
+		.pa_version = PFIL_VERSION,
+		.pa_flags = PFIL_IN | PFIL_OUT,
+		.pa_type = PFIL_TYPE_IP4,
+		.pa_headname = PFIL_INET_NAME,
+	};
+	V_inet_pfil_head = pfil_head_register(&pa);
+
+	pa.pa_flags = PFIL_OUT;
+	pa.pa_headname = PFIL_INET_LOCAL_NAME;
+	V_inet_local_pfil_head = pfil_head_register(&pa);
 
 	if (hhook_head_register(HHOOK_TYPE_IPSEC_IN, AF_INET,
 	    &V_ipsec_hhh_in[HHOOK_IPSEC_INET],
@@ -350,6 +360,7 @@ VNET_SYSINIT(ip_vnet_init, SI_SUB_PROTO_DOMAIN, SI_ORDER_FOURTH,
 static void
 ip_init(const void *unused __unused)
 {
+	struct ifnet *ifp;
 
 	ipreass_init();
 
@@ -374,6 +385,14 @@ ip_init(const void *unused __unused)
 #ifdef	RSS
 	netisr_register(&ip_direct_nh);
 #endif
+	/*
+	 * XXXGL: we use SYSINIT() here, but go over V_ifnet.  It was the same
+	 * way before dom_ifattach removal.  This worked because when any
+	 * non-default vnet is created, there are no interfaces inside.
+	 * Eventually this needs to be fixed.
+	 */
+	CK_STAILQ_FOREACH(ifp, &V_ifnet, if_link)
+		in_ifattach(NULL, ifp);
 }
 SYSINIT(ip_init, SI_SUB_PROTO_DOMAIN, SI_ORDER_THIRD, ip_init, NULL);
 
@@ -412,7 +431,12 @@ ip_destroy(void *unused __unused)
 	ipreass_destroy();
 
 	/* Cleanup in_ifaddr hash table; should be empty. */
-	hashdestroy(V_in_ifaddrhashtbl, M_IFADDR, V_in_ifaddrhmask);
+	struct hashalloc_args ha = {
+		.mtype = M_IFADDR,
+		.head = HASH_HEAD_CK_LIST,
+		.size = V_in_ifaddrhmask + 1,
+	};
+	hashfree(V_in_ifaddrhashtbl, &ha);
 }
 
 VNET_SYSUNINIT(ip, SI_SUB_PROTO_DOMAIN, SI_ORDER_THIRD, ip_destroy, NULL);
@@ -521,6 +545,12 @@ ip_input(struct mbuf *m)
 
 	if (m->m_pkthdr.csum_flags & CSUM_IP_CHECKED) {
 		sum = !(m->m_pkthdr.csum_flags & CSUM_IP_VALID);
+	} else if (m->m_pkthdr.csum_flags & CSUM_IP) {
+		/*
+		 * Packet from local host that offloaded checksum computation.
+		 * Checksum not required since the packet wasn't on the wire.
+		 */
+		sum = 0;
 	} else {
 		if (hlen == sizeof(struct ip)) {
 			sum = in_cksum_hdr(ip);
@@ -532,12 +562,6 @@ ip_input(struct mbuf *m)
 		IPSTAT_INC(ips_badsum);
 		goto bad;
 	}
-
-#ifdef ALTQ
-	if (altq_input != NULL && (*altq_input)(m, AF_INET) == 0)
-		/* packet is dropped by traffic conditioner */
-		return;
-#endif
 
 	ip_len = ntohs(ip->ip_len);
 	if (__predict_false(ip_len < hlen)) {
@@ -616,10 +640,8 @@ tooshort:
 		goto passin;
 
 	odst = ip->ip_dst;
-	if (pfil_run_hooks(V_inet_pfil_head, &m, ifp, PFIL_IN, NULL) !=
+	if (pfil_mbuf_in(V_inet_pfil_head, &m, ifp, NULL) !=
 	    PFIL_PASS)
-		return;
-	if (m == NULL)			/* consumed by filter */
 		return;
 
 	ip = mtod(m, struct ip *);
@@ -641,6 +663,17 @@ tooshort:
 		}
 	}
 passin:
+	/*
+	 * The unspecified address can appear only as a src address - RFC1122.
+	 *
+	 * The check is deferred to here to give firewalls a chance to block
+	 * (and log) such packets.  ip_tryforward() will not process such
+	 * packets.
+	 */
+	if (__predict_false(ntohl(ip->ip_dst.s_addr) == INADDR_ANY)) {
+		IPSTAT_INC(ips_badaddr);
+		goto bad;
+	}
 
 	/*
 	 * Process options and, if not destined for us,
@@ -751,7 +784,8 @@ passin:
 		 * RFC 3927 2.7: Do not forward multicast packets from
 		 * IN_LINKLOCAL.
 		 */
-		if (V_ip_mrouter && !IN_LINKLOCAL(ntohl(ip->ip_src.s_addr))) {
+		if (V_ip_mrouting_enabled &&
+		    !IN_LINKLOCAL(ntohl(ip->ip_src.s_addr))) {
 			/*
 			 * If we are acting as a multicast router, all
 			 * incoming multicast packets are passed to the
@@ -783,9 +817,7 @@ passin:
 		 */
 		goto ours;
 	}
-	if (ip->ip_dst.s_addr == (u_long)INADDR_BROADCAST)
-		goto ours;
-	if (ip->ip_dst.s_addr == INADDR_ANY)
+	if (in_broadcast(ip->ip_dst))
 		goto ours;
 	/* RFC 3927 2.7: Do not forward packets to or from IN_LINKLOCAL. */
 	if (IN_LINKLOCAL(ntohl(ip->ip_dst.s_addr)) ||
@@ -815,6 +847,18 @@ ours:
 	if (V_ipstealth && hlen > sizeof (struct ip) && ip_dooptions(m, 1))
 		return;
 #endif /* IPSTEALTH */
+
+	/*
+	 * We are going to ship the packet to the local protocol stack. Call the
+	 * filter again for this 'output' action, allowing redirect-like rules
+	 * to adjust the source address.
+	 */
+	if (PFIL_HOOKED_OUT(V_inet_local_pfil_head)) {
+		if (pfil_mbuf_out(V_inet_local_pfil_head, &m, V_loif, NULL) !=
+		    PFIL_PASS)
+			return;
+		ip = mtod(m, struct ip *);
+	}
 
 	/*
 	 * Attempt reassembly; if it succeeds, proceed.
@@ -880,15 +924,6 @@ ipproto_unregister(uint8_t proto)
 		return (ENOENT);
 }
 
-u_char inetctlerrmap[PRC_NCMDS] = {
-	0,		0,		0,		0,
-	0,		EMSGSIZE,	EHOSTDOWN,	EHOSTUNREACH,
-	EHOSTUNREACH,	EHOSTUNREACH,	ECONNREFUSED,	ECONNREFUSED,
-	EMSGSIZE,	EHOSTUNREACH,	0,		0,
-	0,		0,		EHOSTUNREACH,	0,
-	ENOPROTOOPT,	ECONNREFUSED
-};
-
 /*
  * Forward a packet.  If some error occurs return the sender
  * an icmp packet.  Note we can't always generate a meaningful
@@ -917,7 +952,7 @@ ip_forward(struct mbuf *m, int srcrt)
 
 	NET_EPOCH_ASSERT();
 
-	if (m->m_flags & (M_BCAST|M_MCAST) || in_canforward(ip->ip_dst) == 0) {
+	if (m->m_flags & (M_BCAST|M_MCAST) || !in_canforward(ip->ip_dst)) {
 		IPSTAT_INC(ips_cantforward);
 		m_freem(m);
 		return;
@@ -939,6 +974,18 @@ ip_forward(struct mbuf *m, int srcrt)
 	flowid = m->m_pkthdr.flowid;
 	ro.ro_nh = fib4_lookup(M_GETFIB(m), ip->ip_dst, 0, NHR_REF, flowid);
 	if (ro.ro_nh != NULL) {
+		if (ro.ro_nh->nh_flags & (NHF_BLACKHOLE | NHF_BROADCAST)) {
+			IPSTAT_INC(ips_cantforward);
+			m_freem(m);
+			NH_FREE(ro.ro_nh);
+			return;
+		}
+		if (ro.ro_nh->nh_flags & NHF_REJECT) {
+			IPSTAT_INC(ips_cantforward);
+			NH_FREE(ro.ro_nh);
+			icmp_error(m, ICMP_UNREACH, ICMP_UNREACH_HOST, 0, 0);
+			return;
+		}
 		ia = ifatoia(ro.ro_nh->nh_ifa);
 	} else
 		ia = NULL;
@@ -1313,10 +1360,6 @@ VNET_DEFINE(struct socket *, ip_rsvpd);
 int
 ip_rsvp_init(struct socket *so)
 {
-
-	if (so->so_type != SOCK_RAW ||
-	    so->so_proto->pr_protocol != IPPROTO_RSVP)
-		return EOPNOTSUPP;
 
 	if (V_ip_rsvpd != NULL)
 		return EADDRINUSE;

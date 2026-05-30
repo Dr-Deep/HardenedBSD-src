@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-3-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-3-Clause
  *
  * Copyright (c) 2003 Poul-Henning Kamp
  * All rights reserved.
@@ -27,8 +27,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 
@@ -66,7 +64,7 @@ static int flag_I = 1000000;
 			printw(__VA_ARGS__);				\
 	} while(0)
 
-static void usage(void);
+static void usage(void) __dead2;
 
 static const char*
 el_prompt(void)
@@ -143,9 +141,6 @@ main(int argc, char **argv)
 				    "Invalid filter - see re_format(7)");
 			strlcpy(f_s, optarg, sizeof(f_s));
 			break;
-		case 'o':
-			flag_o = 1;
-			break;
 		case 'I':
 			p = NULL;
 			i = strtoul(optarg, &p, 0);
@@ -159,6 +154,9 @@ main(int argc, char **argv)
 			else if (!strcmp(p, "us"))
 				i *= 1;
 			flag_I = i;
+			break;
+		case 'o':
+			flag_o = 1;
 			break;
 		case 'p':
 			flag_p = 1;
@@ -408,16 +406,20 @@ main(int argc, char **argv)
 				PRINTMSG(",%.0f", (double)ld[2] * 1024);
 				if (ld[3] > 1e3) 
 					PRINTMSG(",%.0f", (double)ld[3]);
-				else
+				else if (ld[3] > 1e0)
 					PRINTMSG(",%.1f", (double)ld[3]);
+				else
+					PRINTMSG(",%.3f", (double)ld[3]);
 				PRINTMSG(",%.0f", (double)ld[4]);
 				if (flag_s)
 					PRINTMSG(",%.0f", (double)ld[14]);
 				PRINTMSG(",%.0f", (double)ld[5] * 1024);
 				if (ld[6] > 1e3) 
 					PRINTMSG(",%.0f", (double)ld[6]);
-				else
+				else if (ld[6] > 1e0)
 					PRINTMSG(",%.1f", (double)ld[6]);
+				else
+					PRINTMSG(",%.3f", (double)ld[6]);
 
 				if (flag_d) {
 					PRINTMSG(",%.0f", (double)ld[8]);
@@ -428,8 +430,11 @@ main(int argc, char **argv)
 					if (ld[10] > 1e3) 
 						PRINTMSG(",%.0f",
 								(double)ld[10]);
-					else
+					else if (ld[10] > 1e0)
 						PRINTMSG(",%.1f",
+								(double)ld[10]);
+					else
+						PRINTMSG(",%.3f",
 								(double)ld[10]);
 				}
 
@@ -438,8 +443,11 @@ main(int argc, char **argv)
 					if (ld[12] > 1e3) 
 						PRINTMSG(",%.0f",
 								(double)ld[12]);
+					else if (ld[12] > 1e0)
+						PRINTMSG(",%.1f",
+								(double)ld[12]);
 					else
-						PRINTMSG(",%.1f", 
+						PRINTMSG(",%.3f",
 								(double)ld[12]);
 				}
 				PRINTMSG(",%.1lf", (double)ld[7]);
@@ -452,16 +460,20 @@ main(int argc, char **argv)
 				PRINTMSG(" %6.0f", (double)ld[2] * 1024);
 				if (ld[3] > 1e3) 
 					PRINTMSG(" %6.0f", (double)ld[3]);
-				else
+				else if (ld[3] > 1e0)
 					PRINTMSG(" %6.1f", (double)ld[3]);
+				else
+					PRINTMSG(" %6.3f", (double)ld[3]);
 				PRINTMSG(" %6.0f", (double)ld[4]);
 				if (flag_s)
 					PRINTMSG(" %6.0f", (double)ld[14]);
 				PRINTMSG(" %6.0f", (double)ld[5] * 1024);
 				if (ld[6] > 1e3) 
 					PRINTMSG(" %6.0f", (double)ld[6]);
-				else
+				else if (ld[6] > 1e0)
 					PRINTMSG(" %6.1f", (double)ld[6]);
+				else
+					PRINTMSG(" %6.3f", (double)ld[6]);
 
 				if (flag_d) {
 					PRINTMSG(" %6.0f", (double)ld[8]);
@@ -473,8 +485,11 @@ main(int argc, char **argv)
 					if (ld[10] > 1e3) 
 						PRINTMSG(" %6.0f",
 								(double)ld[10]);
-					else
+					else if (ld[10] > 1e0)
 						PRINTMSG(" %6.1f",
+								(double)ld[10]);
+					else
+						PRINTMSG(" %6.3f",
 								(double)ld[10]);
 				}
 
@@ -483,8 +498,11 @@ main(int argc, char **argv)
 					if (ld[12] > 1e3) 
 						PRINTMSG(" %6.0f",
 								(double)ld[12]);
+					else if (ld[12] > 1e0)
+						PRINTMSG(" %6.1f",
+								(double)ld[12]);
 					else
-						PRINTMSG(" %6.1f", 
+						PRINTMSG(" %6.3f",
 								(double)ld[12]);
 				}
 
@@ -597,7 +615,7 @@ out:
 static void
 usage(void)
 {
-	fprintf(stderr, "usage: gstat [-abBcCdps] [-f filter] [-I interval]\n");
+	fprintf(stderr, "usage: gstat [-abBcCdops] [-f filter] [-I interval]\n");
 	exit(EX_USAGE);
         /* NOTREACHED */
 }

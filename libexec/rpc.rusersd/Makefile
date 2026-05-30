@@ -1,10 +1,11 @@
-# $FreeBSD$
-
-PROG =	rpc.rusersd
-SRCS =	rusersd.c rusers_proc.c extern.h
-MAN =	rpc.rusersd.8
+PACKAGE= rcmds
+PROG=	rpc.rusersd
+SRCS=	rusersd.c rusers_proc.c extern.h
+MAN=	rpc.rusersd.8
 
 LIBADD=	rpcsvc
+
+CFI_OVERRIDE=	-fno-sanitize=cfi-icall
 
 #.if exists(/usr/X11R6/include/X11/extensions/xidle.h)
 #CFLAGS+= -DXIDLE

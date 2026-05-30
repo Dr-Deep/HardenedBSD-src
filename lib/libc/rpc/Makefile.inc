@@ -1,6 +1,3 @@
-#	@(#)Makefile    5.11 (Berkeley) 9/6/90
-# $FreeBSD$
-
 .PATH: ${LIBC_SRCTOP}/rpc ${LIBC_SRCTOP}/.
 CONFS+=	rpc/netconfig rpc/rpc
 SRCS+=	auth_none.c auth_unix.c authunix_prot.c bindresvport.c clnt_bcast.c \
@@ -11,7 +8,7 @@ SRCS+=	auth_none.c auth_unix.c authunix_prot.c bindresvport.c clnt_bcast.c \
 	rpc_callmsg.c rpc_generic.c rpc_soc.c rpcb_clnt.c rpcb_prot.c \
 	rpcb_st_xdr.c rpcsec_gss_stub.c svc.c svc_auth.c svc_dg.c \
 	svc_auth_unix.c svc_generic.c svc_raw.c svc_run.c svc_simple.c \
-	svc_vc.c
+	svc_vc.c svc_nl.c
 
 # Secure-RPC
 SRCS+=  auth_time.c auth_des.c authdes_prot.c des_crypt.c des_soft.c \
@@ -45,12 +42,12 @@ crypt_xdr.c: ${RPCDIR}/crypt.x crypt.h
 
 crypt.h: ${RPCDIR}/crypt.x
 	${RPCGEN} -h -o ${.TARGET} ${RPCDIR}/crypt.x
+
 MAN+=	bindresvport.3 des_crypt.3 getnetconfig.3 getnetpath.3 getrpcent.3 \
 	getrpcport.3 rpc.3 rpc_soc.3 rpc_clnt_auth.3 rpc_clnt_calls.3 \
 	rpc_clnt_create.3 rpc_svc_calls.3 rpc_svc_create.3 rpc_svc_err.3 \
 	rpc_svc_reg.3 rpc_xdr.3 rpcbind.3 publickey.3 rpc_secure.3 \
 	rtime.3
-MAN+=	publickey.5 rpc.5 netconfig.5
 MLINKS+=	bindresvport.3 bindresvport_sa.3 \
 		des_crypt.3 ecb_crypt.3 \
 		des_crypt.3 cbc_crypt.3 \
@@ -168,6 +165,7 @@ MLINKS+=	bindresvport.3 bindresvport_sa.3 \
 		rpc_soc.3 svc_fds.3 \
 		rpc_soc.3 svc_fdset.3 \
 		rpc_soc.3 svc_getcaller.3 \
+		rpc_soc.3 svc_getreq.3 \
 		rpc_soc.3 svc_register.3 \
 		rpc_soc.3 svc_unregister.3 \
 		rpc_soc.3 svcfd_create.3 \
@@ -176,5 +174,8 @@ MLINKS+=	bindresvport.3 bindresvport_sa.3 \
 		rpc_soc.3 svctcp_create.3 \
 		rpc_soc.3 svcudp_bufcreate.3 \
 		rpc_soc.3 svcunix_create.3 \
+		rpc_soc.3 xdr_authunix_parms.3 \
 		rpc_soc.3 xdr_pmap.3 \
 		rpc_soc.3 xdr_pmaplist.3
+
+MANNODEV+=	rpc.5 netconfig.5

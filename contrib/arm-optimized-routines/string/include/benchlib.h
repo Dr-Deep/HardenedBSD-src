@@ -2,7 +2,7 @@
  * Benchmark support functions.
  *
  * Copyright (c) 2020, Arm Limited.
- * SPDX-License-Identifier: MIT
+ * SPDX-License-Identifier: MIT OR Apache-2.0 WITH LLVM-exception
  */
 
 #include <stdint.h>
@@ -30,4 +30,35 @@ rand32 (uint32_t seed)
   return res;
 }
 
+/* Macros to run a benchmark BENCH using string function FN.  */
+#define RUN(BENCH, FN) BENCH(#FN, FN)
 
+#if __aarch64__
+# define RUNA64(BENCH, FN) BENCH(#FN, FN)
+#else
+# define RUNA64(BENCH, FN)
+#endif
+
+#if __ARM_FEATURE_SVE
+# define RUNSVE(BENCH, FN) BENCH(#FN, FN)
+#else
+# define RUNSVE(BENCH, FN)
+#endif
+
+#if WANT_MOPS
+# define RUNMOPS(BENCH, FN) BENCH(#FN, FN)
+#else
+# define RUNMOPS(BENCH, FN)
+#endif
+
+#if __arm__
+# define RUNA32(BENCH, FN) BENCH(#FN, FN)
+#else
+# define RUNA32(BENCH, FN)
+#endif
+
+#if __arm__ && __ARM_ARCH >= 6 && __ARM_ARCH_ISA_THUMB == 2
+# define RUNT32(BENCH, FN) BENCH(#FN, FN)
+#else
+# define RUNT32(BENCH, FN)
+#endif

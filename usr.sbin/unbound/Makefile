@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 SUBDIR=	daemon anchor checkconf control host
 SUBDIR+= setup
 SUBDIR_PARALLEL=

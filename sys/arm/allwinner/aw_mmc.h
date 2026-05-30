@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2018 Emmanuel Vadot <manu@FreeBSD.org>
  * Copyright (c) 2013 Alexander Fedorov <alexander.fedorov@rtlservice.com>
@@ -25,8 +25,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef	_AW_MMC_H_
@@ -170,6 +168,10 @@
 
 /* AW_MMC_NTSR */
 #define	AW_MMC_NTSR_MODE_SELECT		(1U << 31)
+
+/* AW_MMC_HWRST */
+#define	AW_MMC_HWRST_ASSERT		(0U << 0)
+#define	AW_MMC_HWRST_DEASSERT		(1U << 0)
 
 /* IDMA CONTROLLER BUS MOD BIT FIELD */
 #define	AW_MMC_DMAC_IDMAC_SOFT_RST	(1U << 0)

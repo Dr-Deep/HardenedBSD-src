@@ -38,8 +38,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <dev/mrsas/mrsas.h>
 #include <dev/mrsas/mrsas_ioctl.h>
 
@@ -351,15 +349,9 @@ mrsas_find_ident(device_t dev)
 static int
 mrsas_probe(device_t dev)
 {
-	static u_int8_t first_ctrl = 1;
 	struct mrsas_ident *id;
 
 	if ((id = mrsas_find_ident(dev)) != NULL) {
-		if (first_ctrl) {
-			printf("AVAGO MegaRAID SAS FreeBSD mrsas driver version: %s\n",
-			    MRSAS_VERSION);
-			first_ctrl = 0;
-		}
 		device_set_desc(dev, id->desc);
 		/* between BUS_PROBE_DEFAULT and BUS_PROBE_LOW_PRIORITY */
 		return (-30);
@@ -1449,7 +1441,14 @@ mrsas_ioctl(struct cdev *dev, u_long cmd, caddr_t arg, int flag,
 	int ret = 0, i = 0;
 	MRSAS_DRV_PCI_INFORMATION *pciDrvInfo;
 
-	sc = mrsas_get_softc_instance(dev, cmd, arg);
+	switch (cmd) {
+	case MFIIO_PASSTHRU:
+                sc = (struct mrsas_softc *)(dev->si_drv1);
+		break;
+	default:
+		sc = mrsas_get_softc_instance(dev, cmd, arg);
+		break;
+        }
 	if (!sc)
 		return ENOENT;
 
@@ -1510,6 +1509,10 @@ do_ioctl:
 		    pciDrvInfo->busNumber, pciDrvInfo->deviceNumber,
 		    pciDrvInfo->functionNumber, pciDrvInfo->domainID);
 		ret = 0;
+		break;
+
+	case MFIIO_PASSTHRU:
+		ret = mrsas_user_command(sc, (struct mfi_ioc_passthru *)arg);
 		break;
 
 	default:
@@ -1723,11 +1726,13 @@ mrsas_complete_cmd(struct mrsas_softc *sc, u_int32_t MSIxIndex)
 						data_length = r1_cmd->io_request->DataLength;
 						sense = r1_cmd->sense;
 					}
+					mtx_lock(&sc->sim_lock);
 					r1_cmd->ccb_ptr = NULL;
 					if (r1_cmd->callout_owner) {
 						callout_stop(&r1_cmd->cm_callout);
 						r1_cmd->callout_owner  = false;
 					}
+					mtx_unlock(&sc->sim_lock);
 					mrsas_release_mpt_cmd(r1_cmd);
 					mrsas_atomic_dec(&sc->fw_outstanding);
 					mrsas_map_mpt_cmd_status(cmd_mpt, cmd_mpt->ccb_ptr, status,
@@ -3980,6 +3985,7 @@ mrsas_issue_blocked_cmd(struct mrsas_softc *sc, struct mrsas_mfi_cmd *cmd)
 			}
 		}
 	}
+	sc->chan = NULL;
 
 	if (cmd->cmd_status == 0xFF) {
 		device_printf(sc->mrsas_dev, "DCMD timed out after %d "
@@ -4566,6 +4572,13 @@ mrsas_get_pd_list(struct mrsas_softc *sc)
 	dcmd = &cmd->frame->dcmd;
 
 	tcmd = malloc(sizeof(struct mrsas_tmp_dcmd), M_MRSAS, M_NOWAIT);
+	if (tcmd == NULL) {
+		device_printf(sc->mrsas_dev,
+		    "Cannot alloc dmamap for get PD list cmd\n");
+		mrsas_release_mfi_cmd(cmd);
+		mrsas_free_tmp_dcmd(tcmd);
+		return (ENOMEM);
+	}
 	pd_list_size = MRSAS_MAX_PD * sizeof(struct MR_PD_LIST);
 	if (mrsas_alloc_tmp_dcmd(sc, tcmd, pd_list_size) != SUCCESS) {
 		device_printf(sc->mrsas_dev,
@@ -4674,6 +4687,14 @@ mrsas_get_ld_list(struct mrsas_softc *sc)
 	dcmd = &cmd->frame->dcmd;
 
 	tcmd = malloc(sizeof(struct mrsas_tmp_dcmd), M_MRSAS, M_NOWAIT);
+	if (tcmd == NULL) {
+		device_printf(sc->mrsas_dev,
+		    "Cannot alloc dmamap for get LD list cmd\n");
+		mrsas_release_mfi_cmd(cmd);
+		mrsas_free_tmp_dcmd(tcmd);
+		free(tcmd, M_MRSAS);
+		return (ENOMEM);
+	}
 	ld_list_size = sizeof(struct MR_LD_LIST);
 	if (mrsas_alloc_tmp_dcmd(sc, tcmd, ld_list_size) != SUCCESS) {
 		device_printf(sc->mrsas_dev,

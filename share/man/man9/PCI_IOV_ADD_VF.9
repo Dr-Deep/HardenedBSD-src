@@ -23,8 +23,6 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
 .Dd May 28, 2015
 .Dt PCI_IOV_ADD_VF 9
 .Os
@@ -33,7 +31,7 @@
 .Nd inform a PF driver that a VF is being created
 .Sh SYNOPSIS
 .In sys/bus.h
-.In machine/stdarg.h
+.In sys/stdarg.h
 .In sys/nv.h
 .In dev/pci/pci_iov.h
 .Ft int
@@ -43,7 +41,7 @@ The
 .Fn PCI_IOV_ADD_VF
 method is called by the PCI Single-Root I/O Virtualization
 .Pq SR-IOV
-infrastructure when it is initializating a new Virtual Function (VF) as a child
+infrastructure when it is initializing a new Virtual Function (VF) as a child
 of the given Physical Function (PF) device.
 This method will not be called until a successful call to
 .Xr PCI_IOV_INIT 9

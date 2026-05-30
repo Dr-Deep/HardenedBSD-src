@@ -19,12 +19,11 @@
  * purpose.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
+#include <sys/stdarg.h>
+
 #include <machine/elf.h>
-#include <machine/stdarg.h>
+
 #include <stand.h>
 
 #include <efi.h>
@@ -69,7 +68,7 @@ probe_handle(EFI_HANDLE h, EFI_DEVICE_PATH *imgpath)
 
 	if (status != EFI_SUCCESS) {
 		DPRINTF("\nFailed to query DevicePath (%lu)\n",
-		    EFI_ERROR_CODE(status));
+		    DECODE_ERROR(status));
 		return (-1);
 	}
 #ifdef EFI_DEBUG
@@ -85,7 +84,7 @@ probe_handle(EFI_HANDLE h, EFI_DEVICE_PATH *imgpath)
 
 	if (status != EFI_SUCCESS) {
 		DPRINTF("\nFailed to query BlockIoProtocol (%lu)\n",
-		    EFI_ERROR_CODE(status));
+		    DECODE_ERROR(status));
 		return (-1);
 	}
 

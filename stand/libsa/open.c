@@ -31,8 +31,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- *	@(#)open.c	8.1 (Berkeley) 6/11/93
- *
  *
  * Copyright (c) 1989, 1990, 1991 Carnegie Mellon University
  * All Rights Reserved.
@@ -59,9 +57,6 @@
  * any improvements or extensions that they make and grant Carnegie the
  * rights to redistribute these changes.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include "stand.h"
 
@@ -143,6 +138,8 @@ open(const char *fname, int mode)
 	struct fs_ops *fs;
 	struct open_file *f;
 	int fd, i, error, besterror;
+	bool is_dir;
+	size_t n;
 	const char *file;
 
 	TSENTER();
@@ -159,31 +156,42 @@ open(const char *fname, int mode)
 	f->f_devdata = NULL;
 	file = NULL;
 
+	if (exclusive_file_system == NULL ||
+	    (exclusive_file_system->fs_flags & FS_OPS_NO_DEVOPEN) == 0) {
+		error = devopen(f, fname, &file);
+		if (error ||
+		    (((f->f_flags & F_NODEV) == 0) && f->f_dev == NULL))
+			goto err;
+
+		/* see if we opened a raw device; otherwise, 'file' is the file name. */
+		if (file == NULL || *file == '\0') {
+			f->f_flags |= F_RAW;
+			f->f_rabuf = NULL;
+			TSEXIT();
+			return (fd);
+		}
+	} else
+		file = fname;
+
 	if (exclusive_file_system != NULL) {
+		/* loader is forcing the filesystem to be used */
 		fs = exclusive_file_system;
-		error = (fs->fo_open)(fname, f);
+		error = (fs->fo_open)(file, f);
 		if (error == 0)
 			goto ok;
 		goto err;
 	}
 
-	error = devopen(f, fname, &file);
-	if (error ||
-	    (((f->f_flags & F_NODEV) == 0) && f->f_dev == NULL))
-		goto err;
-
-	/* see if we opened a raw device; otherwise, 'file' is the file name. */
-	if (file == NULL || *file == '\0') {
-		f->f_flags |= F_RAW;
-		f->f_rabuf = NULL;
-		TSEXIT();
-		return (fd);
-	}
-
 	/* pass file name to the different filesystem open routines */
 	besterror = ENOENT;
+	n = strlen(file);
+	is_dir = (n > 0 && file[n - 1] == '/');
 	for (i = 0; file_system[i] != NULL; i++) {
 		fs = file_system[i];
+		if (is_dir && is_tftp()) {
+			error = EOPNOTSUPP;
+			goto err;
+		}
 		error = (fs->fo_open)(file, f);
 		if (error == 0)
 			goto ok;

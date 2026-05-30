@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2004, 2005
  *      Damien Bergamini <damien.bergamini@free.fr>. All rights reserved.
@@ -30,8 +30,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*-
  * Intel(R) PRO/Wireless 2200BG/2225BG/2915ABG driver
  * http://www.intel.com/network/connectivity/products/wireless/prowireless_mobile.htm
@@ -160,7 +158,7 @@ static void	iwi_free_rx_ring(struct iwi_softc *, struct iwi_rx_ring *);
 static struct ieee80211_node *iwi_node_alloc(struct ieee80211vap *,
 		    const uint8_t [IEEE80211_ADDR_LEN]);
 static void	iwi_node_free(struct ieee80211_node *);
-static void	iwi_media_status(struct ifnet *, struct ifmediareq *);
+static void	iwi_media_status(if_t, struct ifmediareq *);
 static int	iwi_newstate(struct ieee80211vap *, enum ieee80211_state, int);
 static void	iwi_wme_init(struct iwi_softc *);
 static int	iwi_wme_setparams(struct iwi_softc *);
@@ -173,7 +171,7 @@ static void	iwi_rx_intr(struct iwi_softc *);
 static void	iwi_tx_intr(struct iwi_softc *, struct iwi_tx_ring *);
 static void	iwi_intr(void *);
 static int	iwi_cmd(struct iwi_softc *, uint8_t, void *, uint8_t);
-static void	iwi_write_ibssnode(struct iwi_softc *, const u_int8_t [], int);
+static void	iwi_write_ibssnode(struct iwi_softc *, const u_int8_t [IEEE80211_ADDR_LEN], int);
 static int	iwi_tx_start(struct iwi_softc *, struct mbuf *,
 		    struct ieee80211_node *, int);
 static int	iwi_raw_xmit(struct ieee80211_node *, struct mbuf *,
@@ -372,6 +370,8 @@ iwi_attach(device_t dev)
 	    | IEEE80211_C_BGSCAN	/* capable of bg scanning */
 #endif
 	    ;
+
+	ic->ic_flags_ext |= IEEE80211_FEXT_SEQNO_OFFLOAD;
 
 	/* read MAC address from EEPROM */
 	val = iwi_read_prom_word(sc, IWI_EEPROM_MAC + 0);
@@ -920,17 +920,17 @@ iwi_cvtrate(int iwirate)
  * value here.
  */
 static void
-iwi_media_status(struct ifnet *ifp, struct ifmediareq *imr)
+iwi_media_status(if_t ifp, struct ifmediareq *imr)
 {
-	struct ieee80211vap *vap = ifp->if_softc;
+	struct ieee80211vap *vap = if_getsoftc(ifp);
 	struct ieee80211com *ic = vap->iv_ic;
 	struct iwi_softc *sc = ic->ic_softc;
 	struct ieee80211_node *ni;
 
 	/* read current transmission rate from adapter */
 	ni = ieee80211_ref_node(vap->iv_bss);
-	ni->ni_txrate =
-	    iwi_cvtrate(CSR_READ_4(sc, IWI_CSR_CURRENT_TX_RATE));
+	ieee80211_node_set_txrate_dot11rate(ni,
+	    iwi_cvtrate(CSR_READ_4(sc, IWI_CSR_CURRENT_TX_RATE)));
 	ieee80211_free_node(ni);
 	ieee80211_media_status(ifp, imr);
 }
@@ -1179,7 +1179,6 @@ static void
 iwi_frame_intr(struct iwi_softc *sc, struct iwi_rx_data *data, int i,
     struct iwi_frame *frame)
 {
-	struct epoch_tracker et;
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct mbuf *mnew, *m;
 	struct ieee80211_node *ni;
@@ -1269,13 +1268,11 @@ iwi_frame_intr(struct iwi_softc *sc, struct iwi_rx_data *data, int i,
 	IWI_UNLOCK(sc);
 
 	ni = ieee80211_find_rxnode(ic, mtod(m, struct ieee80211_frame_min *));
-	NET_EPOCH_ENTER(et);
 	if (ni != NULL) {
 		type = ieee80211_input(ni, m, rssi, nf);
 		ieee80211_free_node(ni);
 	} else
 		type = ieee80211_input_all(ic, m, rssi, nf);
-	NET_EPOCH_EXIT(et);
 
 	IWI_LOCK(sc);
 	if (sc->sc_softled) {
@@ -1838,6 +1835,8 @@ iwi_tx_start(struct iwi_softc *sc, struct mbuf *m0, struct ieee80211_node *ni,
 		}
 	} else
 		staid = 0;
+
+	ieee80211_output_seqno_assign(ni, -1, m0);
 
 	if (wh->i_fc[1] & IEEE80211_FC1_PROTECTED) {
 		k = ieee80211_crypto_encap(ni, m0);
@@ -2535,9 +2534,10 @@ iwi_setwepkeys(struct iwi_softc *sc, struct ieee80211vap *vap)
 
 		wepkey.cmd = IWI_WEP_KEY_CMD_SETKEY;
 		wepkey.idx = i;
-		wepkey.len = wk->wk_keylen;
+		wepkey.len = ieee80211_crypto_get_key_len(wk);
 		memset(wepkey.key, 0, sizeof wepkey.key);
-		memcpy(wepkey.key, wk->wk_key, wk->wk_keylen);
+		memcpy(wepkey.key, ieee80211_crypto_get_key_data(wk),
+		    ieee80211_crypto_get_key_len(wk));
 		DPRINTF(("Setting wep key index %u len %u\n", wepkey.idx,
 		    wepkey.len));
 		error = iwi_cmd(sc, IWI_CMD_SET_WEP_KEY, &wepkey,
@@ -2825,7 +2825,7 @@ static int
 iwi_auth_and_assoc(struct iwi_softc *sc, struct ieee80211vap *vap)
 {
 	struct ieee80211com *ic = vap->iv_ic;
-	struct ifnet *ifp = vap->iv_ifp;
+	if_t ifp = vap->iv_ifp;
 	struct ieee80211_node *ni;
 	struct iwi_configuration config;
 	struct iwi_associate *assoc = &sc->assoc;
@@ -2972,7 +2972,7 @@ iwi_auth_and_assoc(struct iwi_softc *sc, struct ieee80211vap *vap)
 	assoc->intval = htole16(ni->ni_intval);
 	IEEE80211_ADDR_COPY(assoc->bssid, ni->ni_bssid);
 	if (vap->iv_opmode == IEEE80211_M_IBSS)
-		IEEE80211_ADDR_COPY(assoc->dst, ifp->if_broadcastaddr);
+		IEEE80211_ADDR_COPY(assoc->dst, if_getbroadcastaddr(ifp));
 	else
 		IEEE80211_ADDR_COPY(assoc->dst, ni->ni_bssid);
 

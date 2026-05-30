@@ -31,9 +31,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
-.Dd December 21, 2001
+.Dd October 26, 2025
 .Dt MAC_FREE 3
 .Os
 .Sh NAME
@@ -69,12 +67,6 @@ function.
 .Xr mac 9
 .Sh STANDARDS
 POSIX.1e is described in IEEE POSIX.1e draft 17.
-Discussion of the draft
-continues on the cross-platform POSIX.1e implementation mailing list.
-To join this list, see the
-.Fx
-POSIX.1e implementation page
-for more information.
 .Sh HISTORY
 Support for Mandatory Access Control was introduced in
 .Fx 5.0
@@ -93,7 +85,7 @@ is a complex structure in the
 implementation,
 .Fn mac_free
 is specific to
-.Vt mac_3 ,
+.Vt mac_t ,
 and must not be used to free the character strings returned from
 .Fn mac_to_text .
 Doing so may result in undefined behavior.

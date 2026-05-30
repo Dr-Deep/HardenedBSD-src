@@ -66,9 +66,9 @@ struct edns_data;
  * @param secure: if 1, the AD bit is set in the reply.
  * @return: 0 on error (server failure).
  */
-int reply_info_answer_encode(struct query_info* qinf, struct reply_info* rep, 
+int reply_info_answer_encode(struct query_info* qinf, struct reply_info* rep,
 	uint16_t id, uint16_t qflags, struct sldns_buffer* dest, time_t timenow,
-	int cached, struct regional* region, uint16_t udpsize, 
+	int cached, struct regional* region, uint16_t udpsize,
 	struct edns_data* edns, int dnssec, int secure);
 
 /**
@@ -106,7 +106,28 @@ void qinfo_query_encode(struct sldns_buffer* pkt, struct query_info* qinfo);
  * @param edns: edns data or NULL.
  * @return octets to reserve for EDNS.
  */
-uint16_t calc_edns_field_size(struct edns_data* edns);
+size_t calc_edns_field_size(struct edns_data* edns);
+
+/**
+ * Calculate the size of a specific EDNS option in packet.
+ * @param edns: edns data or NULL.
+ * @param code: the opt code to get the size of.
+ * @return octets the option will take up.
+ */
+uint16_t calc_edns_option_size(struct edns_data* edns, uint16_t code);
+
+/**
+ * Calculate the size of the EDE option(s) in packet. Also calculate separately
+ * the size of the EXTRA-TEXT field(s) in case we can trim them to fit.
+ * In this case include any LDNS_EDE_OTHER options in their entirety since they
+ * are useless without extra text.
+ * @param edns: edns data or NULL.
+ * @param txt_size: the size of the EXTRA-TEXT field(s); this includes
+ *	LDNS_EDE_OTHER in their entirety since they are useless without
+ *	extra text.
+ * @return octets the option will take up.
+ */
+uint16_t calc_ede_option_size(struct edns_data* edns, size_t* txt_size);
 
 /**
  * Attach EDNS record to buffer. Buffer has complete packet. There must
@@ -116,11 +137,11 @@ uint16_t calc_edns_field_size(struct edns_data* edns);
  */
 void attach_edns_record(struct sldns_buffer* pkt, struct edns_data* edns);
 
-/** 
+/**
  * Encode an error. With QR and RA set.
  *
  * @param pkt: where to store the packet.
- * @param r: RCODE value to encode.
+ * @param r: RCODE value to encode (may contain extra flags).
  * @param qinfo: if not NULL, the query is included.
  * @param qid: query ID to set in packet. network order.
  * @param qflags: original query flags (to copy RD and CD bits). host order.
@@ -129,5 +150,22 @@ void attach_edns_record(struct sldns_buffer* pkt, struct edns_data* edns);
  */
 void error_encode(struct sldns_buffer* pkt, int r, struct query_info* qinfo,
 	uint16_t qid, uint16_t qflags, struct edns_data* edns);
+
+/**
+ * Encode an extended error. With QR and RA set.
+ *
+ * @param pkt: where to store the packet.
+ * @param rcode: Extended RCODE value to encode.
+ * @param qinfo: if not NULL, the query is included.
+ * @param qid: query ID to set in packet. network order.
+ * @param qflags: original query flags (to copy RD and CD bits). host order.
+ * @param xflags: extra flags to set (such as for example BIT_AA and/or BIT_TC)
+ * @param edns: if not NULL, this is the query edns info,
+ * 	and an edns reply is attached. Only attached if EDNS record fits reply.
+ * 	Without edns extended errors (i.e. > 15) will not be conveyed.
+ */
+void extended_error_encode(struct sldns_buffer* pkt, uint16_t rcode,
+	struct query_info* qinfo, uint16_t qid, uint16_t qflags,
+	uint16_t xflags, struct edns_data* edns);
 
 #endif /* UTIL_DATA_MSGENCODE_H */

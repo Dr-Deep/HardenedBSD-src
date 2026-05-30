@@ -1,15 +1,16 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/* Copyright(c) 2007-2022 Intel Corporation */
-/* $FreeBSD$ */
+/* Copyright(c) 2007-2025 Intel Corporation */
 #include "qat_freebsd.h"
 #include "adf_cfg.h"
 #include "adf_common_drv.h"
+#include "adf_dbgfs.h"
 #include "adf_accel_devices.h"
 #include "icp_qat_uclo.h"
 #include "icp_qat_fw.h"
 #include "icp_qat_fw_init_admin.h"
 #include "adf_cfg_strings.h"
 #include "adf_dev_err.h"
+#include "adf_uio.h"
 #include "adf_transport_access_macros.h"
 #include "adf_transport_internal.h"
 #include <sys/mutex.h>
@@ -19,6 +20,10 @@
 #include "adf_common_drv.h"
 #include "icp_qat_fw.h"
 
+#if defined(QAT_UIO)
+#include "adf_cfg_device.h"
+#endif /* QAT_UIO*/
+
 /* Mask used to check the CompressAndVerify capability bit */
 #define DC_CNV_EXTENDED_CAPABILITY (0x01)
 
@@ -27,6 +32,11 @@
 
 static LIST_HEAD(service_table);
 static DEFINE_MUTEX(service_lock);
+
+static int adf_dev_init_locked(struct adf_accel_dev *accel_dev);
+static int adf_dev_start_locked(struct adf_accel_dev *accel_dev);
+static int adf_dev_stop_locked(struct adf_accel_dev *accel_dev);
+static void adf_dev_shutdown_locked(struct adf_accel_dev *accel_dev);
 
 static void
 adf_service_add(struct service_hndl *service)
@@ -77,7 +87,6 @@ adf_cfg_add_device_params(struct adf_accel_dev *accel_dev)
 	char mmp_version[ADF_CFG_MAX_VAL_LEN_IN_BYTES];
 	struct adf_hw_device_data *hw_data = NULL;
 	unsigned long val;
-
 	if (!accel_dev)
 		return -EINVAL;
 
@@ -213,7 +222,7 @@ adf_set_ssm_wdtimer(struct adf_accel_dev *accel_dev)
 	unsigned int mask;
 	u32 clk_per_sec = hw_data->get_clock_speed(hw_data);
 	u32 timer_val = ADF_WDT_TIMER_SYM_COMP_MS * (clk_per_sec / 1000);
-	u32 timer_val_pke = ADF_SSM_WDT_PKE_DEFAULT_VALUE;
+	u32 timer_val_pke = ADF_GEN2_SSM_WDT_PKE_DEFAULT_VALUE;
 	char timer_str[ADF_CFG_MAX_VAL_LEN_IN_BYTES] = { 0 };
 
 	/* Get Watch Dog Timer for CySym+Comp from the configuration */
@@ -262,6 +271,18 @@ adf_set_ssm_wdtimer(struct adf_accel_dev *accel_dev)
 int
 adf_dev_init(struct adf_accel_dev *accel_dev)
 {
+	int ret = 0;
+
+	mutex_lock(&accel_dev->lock);
+	ret = adf_dev_init_locked(accel_dev);
+	mutex_unlock(&accel_dev->lock);
+
+	return ret;
+}
+
+static int
+adf_dev_init_locked(struct adf_accel_dev *accel_dev)
+{
 	struct service_hndl *service;
 	struct list_head *list_itr;
 	struct adf_hw_device_data *hw_data = accel_dev->hw_device;
@@ -286,6 +307,12 @@ adf_dev_init(struct adf_accel_dev *accel_dev)
 
 	if (adf_init_etr_data(accel_dev)) {
 		device_printf(GET_DEV(accel_dev), "Failed initialize etr\n");
+		return EFAULT;
+	}
+
+	if (hw_data->init_device && hw_data->init_device(accel_dev)) {
+		device_printf(GET_DEV(accel_dev),
+			      "Failed to initialize device\n");
 		return EFAULT;
 	}
 
@@ -343,17 +370,9 @@ adf_dev_init(struct adf_accel_dev *accel_dev)
 
 	hw_data->enable_error_correction(accel_dev);
 
-	if (hw_data->enable_vf2pf_comms(accel_dev)) {
-		device_printf(GET_DEV(accel_dev),
-			      "QAT: Failed to enable vf2pf comms\n");
-		return EFAULT;
-	}
-
-	if (adf_pf_vf_capabilities_init(accel_dev))
-		return EFAULT;
-
-	if (adf_pf_vf_ring_to_svc_init(accel_dev))
-		return EFAULT;
+	ret = hw_data->csr_info.pfvf_ops.enable_comms(accel_dev);
+	if (ret)
+		return ret;
 
 	if (adf_cfg_add_device_params(accel_dev))
 		return EFAULT;
@@ -413,17 +432,23 @@ adf_dev_init(struct adf_accel_dev *accel_dev)
 int
 adf_dev_start(struct adf_accel_dev *accel_dev)
 {
+	int ret = 0;
+
+	mutex_lock(&accel_dev->lock);
+	ret = adf_dev_start_locked(accel_dev);
+	mutex_unlock(&accel_dev->lock);
+
+	return ret;
+}
+
+static int
+adf_dev_start_locked(struct adf_accel_dev *accel_dev)
+{
 	struct adf_hw_device_data *hw_data = accel_dev->hw_device;
 	struct service_hndl *service;
 	struct list_head *list_itr;
 
 	set_bit(ADF_STATUS_STARTING, &accel_dev->status);
-	if (adf_devmgr_verify_id(&accel_dev->accel_id)) {
-		device_printf(GET_DEV(accel_dev),
-			      "QAT: Device %d not found\n",
-			      accel_dev->accel_id);
-		return ENODEV;
-	}
 	if (adf_ae_start(accel_dev)) {
 		device_printf(GET_DEV(accel_dev), "AE Start Failed\n");
 		return EFAULT;
@@ -455,6 +480,12 @@ adf_dev_start(struct adf_accel_dev *accel_dev)
 		return EFAULT;
 	}
 
+	if (hw_data->int_timer_init && hw_data->int_timer_init(accel_dev)) {
+		device_printf(GET_DEV(accel_dev),
+			      "Failed to init heartbeat interrupt timer\n");
+		return -EFAULT;
+	}
+
 	list_for_each(list_itr, &service_table)
 	{
 		service = list_entry(list_itr, struct service_hndl, list);
@@ -467,12 +498,26 @@ adf_dev_start(struct adf_accel_dev *accel_dev)
 		set_bit(accel_dev->accel_id, service->start_status);
 	}
 
+	if (accel_dev->is_vf || !accel_dev->u1.pf.vf_info) {
+		/*Register UIO devices */
+		if (adf_uio_register(accel_dev)) {
+			adf_uio_remove(accel_dev);
+			device_printf(GET_DEV(accel_dev),
+				      "Failed to register UIO devices\n");
+			set_bit(ADF_STATUS_STARTING, &accel_dev->status);
+			clear_bit(ADF_STATUS_STARTED, &accel_dev->status);
+			return ENODEV;
+		}
+	}
+
 	if (!test_bit(ADF_STATUS_RESTARTING, &accel_dev->status) &&
 	    adf_cfg_add_ext_params(accel_dev))
 		return EFAULT;
 
 	clear_bit(ADF_STATUS_STARTING, &accel_dev->status);
 	set_bit(ADF_STATUS_STARTED, &accel_dev->status);
+
+	adf_dbgfs_add(accel_dev);
 
 	return 0;
 }
@@ -490,15 +535,24 @@ adf_dev_start(struct adf_accel_dev *accel_dev)
 int
 adf_dev_stop(struct adf_accel_dev *accel_dev)
 {
+	int ret = 0;
+
+	mutex_lock(&accel_dev->lock);
+	ret = adf_dev_stop_locked(accel_dev);
+	mutex_unlock(&accel_dev->lock);
+
+	return ret;
+}
+
+static int
+adf_dev_stop_locked(struct adf_accel_dev *accel_dev)
+{
 	struct service_hndl *service;
 	struct list_head *list_itr;
 
-	if (adf_devmgr_verify_id(&accel_dev->accel_id)) {
-		device_printf(GET_DEV(accel_dev),
-			      "QAT: Device %d not found\n",
-			      accel_dev->accel_id);
-		return ENODEV;
-	}
+	if (!test_bit(ADF_STATUS_CONFIGURED, &accel_dev->status))
+		return 0;
+
 	if (!adf_dev_started(accel_dev) &&
 	    !test_bit(ADF_STATUS_STARTING, &accel_dev->status)) {
 		return 0;
@@ -511,8 +565,13 @@ adf_dev_stop(struct adf_accel_dev *accel_dev)
 		return EBUSY;
 	}
 
+	adf_dbgfs_rm(accel_dev);
+
 	clear_bit(ADF_STATUS_STARTING, &accel_dev->status);
 	clear_bit(ADF_STATUS_STARTED, &accel_dev->status);
+
+	if (accel_dev->hw_device->int_timer_exit)
+		accel_dev->hw_device->int_timer_exit(accel_dev);
 
 	list_for_each(list_itr, &service_table)
 	{
@@ -520,6 +579,11 @@ adf_dev_stop(struct adf_accel_dev *accel_dev)
 		if (!test_bit(accel_dev->accel_id, service->start_status))
 			continue;
 		clear_bit(accel_dev->accel_id, service->start_status);
+	}
+
+	if (accel_dev->is_vf || !accel_dev->u1.pf.vf_info) {
+		/* Remove UIO Devices */
+		adf_uio_remove(accel_dev);
 	}
 
 	if (test_bit(ADF_STATUS_AE_STARTED, &accel_dev->status)) {
@@ -543,9 +607,20 @@ adf_dev_stop(struct adf_accel_dev *accel_dev)
 void
 adf_dev_shutdown(struct adf_accel_dev *accel_dev)
 {
+	mutex_lock(&accel_dev->lock);
+	adf_dev_shutdown_locked(accel_dev);
+	mutex_unlock(&accel_dev->lock);
+}
+
+static void
+adf_dev_shutdown_locked(struct adf_accel_dev *accel_dev)
+{
 	struct adf_hw_device_data *hw_data = accel_dev->hw_device;
 	struct service_hndl *service;
 	struct list_head *list_itr;
+
+	if (!test_bit(ADF_STATUS_CONFIGURED, &accel_dev->status))
+		return;
 
 	if (test_bit(ADF_STATUS_SYSCTL_CTX_INITIALISED, &accel_dev->status)) {
 		sysctl_ctx_free(&accel_dev->sysctl_ctx);
@@ -589,17 +664,18 @@ adf_dev_shutdown(struct adf_accel_dev *accel_dev)
 
 	hw_data->disable_iov(accel_dev);
 
-	if (hw_data->disable_vf2pf_comms)
-		hw_data->disable_vf2pf_comms(accel_dev);
-
 	if (test_bit(ADF_STATUS_IRQ_ALLOCATED, &accel_dev->status)) {
 		hw_data->free_irq(accel_dev);
 		clear_bit(ADF_STATUS_IRQ_ALLOCATED, &accel_dev->status);
 	}
 
 	/* Delete configuration only if not restarting */
-	if (!test_bit(ADF_STATUS_RESTARTING, &accel_dev->status))
+	if (!test_bit(ADF_STATUS_RESTARTING, &accel_dev->status)) {
 		adf_cfg_del_all(accel_dev);
+#ifdef QAT_UIO
+		adf_cfg_device_clear_all(accel_dev);
+#endif
+	}
 
 	if (hw_data->remove_pke_stats)
 		hw_data->remove_pke_stats(accel_dev);

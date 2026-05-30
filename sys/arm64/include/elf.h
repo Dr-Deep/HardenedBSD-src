@@ -22,9 +22,11 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
+
+#ifdef __arm__
+#include <arm/elf.h>
+#else /* !__arm__ */
 
 #ifndef	_MACHINE_ELF_H_
 #define	_MACHINE_ELF_H_
@@ -86,69 +88,146 @@ __ElfType(Auxinfo);
 #endif
 
 #if __ELF_WORD_SIZE == 32
-#define	ET_DYN_LOAD_ADDR 0x12000
+#define	ET_DYN_LOAD_ADDR 0x01001000
 #else
 #define	ET_DYN_LOAD_ADDR 0x100000
 #endif
 
+/* First __FreeBSD_version that supports Top Byte Ignore (TBI) */
+#define	TBI_VERSION	1500058
+
+/*
+ * The HWCAP values must be identical to Linux. Many userspace programs
+ * will define missing HWCAP values to the Linux version. To keep these
+ * working when we add the HWCAP it must be the same.
+ */
+
 /* HWCAP */
-#define	HWCAP_FP		0x00000001
-#define	HWCAP_ASIMD		0x00000002
-#define	HWCAP_EVTSTRM		0x00000004
-#define	HWCAP_AES		0x00000008
-#define	HWCAP_PMULL		0x00000010
-#define	HWCAP_SHA1		0x00000020
-#define	HWCAP_SHA2		0x00000040
-#define	HWCAP_CRC32		0x00000080
-#define	HWCAP_ATOMICS		0x00000100
-#define	HWCAP_FPHP		0x00000200
-#define	HWCAP_ASIMDHP		0x00000400
+#define	HWCAP_FP		(1 << 0)
+#define	HWCAP_ASIMD		(1 << 1)
+#define	HWCAP_EVTSTRM		(1 << 2)
+#define	HWCAP_AES		(1 << 3)
+#define	HWCAP_PMULL		(1 << 4)
+#define	HWCAP_SHA1		(1 << 5)
+#define	HWCAP_SHA2		(1 << 6)
+#define	HWCAP_CRC32		(1 << 7)
+#define	HWCAP_ATOMICS		(1 << 8)
+#define	HWCAP_FPHP		(1 << 9)
+#define	HWCAP_ASIMDHP		(1 << 10)
 /*
  * XXX: The following bits (from CPUID to FLAGM) were originally incorrect,
  * but later changed to match the Linux definitions. No compatibility code is
  * provided, as the fix was expected to result in near-zero fallout.
  */
-#define	HWCAP_CPUID		0x00000800
-#define	HWCAP_ASIMDRDM		0x00001000
-#define	HWCAP_JSCVT		0x00002000
-#define	HWCAP_FCMA		0x00004000
-#define	HWCAP_LRCPC		0x00008000
-#define	HWCAP_DCPOP		0x00010000
-#define	HWCAP_SHA3		0x00020000
-#define	HWCAP_SM3		0x00040000
-#define	HWCAP_SM4		0x00080000
-#define	HWCAP_ASIMDDP		0x00100000
-#define	HWCAP_SHA512		0x00200000
-#define	HWCAP_SVE		0x00400000
-#define	HWCAP_ASIMDFHM		0x00800000
-#define	HWCAP_DIT		0x01000000
-#define	HWCAP_USCAT		0x02000000
-#define	HWCAP_ILRCPC		0x04000000
-#define	HWCAP_FLAGM		0x08000000
-#define	HWCAP_SSBS		0x10000000
-#define	HWCAP_SB		0x20000000
-#define	HWCAP_PACA		0x40000000
-#define	HWCAP_PACG		0x80000000
+#define	HWCAP_CPUID		(1 << 11)
+#define	HWCAP_ASIMDRDM		(1 << 12)
+#define	HWCAP_JSCVT		(1 << 13)
+#define	HWCAP_FCMA		(1 << 14)
+#define	HWCAP_LRCPC		(1 << 15)
+#define	HWCAP_DCPOP		(1 << 16)
+#define	HWCAP_SHA3		(1 << 17)
+#define	HWCAP_SM3		(1 << 18)
+#define	HWCAP_SM4		(1 << 19)
+#define	HWCAP_ASIMDDP		(1 << 20)
+#define	HWCAP_SHA512		(1 << 21)
+#define	HWCAP_SVE		(1 << 22)
+#define	HWCAP_ASIMDFHM		(1 << 23)
+#define	HWCAP_DIT		(1 << 24)
+#define	HWCAP_USCAT		(1 << 25)
+#define	HWCAP_ILRCPC		(1 << 26)
+#define	HWCAP_FLAGM		(1 << 27)
+#define	HWCAP_SSBS		(1 << 28)
+#define	HWCAP_SB		(1 << 29)
+#define	HWCAP_PACA		(1 << 30)
+#define	HWCAP_PACG		(1UL << 31)
+#define	HWCAP_GCS		(1UL << 32)
+#define	HWCAP_CMPBR		(1UL << 33)
+#define	HWCAP_FPRCVT		(1UL << 34)
+#define	HWCAP_F8MM8		(1UL << 35)
+#define	HWCAP_F8MM4		(1UL << 36)
+#define	HWCAP_SVE_F16MM		(1UL << 37)
+#define	HWCAP_SVE_ELTPERM	(1UL << 38)
+#define	HWCAP_SVE_AES2		(1UL << 39)
+#define	HWCAP_SVE_BFSCALE	(1UL << 40)
+#define	HWCAP_SVE2P2		(1UL << 41)
+#define	HWCAP_SME2P2		(1UL << 42)
+#define	HWCAP_SME_SBITPERM	(1UL << 43)
+#define	HWCAP_SME_AES		(1UL << 44)
+#define	HWCAP_SME_SFEXPA	(1UL << 45)
+#define	HWCAP_SME_STMOP		(1UL << 46)
+#define	HWCAP_SME_SMOP4		(1UL << 47)
 
 /* HWCAP2 */
-#define	HWCAP2_DCPODP		0x00000001
-#define	HWCAP2_SVE2		0x00000002
-#define	HWCAP2_SVEAES		0x00000004
-#define	HWCAP2_SVEPMULL		0x00000008
-#define	HWCAP2_SVEBITPERM	0x00000010
-#define	HWCAP2_SVESHA3		0x00000020
-#define	HWCAP2_SVESM4		0x00000040
-#define	HWCAP2_FLAGM2		0x00000080
-#define	HWCAP2_FRINT		0x00000100
-#define	HWCAP2_SVEI8MM		0x00000200
-#define	HWCAP2_SVEF32MM		0x00000400
-#define	HWCAP2_SVEF64MM		0x00000800
-#define	HWCAP2_SVEBF16		0x00001000
-#define	HWCAP2_I8MM		0x00002000
-#define	HWCAP2_BF16		0x00004000
-#define	HWCAP2_DGH		0x00008000
-#define	HWCAP2_RNG		0x00010000
-#define	HWCAP2_BTI		0x00020000
+#define	HWCAP2_DCPODP		(1 << 0)
+#define	HWCAP2_SVE2		(1 << 1)
+#define	HWCAP2_SVEAES		(1 << 2)
+#define	HWCAP2_SVEPMULL		(1 << 3)
+#define	HWCAP2_SVEBITPERM	(1 << 4)
+#define	HWCAP2_SVESHA3		(1 << 5)
+#define	HWCAP2_SVESM4		(1 << 6)
+#define	HWCAP2_FLAGM2		(1 << 7)
+#define	HWCAP2_FRINT		(1 << 8)
+#define	HWCAP2_SVEI8MM		(1 << 9)
+#define	HWCAP2_SVEF32MM		(1 << 10)
+#define	HWCAP2_SVEF64MM		(1 << 11)
+#define	HWCAP2_SVEBF16		(1 << 12)
+#define	HWCAP2_I8MM		(1 << 13)
+#define	HWCAP2_BF16		(1 << 14)
+#define	HWCAP2_DGH		(1 << 15)
+#define	HWCAP2_RNG		(1 << 16)
+#define	HWCAP2_BTI		(1 << 17)
+#define	HWCAP2_MTE		(1 << 18)
+#define	HWCAP2_ECV		(1 << 19)
+#define	HWCAP2_AFP		(1 << 20)
+#define	HWCAP2_RPRES		(1 << 21)
+#define	HWCAP2_MTE3		(1 << 22)
+#define	HWCAP2_SME		(1 << 23)
+#define	HWCAP2_SME_I16I64	(1 << 24)
+#define	HWCAP2_SME_F64F64	(1 << 25)
+#define	HWCAP2_SME_I8I32	(1 << 26)
+#define	HWCAP2_SME_F16F32	(1 << 27)
+#define	HWCAP2_SME_B16F32	(1 << 28)
+#define	HWCAP2_SME_F32F32	(1 << 29)
+#define	HWCAP2_SME_FA64		(1 << 30)
+#define	HWCAP2_WFXT		(1UL << 31)
+#define	HWCAP2_EBF16		(1UL << 32)
+#define	HWCAP2_SVE_EBF16	(1UL << 33)
+#define	HWCAP2_CSSC		(1UL << 34)
+#define	HWCAP2_RPRFM		(1UL << 35)
+#define	HWCAP2_SVE2P1		(1UL << 36)
+#define	HWCAP2_SME2		(1UL << 37)
+#define	HWCAP2_SME2P1		(1UL << 38)
+#define	HWCAP2_SME_I16I32	(1UL << 39)
+#define	HWCAP2_SME_BI32I32	(1UL << 40)
+#define	HWCAP2_SME_B16B16	(1UL << 41)
+#define	HWCAP2_SME_F16F16	(1UL << 42)
+#define	HWCAP2_MOPS		(1UL << 43)
+#define	HWCAP2_HBC		(1UL << 44)
+#define	HWCAP2_SVE_B16B16	(1UL << 45)
+#define	HWCAP2_LRCPC3		(1UL << 46)
+#define	HWCAP2_LSE128		(1UL << 47)
+#define	HWCAP2_FPMR		(1UL << 48)
+#define	HWCAP2_LUT		(1UL << 49)
+#define	HWCAP2_FAMINMAX		(1UL << 50)
+#define	HWCAP2_F8CVT		(1UL << 51)
+#define	HWCAP2_F8FMA		(1UL << 52)
+#define	HWCAP2_F8DP4		(1UL << 53)
+#define	HWCAP2_F8DP2		(1UL << 54)
+#define	HWCAP2_F8E4M3		(1UL << 55)
+#define	HWCAP2_F8E5M2		(1UL << 56)
+#define	HWCAP2_SME_LUTV2	(1UL << 57)
+#define	HWCAP2_SME_F8F16	(1UL << 58)
+#define	HWCAP2_SME_F8F32	(1UL << 59)
+#define	HWCAP2_SME_SF8FMA	(1UL << 60)
+#define	HWCAP2_SME_SF8DP4	(1UL << 61)
+#define	HWCAP2_SME_SF8DP2	(1UL << 62)
+#define	HWCAP2_POE		(1UL << 63)
+
+/* HWCAP3 */
+#define	HWCAP3_MTE_FAR		(1 << 0)
+#define	HWCAP3_MTE_STORE_ONLY	(1 << 1)
+#define	HWCAP3_LSFE		(1 << 2)
+#define	HWCAP3_LS64		(1 << 3)
 
 #ifdef COMPAT_FREEBSD32
 /* ARM HWCAP */
@@ -180,3 +259,5 @@ __ElfType(Auxinfo);
 #endif
 
 #endif /* !_MACHINE_ELF_H_ */
+
+#endif /* !__arm__ */

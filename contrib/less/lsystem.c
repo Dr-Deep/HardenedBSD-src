@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1984-2021  Mark Nudelman
+ * Copyright (C) 1984-2026  Mark Nudelman
  *
  * You may distribute under the terms of either the GNU General Public
  * License or the Less License, as specified in the README file.
@@ -19,7 +19,7 @@
 
 #if MSDOS_COMPILER
 #include <dos.h>
-#if MSDOS_COMPILER==WIN32C && defined(MINGW)
+#if MSDOS_COMPILER==WIN32C && defined(__MINGW32__)
 #include <direct.h>
 #define setdisk(n) _chdrive((n)+1)
 #else
@@ -32,7 +32,7 @@
 #endif
 #endif
 
-extern int screen_trashed;
+extern int sigs;
 extern IFILE curr_ifile;
 
 
@@ -42,14 +42,11 @@ extern IFILE curr_ifile;
  * Pass the specified command to a shell to be executed.
  * Like plain "system()", but handles resetting terminal modes, etc.
  */
-	public void
-lsystem(cmd, donemsg)
-	char *cmd;
-	char *donemsg;
+public void lsystem(constant char *cmd, constant char *donemsg)
 {
 	int inp;
 #if HAVE_SHELL
-	char *shell;
+	constant char *shell;
 	char *p;
 #endif
 	IFILE save_ifile;
@@ -96,7 +93,7 @@ lsystem(cmd, donemsg)
 	/*
 	 * De-initialize the terminal and take out of raw mode.
 	 */
-	deinit();
+	term_deinit();
 	flush();         /* Make sure the deinit chars get out */
 	raw_mode(0);
 #if MSDOS_COMPILER==WIN32C
@@ -117,12 +114,7 @@ lsystem(cmd, donemsg)
 	inp = dup(0);
 	close(0);
 #if !MSDOS_COMPILER
-#if OS2
-	/* The __open() system call translates "/dev/tty" to "con". */
-	if (__open(tty_device(), OPEN_READ) < 0)
-#else
-	if (open(tty_device(), OPEN_READ) < 0)
-#endif
+	if (open_tty() < 0)
 #endif
 		dup(inp);
 #endif
@@ -144,9 +136,10 @@ lsystem(cmd, donemsg)
 			char *esccmd = shell_quote(cmd);
 			if (esccmd != NULL)
 			{
-				int len = (int) (strlen(shell) + strlen(esccmd) + 5);
+				constant char *copt = shell_coption();
+				size_t len = strlen(shell) + strlen(esccmd) + strlen(copt) + 3;
 				p = (char *) ecalloc(len, sizeof(char));
-				SNPRINTF3(p, len, "%s %s %s", shell, shell_coption(), esccmd);
+				SNPRINTF3(p, len, "%s %s %s", shell, copt, esccmd);
 				free(esccmd);
 			}
 		}
@@ -200,8 +193,8 @@ lsystem(cmd, donemsg)
 		putchr('\n');
 		flush();
 	}
-	init();
-	screen_trashed = 1;
+	term_init();
+	screen_trashed();
 
 #if MSDOS_COMPILER && MSDOS_COMPILER!=WIN32C
 	/*
@@ -229,15 +222,13 @@ lsystem(cmd, donemsg)
 	 */
 	reedit_ifile(save_ifile);
 
-#if defined(SIGWINCH) || defined(SIGWIND)
 	/*
 	 * Since we were ignoring window change signals while we executed
 	 * the system command, we must assume the window changed.
 	 * Warning: this leaves a signal pending (in "sigs"),
 	 * so psignals() should be called soon after lsystem().
 	 */
-	winch(0);
-#endif
+	sigs |= S_WINCH;
 }
 
 #endif
@@ -256,10 +247,7 @@ lsystem(cmd, donemsg)
  * If the mark is on the current screen, or if the mark is ".",
  * the whole current screen is piped.
  */
-	public int
-pipe_mark(c, cmd)
-	int c;
-	char *cmd;
+public int pipe_mark(char c, constant char *cmd)
 {
 	POSITION mpos, tpos, bpos;
 
@@ -290,11 +278,7 @@ pipe_mark(c, cmd)
  * Create a pipe to the given shell command.
  * Feed it the file contents between the positions spos and epos.
  */
-	public int
-pipe_data(cmd, spos, epos)
-	char *cmd;
-	POSITION spos;
-	POSITION epos;
+public int pipe_data(constant char *cmd, POSITION spos, POSITION epos)
 {
 	FILE *f;
 	int c;
@@ -321,7 +305,7 @@ pipe_data(cmd, spos, epos)
 	putstr(cmd);
 	putstr("\n");
 
-	deinit();
+	term_deinit();
 	flush();
 	raw_mode(0);
 	init_signals(0);
@@ -367,11 +351,11 @@ pipe_data(cmd, spos, epos)
 #endif
 	init_signals(1);
 	raw_mode(1);
-	init();
-	screen_trashed = 1;
+	term_init();
+	screen_trashed();
 #if defined(SIGWINCH) || defined(SIGWIND)
 	/* {{ Probably don't need this here. }} */
-	winch(0);
+	lwinch(0);
 #endif
 	return (0);
 }

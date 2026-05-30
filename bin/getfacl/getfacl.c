@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 1999, 2001, 2002 Robert N M Watson
  * All rights reserved.
  *
@@ -30,10 +32,6 @@
  * and send the results to stdout
  */
 
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/types.h>
 #include <sys/param.h>
 #include <sys/acl.h>
@@ -41,6 +39,7 @@ __FBSDID("$FreeBSD$");
 
 #include <err.h>
 #include <errno.h>
+#include <getopt.h>
 #include <grp.h>
 #include <pwd.h>
 #include <stdio.h>
@@ -49,6 +48,15 @@ __FBSDID("$FreeBSD$");
 #include <unistd.h>
 
 static int more_than_one = 0;
+
+static const struct option long_options[] =
+{
+	{ "default",		no_argument,	NULL,	'd' },
+	{ "numeric",		no_argument,	NULL,	'n' },
+	{ "omit-header",	no_argument,	NULL,	'q' },
+	{ "skip-base",		no_argument,	NULL,	's' },
+	{ NULL,			no_argument,	NULL,	0 },
+};
 
 static void
 usage(void)
@@ -85,7 +93,7 @@ getgname(gid_t gid)
 
 static int
 print_acl(char *path, acl_type_t type, int hflag, int iflag, int nflag,
-    int qflag, int vflag)
+    int qflag, int vflag, int sflag)
 {
 	struct stat	sb;
 	acl_t	acl;
@@ -117,25 +125,49 @@ print_acl(char *path, acl_type_t type, int hflag, int iflag, int nflag,
 		return (-1);
 	}
 
-	if (more_than_one)
-		printf("\n");
-	else
-		more_than_one++;
-
-	if (!qflag)
-		printf("# file: %s\n# owner: %s\n# group: %s\n", path,
-		    getuname(sb.st_uid), getgname(sb.st_gid));
-
 	if (hflag)
 		acl = acl_get_link_np(path, type);
 	else
 		acl = acl_get_file(path, type);
-	if (!acl) {
-		if (errno != EOPNOTSUPP) {
-			warn("%s", path);
-			return(-1);
+
+	if (!acl && errno != EOPNOTSUPP) {
+		warn("%s", path);
+		return(-1);
+	}
+
+	if (sflag) {
+		int trivial;
+
+		/*
+		 * With the -s flag, we shouldn't synthesize a trivial ACL if
+		 * they aren't supported as we do below.
+		 */
+		if (!acl)
+			return(0);
+
+		/*
+		 * We also shouldn't render anything for this path if it's a
+		 * trivial ACL.  If we error out, we'll issue a warning but
+		 * proceed with this file to err on the side of caution.
+		 */
+		error = acl_is_trivial_np(acl, &trivial);
+		if (error != 0) {
+			warn("%s: acl_is_trivial_np failed", path);
+		} else if (trivial) {
+			(void)acl_free(acl);
+			return(0);
 		}
-		errno = 0;
+	}
+
+	if (more_than_one)
+		printf("\n");
+	else
+		more_than_one++;
+	if (!qflag)
+		printf("# file: %s\n# owner: %s\n# group: %s\n", path,
+		    getuname(sb.st_uid), getgname(sb.st_gid));
+
+	if (!acl) {
 		if (type == ACL_TYPE_DEFAULT)
 			return(0);
 		acl = acl_from_mode_np(sb.st_mode);
@@ -157,6 +189,7 @@ print_acl(char *path, acl_type_t type, int hflag, int iflag, int nflag,
 	acl_text = acl_to_text_np(acl, 0, flags);
 	if (!acl_text) {
 		warn("%s: acl_to_text_np() failed", path);
+		(void)acl_free(acl);
 		return(-1);
 	}
 
@@ -170,7 +203,7 @@ print_acl(char *path, acl_type_t type, int hflag, int iflag, int nflag,
 
 static int
 print_acl_from_stdin(acl_type_t type, int hflag, int iflag, int nflag,
-    int qflag, int vflag)
+    int qflag, int vflag, int sflag)
 {
 	char	*p, pathname[PATH_MAX];
 	int	carried_error = 0;
@@ -179,7 +212,7 @@ print_acl_from_stdin(acl_type_t type, int hflag, int iflag, int nflag,
 		if ((p = strchr(pathname, '\n')) != NULL)
 			*p = '\0';
 		if (print_acl(pathname, type, hflag, iflag, nflag,
-		    qflag, vflag) == -1) {
+		    qflag, vflag, sflag) == -1) {
 			carried_error = -1;
 		}
 	}
@@ -193,14 +226,16 @@ main(int argc, char *argv[])
 	acl_type_t	type = ACL_TYPE_ACCESS;
 	int	carried_error = 0;
 	int	ch, error, i;
-	int	hflag, iflag, qflag, nflag, vflag;
+	int	hflag, iflag, qflag, nflag, sflag, vflag;
 
 	hflag = 0;
 	iflag = 0;
 	qflag = 0;
 	nflag = 0;
+	sflag = 0;
 	vflag = 0;
-	while ((ch = getopt(argc, argv, "dhinqv")) != -1)
+	while ((ch = getopt_long(argc, argv, "+dhinqsv", long_options,
+	    NULL)) != -1)
 		switch(ch) {
 		case 'd':
 			type = ACL_TYPE_DEFAULT;
@@ -217,6 +252,9 @@ main(int argc, char *argv[])
 		case 'q':
 			qflag = 1;
 			break;
+		case 's':
+			sflag = 1;
+			break;
 		case 'v':
 			vflag = 1;
 			break;
@@ -229,19 +267,19 @@ main(int argc, char *argv[])
 
 	if (argc == 0) {
 		error = print_acl_from_stdin(type, hflag, iflag, nflag,
-		    qflag, vflag);
+		    qflag, vflag, sflag);
 		return(error ? 1 : 0);
 	}
 
 	for (i = 0; i < argc; i++) {
 		if (!strcmp(argv[i], "-")) {
 			error = print_acl_from_stdin(type, hflag, iflag, nflag,
-			    qflag, vflag);
+			    qflag, vflag, sflag);
 			if (error == -1)
 				carried_error = -1;
 		} else {
 			error = print_acl(argv[i], type, hflag, iflag, nflag,
-			    qflag, vflag);
+			    qflag, vflag, sflag);
 			if (error == -1)
 				carried_error = -1;
 		}

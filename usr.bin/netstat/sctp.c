@@ -31,15 +31,6 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#if 0
-#ifndef lint
-static char sccsid[] = "@(#)sctp.c	0.1 (Berkeley) 4/18/2007";
-#endif /* not lint */
-#endif
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/queue.h>
 #include <sys/types.h>
@@ -53,7 +44,6 @@ __FBSDID("$FreeBSD$");
 #include <netinet/sctp_constants.h>
 #include <arpa/inet.h>
 
-#include <err.h>
 #include <errno.h>
 #include <libutil.h>
 #include <netdb.h>
@@ -632,6 +622,10 @@ sctp_stats(u_long off, const char *name, int af1 __unused, int proto __unused)
 	    "{N:/fast path receives all one chunk}\n");
 	p1a(sctps_recvexpressm, "\t\t{:receives-fast-path-multipart/%ju} "
 	    "{N:/fast path multi-part data}\n");
+	p1a(sctps_recvswcrc, "\t\t{:performed-receive-crc32c-computation/%ju} "
+	    "{N:/performed receive crc32c computation}\n");
+	p1a(sctps_recvhwcrc, "\t\t{:performed-receive-crc32c-offloading/%ju} "
+	    "{N:/performed receive crc32c offloading}\n");
 
 	/*
 	 * output statistics
@@ -658,6 +652,10 @@ sctp_stats(u_long off, const char *name, int af1 __unused, int proto __unused)
 	    "{N:/output AUTH chunk%s}\n");
 	p1a(sctps_senderrors, "\t\t{:send-errors/%ju} "
 	    "{N:/ip_output error counter}\n");
+	p1a(sctps_sendswcrc, "\t\t{:performed-transmit-crc32c-computation/%ju} "
+	    "{N:/performed transmit crc32c computation}\n");
+	p1a(sctps_sendhwcrc, "\t\t{:performed-transmit-crc32c-offloading/%ju} "
+	    "{N:/performed transmit crc32c offloading}\n");
 
 	/*
 	 * PCKDROPREP statistics
@@ -720,7 +718,7 @@ sctp_stats(u_long off, const char *name, int af1 __unused, int proto __unused)
 	    "secret\n");
 	p(sctps_timopathmtu, "\t\t{:pmtu-timer/%ju} "
 	    "{N:/PMTU timer%s fired}\n");
-	p(sctps_timoshutdownack, "\t\t{:shutdown-timer/%ju} "
+	p(sctps_timoshutdownack, "\t\t{:shutdown-ack-timer/%ju} "
 	    "{N:/shutdown ack timer%s fired}\n");
 	p(sctps_timoshutdownguard, "\t\t{:shutdown-guard-timer/%ju} "
 	    "{N:/shutdown guard timer%s fired}\n");

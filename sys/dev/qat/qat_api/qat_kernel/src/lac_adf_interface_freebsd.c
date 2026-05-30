@@ -1,10 +1,11 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/* Copyright(c) 2007-2022 Intel Corporation */
-/* $FreeBSD$ */
+/* Copyright(c) 2007-2025 Intel Corporation */
 #include "adf_cfg.h"
 #include "cpa.h"
 #include "icp_accel_devices.h"
 #include "adf_common_drv.h"
+#include "icp_adf_accel_mgr.h"
+#include "icp_adf_cfg.h"
 #include "icp_adf_debug.h"
 #include "icp_adf_init.h"
 #include "lac_sal_ctrl.h"
@@ -287,8 +288,8 @@ icp_amgr_getAccelDevByCapabilities(Cpa32U capabilitiesMask,
 
 /*
  * icp_amgr_getAllAccelDevByEachCapabilities
- * Returns table of accel devices that are started and implement
- * each of the capabilities specified in capabilitiesMask.
+ * Returns table of accel devices that are started and that implement
+ * at least one of the capabilities specified in capabilitiesMask.
  */
 CpaStatus
 icp_amgr_getAllAccelDevByEachCapability(Cpa32U capabilitiesMask,

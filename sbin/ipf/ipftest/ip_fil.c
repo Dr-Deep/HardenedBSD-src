@@ -1,4 +1,3 @@
-/*	$FreeBSD$	*/
 
 /*
  * Copyright (C) 2012 by Darren Reed.
@@ -7,10 +6,6 @@
  *
  * $Id$
  */
-#if !defined(lint)
-static const char sccsid[] = "@(#)ip_fil.c	2.41 6/5/96 (C) 1993-2000 Darren Reed";
-static const char rcsid[] = "@(#)$Id$";
-#endif
 
 #include "ipf.h"
 #include "md5.h"
@@ -558,7 +553,7 @@ ipf_newisn(fin)
 
 /* ------------------------------------------------------------------------ */
 /* Function:    ipf_nextipid                                                */
-/* Returns:     int - 0 == success, -1 == error (packet should be droppped) */
+/* Returns:     int - 0 == success, -1 == error (packet should be dropped)  */
 /* Parameters:  fin(I) - pointer to packet information                      */
 /*                                                                          */
 /* Returns the next IPv4 ID to use for this packet.                         */
@@ -624,7 +619,7 @@ ipf_checkv6sum(fin)
  * See above for description, except that all addressing is in user space.
  */
 int
-copyoutptr(softc, src, dst, size)
+ipf_copyout_indirect(softc, src, dst, size)
 	void *src, *dst;
 	size_t size;
 {
@@ -640,7 +635,7 @@ copyoutptr(softc, src, dst, size)
  * See above for description, except that all addressing is in user space.
  */
 int
-copyinptr(src, dst, size)
+ipf_copyin_indirect(src, dst, size)
 	void *src, *dst;
 	size_t size;
 {

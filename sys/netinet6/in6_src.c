@@ -58,12 +58,7 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)in_pcb.c	8.2 (Berkeley) 1/4/94
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include "opt_inet.h"
 #include "opt_inet6.h"
@@ -89,6 +84,7 @@ __FBSDID("$FreeBSD$");
 #include <net/if.h>
 #include <net/if_var.h>
 #include <net/if_dl.h>
+#include <net/if_private.h>
 #include <net/route.h>
 #include <net/route/nhop.h>
 #include <net/if_llatbl.h>
@@ -140,8 +136,8 @@ static int in6_selectif(struct sockaddr_in6 *, struct ip6_pktopts *,
 	struct ip6_moptions *, struct ifnet **,
 	struct ifnet *, u_int);
 static int in6_selectsrc(uint32_t, struct sockaddr_in6 *,
-	struct ip6_pktopts *, struct inpcb *, struct ucred *,
-	struct ifnet **, struct in6_addr *);
+	struct ip6_pktopts *, struct ip6_moptions *, struct inpcb *,
+	struct ucred *, struct ifnet **, struct in6_addr *);
 
 static struct in6_addrpolicy *lookup_addrsel_policy(struct sockaddr_in6 *);
 
@@ -160,7 +156,7 @@ static struct in6_addrpolicy *match_addrsel_policy(struct sockaddr_in6 *);
  * an entry to the caller for later use.
  */
 #define REPLACE(r) do {\
-	IP6STAT_INC(ip6s_sources_rule[(r)]); \
+	IP6STAT_INC2(ip6s_sources_rule, (r)); \
 	/* { \
 	char ip6buf[INET6_ADDRSTRLEN], ip6b[INET6_ADDRSTRLEN]; \
 	printf("in6_selectsrc: replace %s with %s by %d\n", ia_best ? ip6_sprintf(ip6buf, &ia_best->ia_addr.sin6_addr) : "none", ip6_sprintf(ip6b, &ia->ia_addr.sin6_addr), (r)); \
@@ -175,14 +171,14 @@ static struct in6_addrpolicy *match_addrsel_policy(struct sockaddr_in6 *);
 	goto next;		/* XXX: we can't use 'continue' here */ \
 } while(0)
 #define BREAK(r) do { \
-	IP6STAT_INC(ip6s_sources_rule[(r)]); \
+	IP6STAT_INC2(ip6s_sources_rule, (r)); \
 	goto out;		/* XXX: we can't use 'break' here */ \
 } while(0)
 
 static int
 in6_selectsrc(uint32_t fibnum, struct sockaddr_in6 *dstsock,
-    struct ip6_pktopts *opts, struct inpcb *inp, struct ucred *cred,
-    struct ifnet **ifpp, struct in6_addr *srcp)
+    struct ip6_pktopts *opts, struct ip6_moptions *mopts, struct inpcb *inp,
+    struct ucred *cred, struct ifnet **ifpp, struct in6_addr *srcp)
 {
 	struct rm_priotracker in6_ifa_tracker;
 	struct in6_addr dst, tmp;
@@ -194,7 +190,6 @@ in6_selectsrc(uint32_t fibnum, struct sockaddr_in6 *dstsock,
 	u_int32_t odstzone;
 	int prefer_tempaddr;
 	int error;
-	struct ip6_moptions *mopts;
 
 	NET_EPOCH_ASSERT();
 	KASSERT(srcp != NULL, ("%s: srcp is NULL", __func__));
@@ -211,13 +206,6 @@ in6_selectsrc(uint32_t fibnum, struct sockaddr_in6 *dstsock,
 		if (*ifpp != NULL)
 			oifp = *ifpp;
 		*ifpp = NULL;
-	}
-
-	if (inp != NULL) {
-		INP_LOCK_ASSERT(inp);
-		mopts = inp->in6p_moptions;
-	} else {
-		mopts = NULL;
 	}
 
 	/*
@@ -383,7 +371,7 @@ in6_selectsrc(uint32_t fibnum, struct sockaddr_in6 *dstsock,
 		 */
 
 		/* Rule 5: Prefer outgoing interface */
-		if (!(ND_IFINFO(ifp)->flags & ND6_IFF_NO_PREFER_IFACE)) {
+		if (!(ifp->if_inet6->nd_flags & ND6_IFF_NO_PREFER_IFACE)) {
 			if (ia_best->ia_ifp == ifp && ia->ia_ifp != ifp)
 				NEXT(5);
 			if (ia_best->ia_ifp != ifp && ia->ia_ifp == ifp)
@@ -531,15 +519,15 @@ in6_selectsrc(uint32_t fibnum, struct sockaddr_in6 *dstsock,
 
 	bcopy(&tmp, srcp, sizeof(*srcp));
 	if (ia->ia_ifp == ifp)
-		IP6STAT_INC(ip6s_sources_sameif[best_scope]);
+		IP6STAT_INC2(ip6s_sources_sameif, best_scope);
 	else
-		IP6STAT_INC(ip6s_sources_otherif[best_scope]);
+		IP6STAT_INC2(ip6s_sources_otherif, best_scope);
 	if (dst_scope == best_scope)
-		IP6STAT_INC(ip6s_sources_samescope[best_scope]);
+		IP6STAT_INC2(ip6s_sources_samescope, best_scope);
 	else
-		IP6STAT_INC(ip6s_sources_otherscope[best_scope]);
+		IP6STAT_INC2(ip6s_sources_otherscope, best_scope);
 	if (IFA6_IS_DEPRECATED(ia))
-		IP6STAT_INC(ip6s_sources_deprecated[best_scope]);
+		IP6STAT_INC2(ip6s_sources_deprecated, best_scope);
 	IN6_IFADDR_RUNLOCK(&in6_ifa_tracker);
 	return (0);
 }
@@ -560,10 +548,13 @@ in6_selectsrc_socket(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 	uint32_t fibnum;
 	int error;
 
+	INP_LOCK_ASSERT(inp);
+
 	fibnum = inp->inp_inc.inc_fibnum;
 	retifp = NULL;
 
-	error = in6_selectsrc(fibnum, dstsock, opts, inp, cred, &retifp, srcp);
+	error = in6_selectsrc(fibnum, dstsock, opts, inp->in6p_moptions,
+	    inp, cred, &retifp, srcp);
 	if (error != 0)
 		return (error);
 
@@ -591,7 +582,7 @@ in6_selectsrc_socket(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
  * Stores selected address to @srcp.
  * Returns 0 on success.
  *
- * Used by non-socket based consumers (ND code mostly)
+ * Used by non-socket based consumers
  */
 int
 in6_selectsrc_addr(uint32_t fibnum, const struct in6_addr *dst,
@@ -610,10 +601,39 @@ in6_selectsrc_addr(uint32_t fibnum, const struct in6_addr *dst,
 	dst_sa.sin6_scope_id = scopeid;
 	sa6_embedscope(&dst_sa, 0);
 
-	error = in6_selectsrc(fibnum, &dst_sa, NULL, NULL, NULL, &retifp, srcp);
+	error = in6_selectsrc(fibnum, &dst_sa, NULL, NULL,
+	    NULL, NULL, &retifp, srcp);
 	if (hlim != NULL)
 		*hlim = in6_selecthlim(NULL, retifp);
 
+	return (error);
+}
+
+/*
+ * Select source address based on @fibnum, @dst and @mopts.
+ * Stores selected address to @srcp.
+ * Returns 0 on success.
+ *
+ * Used by non-socket based consumers (ND code mostly)
+ */
+int
+in6_selectsrc_nbr(uint32_t fibnum, const struct in6_addr *dst,
+    struct ip6_moptions *mopts, struct ifnet *ifp, struct in6_addr *srcp)
+{
+	struct sockaddr_in6 dst_sa;
+	struct ifnet *retifp;
+	int error;
+
+	retifp = ifp;
+	bzero(&dst_sa, sizeof(dst_sa));
+	dst_sa.sin6_family = AF_INET6;
+	dst_sa.sin6_len = sizeof(dst_sa);
+	dst_sa.sin6_addr = *dst;
+	dst_sa.sin6_scope_id = ntohs(in6_getscope(dst));
+	sa6_embedscope(&dst_sa, 0);
+
+	error = in6_selectsrc(fibnum, &dst_sa, NULL, mopts,
+	    NULL, NULL, &retifp, srcp);
 	return (error);
 }
 
@@ -853,7 +873,7 @@ in6_selecthlim(struct inpcb *inp, struct ifnet *ifp)
 	if (inp && inp->in6p_hops >= 0)
 		return (inp->in6p_hops);
 	else if (ifp)
-		return (ND_IFINFO(ifp)->chlim);
+		return (ifp->if_inet6->nd_curhoplimit);
 	else if (inp && !IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_faddr)) {
 		struct nhop_object *nh;
 		struct in6_addr dst;
@@ -864,7 +884,7 @@ in6_selecthlim(struct inpcb *inp, struct ifnet *ifp)
 		in6_splitscope(&inp->in6p_faddr, &dst, &scopeid);
 		nh = fib6_lookup(fibnum, &dst, scopeid, 0, 0);
 		if (nh != NULL) {
-			hlim = ND_IFINFO(nh->nh_ifp)->chlim;
+			hlim = nh->nh_ifp->if_inet6->nd_curhoplimit;
 			return (hlim);
 		}
 	}

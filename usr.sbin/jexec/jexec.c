@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2003 Mike Barcroft <mike@FreeBSD.org>
  * Copyright (c) 2008 Bjoern A. Zeeb <bz@FreeBSD.org>
@@ -25,8 +25,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include <sys/param.h>
@@ -60,16 +58,30 @@ main(int argc, char *argv[])
 {
 	int jid;
 	login_cap_t *lcap = NULL;
-	int ch, clean, uflag, Uflag;
+	int ch, clean, dflag, uflag, Uflag;
+	int env_argc = argc;
+	char **env_argv = argv;
 	char *cleanenv;
 	const struct passwd *pwd = NULL;
 	const char *username, *shell, *term;
+	const char *workdir;
+	const char *jexec_args = "d:e:lnu:U:";
 
-	ch = clean = uflag = Uflag = 0;
+	ch = clean = dflag = uflag = Uflag = 0;
 	username = NULL;
+	workdir = "/";
 
-	while ((ch = getopt(argc, argv, "lnu:U:")) != -1) {
+	while ((ch = getopt(argc, argv, jexec_args)) != -1) {
 		switch (ch) {
+		case 'd':
+			workdir = optarg;
+			dflag = 1;
+			break;
+		case 'e':
+			/* Used later. */
+			if (strchr(optarg, '=') == NULL)
+				errx(1, "%s: Invalid environment variable.", optarg);
+			break;
 		case 'l':
 			clean = 1;
 			break;
@@ -104,8 +116,8 @@ main(int argc, char *argv[])
 		errx(1, "%s", jail_errmsg);
 	if (jail_attach(jid) == -1)
 		err(1, "jail_attach(%d)", jid);
-	if (chdir("/") == -1)
-		err(1, "chdir(): /");
+	if (chdir(workdir) == -1)
+		err(1, "chdir(): %s", workdir);
 
 	/* Set up user environment */
 	if (clean || username != NULL) {
@@ -131,9 +143,22 @@ main(int argc, char *argv[])
 		setenv("HOME", pwd->pw_dir, 1);
 		setenv("SHELL",
 		    *pwd->pw_shell ? pwd->pw_shell : _PATH_BSHELL, 1);
-		if (clean && chdir(pwd->pw_dir) < 0)
+		if (clean && username && !dflag && chdir(pwd->pw_dir) < 0)
 			err(1, "chdir: %s", pwd->pw_dir);
 		endpwent();
+	}
+
+	optreset = 1;
+	optind = 1;
+
+	/* Custom environment */
+	while ((ch = getopt(env_argc, env_argv, jexec_args)) != -1) {
+		switch (ch) {
+		case 'e':
+			if (putenv(optarg) == -1)
+				err(1, "putenv");
+			break;
+		}
 	}
 
 	/* Run the specified command, or the shell */
@@ -188,6 +213,7 @@ usage(void)
 {
 
 	fprintf(stderr, "%s\n",
-	    "usage: jexec [-l] [-u username | -U username] jail [command ...]");
+	    "usage: jexec [-l] [-d working-directory] [[-e name=value] ...]\n"
+	    "       [-u username | -U username] jail [command ...]");
 	exit(1);
 }

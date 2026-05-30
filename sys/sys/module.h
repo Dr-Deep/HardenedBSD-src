@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1997 Doug Rabson
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _SYS_MODULE_H_
@@ -118,15 +116,17 @@ struct mod_pnp_match_info
 	};								\
 	DATA_SET(modmetadata_set, MODULE_METADATA_CONCAT(uniquifier))
 
+#define	MODULE_DEPEND_CONCAT(module, mdepend)	_##module##_depend_on_##mdepend
 #define	MODULE_DEPEND(module, mdepend, vmin, vpref, vmax)		\
-	static struct mod_depend _##module##_depend_on_##mdepend	\
+	static struct mod_depend MODULE_DEPEND_CONCAT(module, mdepend)	\
 	    __section(".data") = {					\
 		vmin,							\
 		vpref,							\
 		vmax							\
 	};								\
-	MODULE_METADATA(_md_##module##_on_##mdepend, MDT_DEPEND,	\
-	    &_##module##_depend_on_##mdepend, #mdepend)
+	MODULE_METADATA(MODULE_DEPEND_CONCAT(module, mdepend),		\
+	    MDT_DEPEND, &MODULE_DEPEND_CONCAT(module, mdepend),		\
+	    __XSTRING(mdepend))
 
 /*
  * Every kernel has a 'kernel' module with the version set to

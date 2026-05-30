@@ -25,10 +25,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\"     @(#)resolver.5	8.1 (Berkeley) 6/5/93
-.\" $FreeBSD$
-.\"
-.Dd November 9, 2021
+.Dd March 15, 2026
 .Dt RESOLVER 5
 .Os
 .Sh NAME
@@ -46,8 +43,10 @@ by the resolver routines the first time they are invoked by a process.
 The file is designed to be human readable and contains a list of
 keywords with values that provide various types of resolver information.
 .Pp
-On a normally configured system this file should not be necessary.
-The only name server to be queried will be on the local machine,
+On a normally configured system, setting this file manually should not
+be necessary.
+The only name server(s) to be queried will be on the local machine
+or automatically configured using DHCP or a similar mechanism,
 the domain name is determined from the host name,
 and the domain search path is constructed from the domain name.
 .Pp
@@ -132,7 +131,7 @@ in _res.options.
 sets
 .Dv RES_USEVC
 to use TCP instead of UDP for queries.
-.It Sy ndots: Ns Ar n
+.It Sy ndots : Ns Ar n
 sets a threshold for the number of dots which must appear in a name given to
 .Fn res_query
 (see
@@ -148,7 +147,7 @@ meaning that if there are any dots in a name, the name
 will be tried first as an absolute name before any
 .Em search list
 elements are appended to it.
-.It Sy timeout: Ns Ar n
+.It Sy timeout : Ns Ar n
 sets the initial amount of time the resolver will wait
 for a response from a remote
 name server before retrying the query via a different name server.
@@ -161,7 +160,7 @@ the allowed maximum is
 .Dv RES_MAXRETRANS
 (see
 .In resolv.h ) .
-.It Sy attempts: Ns Ar n
+.It Sy attempts : Ns Ar n
 sets the number of times the resolver will send a query to each of
 its name servers
 before giving up and returning an error to the calling application.
@@ -171,6 +170,38 @@ the allowed maximum is
 .Dv RES_MAXRETRY
 (see
 .In resolv.h ) .
+.It Sy edns0
+Sets
+.Dv RES_USE_EDNS0 .
+Attach an OPT pseudo-RR for the EDNS0 extension,
+as specified in RFC 2671.
+This allows the resolver to advertise a larger UDP receive buffer size,
+permitting responses larger than the original 512-byte limit.
+.It Sy inet6
+Sets
+.Dv RES_USE_INET6 .
+Causes
+.Xr gethostbyname 3
+to look up AAAA records before A records
+and to map IPv4 responses into IPv6 addresses.
+The use of this option is discouraged.
+.It Sy insecure1
+Sets
+.Dv RES_INSECURE1 .
+Disables the check that the response was received from the
+same server to which the query was sent.
+Use of this option is a security risk and is not recommended.
+.It Sy insecure2
+Sets
+.Dv RES_INSECURE2 .
+Disables the check that the response contains a query
+matching the one that was sent.
+Use of this option is a security risk and is not recommended.
+.It Sy no-check-names
+Sets
+.Dv RES_NOCHECKNAME .
+Disables the check of incoming host names for invalid characters
+such as underscore, non-ASCII, or control characters.
 .It Sy no_tld_query
 tells the resolver not to attempt to resolve a top level domain name, that
 is, a name that contains no dots.
@@ -180,7 +211,13 @@ the resolver from obeying the standard
 and
 .Sy search
 rules with the given name.
-.It Sy reload-period: Ns Ar n
+.It Sy rotate
+Sets
+.Dv RES_ROTATE .
+Causes the resolver to round-robin among the configured name servers,
+distributing the query load instead of always trying the first
+listed server.
+.It Sy reload-period : Ns Ar n
 The resolver checks the modification time of
 .Pa /etc/resolv.conf
 every
@@ -220,14 +257,34 @@ The file
 resides in
 .Pa /etc .
 .El
+.Sh EXAMPLES
+A basic resolv.conf file could be in the following form.
+.Bd -literal -offset indent
+# The domain directive is only necessary, if your local
+# router advertises something like localdomain and you have
+# set up your hostnames via an external domain.
+domain localdomain.tld
+
+# In case you a running a local dns server or caching name server
+# like local-unbound(8) for example.
+nameserver 127.0.0.1
+
+# IP address of the local or ISP name service
+nameserver 192.168.2.1
+
+# Fallback nameservers, in this case these from Google.
+nameserver 8.8.8.8
+nameserver 8.8.4.4
+
+# Attach an OPT pseudo-RR for the EDNS0 extension,
+# as specified in RFC 2671.
+options edns0
+.Ed
 .Sh SEE ALSO
 .Xr gethostbyname 3 ,
 .Xr resolver 3 ,
 .Xr hostname 7 ,
 .Xr resolvconf 8
-.Rs
-.%T "Name Server Operations Guide for BIND"
-.Re
 .Sh HISTORY
 The
 .Nm resolv.conf

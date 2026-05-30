@@ -22,6 +22,13 @@ NO_PIC=	yes
 # Some files have to be clean for extra defines too...
 CFLAGS.event.c=	-D_WANT_KEVENT32 -D_WANT_FREEBSD11_KEVENT
 
+# We currently support C89 and newer compilers. Catch the odd little fussy
+# details like __inline that the header files must follow to support C89.
+CFLAGS+=-ansi
+
+# Make sure we're pulling in headers from the src tree.
+CFLAGS+=-I${SRCTOP}/sys
+
 .include "badfiles.inc"
 
 .for h c in ${HDRS:@x@$x ${x:S,/,_,g:R}.c@}

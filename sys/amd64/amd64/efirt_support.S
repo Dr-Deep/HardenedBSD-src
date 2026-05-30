@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2018 The FreeBSD Foundation
  *
@@ -26,8 +26,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include <machine/asmacros.h>
@@ -60,6 +58,7 @@ ENTRY(efi_rt_arch_call)
 	cmovbl	%eax, %ecx
 	shll	$3, %ecx
 	subq	%rcx, %rsp
+	andq	$~0xf, %rsp
 
 	cmpl	$0, %ebx
 	jz	1f
@@ -118,3 +117,5 @@ ENTRY(efi_rt_fault)
 END(efi_rt_fault)
 
 efi_rt_panic_str:	.asciz	"efi_rt_arch_call: too many args"
+
+	.section .note.GNU-stack,"",%progbits

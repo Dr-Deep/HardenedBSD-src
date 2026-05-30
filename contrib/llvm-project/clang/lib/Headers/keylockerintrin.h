@@ -28,9 +28,6 @@
 #ifndef _KEYLOCKERINTRIN_H
 #define _KEYLOCKERINTRIN_H
 
-#if !(defined(_MSC_VER) || defined(__SCE__)) || __has_feature(modules) ||      \
-    defined(__KL__)
-
 /* Define the default attributes for the functions in this file. */
 #define __DEFAULT_FN_ATTRS \
   __attribute__((__always_inline__, __nodebug__, __target__("kl"),\
@@ -46,7 +43,7 @@
 ///
 /// This intrinsic corresponds to the <c> LOADIWKEY </c> instructions.
 ///
-/// \operation
+/// \code{.operation}
 /// IF CPL > 0 // LOADKWKEY only allowed at ring 0 (supervisor mode)
 ///   GP (0)
 /// FI
@@ -91,7 +88,7 @@
 /// AF := 0
 /// PF := 0
 /// CF := 0
-/// \endoperation
+/// \endcode
 static __inline__ void __DEFAULT_FN_ATTRS
 _mm_loadiwkey (unsigned int __ctl, __m128i __intkey,
                __m128i __enkey_lo, __m128i __enkey_hi) {
@@ -106,7 +103,7 @@ _mm_loadiwkey (unsigned int __ctl, __m128i __intkey,
 ///
 /// This intrinsic corresponds to the <c> ENCODEKEY128 </c> instructions.
 ///
-/// \operation
+/// \code{.operation}
 /// InputKey[127:0] := __key[127:0]
 /// KeyMetadata[2:0] := __htype[2:0]
 /// KeyMetadata[23:3] := 0 // Reserved for future usage
@@ -126,7 +123,7 @@ _mm_loadiwkey (unsigned int __ctl, __m128i __intkey,
 /// AF := 0
 /// PF := 0
 /// CF := 0
-/// \endoperation
+/// \endcode
 static __inline__ unsigned int __DEFAULT_FN_ATTRS
 _mm_encodekey128_u32(unsigned int __htype, __m128i __key, void *__h) {
   return __builtin_ia32_encodekey128_u32(__htype, (__v2di)__key, __h);
@@ -141,7 +138,7 @@ _mm_encodekey128_u32(unsigned int __htype, __m128i __key, void *__h) {
 ///
 /// This intrinsic corresponds to the <c> ENCODEKEY256 </c> instructions.
 ///
-/// \operation
+/// \code{.operation}
 /// InputKey[127:0] := __key_lo[127:0]
 /// InputKey[255:128] := __key_hi[255:128]
 /// KeyMetadata[2:0] := __htype[2:0]
@@ -163,7 +160,7 @@ _mm_encodekey128_u32(unsigned int __htype, __m128i __key, void *__h) {
 /// AF := 0
 /// PF := 0
 /// CF := 0
-/// \endoperation
+/// \endcode
 static __inline__ unsigned int __DEFAULT_FN_ATTRS
 _mm_encodekey256_u32(unsigned int __htype, __m128i __key_lo, __m128i __key_hi,
                      void *__h) {
@@ -179,7 +176,7 @@ _mm_encodekey256_u32(unsigned int __htype, __m128i __key_lo, __m128i __key_hi,
 ///
 /// This intrinsic corresponds to the <c> AESENC128KL </c> instructions.
 ///
-/// \operation
+/// \code{.operation}
 /// Handle[383:0] := MEM[__h+383:__h] // Load is not guaranteed to be atomic.
 /// IllegalHandle := ( HandleReservedBitSet (Handle[383:0]) ||
 ///                    (Handle[127:0] AND (CPL > 0)) ||
@@ -202,7 +199,7 @@ _mm_encodekey256_u32(unsigned int __htype, __m128i __key_lo, __m128i __key_hi,
 /// AF := 0
 /// PF := 0
 /// CF := 0
-/// \endoperation
+/// \endcode
 static __inline__ unsigned char __DEFAULT_FN_ATTRS
 _mm_aesenc128kl_u8(__m128i* __odata, __m128i __idata, const void *__h) {
   return __builtin_ia32_aesenc128kl_u8((__v2di *)__odata, (__v2di)__idata, __h);
@@ -216,7 +213,7 @@ _mm_aesenc128kl_u8(__m128i* __odata, __m128i __idata, const void *__h) {
 ///
 /// This intrinsic corresponds to the <c> AESENC256KL </c> instructions.
 ///
-/// \operation
+/// \code{.operation}
 /// Handle[511:0] := MEM[__h+511:__h] // Load is not guaranteed to be atomic.
 /// IllegalHandle := ( HandleReservedBitSet (Handle[511:0]) ||
 ///                    (Handle[127:0] AND (CPL > 0)) ||
@@ -241,7 +238,7 @@ _mm_aesenc128kl_u8(__m128i* __odata, __m128i __idata, const void *__h) {
 /// AF := 0
 /// PF := 0
 /// CF := 0
-/// \endoperation
+/// \endcode
 static __inline__ unsigned char __DEFAULT_FN_ATTRS
 _mm_aesenc256kl_u8(__m128i* __odata, __m128i __idata, const void *__h) {
   return __builtin_ia32_aesenc256kl_u8((__v2di *)__odata, (__v2di)__idata, __h);
@@ -255,7 +252,7 @@ _mm_aesenc256kl_u8(__m128i* __odata, __m128i __idata, const void *__h) {
 ///
 /// This intrinsic corresponds to the <c> AESDEC128KL </c> instructions.
 ///
-/// \operation
+/// \code{.operation}
 /// Handle[383:0] := MEM[__h+383:__h] // Load is not guaranteed to be atomic.
 /// IllegalHandle := (HandleReservedBitSet (Handle[383:0]) ||
 ///                  (Handle[127:0] AND (CPL > 0)) ||
@@ -280,7 +277,7 @@ _mm_aesenc256kl_u8(__m128i* __odata, __m128i __idata, const void *__h) {
 /// AF := 0
 /// PF := 0
 /// CF := 0
-/// \endoperation
+/// \endcode
 static __inline__ unsigned char __DEFAULT_FN_ATTRS
 _mm_aesdec128kl_u8(__m128i* __odata, __m128i __idata, const void *__h) {
   return __builtin_ia32_aesdec128kl_u8((__v2di *)__odata, (__v2di)__idata, __h);
@@ -294,7 +291,7 @@ _mm_aesdec128kl_u8(__m128i* __odata, __m128i __idata, const void *__h) {
 ///
 /// This intrinsic corresponds to the <c> AESDEC256KL </c> instructions.
 ///
-/// \operation
+/// \code{.operation}
 /// Handle[511:0] := MEM[__h+511:__h]
 /// IllegalHandle := (HandleReservedBitSet (Handle[511:0]) ||
 ///                   (Handle[127:0] AND (CPL > 0)) ||
@@ -319,19 +316,13 @@ _mm_aesdec128kl_u8(__m128i* __odata, __m128i __idata, const void *__h) {
 /// AF := 0
 /// PF := 0
 /// CF := 0
-/// \endoperation
+/// \endcode
 static __inline__ unsigned char __DEFAULT_FN_ATTRS
 _mm_aesdec256kl_u8(__m128i* __odata, __m128i __idata, const void *__h) {
   return __builtin_ia32_aesdec256kl_u8((__v2di *)__odata, (__v2di)__idata, __h);
 }
 
 #undef __DEFAULT_FN_ATTRS
-
-#endif /* !(defined(_MSC_VER) || defined(__SCE__)) || __has_feature(modules) \
-          || defined(__KL__) */
-
-#if !(defined(_MSC_VER) || defined(__SCE__)) || __has_feature(modules) ||      \
-    defined(__WIDEKL__)
 
 /* Define the default attributes for the functions in this file. */
 #define __DEFAULT_FN_ATTRS \
@@ -346,7 +337,7 @@ _mm_aesdec256kl_u8(__m128i* __odata, __m128i __idata, const void *__h) {
 ///
 /// This intrinsic corresponds to the <c> AESENCWIDE128KL </c> instructions.
 ///
-/// \operation
+/// \code{.operation}
 /// Handle := MEM[__h+383:__h]
 /// IllegalHandle := ( HandleReservedBitSet (Handle[383:0]) ||
 ///                    (Handle[127:0] AND (CPL > 0)) ||
@@ -377,7 +368,7 @@ _mm_aesdec256kl_u8(__m128i* __odata, __m128i __idata, const void *__h) {
 /// AF := 0
 /// PF := 0
 /// CF := 0
-/// \endoperation
+/// \endcode
 static __inline__ unsigned char __DEFAULT_FN_ATTRS
 _mm_aesencwide128kl_u8(__m128i __odata[8], const __m128i __idata[8], const void* __h) {
   return __builtin_ia32_aesencwide128kl_u8((__v2di *)__odata,
@@ -392,7 +383,7 @@ _mm_aesencwide128kl_u8(__m128i __odata[8], const __m128i __idata[8], const void*
 ///
 /// This intrinsic corresponds to the <c> AESENCWIDE256KL </c> instructions.
 ///
-/// \operation
+/// \code{.operation}
 /// Handle[511:0] := MEM[__h+511:__h]
 /// IllegalHandle := ( HandleReservedBitSet (Handle[511:0]) ||
 ///                    (Handle[127:0] AND (CPL > 0)) ||
@@ -423,7 +414,7 @@ _mm_aesencwide128kl_u8(__m128i __odata[8], const __m128i __idata[8], const void*
 /// AF := 0
 /// PF := 0
 /// CF := 0
-/// \endoperation
+/// \endcode
 static __inline__ unsigned char __DEFAULT_FN_ATTRS
 _mm_aesencwide256kl_u8(__m128i __odata[8], const __m128i __idata[8], const void* __h) {
   return __builtin_ia32_aesencwide256kl_u8((__v2di *)__odata,
@@ -438,7 +429,7 @@ _mm_aesencwide256kl_u8(__m128i __odata[8], const __m128i __idata[8], const void*
 ///
 /// This intrinsic corresponds to the <c> AESDECWIDE128KL </c> instructions.
 ///
-/// \operation
+/// \code{.operation}
 /// Handle[383:0] := MEM[__h+383:__h]
 /// IllegalHandle := ( HandleReservedBitSet (Handle[383:0]) ||
 ///                    (Handle[127:0] AND (CPL > 0)) ||
@@ -469,7 +460,7 @@ _mm_aesencwide256kl_u8(__m128i __odata[8], const __m128i __idata[8], const void*
 /// AF := 0
 /// PF := 0
 /// CF := 0
-/// \endoperation
+/// \endcode
 static __inline__ unsigned char __DEFAULT_FN_ATTRS
 _mm_aesdecwide128kl_u8(__m128i __odata[8], const __m128i __idata[8], const void* __h) {
   return __builtin_ia32_aesdecwide128kl_u8((__v2di *)__odata,
@@ -484,7 +475,7 @@ _mm_aesdecwide128kl_u8(__m128i __odata[8], const __m128i __idata[8], const void*
 ///
 /// This intrinsic corresponds to the <c> AESDECWIDE256KL </c> instructions.
 ///
-/// \operation
+/// \code{.operation}
 /// Handle[511:0] := MEM[__h+511:__h]
 /// IllegalHandle = ( HandleReservedBitSet (Handle[511:0]) ||
 ///                   (Handle[127:0] AND (CPL > 0)) ||
@@ -515,7 +506,7 @@ _mm_aesdecwide128kl_u8(__m128i __odata[8], const __m128i __idata[8], const void*
 /// AF := 0
 /// PF := 0
 /// CF := 0
-/// \endoperation
+/// \endcode
 static __inline__ unsigned char __DEFAULT_FN_ATTRS
 _mm_aesdecwide256kl_u8(__m128i __odata[8], const __m128i __idata[8], const void* __h) {
   return __builtin_ia32_aesdecwide256kl_u8((__v2di *)__odata,
@@ -523,8 +514,5 @@ _mm_aesdecwide256kl_u8(__m128i __odata[8], const __m128i __idata[8], const void*
 }
 
 #undef __DEFAULT_FN_ATTRS
-
-#endif /* !(defined(_MSC_VER) || defined(__SCE__)) || __has_feature(modules) \
-          || defined(__WIDEKL__) */
 
 #endif /* _KEYLOCKERINTRIN_H */

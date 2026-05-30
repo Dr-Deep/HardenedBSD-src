@@ -1,4 +1,3 @@
-# $FreeBSD$
 #
 # This file contains common settings used for building FreeBSD
 # sources.
@@ -11,8 +10,7 @@
 
 .include <bsd.compiler.mk>
 
-# the default is gnu99 for now
-CSTD?=		gnu99
+CSTD?=		gnu17
 
 .if ${CSTD} == "c89" || ${CSTD} == "c90"
 CFLAGS+=	-std=iso9899:1990
@@ -23,6 +21,8 @@ CFLAGS+=	-std=iso9899:1999
 .else # CSTD
 CFLAGS+=	-std=${CSTD}
 .endif # CSTD
+
+CXXSTD?=	gnu++17
 
 .if !empty(CXXSTD)
 CXXFLAGS+=	-std=${CXXSTD}
@@ -49,8 +49,11 @@ CWARNFLAGS+=	-Werror
 CWARNFLAGS+=	-Wall -Wno-format-y2k
 .endif # WARNS >= 2
 .if ${WARNS} >= 3
-CWARNFLAGS+=	-W -Wno-unused-parameter -Wstrict-prototypes\
-		-Wmissing-prototypes -Wpointer-arith
+CWARNFLAGS+=	-W -Wno-unused-parameter
+.if ${COMPILER_TYPE} == "clang"
+CWARNFLAGS+=	-Wstrict-prototypes
+.endif
+CWARNFLAGS+=	-Wmissing-prototypes -Wpointer-arith
 .endif # WARNS >= 3
 .if ${WARNS} >= 4
 CWARNFLAGS+=	-Wreturn-type -Wcast-qual -Wwrite-strings -Wswitch -Wshadow\
@@ -75,13 +78,23 @@ CWARNFLAGS.clang+=	-Wthread-safety
 CWARNFLAGS+=	-Wno-uninitialized
 .endif # WARNS >=2 && WARNS <= 4
 CWARNFLAGS+=	-Wno-pointer-sign
+.if !defined(NO_WDATE_TIME)
+CWARNFLAGS+=	-Wdate-time
+.endif # NO_WDATE_TIME
 # Clang has more warnings enabled by default, and when using -Wall, so if WARNS
 # is set to low values, these have to be disabled explicitly.
 .if ${WARNS} <= 6
 CWARNFLAGS.clang+=	-Wno-empty-body -Wno-string-plus-int
 CWARNFLAGS.clang+=	-Wno-unused-const-variable
-.if ${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} >= 130000
-CWARNFLAGS.clang+=	-Wno-error=unused-but-set-variable
+.if ${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} >= 150000
+CWARNFLAGS.clang+=	-Wno-error=unused-but-set-parameter
+.endif
+.if ${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} >= 190000
+# Similar to gcc >= 8.1 -Wno-error=cast-function-type below
+CWARNFLAGS.clang+=	-Wno-error=cast-function-type-mismatch
+CXXWARNFLAGS.clang+=	-Wno-c++20-extensions
+CXXWARNFLAGS.clang+=	-Wno-c++23-lambda-attributes
+CXXWARNFLAGS.clang+=	-Wno-nullability-completeness
 .endif
 .endif # WARNS <= 6
 .if ${WARNS} <= 3
@@ -91,10 +104,6 @@ CWARNFLAGS.clang+=	-Wno-unused-local-typedef
 CWARNFLAGS.clang+=	-Wno-address-of-packed-member
 .if ${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 90100
 CWARNFLAGS.gcc+=	-Wno-address-of-packed-member
-.endif
-.if ${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} >= 70000 && \
-    ${MACHINE_CPUARCH} == "arm" && !${MACHINE_ARCH:Marmv[67]*}
-CWARNFLAGS.clang+=	-Wno-atomic-alignment
 .endif
 .endif # WARNS <= 3
 .if ${WARNS} <= 2
@@ -111,8 +120,32 @@ CWARNFLAGS.clang+=	-Wno-array-bounds
       ${COMPILER_TYPE} == "gcc")
 CWARNFLAGS+=		-Wno-misleading-indentation
 .endif # NO_WMISLEADING_INDENTATION
+.if ${COMPILER_VERSION} >= 130000
+NO_WUNUSED_BUT_SET_VARIABLE=	-Wno-unused-but-set-variable
+.endif
 .if ${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} >= 140000
 NO_WBITWISE_INSTEAD_OF_LOGICAL=	-Wno-bitwise-instead-of-logical
+.endif
+.if ${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} >= 150000
+NO_WARRAY_PARAMETER=	-Wno-array-parameter
+NO_WSTRICT_PROTOTYPES=	-Wno-strict-prototypes
+NO_WDEPRECATED_NON_PROTOTYPE=-Wno-deprecated-non-prototype
+.endif
+.if ${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} >= 210000
+NO_WCHARACTER_CONVERSION=-Wno-character-conversion
+.endif
+.if ${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 50200
+NO_WUNUSED_BUT_SET_VARIABLE=-Wno-unused-but-set-variable
+.endif
+.if ${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 100100
+NO_WZERO_LENGTH_BOUNDS=	-Wno-zero-length-bounds
+.endif
+.if ${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 110100
+NO_WARRAY_PARAMETER=	-Wno-array-parameter
+.endif
+.if ${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 120100
+NO_WUSE_AFTER_FREE=	-Wno-use-after-free
+NO_WDANGLING_POINTER=	-Wno-dangling-pointer
 .endif
 .endif # WARNS
 
@@ -123,7 +156,7 @@ WFORMAT=	1
 .if ${WFORMAT} > 0
 #CWARNFLAGS+=	-Wformat-nonliteral -Wformat-security -Wno-format-extra-args
 CWARNFLAGS+=	-Wformat=2 -Wno-format-extra-args
-.if ${WARNS} <= 3
+.if ${WARNS:U0} <= 3
 CWARNFLAGS.clang+=	-Wno-format-nonliteral
 .endif # WARNS <= 3
 .if ${MK_WERROR} != "no" && ${MK_WERROR.${COMPILER_TYPE}:Uyes} != "no"
@@ -156,9 +189,13 @@ CWARNFLAGS+=	-Wno-error=address			\
 		-Wno-error=logical-not-parentheses	\
 		-Wno-error=strict-aliasing		\
 		-Wno-error=uninitialized		\
-		-Wno-error=unused-but-set-variable	\
 		-Wno-error=unused-function		\
 		-Wno-error=unused-value
+
+# These warnings are raised by headers in libc++ so are disabled
+# globally for all C++
+CXXWARNFLAGS+=	-Wno-attributes				\
+		-Wno-deprecated-declarations
 .endif
 
 # GCC 6.1.0
@@ -196,6 +233,7 @@ CWARNFLAGS+=	-Wno-error=aggressive-loop-optimizations	\
 		-Wno-error=restrict				\
 		-Wno-error=sizeof-pointer-memaccess		\
 		-Wno-error=stringop-truncation
+CXXWARNFLAGS+=	-Wno-error=class-memaccess
 .endif
 
 # GCC 9.2.0
@@ -203,6 +241,23 @@ CWARNFLAGS+=	-Wno-error=aggressive-loop-optimizations	\
 .if ${MACHINE_ARCH} == "i386"
 CWARNFLAGS+=	-Wno-error=overflow
 .endif
+.endif
+
+# GCC 12.1.0
+.if ${COMPILER_VERSION} >= 120100
+# These warnings are raised by headers in libc++ so are disabled
+# globally for all C++
+CXXWARNFLAGS+=	-Wno-literal-suffix			\
+		-Wno-c++20-extensions			\
+		-Wno-attributes				\
+		-Wno-error=unknown-pragmas
+.endif
+
+# GCC 13.1.0
+.if ${COMPILER_VERSION} >= 130100
+# These warnings are raised by headers in libc++ so are disabled
+# globally for all C++
+CXXWARNFLAGS+=	-Wno-dangling-reference
 .endif
 
 # GCC produces false positives for functions that switch on an
@@ -216,7 +271,8 @@ CWARNFLAGS+=	-Wno-system-headers
 .endif	# gcc
 
 # How to handle FreeBSD custom printf format specifiers.
-.if ${COMPILER_TYPE} == "clang"
+.if ${COMPILER_TYPE} == "clang" || \
+    (${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 120100)
 FORMAT_EXTENSIONS=	-D__printf__=__freebsd_kprintf__
 .else
 FORMAT_EXTENSIONS=	-fformat-extensions
@@ -250,18 +306,31 @@ CLANG_OPT_SMALL+= -mllvm -simplifycfg-dup-ret
 .endif
 CLANG_OPT_SMALL+= -mllvm -enable-load-pre=false
 CFLAGS.clang+=	 -Qunused-arguments
-# The libc++ headers use c++11 extensions.  These are normally silenced because
-# they are treated as system headers, but we explicitly disable that warning
-# suppression when building the base system to catch bugs in our headers.
-# Eventually we'll want to start building the base system C++ code as C++11,
-# but not yet.
-CXXFLAGS.clang+=	 -Wno-c++11-extensions
 
 .if ${MK_SSP} != "no"
 # Don't use -Wstack-protector as it breaks world with -Werror.
+.if ${COMPILER_FEATURES:Mstackclash}
+SSP_CFLAGS?=	-fstack-protector-strong -fstack-clash-protection
+.else
 SSP_CFLAGS?=	-fstack-protector-strong
+.endif
 CFLAGS+=	${SSP_CFLAGS}
+FORTIFY_SOURCE?=	2
+.else
+FORTIFY_SOURCE?=	0
 .endif # SSP
+.if ${FORTIFY_SOURCE} > 0
+CFLAGS+=	-D_FORTIFY_SOURCE=${FORTIFY_SOURCE}
+CXXFLAGS+=	-D_FORTIFY_SOURCE=${FORTIFY_SOURCE}
+.endif
+
+# HBSD: Various hardening flags that are good to force enable
+.if !defined(_HBSD_EXTRA_HARDENING_DISABLED)
+CFLAGS+=	-fno-delete-null-pointer-checks
+CXXFLAGS+=	-fno-delete-null-pointer-checks
+CWARNFLAGS+=	-Werror=format-security
+CXXWARNFLAGS+=	-Werror=format-security
+.endif
 
 # Additional flags passed in CFLAGS and CXXFLAGS when MK_DEBUG_FILES is
 # enabled.
@@ -402,6 +471,14 @@ STAGE_AS_${SHLIB_LINK:R}.ld:= ${SHLIB_LINK}
 NO_SHLIB_LINKS=
 .endif
 
+.if defined(STATIC_LDSCRIPT) && target(lib${LIB}.ald)
+STAGE_AS_SETS+= ald
+STAGE_DIR.ald = ${STAGE_LIBDIR}
+STAGE_AS.ald+= lib${LIB}.ald
+STAGE_AS_lib${LIB}.ald = lib${LIB}.a
+stage_as.ald: lib${LIB}.ald
+.endif
+
 .if target(stage_files.shlib)
 stage_libs: ${_LIBS}
 .if defined(DEBUG_FLAGS) && target(${SHLIB_NAME}.symbols)
@@ -463,3 +540,8 @@ ${_tgt}: ${META_DEPS}
 .endif
 .endfor
 .endif
+
+# we are generally the last makefile read
+CFLAGS+= ${CFLAGS_LAST}
+CXXFLAGS+= ${CXXFLAGS_LAST}
+LDFLAGS+= ${LDFLAGS_LAST}

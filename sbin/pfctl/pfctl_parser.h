@@ -29,8 +29,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
  * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _PFCTL_PARSER_H_
@@ -38,26 +36,29 @@
 
 #include <libpfctl.h>
 
+#include <pfctl.h>
+
 #define PF_OSFP_FILE		"/etc/pf.os"
 
-#define PF_OPT_DISABLE		0x0001
-#define PF_OPT_ENABLE		0x0002
-#define PF_OPT_VERBOSE		0x0004
-#define PF_OPT_NOACTION		0x0008
-#define PF_OPT_QUIET		0x0010
-#define PF_OPT_CLRRULECTRS	0x0020
-#define PF_OPT_USEDNS		0x0040
-#define PF_OPT_VERBOSE2		0x0080
-#define PF_OPT_DUMMYACTION	0x0100
-#define PF_OPT_DEBUG		0x0200
-#define PF_OPT_SHOWALL		0x0400
-#define PF_OPT_OPTIMIZE		0x0800
-#define PF_OPT_NUMERIC		0x1000
-#define PF_OPT_MERGE		0x2000
-#define PF_OPT_RECURSE		0x4000
-#define PF_OPT_KILLMATCH	0x8000
-
-#define PF_TH_ALL		0xFF
+#define PF_OPT_DISABLE		0x00001
+#define PF_OPT_ENABLE		0x00002
+#define PF_OPT_VERBOSE		0x00004
+#define PF_OPT_NOACTION		0x00008
+#define PF_OPT_QUIET		0x00010
+#define PF_OPT_CLRRULECTRS	0x00020
+#define PF_OPT_USEDNS		0x00040
+#define PF_OPT_VERBOSE2		0x00080
+#define PF_OPT_DUMMYACTION	0x00100
+#define PF_OPT_DEBUG		0x00200
+#define PF_OPT_SHOWALL		0x00400
+#define PF_OPT_OPTIMIZE		0x00800
+#define PF_OPT_NUMERIC		0x01000
+#define PF_OPT_MERGE		0x02000
+#define PF_OPT_RECURSE		0x04000
+#define PF_OPT_KILLMATCH	0x08000
+#define PF_OPT_NODNS		0x10000
+#define PF_OPT_IGNFAIL		0x20000
+#define PF_OPT_CALLSHOW		0x40000
 
 #define PF_NAT_PROXY_PORT_LOW	50001
 #define PF_NAT_PROXY_PORT_HIGH	65535
@@ -74,9 +75,27 @@
 
 struct pfr_buffer;	/* forward definition */
 
+struct pfctl_statelim {
+	struct pfctl_state_lim		 ioc;
+	RB_ENTRY(pfctl_statelim)	 id_entry;
+	RB_ENTRY(pfctl_statelim)	 nm_entry;
+};
+
+RB_HEAD(pfctl_statelim_ids, pfctl_statelim);
+RB_HEAD(pfctl_statelim_nms, pfctl_statelim);
+
+struct pfctl_sourcelim {
+	struct pfctl_source_lim		 ioc;
+	RB_ENTRY(pfctl_sourcelim)	 id_entry;
+	RB_ENTRY(pfctl_sourcelim)	 nm_entry;
+};
+
+RB_HEAD(pfctl_sourcelim_ids, pfctl_sourcelim);
+RB_HEAD(pfctl_sourcelim_nms, pfctl_sourcelim);
 
 struct pfctl {
 	int dev;
+	struct pfctl_handle *h;
 	int opts;
 	int optimize;
 	int loadopt;
@@ -90,17 +109,24 @@ struct pfctl {
 	struct pfioc_queue *pqueue;
 	struct pfr_buffer *trans;
 	struct pfctl_anchor *anchor, *alast;
+	struct pfr_ktablehead pfr_ktlast;
 	int eth_nr;
 	struct pfctl_eth_anchor *eanchor, *ealast;
 	struct pfctl_eth_anchor *eastack[PFCTL_ANCHOR_STACK_DEPTH];
 	u_int32_t eth_ticket;
 	const char *ruleset;
 
+	struct pfctl_statelim_ids	 statelim_ids;
+	struct pfctl_statelim_nms	 statelim_nms;
+	struct pfctl_sourcelim_ids	 sourcelim_ids;
+	struct pfctl_sourcelim_nms	 sourcelim_nms;
+
 	/* 'set foo' options */
 	u_int32_t	 timeout[PFTM_MAX];
 	u_int32_t	 limit[PF_LIMIT_MAX];
 	u_int32_t	 debug;
 	u_int32_t	 hostid;
+	u_int32_t	 reassemble;
 	char		*ifname;
 	bool		 keep_counters;
 	u_int8_t	 syncookies;
@@ -112,6 +138,7 @@ struct pfctl {
 	u_int8_t	 debug_set;
 	u_int8_t	 hostid_set;
 	u_int8_t	 ifname_set;
+	u_int8_t	 reass_set;
 };
 
 struct node_if {
@@ -135,6 +162,8 @@ struct node_host {
 	struct node_host	*next;
 	struct node_host	*tail;
 };
+
+void	freehostlist(struct node_host *);
 
 struct node_mac {
 	u_int8_t	 mac[ETHER_ADDR_LEN];
@@ -256,10 +285,10 @@ struct pf_opt_tbl {
 	char			 pt_name[PF_TABLE_NAME_SIZE];
 	int			 pt_rulecount;
 	int			 pt_generated;
+	uint32_t		 pt_refcnt;
 	struct node_tinithead	 pt_nodes;
 	struct pfr_buffer	*pt_buf;
 };
-#define PF_OPT_TABLE_PREFIX	"__automatic_"
 
 /* optimizer pf_rule container */
 struct pf_opt_rule {
@@ -273,32 +302,51 @@ struct pf_opt_rule {
 
 TAILQ_HEAD(pf_opt_queue, pf_opt_rule);
 
+struct pfr_uktable;
+
+void	copy_satopfaddr(struct pf_addr *, struct sockaddr *);
+
 int	pfctl_rules(int, char *, int, int, char *, struct pfr_buffer *);
 int	pfctl_optimize_ruleset(struct pfctl *, struct pfctl_ruleset *);
 
-int	pfctl_append_rule(struct pfctl *, struct pfctl_rule *, const char *);
+void	pfctl_init_rule(struct pfctl_rule *r);
+void	pfctl_append_rule(struct pfctl *, struct pfctl_rule *);
 int	pfctl_append_eth_rule(struct pfctl *, struct pfctl_eth_rule *,
 	    const char *);
 int	pfctl_add_altq(struct pfctl *, struct pf_altq *);
-int	pfctl_add_pool(struct pfctl *, struct pfctl_pool *, sa_family_t);
+int	pfctl_add_pool(struct pfctl *, struct pfctl_pool *, int);
 void	pfctl_move_pool(struct pfctl_pool *, struct pfctl_pool *);
 void	pfctl_clear_pool(struct pfctl_pool *);
 
-int	pfctl_set_timeout(struct pfctl *, const char *, int, int);
+int	pfctl_add_statelim(struct pfctl *, struct pfctl_statelim *);
+struct pfctl_statelim *
+	pfctl_get_statelim_id(struct pfctl *, uint32_t);
+struct pfctl_statelim *
+	pfctl_get_statelim_nm(struct pfctl *, const char *);
+int	pfctl_add_sourcelim(struct pfctl *, struct pfctl_sourcelim *);
+struct pfctl_sourcelim *
+	pfctl_get_sourcelim_id(struct pfctl *, uint32_t);
+struct pfctl_sourcelim *
+	pfctl_get_sourcelim_nm(struct pfctl *, const char *);
+
+int	pfctl_apply_timeout(struct pfctl *, const char *, int, int);
+int	pfctl_set_reassembly(struct pfctl *, int, int);
 int	pfctl_set_optimization(struct pfctl *, const char *);
-int	pfctl_set_limit(struct pfctl *, const char *, unsigned int);
+int	pfctl_apply_limit(struct pfctl *, const char *, unsigned int);
 int	pfctl_set_logif(struct pfctl *, char *);
-int	pfctl_set_hostid(struct pfctl *, u_int32_t);
-int	pfctl_set_debug(struct pfctl *, char *);
+void	pfctl_set_hostid(struct pfctl *, u_int32_t);
+int	pfctl_do_set_debug(struct pfctl *, char *);
 int	pfctl_set_interface_flags(struct pfctl *, char *, int, int);
 int	pfctl_cfg_syncookies(struct pfctl *, uint8_t, struct pfctl_watermarks *);
 
 int	parse_config(char *, struct pfctl *);
 int	parse_flags(char *);
-int	pfctl_load_anchors(int, struct pfctl *, struct pfr_buffer *);
+int	pfctl_load_anchors(int, struct pfctl *);
 
-void	print_pool(struct pfctl_pool *, u_int16_t, u_int16_t, sa_family_t, int);
-void	print_src_node(struct pf_src_node *, int);
+void	print_pool(struct pfctl_pool *, u_int16_t, u_int16_t, int);
+void	print_src_node(struct pfctl_src_node *, int);
+void	print_statelim(const struct pfctl_state_lim *);
+void	print_sourcelim(const struct pfctl_source_lim *);
 void	print_eth_rule(struct pfctl_eth_rule *, const char *, int);
 void	print_rule(struct pfctl_rule *, const char *, int, int);
 void	print_tabledef(const char *, int, int, struct node_tinithead *);
@@ -316,7 +364,7 @@ void	 print_queue(const struct pf_altq *, unsigned, struct node_queue_bw *,
 	    int, struct node_queue_opt *);
 
 int	pfctl_define_table(char *, int, int, const char *, struct pfr_buffer *,
-	    u_int32_t);
+	    u_int32_t, struct pfr_uktable *);
 
 void		 pfctl_clear_fingerprints(int, int);
 int		 pfctl_file_fingerprints(int, int, const char *);
@@ -337,10 +385,10 @@ struct icmpcodeent {
 	u_int8_t code;
 };
 
-const struct icmptypeent *geticmptypebynumber(u_int8_t, u_int8_t);
-const struct icmptypeent *geticmptypebyname(char *, u_int8_t);
-const struct icmpcodeent *geticmpcodebynumber(u_int8_t, u_int8_t, u_int8_t);
-const struct icmpcodeent *geticmpcodebyname(u_long, char *, u_int8_t);
+const struct icmptypeent *geticmptypebynumber(u_int8_t, sa_family_t);
+const struct icmptypeent *geticmptypebyname(char *, sa_family_t);
+const struct icmpcodeent *geticmpcodebynumber(u_int8_t, u_int8_t, sa_family_t);
+const struct icmpcodeent *geticmpcodebyname(u_long, char *, sa_family_t);
 
 struct pf_timeout {
 	const char	*name;
@@ -356,18 +404,24 @@ struct pf_timeout {
 
 extern const struct pf_timeout pf_timeouts[];
 
-void			 set_ipmask(struct node_host *, u_int8_t);
+void			 set_ipmask(struct node_host *, int);
 int			 check_netmask(struct node_host *, sa_family_t);
-int			 unmask(struct pf_addr *, sa_family_t);
+int			 unmask(struct pf_addr *);
+struct node_host	*gen_dynnode(struct node_host *, sa_family_t);
 void			 ifa_load(void);
+unsigned int		 ifa_nametoindex(const char *);
+char			*ifa_indextoname(unsigned int, char *);
 int			 get_query_socket(void);
 struct node_host	*ifa_exists(char *);
 struct node_host	*ifa_grouplookup(char *ifa_name, int flags);
 struct node_host	*ifa_lookup(char *, int);
-struct node_host	*host(const char *);
+struct node_host	*host(const char *, int);
 
-int			 append_addr(struct pfr_buffer *, char *, int);
+int			 append_addr(struct pfr_buffer *, char *, int, int);
 int			 append_addr_host(struct pfr_buffer *,
 			    struct node_host *, int, int);
+int			 pfr_ktable_compare(struct pfr_ktable *,
+			    struct pfr_ktable *);
+RB_PROTOTYPE(pfr_ktablehead, pfr_ktable, pfrkt_tree, pfr_ktable_compare);
 
 #endif /* _PFCTL_PARSER_H_ */

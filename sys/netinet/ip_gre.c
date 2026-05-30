@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
  * Copyright (c) 2014, 2018 Andrey V. Elsukov <ae@FreeBSD.org>
@@ -34,9 +34,6 @@
  * $NetBSD: ip_gre.c,v 1.29 2003/09/05 23:02:43 itojun Exp $
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_inet.h"
 #include "opt_inet6.h"
 
@@ -55,6 +52,7 @@ __FBSDID("$FreeBSD$");
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_private.h>
 #include <net/vnet.h>
 
 #include <netinet/in.h>
@@ -258,7 +256,7 @@ in_gre_setup_socket(struct gre_softc *sc)
 	 * NOTE: we are protected with gre_ioctl_sx lock.
 	 *
 	 * First check that socket is already configured.
-	 * If so, check that source addres was not changed.
+	 * If so, check that source address was not changed.
 	 * If address is different, check that there are no other tunnels
 	 * and close socket.
 	 */
@@ -535,7 +533,7 @@ in_gre_output(struct mbuf *m, int af, int hlen)
 #ifdef INET6
 	case AF_INET6:
 		gi->gi_ip.ip_tos = 0; /* XXX */
-		ip_fillid(&gi->gi_ip);
+		ip_fillid(&gi->gi_ip, V_ip_random_id);
 		break;
 #endif
 	}

@@ -33,16 +33,11 @@
  */
 
 #include "assym.inc"
-#include "opt_sched.h"
 
 #include <machine/param.h>
 #include <machine/asm.h>
 #include <machine/riscvreg.h>
 #include <machine/pte.h>
-
-__FBSDID("$FreeBSD$");
-
-#ifdef FPE
 .macro __fpe_state_save p
 	/*
 	 * Enable FPE usage in supervisor mode,
@@ -204,8 +199,7 @@ ENTRY(fpe_state_clear)
 
 	ret
 END(fpe_state_clear)
-#endif /* FPE */
-	
+
 /*
  * void cpu_throw(struct thread *old __unused, struct thread *new)
  */
@@ -240,7 +234,6 @@ ENTRY(cpu_throw)
 	ld	s10, (PCB_S + 10 * 8)(x13)
 	ld	s11, (PCB_S + 11 * 8)(x13)
 
-#ifdef FPE
 	/* Is FPE enabled for new thread? */
 	ld	t0, TD_FRAME(a0)
 	ld	t1, (TF_SSTATUS)(t0)
@@ -251,8 +244,6 @@ ENTRY(cpu_throw)
 	/* Restore registers. */
 	__fpe_state_load x13
 1:
-#endif
-
 	ret
 END(cpu_throw)
 
@@ -292,7 +283,6 @@ ENTRY(cpu_switch)
 	sd	s10, (PCB_S + 10 * 8)(x13)
 	sd	s11, (PCB_S + 11 * 8)(x13)
 
-#ifdef FPE
 	/*
 	 * Is FPE enabled and is it in dirty state
 	 * for the old thread?
@@ -313,7 +303,6 @@ ENTRY(cpu_switch)
 
 	__fpe_state_save x13
 1:
-#endif
 
 	/* Activate the new thread's pmap */
 	mv	s0, a0
@@ -325,7 +314,7 @@ ENTRY(cpu_switch)
 
 	/* Release the old thread */
 	sd	s2, TD_LOCK(s0)
-#if defined(SCHED_ULE) && defined(SMP)
+#if defined(SMP)
 	/* Spin if TD_LOCK points to a blocked_lock */
 	la	s2, _C_LABEL(blocked_lock)
 1:
@@ -355,7 +344,6 @@ ENTRY(cpu_switch)
 	ld	s10, (PCB_S + 10 * 8)(x13)
 	ld	s11, (PCB_S + 11 * 8)(x13)
 
-#ifdef FPE
 	/* Is FPE enabled for new thread? */
 	ld	t0, TD_FRAME(a1)
 	ld	t1, (TF_SSTATUS)(t0)
@@ -366,11 +354,7 @@ ENTRY(cpu_switch)
 	/* Restore registers. */
 	__fpe_state_load x13
 1:
-#endif
-
 	ret
-.Lcpu_switch_panic_str:
-	.asciz "cpu_switch: %p\0"
 END(cpu_switch)
 
 /*
@@ -434,7 +418,7 @@ ENTRY(fork_trampoline)
 	 * Store our pcpup on stack, we will load it back
 	 * on kernel mode trap.
 	 */
-	sd	tp, (TF_SIZE)(sp)
+	sd	tp, (TF_SIZE + KF_TP)(sp)
 	ld	tp, (TF_TP)(sp)
 
 	/* Save kernel stack so we can use it doing a user trap */
@@ -468,8 +452,6 @@ ENTRY(savectx)
 	sd	s10, (PCB_S + 10 * 8)(a0)
 	sd	s11, (PCB_S + 11 * 8)(a0)
 
-#ifdef FPE
 	__fpe_state_save a0
-#endif
 	ret
 END(savectx)

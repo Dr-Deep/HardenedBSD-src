@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1991, 1993, 1994
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -26,14 +28,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#ifndef lint
-#if 0
-static char sccsid[] = "@(#)print.c	8.6 (Berkeley) 4/16/94";
-#endif
-#endif /* not lint */
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
 
@@ -129,6 +123,7 @@ print(struct termios *tp, struct winsize *wp, int ldisc, enum FMT fmt)
 	put("-inpck", INPCK, 0);
 	put("-ignpar", IGNPAR, 0);
 	put("-parmrk", PARMRK, 0);
+	put("-iutf8", IUTF8, 1);
 
 	/* output flags */
 	tmp = tp->c_oflag;

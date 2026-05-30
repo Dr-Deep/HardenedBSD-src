@@ -1,4 +1,3 @@
-# $FreeBSD$
 #
 # The include file <bsd.obj.mk> handles creating the 'obj' directory
 # and cleaning up object files, etc.
@@ -39,7 +38,7 @@
 #
 
 .if !target(__<bsd.obj.mk>__)
-__<bsd.obj.mk>__:
+__<bsd.obj.mk>__:	.NOTMAIN
 .include <bsd.own.mk>
 
 # This is also done in bsd.init.mk

@@ -25,15 +25,16 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/bus.h>
 #include <sys/kernel.h>
 #include <sys/module.h>
+#include <sys/socket.h>
 #include <sys/systm.h>
+#include <sys/iov.h>
 #include <dev/pci/pcivar.h>
+#include <net/if.h>
+#include <net/if_vlan_var.h>
 
 #ifdef PCI_IOV
 #include <sys/nv.h>
@@ -53,8 +54,6 @@ struct t4iov_softc {
 	int pf;
 	int regs_rid;
 	struct resource *regs_res;
-	bus_space_handle_t bh;
-	bus_space_tag_t bt;
 };
 
 struct {
@@ -98,15 +97,15 @@ struct {
 	{0x6002, "Chelsio T6225-SO-CR"},	/* 2 x 10/25G, nomem */
 	{0x6003, "Chelsio T6425-CR"},		/* 4 x 10/25G */
 	{0x6004, "Chelsio T6425-SO-CR"},	/* 4 x 10/25G, nomem */
-	{0x6005, "Chelsio T6225-OCP-SO"},	/* 2 x 10/25G, nomem */
-	{0x6006, "Chelsio T62100-OCP-SO"},	/* 2 x 40/50/100G, nomem */
+	{0x6005, "Chelsio T6225-SO-OCP3"},	/* 2 x 10/25G, nomem */
+	{0x6006, "Chelsio T6225-OCP3"},		/* 2 x 10/25G */
 	{0x6007, "Chelsio T62100-LP-CR"},	/* 2 x 40/50/100G */
 	{0x6008, "Chelsio T62100-SO-CR"},	/* 2 x 40/50/100G, nomem */
 	{0x6009, "Chelsio T6210-BT"},		/* 2 x 10GBASE-T */
 	{0x600d, "Chelsio T62100-CR"},		/* 2 x 40/50/100G */
 	{0x6010, "Chelsio T6-DBG-100"},		/* 2 x 40/50/100G, debug */
 	{0x6011, "Chelsio T6225-LL-CR"},	/* 2 x 10/25G */
-	{0x6014, "Chelsio T61100-OCP-SO"},	/* 1 x 40/50/100G, nomem */
+	{0x6014, "Chelsio T62100-SO-OCP3"},	/* 2 x 40/50/100G, nomem */
 	{0x6015, "Chelsio T6201-BT"},		/* 2 x 1000BASE-T */
 
 	/* Custom */
@@ -118,13 +117,35 @@ struct {
 	{0x6085, "Chelsio T6240-SO 85"},
 	{0x6086, "Chelsio T6225-SO-CR 86"},
 	{0x6087, "Chelsio T6225-CR 87"},
+}, t7iov_pciids[] = {
+	{0xd000, "Chelsio Terminator 7 FPGA"},	/* T7 PE12K FPGA */
+	{0x7000, "Chelsio T72200-DBG"},		/* 2 x 200G, debug */
+	{0x7001, "Chelsio T7250"},		/* 2 x 10/25/50G, 1 mem */
+	{0x7002, "Chelsio S7250"},		/* 2 x 10/25/50G, nomem */
+	{0x7003, "Chelsio T7450"},		/* 4 x 10/25/50G, 1 mem */
+	{0x7004, "Chelsio S7450"},		/* 4 x 10/25/50G, nomem */
+	{0x7005, "Chelsio T72200"},		/* 2 x 40/100/200G, 1 mem */
+	{0x7006, "Chelsio S72200"},		/* 2 x 40/100/200G, nomem */
+	{0x7007, "Chelsio T72200-FH"},		/* 2 x 40/100/200G, 2 mem */
+	{0x7008, "Chelsio T71400"},		/* 1 x 400G, nomem */
+	{0x7009, "Chelsio S7210-BT"},		/* 2 x 10GBASE-T, nomem */
+	{0x700a, "Chelsio T7450-RC"},		/* 4 x 10/25/50G, 1 mem, RC */
+	{0x700b, "Chelsio T72200-RC"},		/* 2 x 40/100/200G, 1 mem, RC */
+	{0x700c, "Chelsio T72200-FH-RC"},	/* 2 x 40/100/200G, 2 mem, RC */
+	{0x700d, "Chelsio S72200-OCP3"},	/* 2 x 40/100/200G OCP3 */
+	{0x700e, "Chelsio S7450-OCP3"},		/* 4 x 1/20/25/50G OCP3 */
+	{0x700f, "Chelsio S7410-BT-OCP3"},	/* 4 x 10GBASE-T OCP3 */
+	{0x7010, "Chelsio S7210-BT-A"},		/* 2 x 10GBASE-T */
+	{0x7011, "Chelsio T7_MAYRA_7"},		/* Motherboard */
+
+	{0x7080, "Custom T7"},
 };
 
 static inline uint32_t
 t4iov_read_reg(struct t4iov_softc *sc, uint32_t reg)
 {
 
-	return bus_space_read_4(sc->bt, sc->bh, reg);
+	return bus_read_4(sc->regs_res, reg);
 }
 
 static int	t4iov_attach_child(device_t dev);
@@ -190,10 +211,31 @@ t6iov_probe(device_t dev)
 }
 
 static int
+chiov_probe(device_t dev)
+{
+	uint16_t d;
+	size_t i;
+
+	if (pci_get_vendor(dev) != PCI_VENDOR_ID_CHELSIO)
+		return (ENXIO);
+
+	d = pci_get_device(dev);
+	for (i = 0; i < nitems(t7iov_pciids); i++) {
+		if (d == t7iov_pciids[i].device) {
+			device_set_desc(dev, t7iov_pciids[i].desc);
+			device_quiet(dev);
+			return (BUS_PROBE_DEFAULT);
+		}
+	}
+	return (ENXIO);
+}
+
+static int
 t4iov_attach(device_t dev)
 {
 	struct t4iov_softc *sc;
 	uint32_t pl_rev, whoami;
+	int error;
 
 	sc = device_get_softc(dev);
 	sc->sc_dev = dev;
@@ -205,8 +247,6 @@ t4iov_attach(device_t dev)
 		device_printf(dev, "cannot map registers.\n");
 		return (ENXIO);
 	}
-	sc->bt = rman_get_bustag(sc->regs_res);
-	sc->bh = rman_get_bushandle(sc->regs_res);
 
 	pl_rev = t4iov_read_reg(sc, A_PL_REV);
 	whoami = t4iov_read_reg(sc, A_PL_WHOAMI);
@@ -217,10 +257,18 @@ t4iov_attach(device_t dev)
 
 	sc->sc_main = pci_find_dbsf(pci_get_domain(dev), pci_get_bus(dev),
 	    pci_get_slot(dev), 4);
-	if (sc->sc_main == NULL)
+	if (sc->sc_main == NULL) {
+		bus_release_resource(dev, SYS_RES_MEMORY, sc->regs_rid,
+		    sc->regs_res);
 		return (ENXIO);
-	if (T4_IS_MAIN_READY(sc->sc_main) == 0)
-		return (t4iov_attach_child(dev));
+	}
+	if (T4_IS_MAIN_READY(sc->sc_main) == 0) {
+		error = t4iov_attach_child(dev);
+		if (error != 0)
+			bus_release_resource(dev, SYS_RES_MEMORY, sc->regs_rid,
+			    sc->regs_res);
+		return (error);
+	}
 	return (0);
 }
 
@@ -251,6 +299,7 @@ t4iov_attach_child(device_t dev)
 	pf_schema = pci_iov_schema_alloc_node();
 	vf_schema = pci_iov_schema_alloc_node();
 	pci_iov_schema_add_unicast_mac(vf_schema, "mac-addr", 0, NULL);
+	pci_iov_schema_add_vlan(vf_schema, "vlan", 0, 0);
 	error = pci_iov_attach_name(dev, pf_schema, vf_schema, "%s",
 	    device_get_nameunit(pdev));
 	if (error) {
@@ -330,14 +379,15 @@ t4iov_add_vf(device_t dev, uint16_t vfnum, const struct nvlist *config)
 	size_t size;
 	int rc;
 
+	sc = device_get_softc(dev);
+	MPASS(sc->sc_attached);
+	MPASS(sc->sc_main != NULL);
+	adap = device_get_softc(sc->sc_main);
+
 	if (nvlist_exists_binary(config, "mac-addr")) {
 		mac = nvlist_get_binary(config, "mac-addr", &size);
 		bcopy(mac, ma, ETHER_ADDR_LEN);
 
-		sc = device_get_softc(dev);
-		MPASS(sc->sc_attached);
-		MPASS(sc->sc_main != NULL);
-		adap = device_get_softc(sc->sc_main);
 		if (begin_synchronized_op(adap, NULL, SLEEP_OK | INTR_OK,
 		    "t4vfma") != 0)
 			return (ENXIO);
@@ -348,6 +398,29 @@ t4iov_add_vf(device_t dev, uint16_t vfnum, const struct nvlist *config)
 			    "Failed to set VF%d MAC address to "
 			    "%02x:%02x:%02x:%02x:%02x:%02x, rc = %d\n", vfnum,
 			    ma[0], ma[1], ma[2], ma[3], ma[4], ma[5], rc);
+			return (rc);
+		}
+	}
+
+	if (nvlist_exists_number(config, "vlan")) {
+		uint16_t vlan = nvlist_get_number(config, "vlan");
+
+		/* We can't restrict to VID 0 */
+		if (vlan == DOT1Q_VID_NULL)
+			return (ENOTSUP);
+
+		if (vlan == VF_VLAN_TRUNK)
+			vlan = DOT1Q_VID_NULL;
+
+		if (begin_synchronized_op(adap, NULL, SLEEP_OK | INTR_OK,
+		    "t4vfvl") != 0)
+			return (ENXIO);
+		rc = t4_set_vlan_acl(adap, sc->pf, vfnum + 1, vlan);
+		end_synchronized_op(adap, 0);
+		if (rc != 0) {
+			device_printf(dev,
+			    "Failed to set VF%d VLAN to %d, rc = %d\n",
+			    vfnum, vlan, rc);
 			return (rc);
 		}
 	}
@@ -425,6 +498,28 @@ static driver_t t6iov_driver = {
 	sizeof(struct t4iov_softc)
 };
 
+static device_method_t chiov_methods[] = {
+	DEVMETHOD(device_probe,		chiov_probe),
+	DEVMETHOD(device_attach,	t4iov_attach),
+	DEVMETHOD(device_detach,	t4iov_detach),
+
+#ifdef PCI_IOV
+	DEVMETHOD(pci_iov_init,		t4iov_iov_init),
+	DEVMETHOD(pci_iov_uninit,	t4iov_iov_uninit),
+	DEVMETHOD(pci_iov_add_vf,	t4iov_add_vf),
+#endif
+
+	DEVMETHOD(t4_attach_child,	t4iov_attach_child),
+	DEVMETHOD(t4_detach_child,	t4iov_detach_child),
+
+	DEVMETHOD_END
+};
+
+static driver_t chiov_driver = {
+	"chiov",
+	chiov_methods,
+	sizeof(struct t4iov_softc)
+};
 DRIVER_MODULE(t4iov, pci, t4iov_driver, 0, 0);
 MODULE_VERSION(t4iov, 1);
 
@@ -433,3 +528,6 @@ MODULE_VERSION(t5iov, 1);
 
 DRIVER_MODULE(t6iov, pci, t6iov_driver, 0, 0);
 MODULE_VERSION(t6iov, 1);
+
+DRIVER_MODULE(chiov, pci, chiov_driver, 0, 0);
+MODULE_VERSION(chiov, 1);

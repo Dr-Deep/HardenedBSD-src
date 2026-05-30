@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2007-2009 Sam Leffler, Errno Consulting
  * Copyright (c) 2007-2008 Marvell Semiconductor, Inc.
@@ -31,8 +31,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Driver for the Marvell 88W8363 Wireless LAN controller.
  */
@@ -98,7 +96,7 @@ static void	mwl_start(struct mwl_softc *);
 static int	mwl_transmit(struct ieee80211com *, struct mbuf *);
 static int	mwl_raw_xmit(struct ieee80211_node *, struct mbuf *,
 			const struct ieee80211_bpf_params *);
-static int	mwl_media_change(struct ifnet *);
+static int	mwl_media_change(if_t);
 static void	mwl_watchdog(void *);
 static int	mwl_ioctl(struct ieee80211com *, u_long, void *);
 static void	mwl_radar_proc(void *, int);
@@ -131,7 +129,7 @@ static struct ieee80211_node *mwl_node_alloc(struct ieee80211vap *,
 static void	mwl_node_cleanup(struct ieee80211_node *);
 static void	mwl_node_drain(struct ieee80211_node *);
 static void	mwl_node_getsignal(const struct ieee80211_node *,
-			int8_t *, int8_t *);
+			net80211_rssi_t *, int8_t *);
 static void	mwl_node_getmimoinfo(const struct ieee80211_node *,
 			struct ieee80211_mimo_info *);
 static int	mwl_rxbuf_init(struct mwl_softc *, struct mwl_rxbuf *);
@@ -228,12 +226,9 @@ enum {
 	MWL_DEBUG_AMPDU		= 0x00004000,	/* BA stream handling */
 	MWL_DEBUG_ANY		= 0xffffffff
 };
-#define	IS_BEACON(wh) \
-    ((wh->i_fc[0] & (IEEE80211_FC0_TYPE_MASK|IEEE80211_FC0_SUBTYPE_MASK)) == \
-	 (IEEE80211_FC0_TYPE_MGT|IEEE80211_FC0_SUBTYPE_BEACON))
 #define	IFF_DUMPPKTS_RECV(sc, wh) \
     ((sc->sc_debug & MWL_DEBUG_RECV) && \
-      ((sc->sc_debug & MWL_DEBUG_RECV_ALL) || !IS_BEACON(wh)))
+      ((sc->sc_debug & MWL_DEBUG_RECV_ALL) || !IEEE80211_IS_MGMT_BEACON(wh)))
 #define	IFF_DUMPPKTS_XMIT(sc) \
 	(sc->sc_debug & MWL_DEBUG_XMIT)
 
@@ -437,6 +432,8 @@ mwl_attach(uint16_t devid, struct mwl_softc *sc)
 		| IEEE80211_HTC_AMSDU		/* tx A-MSDU */
 		| IEEE80211_HTC_SMPS		/* SMPS available */
 		;
+
+	ic->ic_flags_ext |= IEEE80211_FEXT_SEQNO_OFFLOAD;
 
 	/*
 	 * Mark h/w crypto support.
@@ -1465,7 +1462,7 @@ mwl_raw_xmit(struct ieee80211_node *ni, struct mbuf *m,
 }
 
 static int
-mwl_media_change(struct ifnet *ifp)
+mwl_media_change(if_t ifp)
 {
 	struct ieee80211vap *vap;
 	int error;
@@ -1475,7 +1472,7 @@ mwl_media_change(struct ifnet *ifp)
 	if (error != 0)
 		return (error);
 
-	vap = ifp->if_softc;
+	vap = if_getsoftc(ifp);
 	mwl_setrates(vap);
 	return (0);
 }
@@ -1521,8 +1518,7 @@ mwl_key_alloc(struct ieee80211vap *vap, struct ieee80211_key *k,
 
 	if (k->wk_keyix != IEEE80211_KEYIX_NONE ||
 	    (k->wk_flags & IEEE80211_KEY_GROUP)) {
-		if (!(&vap->iv_nw_keys[0] <= k &&
-		      k < &vap->iv_nw_keys[IEEE80211_WEP_NKID])) {
+		if (!ieee80211_is_key_global(vap, k)) {
 			/* should not happen */
 			DPRINTF(sc, MWL_DEBUG_KEYCACHE,
 				"%s: bogus group key\n", __func__);
@@ -1642,28 +1638,43 @@ _mwl_key_set(struct ieee80211vap *vap, const struct ieee80211_key *k,
 	switch (cip->ic_cipher) {
 	case IEEE80211_CIPHER_WEP:
 		hk.keyTypeId = KEY_TYPE_ID_WEP;
-		hk.keyLen = k->wk_keylen;
+		hk.keyLen = ieee80211_crypto_get_key_len(k);
 		if (k->wk_keyix == vap->iv_def_txkey)
 			hk.keyFlags = KEY_FLAG_WEP_TXKEY;
 		if (!IEEE80211_IS_STATICKEY(k)) {
 			/* NB: WEP is never used for the PTK */
 			(void) addgroupflags(&hk, k);
 		}
+		memcpy(hk.key.aes, ieee80211_crypto_get_key_data(k),
+		    ieee80211_crypto_get_key_len(k));
 		break;
 	case IEEE80211_CIPHER_TKIP:
 		hk.keyTypeId = KEY_TYPE_ID_TKIP;
 		hk.key.tkip.tsc.high = (uint32_t)(k->wk_keytsc >> 16);
 		hk.key.tkip.tsc.low = (uint16_t)k->wk_keytsc;
 		hk.keyFlags = KEY_FLAG_TSC_VALID | KEY_FLAG_MICKEY_VALID;
-		hk.keyLen = k->wk_keylen + IEEE80211_MICBUF_SIZE;
+		hk.keyLen = ieee80211_crypto_get_key_len(k)
+		    + IEEE80211_MICBUF_SIZE;
 		if (!addgroupflags(&hk, k))
 			hk.keyFlags |= KEY_FLAG_PAIRWISE;
+
+		/* Copy in TKIP MIC after the 16 byte main key */
+		memcpy(hk.key.aes, ieee80211_crypto_get_key_data(k),
+		    ieee80211_crypto_get_key_len(k));
+		memcpy(hk.key.aes + IEEE80211_KEYBUF_SIZE,
+		    ieee80211_crypto_get_key_txmic_data(k),
+		    8);
+		memcpy(hk.key.aes + IEEE80211_KEYBUF_SIZE + 8,
+		    ieee80211_crypto_get_key_rxmic_data(k),
+		    8);
 		break;
 	case IEEE80211_CIPHER_AES_CCM:
 		hk.keyTypeId = KEY_TYPE_ID_AES;
-		hk.keyLen = k->wk_keylen;
+		hk.keyLen = ieee80211_crypto_get_key_len(k);
 		if (!addgroupflags(&hk, k))
 			hk.keyFlags |= KEY_FLAG_PAIRWISE;
+		memcpy(hk.key.aes, ieee80211_crypto_get_key_data(k),
+		    ieee80211_crypto_get_key_len(k));
 		break;
 	default:
 		/* XXX should not happen */
@@ -1671,11 +1682,6 @@ _mwl_key_set(struct ieee80211vap *vap, const struct ieee80211_key *k,
 		    __func__, k->wk_cipher->ic_cipher);
 		return 0;
 	}
-	/*
-	 * NB: tkip mic keys get copied here too; the layout
-	 *     just happens to match that in ieee80211_key.
-	 */
-	memcpy(hk.key.aes, k->wk_key, hk.keyLen);
 
 	/*
 	 * Locate address of sta db entry for writing key;
@@ -1735,14 +1741,14 @@ mwl_setmcastfilter(struct mwl_softc *sc)
 		/* XXX Punt on ranges. */
 		if (nmc == MWL_HAL_MCAST_MAX ||
 		    !IEEE80211_ADDR_EQ(enm->enm_addrlo, enm->enm_addrhi)) {
-			ifp->if_flags |= IFF_ALLMULTI;
+			if_setflagsbit(ifp, IFF_ALLMULTI, 0);
 			return;
 		}
 		IEEE80211_ADDR_COPY(mp, enm->enm_addrlo);
 		mp += IEEE80211_ADDR_LEN, nmc++;
 		ETHER_NEXT_MULTI(estep, enm);
 	}
-	ifp->if_flags &= ~IFF_ALLMULTI;
+	if_setflagsbit(ifp, 0, IFF_ALLMULTI);
 	mwl_hal_setmcast(sc->sc_mh, nmc, macs);
 #endif
 }
@@ -1803,7 +1809,7 @@ mwl_updateslot(struct ieee80211com *ic)
 		return;
 
 	/*
-	 * Calculate the ERP flags.  The firwmare will use
+	 * Calculate the ERP flags.  The firmware will use
 	 * this to carry out the appropriate measures.
 	 */
 	prot = 0;
@@ -2384,7 +2390,7 @@ mwl_node_drain(struct ieee80211_node *ni)
 }
 
 static void
-mwl_node_getsignal(const struct ieee80211_node *ni, int8_t *rssi, int8_t *noise)
+mwl_node_getsignal(const struct ieee80211_node *ni, net80211_rssi_t *rssi, int8_t *noise)
 {
 	*rssi = ni->ni_ic->ic_node_getrssi(ni);
 #ifdef MWL_ANT_INFO_SUPPORT
@@ -2531,7 +2537,6 @@ mwl_ext_free(struct mbuf *m)
 	/*
 	 * If we were previously blocked by a lack of rx dma buffers
 	 * check if we now have enough to restart rx interrupt handling.
-	 * NB: we know we are called at splvm which is above splnet.
 	 */
 	if (sc->sc_rxblocked && sc->sc_nrxfree > mwl_rxdmalow) {
 		sc->sc_rxblocked = 0;
@@ -2557,7 +2562,7 @@ mwl_anyhdrsize(const void *data)
 {
 	const struct ieee80211_frame *wh = data;
 
-	if ((wh->i_fc[0]&IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_CTL) {
+	if (IEEE80211_IS_CTL(wh)) {
 		switch (wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK) {
 		case IEEE80211_FC0_SUBTYPE_CTS:
 		case IEEE80211_FC0_SUBTYPE_ACK:
@@ -2606,7 +2611,6 @@ cvtrssi(uint8_t ssi)
 static void
 mwl_rx_proc(void *arg, int npending)
 {
-	struct epoch_tracker et;
 	struct mwl_softc *sc = arg;
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct mwl_rxbuf *bf;
@@ -2795,8 +2799,6 @@ mwl_rx_proc(void *arg, int npending)
 		/* dispatch */
 		ni = ieee80211_find_rxnode(ic,
 		    (const struct ieee80211_frame_min *) wh);
-
-		NET_EPOCH_ENTER(et);
 		if (ni != NULL) {
 			mn = MWL_NODE(ni);
 #ifdef MWL_ANT_INFO_SUPPORT
@@ -2812,7 +2814,6 @@ mwl_rx_proc(void *arg, int npending)
 			ieee80211_free_node(ni);
 		} else
 			(void) ieee80211_input_all(ic, m, rssi, nf);
-		NET_EPOCH_EXIT(et);
 rx_next:
 		/* NB: ignore ENOMEM so we process more descriptors */
 		(void) mwl_rxbuf_init(sc, bf);
@@ -3098,6 +3099,8 @@ mwl_tx_start(struct mwl_softc *sc, struct ieee80211_node *ni, struct mwl_txbuf *
 	} else
 		qos = 0;
 
+	ieee80211_output_seqno_assign(ni, -1, m0);
+
 	if (iswep) {
 		const struct ieee80211_cipher *cip;
 		struct ieee80211_key *k;
@@ -3355,6 +3358,7 @@ mwl_tx_processq(struct mwl_softc *sc, struct mwl_txq *txq)
 		ni = bf->bf_node;
 		if (ni != NULL) {
 			status = le32toh(ds->Status);
+			int rate;
 			if (status & EAGLE_TXD_STATUS_OK) {
 				uint16_t Format = le16toh(ds->Format);
 				uint8_t txant = _IEEE80211_MASKSHIFT(Format,
@@ -3367,14 +3371,14 @@ mwl_tx_processq(struct mwl_softc *sc, struct mwl_txq *txq)
 					sc->sc_stats.mst_tx_mretries++;
 				if (txq->qnum >= MWL_WME_AC_VO)
 					ic->ic_wme.wme_hipri_traffic++;
-				ni->ni_txrate = _IEEE80211_MASKSHIFT(Format,
+				rate = _IEEE80211_MASKSHIFT(Format,
 				    EAGLE_TXD_RATE);
 				if ((Format & EAGLE_TXD_FORMAT_HT) == 0) {
-					ni->ni_txrate = mwl_cvtlegacyrix(
-					    ni->ni_txrate);
+					rate = mwl_cvtlegacyrix(rate);
 				} else
-					ni->ni_txrate |= IEEE80211_RATE_MCS;
-				sc->sc_stats.mst_tx_rate = ni->ni_txrate;
+					rate |= IEEE80211_RATE_MCS;
+				sc->sc_stats.mst_tx_rate = rate;
+				ieee80211_node_set_txrate_dot11rate(ni, rate);
 			} else {
 				if (status & EAGLE_TXD_STATUS_FAILED_LINK_ERROR)
 					sc->sc_stats.mst_tx_linkerror++;
@@ -4027,7 +4031,7 @@ mkpeerinfo(MWL_HAL_PEERINFO *pi, const struct ieee80211_node *ni)
 			pi->HTCapabilitiesInfo &= ~IEEE80211_HTCAP_SHORTGI40;
 		if ((vap->iv_flags_ht & IEEE80211_FHT_SHORTGI20) == 0)
 			pi->HTCapabilitiesInfo &= ~IEEE80211_HTCAP_SHORTGI20;
-		if (ni->ni_chw != 40)
+		if (ni->ni_chw != NET80211_STA_RX_BW_40)
 			pi->HTCapabilitiesInfo &= ~IEEE80211_HTCAP_CHWIDTH40;
 	}
 	return pi;
@@ -4088,7 +4092,7 @@ mwl_newstate(struct ieee80211vap *vap, enum ieee80211_state nstate, int arg)
 	int error;
 
 	DPRINTF(sc, MWL_DEBUG_STATE, "%s: %s: %s -> %s\n",
-	    vap->iv_ifp->if_xname, __func__,
+	    if_name(vap->iv_ifp), __func__,
 	    ieee80211_state_name[ostate], ieee80211_state_name[nstate]);
 
 	callout_stop(&sc->sc_timer);
@@ -4150,7 +4154,7 @@ mwl_newstate(struct ieee80211vap *vap, enum ieee80211_state nstate, int arg)
 		DPRINTF(sc, MWL_DEBUG_STATE,
 		    "%s: %s(RUN): iv_flags 0x%08x bintvl %d bssid %s "
 		    "capinfo 0x%04x chan %d\n",
-		    vap->iv_ifp->if_xname, __func__, vap->iv_flags,
+		    if_name(vap->iv_ifp), __func__, vap->iv_flags,
 		    ni->ni_intval, ether_sprintf(ni->ni_bssid), ni->ni_capinfo,
 		    ieee80211_chan2ieee(ic, ic->ic_curchan));
 
@@ -4183,7 +4187,7 @@ mwl_newstate(struct ieee80211vap *vap, enum ieee80211_state nstate, int arg)
 			break;
 		case IEEE80211_M_STA:
 			DPRINTF(sc, MWL_DEBUG_STATE, "%s: %s: aid 0x%x\n",
-			    vap->iv_ifp->if_xname, __func__, ni->ni_associd);
+			    if_name(vap->iv_ifp), __func__, ni->ni_associd);
 			/*
 			 * Set state now that we're associated.
 			 */
@@ -4196,7 +4200,7 @@ mwl_newstate(struct ieee80211vap *vap, enum ieee80211_state nstate, int arg)
 			break;
 		case IEEE80211_M_WDS:
 			DPRINTF(sc, MWL_DEBUG_STATE, "%s: %s: bssid %s\n",
-			    vap->iv_ifp->if_xname, __func__,
+			    if_name(vap->iv_ifp), __func__,
 			    ether_sprintf(ni->ni_bssid));
 			mwl_seteapolformat(vap);
 			break;
@@ -4729,9 +4733,9 @@ mwl_ioctl(struct ieee80211com *ic, u_long cmd, void *data)
 #if 0
 		/* NB: embed these numbers to get a consistent view */
 		sc->sc_stats.mst_tx_packets =
-		    ifp->if_get_counter(ifp, IFCOUNTER_OPACKETS);
+		    if_get_counter(ifp, IFCOUNTER_OPACKETS);
 		sc->sc_stats.mst_rx_packets =
-		    ifp->if_get_counter(ifp, IFCOUNTER_IPACKETS);
+		    if_get_counter(ifp, IFCOUNTER_IPACKETS);
 #endif
 		/*
 		 * NB: Drop the softc lock in case of a page fault;

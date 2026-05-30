@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2002 Marcel Moolenaar
  * All rights reserved.
@@ -26,13 +26,11 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/endian.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
+#include <sys/malloc.h>
 #include <sys/mutex.h>
 #include <sys/sbuf.h>
 #include <sys/socket.h>
@@ -188,7 +186,7 @@ sys_uuidgen(struct thread *td, struct uuidgen_args *uap)
 	 * like to have some sort of upper-bound that's less than 2G :-)
 	 * XXX probably needs to be tunable.
 	 */
-	if (uap->count < 1 || uap->count > 2048)
+	if (uap->count < 1 || uap->count > UUIDGEN_BATCH_MAX)
 		return (EINVAL);
 
 	count = uap->count;

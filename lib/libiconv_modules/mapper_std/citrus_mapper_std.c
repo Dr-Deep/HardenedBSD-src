@@ -1,4 +1,3 @@
-/* $FreeBSD$ */
 /*	$NetBSD: citrus_mapper_std.c,v 1.11 2018/06/11 18:03:38 kamil Exp $ */
 
 /*-
@@ -308,7 +307,7 @@ rowcol_init(struct _citrus_mapper_std *ms)
 		rc->rc_dst_ilseq = be32toh(eix->eix_dst_ilseq);
 	}
 
-	/* calcurate expected table size */
+	/* calculate expected table size */
 	i = rc->rc_src_rowcol_len;
 	lz = &rc->rc_src_rowcol[--i];
 	table_size = lz->width;

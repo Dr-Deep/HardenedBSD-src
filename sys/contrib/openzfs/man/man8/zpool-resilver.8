@@ -1,3 +1,4 @@
+.\" SPDX-License-Identifier: CDDL-1.0
 .\"
 .\" CDDL HEADER START
 .\"
@@ -26,7 +27,7 @@
 .\" Copyright 2017 Nexenta Systems, Inc.
 .\" Copyright (c) 2017 Open-E, Inc. All Rights Reserved.
 .\"
-.Dd May 27, 2021
+.Dd July 11, 2022
 .Dt ZPOOL-RESILVER 8
 .Os
 .
@@ -40,12 +41,16 @@
 .
 .Sh DESCRIPTION
 Starts a resilver of the specified pools.
-If an existing resilver is already running it will be restarted from the beginning.
+If an existing resilver is already running it will be restarted from the
+beginning.
 Any drives that were scheduled for a deferred
 resilver will be added to the new one.
 This requires the
 .Sy resilver_defer
 pool feature.
+.Pp
+Due to concurrent writes on a live system, it is possible for
+resilver to progress beyond 100% completion.
 .
 .Sh SEE ALSO
 .Xr zpool-iostat 8 ,

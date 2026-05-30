@@ -4,7 +4,7 @@
  * All rights reserved.
  *
  * Copyright (c) 2016-2019 Netflix, Inc. written by M. Warner Losh
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -27,9 +27,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <stand.h>
 
 #include <sys/disk.h>
@@ -48,30 +45,72 @@ __FBSDID("$FreeBSD$");
 #include <disk.h>
 #include <dev_net.h>
 #include <net.h>
+#include <machine/_inttypes.h>
 
 #include <efi.h>
 #include <efilib.h>
 #include <efichar.h>
-#include <efirng.h>
+
+#include <Guid/DebugImageInfoTable.h>
+#include <Guid/DxeServices.h>
+#include <Guid/Mps.h>
+#include <Guid/SmBios.h>
+#include <Protocol/Rng.h>
+#include <Protocol/SimpleNetwork.h>
+#include <Protocol/SimpleTextIn.h>
 
 #include <uuid.h>
 
 #include <bootstrap.h>
 #include <smbios.h>
 
+#include <dev/random/fortuna.h>
+#include <geom/eli/pkcs5v2.h>
+
 #include "efizfs.h"
 #include "framebuffer.h"
 
+#include "platform/acfreebsd.h"
+#include "acconfig.h"
+#define ACPI_SYSTEM_XFACE
+#include "actypes.h"
+#include "actbl.h"
+
+#include <acpi_detect.h>
+
 #include "loader_efi.h"
 
-struct arch_switch archsw;	/* MI/MD interface boundary */
+struct arch_switch archsw = {	/* MI/MD interface boundary */
+	.arch_autoload = efi_autoload,
+	.arch_getdev = efi_getdev,
+	.arch_copyin = efi_copyin,
+	.arch_copyout = efi_copyout,
+#if defined(__amd64__) || defined(__i386__)
+	.arch_hypervisor = x86_hypervisor,
+#endif
+	.arch_readin = efi_readin,
+	.arch_zfs_probe = efi_zfs_probe,
+};
 
-EFI_GUID acpi = ACPI_TABLE_GUID;
-EFI_GUID acpi20 = ACPI_20_TABLE_GUID;
+// XXX These are from ???? Maybe ACPI which needs to define them?
+// XXX EDK2 doesn't (or didn't as of Feb 2025)
+#define HOB_LIST_TABLE_GUID \
+    { 0x7739f24c, 0x93d7, 0x11d4, {0x9a, 0x3a, 0x0, 0x90, 0x27, 0x3f, 0xc1, 0x4d} }
+#define LZMA_DECOMPRESSION_GUID \
+	{ 0xee4e5898, 0x3914, 0x4259, {0x9d, 0x6e, 0xdc, 0x7b, 0xd7, 0x94, 0x3, 0xcf} }
+#define ARM_MP_CORE_INFO_TABLE_GUID \
+	{ 0xa4ee0728, 0xe5d7, 0x4ac5, {0xb2, 0x1e, 0x65, 0x8e, 0xd8, 0x57, 0xe8, 0x34} }
+#define ESRT_TABLE_GUID \
+	{ 0xb122a263, 0x3661, 0x4f68, {0x99, 0x29, 0x78, 0xf8, 0xb0, 0xd6, 0x21, 0x80} }
+#define MEMORY_TYPE_INFORMATION_TABLE_GUID \
+    { 0x4c19049f, 0x4137, 0x4dd3, {0x9c, 0x10, 0x8b, 0x97, 0xa8, 0x3f, 0xfd, 0xfa} }
+#define FDT_TABLE_GUID \
+    { 0xb1b621d5, 0xf19c, 0x41a5, {0x83, 0x0b, 0xd9, 0x15, 0x2c, 0x69, 0xaa, 0xe0} }
+
 EFI_GUID devid = DEVICE_PATH_PROTOCOL;
 EFI_GUID imgid = LOADED_IMAGE_PROTOCOL;
 EFI_GUID mps = MPS_TABLE_GUID;
-EFI_GUID netid = EFI_SIMPLE_NETWORK_PROTOCOL;
+EFI_GUID netid = EFI_SIMPLE_NETWORK_PROTOCOL_GUID;
 EFI_GUID smbios = SMBIOS_TABLE_GUID;
 EFI_GUID smbios3 = SMBIOS3_TABLE_GUID;
 EFI_GUID dxe = DXE_SERVICES_TABLE_GUID;
@@ -80,9 +119,10 @@ EFI_GUID lzmadecomp = LZMA_DECOMPRESSION_GUID;
 EFI_GUID mpcore = ARM_MP_CORE_INFO_TABLE_GUID;
 EFI_GUID esrt = ESRT_TABLE_GUID;
 EFI_GUID memtype = MEMORY_TYPE_INFORMATION_TABLE_GUID;
-EFI_GUID debugimg = DEBUG_IMAGE_INFO_TABLE_GUID;
+EFI_GUID debugimg = EFI_DEBUG_IMAGE_INFO_TABLE_GUID;
 EFI_GUID fdtdtb = FDT_TABLE_GUID;
-EFI_GUID inputid = SIMPLE_TEXT_INPUT_PROTOCOL;
+EFI_GUID inputid = EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID;
+EFI_GUID rng_guid = EFI_RNG_PROTOCOL_GUID;
 
 /*
  * Number of seconds to wait for a keystroke before exiting with failure
@@ -102,6 +142,16 @@ UINT16 boot_current;
  * Image that we booted from.
  */
 EFI_LOADED_IMAGE *boot_img;
+
+enum boot_policies {
+	STRICT,
+	RELAXED,
+} boot_policy = RELAXED;
+
+const char *policy_map[] = {
+	[STRICT] = "strict",
+	[RELAXED] = "relaxed",
+};
 
 static bool
 has_keyboard(void)
@@ -186,20 +236,6 @@ out:
 }
 
 static void
-set_currdev(const char *devname)
-{
-
-	env_setenv("currdev", EV_VOLATILE, devname, efi_setcurrdev,
-	    env_nounset);
-	/*
-	 * Don't execute hook here; the loaddev hook makes it immutable
-	 * once we've determined what the proper currdev is.
-	 */
-	env_setenv("loaddev", EV_VOLATILE | EV_NOHOOK, devname, env_noset,
-	    env_nounset);
-}
-
-static void
 set_currdev_devdesc(struct devdesc *currdev)
 {
 	const char *devname;
@@ -264,42 +300,36 @@ sanity_check_currdev(void)
 static bool
 probe_zfs_currdev(uint64_t guid)
 {
+	char buf[VDEV_PAD_SIZE];
 	char *devname;
 	struct zfs_devdesc currdev;
-	char *buf = NULL;
-	bool rv;
 
 	currdev.dd.d_dev = &zfs_dev;
 	currdev.dd.d_unit = 0;
 	currdev.pool_guid = guid;
 	currdev.root_guid = 0;
-	set_currdev_devdesc((struct devdesc *)&currdev);
 	devname = devformat(&currdev.dd);
+	set_currdev(devname);
+	printf("Setting currdev to %s\n", devname);
 	init_zfs_boot_options(devname);
 
-	rv = sanity_check_currdev();
-	if (rv) {
-		buf = malloc(VDEV_PAD_SIZE);
-		if (buf != NULL) {
-			if (zfs_get_bootonce(&currdev, OS_BOOTONCE, buf,
-			    VDEV_PAD_SIZE) == 0) {
-				printf("zfs bootonce: %s\n", buf);
-				set_currdev(buf);
-				setenv("zfs-bootonce", buf, 1);
-			}
-			free(buf);
-			(void) zfs_attach_nvstore(&currdev);
-		}
+	if (zfs_get_bootonce(&currdev, OS_BOOTONCE, buf, sizeof(buf)) == 0) {
+		printf("zfs bootonce: %s\n", buf);
+		set_currdev(buf);
+		setenv("zfs-bootonce", buf, 1);
 	}
-	return (rv);
+	(void)zfs_attach_nvstore(&currdev);
+
+	return (sanity_check_currdev());
 }
 #endif
 
 #ifdef MD_IMAGE_SIZE
+extern struct devsw md_dev;
+
 static bool
 probe_md_currdev(void)
 {
-	extern struct devsw md_dev;
 	bool rv;
 
 	set_currdev_devsw(&md_dev, 0);
@@ -313,9 +343,9 @@ probe_md_currdev(void)
 static bool
 try_as_currdev(pdinfo_t *hd, pdinfo_t *pp)
 {
+#ifdef EFI_ZFS_BOOT
 	uint64_t guid;
 
-#ifdef EFI_ZFS_BOOT
 	/*
 	 * If there's a zpool on this device, try it as a ZFS
 	 * filesystem, which has somewhat different setup than all
@@ -503,8 +533,7 @@ match_boot_info(char *boot_info, size_t bisz)
  * a drop to the OK boot loader prompt is possible.
  */
 static int
-find_currdev(bool do_bootmgr, bool is_last,
-    char *boot_info, size_t boot_info_sz)
+find_currdev(bool do_bootmgr, char *boot_info, size_t boot_info_sz)
 {
 	pdinfo_t *dp, *pp;
 	EFI_DEVICE_PATH *devpath, *copy;
@@ -521,7 +550,7 @@ find_currdev(bool do_bootmgr, bool is_last,
 	 * it's wrong.
 	 */
 	rootdev = getenv("rootdev");
-	if (rootdev != NULL) {
+	if (rootdev != NULL && *rootdev != '\0') {
 		printf("    Setting currdev to configured rootdev %s\n",
 		    rootdev);
 		set_currdev(rootdev);
@@ -568,21 +597,6 @@ find_currdev(bool do_bootmgr, bool is_last,
 		} /* Nothing specified, try normal match */
 	}
 
-#ifdef EFI_ZFS_BOOT
-	/*
-	 * Did efi_zfs_probe() detect the boot pool? If so, use the zpool
-	 * it found, if it's sane. ZFS is the only thing that looks for
-	 * disks and pools to boot. This may change in the future, however,
-	 * if we allow specifying which pool to boot from via UEFI variables
-	 * rather than the bootenv stuff that FreeBSD uses today.
-	 */
-	if (pool_guid != 0) {
-		printf("Trying ZFS pool\n");
-		if (probe_zfs_currdev(pool_guid))
-			return (0);
-	}
-#endif /* EFI_ZFS_BOOT */
-
 #ifdef MD_IMAGE_SIZE
 	/*
 	 * If there is an embedded MD, try to use that.
@@ -591,6 +605,25 @@ find_currdev(bool do_bootmgr, bool is_last,
 	if (probe_md_currdev())
 		return (0);
 #endif /* MD_IMAGE_SIZE */
+
+#ifdef EFI_ZFS_BOOT
+	zfsinfo_list_t *zfsinfo = efizfs_get_zfsinfo_list();
+	zfsinfo_t *zi;
+
+	/*
+	 * First try the zfs pool(s) that were on the boot device, then
+	 * try any other pool if we have a relaxed policy. zfsinfo has
+	 * the pools that had elements on the boot device first.
+	 */
+	STAILQ_FOREACH(zi, zfsinfo, zi_link) {
+		if (boot_policy == STRICT &&
+		    zi->zi_handle != boot_img->DeviceHandle)
+			continue;
+		printf("Trying ZFS pool 0x%jx\n", zi->zi_pool_guid);
+		if (probe_zfs_currdev(zi->zi_pool_guid))
+			return (0);
+	}
+#endif /* EFI_ZFS_BOOT */
 
 	/*
 	 * Try to find the block device by its handle based on the
@@ -702,8 +735,7 @@ interactive_interrupt(const char *msg)
 static int
 parse_args(int argc, CHAR16 *argv[])
 {
-	int i, j, howto;
-	bool vargood;
+	int i, howto;
 	char var[128];
 
 	/*
@@ -720,7 +752,7 @@ parse_args(int argc, CHAR16 *argv[])
 	 * method is flawed for non-ASCII characters).
 	 */
 	howto = 0;
-	for (i = 1; i < argc; i++) {
+	for (i = 0; i < argc; i++) {
 		cpy16to8(argv[i], var, sizeof(var));
 		howto |= boot_parse_arg(var);
 	}
@@ -737,11 +769,214 @@ setenv_int(const char *key, int val)
 	setenv(key, buf, 1);
 }
 
+static void *
+acpi_map_sdt(vm_offset_t addr)
+{
+	/* PA == VA */
+	return ((void *)addr);
+}
+
+static int
+acpi_checksum(void *p, size_t length)
+{
+	uint8_t *bp;
+	uint8_t sum;
+
+	bp = p;
+	sum = 0;
+	while (length--)
+		sum += *bp++;
+
+	return (sum);
+}
+
+static void *
+acpi_find_table(uint8_t *sig)
+{
+	int entries, i, addr_size;
+	ACPI_TABLE_HEADER *sdp;
+	ACPI_TABLE_RSDT *rsdt;
+	ACPI_TABLE_XSDT *xsdt;
+	vm_offset_t addr;
+
+	if (rsdp == NULL)
+		return (NULL);
+
+	rsdt = (ACPI_TABLE_RSDT *)(uintptr_t)rsdp->RsdtPhysicalAddress;
+	xsdt = (ACPI_TABLE_XSDT *)(uintptr_t)rsdp->XsdtPhysicalAddress;
+	if (rsdp->Revision < 2) {
+		sdp = (ACPI_TABLE_HEADER *)rsdt;
+		addr_size = sizeof(uint32_t);
+	} else {
+		sdp = (ACPI_TABLE_HEADER *)xsdt;
+		addr_size = sizeof(uint64_t);
+	}
+	entries = (sdp->Length - sizeof(ACPI_TABLE_HEADER)) / addr_size;
+	for (i = 0; i < entries; i++) {
+		if (addr_size == 4)
+			addr = le32toh(rsdt->TableOffsetEntry[i]);
+		else
+			addr = le64toh(xsdt->TableOffsetEntry[i]);
+		if (addr == 0)
+			continue;
+		sdp = (ACPI_TABLE_HEADER *)acpi_map_sdt(addr);
+		if (acpi_checksum(sdp, sdp->Length)) {
+			printf("RSDT entry %d (sig %.4s) is corrupt", i,
+			    sdp->Signature);
+			continue;
+		}
+		if (memcmp(sig, sdp->Signature, 4) == 0)
+			return (sdp);
+	}
+	return (NULL);
+}
+
 /*
- * Parse ConOut (the list of consoles active) and see if we can find a
- * serial port and/or a video port. It would be nice to also walk the
- * ACPI name space to map the UID for the serial port to a port. The
- * latter is especially hard.
+ * Convert the InterfaceType in the SPCR. These are encoded the same for DBG2
+ * tables as well (though we don't parse those here).
+ */
+static const char *
+acpi_uart_type(UINT8 t)
+{
+	static const char *types[] = {
+		[0x00] = "ns8250",	/* Full 16550 */
+		[0x01] = "ns8250",	/* DBGP Rev 1 16550 subset */
+		[0x03] = "pl011",	/* Arm PL011 */
+		[0x05] = "ns8250",	/* Nvidia 16550 */
+		[0x0d] = "pl011",	/* Arm SBSA 32-bit width */
+		[0x0e] = "pl011",	/* Arm SBSA generic */
+		[0x12] = "ns8250",	/* 16550 defined in SerialPort */
+	};
+
+	if (t >= nitems(types))
+		return (NULL);
+	return (types[t]);
+}
+
+static int
+acpi_uart_baud(UINT8 b)
+{
+	static int baud[] = { 0, -1, -1, 9600, 19200, -1, 57600, 115200 };
+
+	if (b > 7)
+		return (-1);
+	return (baud[b]);
+}
+
+static int
+acpi_uart_regionwidth(UINT8 rw)
+{
+	if (rw == 0)
+		return (1);
+	if (rw > 4)
+		return (-1);
+	return (1 << (rw - 1));
+}
+
+static const char *
+acpi_uart_parity(UINT8 p)
+{
+	/* Some of these SPCR entires get this wrong, hard wire none */
+	return ("none");
+}
+
+/*
+ * See if we can find an enabled SPCR ACPI table in the static tables. If so,
+ * then it describes the serial console that's been redirected to, so we know
+ * that at least there's a serial console. This is most important for embedded
+ * systems that don't have traidtional PC serial ports.
+ *
+ * All the two letter variables in this function correspond to their usage in
+ * the uart(4) console string. We use io == -1 to select between I/O ports and
+ * memory mapped addresses. Set both hw.uart.console and hw.uart.consol.extra
+ * to communicate settings from SPCR to the kernel.
+ */
+static int
+check_acpi_spcr(void)
+{
+	ACPI_TABLE_SPCR *spcr;
+	int br, db, io, rs, rw, xo, pv, pd;
+	uintmax_t mm;
+	const char *dt, *pa;
+	char *val = NULL;
+
+	/*
+	 * The SPCR is enabled when SerialPort is non-zero.  Address being zero
+	 * should suffice to see if it's disabled.
+	 */
+	spcr = acpi_find_table(ACPI_SIG_SPCR);
+	if (spcr == NULL || spcr->SerialPort.Address == 0)
+		return (0);
+	dt = acpi_uart_type(spcr->InterfaceType);
+	if (dt == NULL)	{ 	/* Kernel can't use unknown types */
+		printf("UART Type %d not known\n", spcr->InterfaceType);
+		return (0);
+	}
+
+	/* I/O vs Memory mapped vs PCI device */
+	io = -1;
+	pv = spcr->PciVendorId;
+	pd = spcr->PciDeviceId;
+	if (pv == 0xffff && pd == 0xffff) {
+		if (spcr->SerialPort.SpaceId == 1)
+			io = spcr->SerialPort.Address;
+		else {
+			mm = spcr->SerialPort.Address;
+			rs = ffs(spcr->SerialPort.BitWidth) - 4;
+			rw = acpi_uart_regionwidth(spcr->SerialPort.AccessWidth);
+		}
+	} else {
+		/* XXX todo: bus:device:function + flags and segment */
+	}
+
+	/* Uart settings */
+	pa = acpi_uart_parity(spcr->Parity);
+	db = 8;
+
+	/*
+	 * UartClkFreq is 3 and newer. We always use it then (it's only valid if
+	 * it isn't 0, but if it is 0, we want to use 0 to have the kernel
+	 * guess).
+	 */
+	if (spcr->Header.Revision <= 2)
+		xo = 0;
+	else
+		xo = spcr->UartClkFreq;
+
+	/*
+	 * PreciseBaudrate, when non-zero, is to be preferred. It's only valid,
+	 * though, for rev 4 and newer. So when it's 0 or the version is too
+	 * old, we do the old-style table lookup. Otherwise we believe it.
+	 */
+	if (spcr->Header.Revision <= 3 || spcr->PreciseBaudrate == 0)
+		br = acpi_uart_baud(spcr->BaudRate);
+	else
+		br = spcr->PreciseBaudrate;
+
+	if (io != -1) {
+		asprintf(&val, "db:%d,dt:%s,io:%#x,pa:%s,br:%d,xo=%d",
+		    db, dt, io, pa, br, xo);
+	} else if (pv != 0xffff && pd != 0xffff) {
+		asprintf(&val, "db:%d,dt:%s,pv:%#x,pd:%#x,pa:%s,br:%d,xo=%d",
+		    db, dt, pv, pd, pa, br, xo);
+	} else {
+		asprintf(&val, "db:%d,dt:%s,mm:%#jx,rs:%d,rw:%d,pa:%s,br:%d,xo=%d",
+		    db, dt, mm, rs, rw, pa, br, xo);
+	}
+	env_setenv("hw.uart.console", EV_VOLATILE, val, NULL, NULL);
+	free(val);
+
+	return (RB_SERIAL);
+}
+
+
+/*
+ * Parse ConOut (the list of consoles active) and see if we can find a serial
+ * port and/or a video port. It would be nice to also walk the ACPI DSDT to map
+ * the UID for the serial port to a port since there's no standard mapping. Also
+ * check for ConIn as well. This will be enough to determine if we have serial,
+ * and if we don't, we default to video. If there's a dual-console situation
+ * with only ConIn defined, this will currently fail.
  */
 int
 parse_uefi_con_out(void)
@@ -755,25 +990,32 @@ parse_uefi_con_out(void)
 	UART_DEVICE_PATH  *uart;
 	bool pci_pending;
 
-	how = 0;
+	/*
+	 * A SPCR in the ACPI fixed tables documents a serial port used for the
+	 * console. It may mirror a video console, or may be stand alone. If it
+	 * is present, we return RB_SERIAL and will use it for the kernel.
+	 */
+	how = check_acpi_spcr();
 	sz = sizeof(buf);
 	rv = efi_global_getenv("ConOut", buf, &sz);
 	if (rv != EFI_SUCCESS)
 		rv = efi_global_getenv("ConOutDev", buf, &sz);
+	if (rv != EFI_SUCCESS)
+		rv = efi_global_getenv("ConIn", buf, &sz);
 	if (rv != EFI_SUCCESS) {
 		/*
-		 * If we don't have any ConOut default to both. If we have GOP
-		 * make video primary, otherwise just make serial primary. In
-		 * either case, try to use both the 'efi' console which will use
-		 * the GOP, if present and serial. If there's an EFI BIOS that
-		 * omits this, but has a serial port redirect, we'll
-		 * unavioidably get doubled characters (but we'll be right in
-		 * all the other more common cases).
+		 * If we don't have any Con* variable use both. If we have GOP
+		 * make video primary, otherwise set serial primary. In either
+		 * case, try to use both the 'efi' console which will use the
+		 * GOP, if present and serial. If there's a UEFI firmware that
+		 * omit this, but has a serial port redirect, we'll unavoidably
+		 * get doubled characters, but we'll be right in all the other
+		 * more common cases.
 		 */
 		if (efi_has_gop())
-			how = RB_MULTIPLE;
+			how |= RB_MULTIPLE;
 		else
-			how = RB_MULTIPLE | RB_SERIAL;
+			how |= RB_MULTIPLE | RB_SERIAL;
 		setenv("console", "efi,comconsole", 1);
 		goto out;
 	}
@@ -913,6 +1155,8 @@ read_loader_env(const char *name, char *def_fn, bool once)
 		printf("    Reading loader env vars from %s\n", fn);
 		parse_loader_efi_config(boot_img->DeviceHandle, fn);
 	}
+
+	free(freeme);
 }
 
 caddr_t
@@ -921,35 +1165,87 @@ ptov(uintptr_t x)
 	return ((caddr_t)x);
 }
 
+static void
+efi_smbios_detect(void)
+{
+	VOID *smbios_v2_ptr = NULL;
+	UINTN k;
+
+	for (k = 0; k < ST->NumberOfTableEntries; k++) {
+		EFI_GUID *guid;
+		VOID *const VT = ST->ConfigurationTable[k].VendorTable;
+		char buf[40];
+		bool is_smbios_v2, is_smbios_v3;
+
+		guid = &ST->ConfigurationTable[k].VendorGuid;
+		is_smbios_v2 = memcmp(guid, &smbios, sizeof(*guid)) == 0;
+		is_smbios_v3 = memcmp(guid, &smbios3, sizeof(*guid)) == 0;
+
+		if (!is_smbios_v2 && !is_smbios_v3)
+			continue;
+
+		snprintf(buf, sizeof(buf), "%p", VT);
+		setenv("hint.smbios.0.mem", buf, 1);
+		if (is_smbios_v2)
+			/*
+			 * We will parse a v2 table only if we don't find a v3
+			 * table.  In the meantime, store the address.
+			 */
+			smbios_v2_ptr = VT;
+		else if (smbios_detect(VT) != NULL)
+			/* v3 parsing succeeded, we are done. */
+			return;
+	}
+	if (smbios_v2_ptr != NULL)
+		(void)smbios_detect(smbios_v2_ptr);
+}
+
+static void
+set_boot_policy(void)
+{
+	const char *policy;
+
+	if ((policy = getenv("boot_policy")) == NULL)
+		return;
+	for (int i = 0; i < nitems(policy_map); i++) {
+		if (strcmp(policy, policy_map[i]) == 0) {
+			boot_policy = i;
+			return;
+		}
+	}
+	printf("Unknown boot_policy '%s', defaulting to %s\n",
+	    policy, policy_map[boot_policy]);
+}
+
 EFI_STATUS
 main(int argc, CHAR16 *argv[])
 {
-	EFI_GUID *guid;
 	int howto, i, uhowto;
-	UINTN k;
-	bool has_kbd, is_last;
+	bool has_kbd;
 	char *s;
 	EFI_DEVICE_PATH *imgpath;
 	CHAR16 *text;
 	EFI_STATUS rv;
-	size_t sz, bosz = 0, bisz = 0;
+	size_t sz, bisz = 0;
 	UINT16 boot_order[100];
 	char boot_info[4096];
 	char buf[32];
 	bool uefi_boot_mgr;
 
-	archsw.arch_autoload = efi_autoload;
-	archsw.arch_getdev = efi_getdev;
-	archsw.arch_copyin = efi_copyin;
-	archsw.arch_copyout = efi_copyout;
-#ifdef __amd64__
-	archsw.arch_hypervisor = x86_hypervisor;
+#if !defined(__arm__)
+	efi_smbios_detect();
 #endif
-	archsw.arch_readin = efi_readin;
-	archsw.arch_zfs_probe = efi_zfs_probe;
 
         /* Get our loaded image protocol interface structure. */
 	(void) OpenProtocolByHandle(IH, &imgid, (void **)&boot_img);
+
+	/* Report the RSDP early. */
+	acpi_detect();
+
+#ifdef LOADER_VERIEXEC
+	/* tell boot_setenv to be careful */
+	set_check_restricted(true);
+#endif
 
 	/*
 	 * Chicken-and-egg problem; we want to have console output early, but
@@ -970,8 +1266,11 @@ main(int argc, CHAR16 *argv[])
 #endif
 	cons_probe();
 
+	/* Set print_delay variable to have hooks in place. */
+	env_setenv("print_delay", EV_VOLATILE, "", setprint_delay, env_nounset);
+
 	/* Set up currdev variable to have hooks in place. */
-	env_setenv("currdev", EV_VOLATILE, "", efi_setcurrdev, env_nounset);
+	env_setenv("currdev", EV_VOLATILE, "", gen_setcurrdev, env_nounset);
 
 	/* Init the time source */
 	efi_time_init();
@@ -991,9 +1290,7 @@ main(int argc, CHAR16 *argv[])
 		    "failures\n", i);
 	}
 
-	for (i = 0; devsw[i] != NULL; i++)
-		if (devsw[i]->dv_init != NULL)
-			(devsw[i]->dv_init)();
+	devinit();
 
 	/*
 	 * Detect console settings two different ways: one via the command
@@ -1022,6 +1319,8 @@ main(int argc, CHAR16 *argv[])
 	 */
 	read_loader_env("LoaderEnv", "/efi/freebsd/loader.env", false);
 	read_loader_env("NextLoaderEnv", NULL, true);
+
+	set_boot_policy();
 
 	/*
 	 * We now have two notions of console. howto should be viewed as
@@ -1055,10 +1354,10 @@ main(int argc, CHAR16 *argv[])
 				setenv("console", "comconsole", 1);
 				break;
 			case VID_SER_BOTH:
-				setenv("console", "efi comconsole", 1);
+				setenv("console", "efi,comconsole", 1);
 				break;
 			case SER_VID_BOTH:
-				setenv("console", "comconsole efi", 1);
+				setenv("console", "comconsole,efi", 1);
 				break;
 				/* case VIDEO_ONLY can't happen -- it's the first if above */
 			}
@@ -1071,10 +1370,8 @@ main(int argc, CHAR16 *argv[])
 	 */
 	boot_howto_to_env(howto);
 
-	if (efi_copy_init()) {
-		printf("failed to allocate staging area\n");
+	if (efi_copy_init())
 		return (EFI_BUFFER_TOO_SMALL);
-	}
 
 	if ((s = getenv("fail_timeout")) != NULL)
 		fail_timeout = strtol(s, NULL, 10);
@@ -1134,17 +1431,13 @@ main(int argc, CHAR16 *argv[])
 				printf(" %04x%s", boot_order[i],
 				    boot_order[i] == boot_current ? "[*]" : "");
 			printf("\n");
-			is_last = boot_order[(sz / sizeof(boot_order[0])) - 1] == boot_current;
-			bosz = sz;
 		} else if (uefi_boot_mgr) {
 			/*
 			 * u-boot doesn't set BootOrder, but otherwise participates in the
 			 * boot manager protocol. So we fake it here and don't consider it
 			 * a failure.
 			 */
-			bosz = sizeof(boot_order[0]);
 			boot_order[0] = boot_current;
-			is_last = true;
 		}
 	}
 
@@ -1193,28 +1486,13 @@ main(int argc, CHAR16 *argv[])
 	 * the boot protocol and also allow an escape hatch for users wishing
 	 * to try something different.
 	 */
-	if (find_currdev(uefi_boot_mgr, is_last, boot_info, bisz) != 0)
+	if (find_currdev(uefi_boot_mgr, boot_info, bisz) != 0)
 		if (uefi_boot_mgr &&
 		    !interactive_interrupt("Failed to find bootable partition"))
 			return (EFI_NOT_FOUND);
 
 	autoload_font(false);	/* Set up the font list for console. */
 	efi_init_environment();
-
-#if !defined(__arm__)
-	for (k = 0; k < ST->NumberOfTableEntries; k++) {
-		guid = &ST->ConfigurationTable[k].VendorGuid;
-		if (!memcmp(guid, &smbios, sizeof(EFI_GUID))) {
-			char buf[40];
-
-			snprintf(buf, sizeof(buf), "%p",
-			    ST->ConfigurationTable[k].VendorTable);
-			setenv("hint.smbios.0.mem", buf, 1);
-			smbios_detect(ST->ConfigurationTable[k].VendorTable);
-			break;
-		}
-	}
-#endif
 
 	interact();			/* doesn't return */
 
@@ -1228,11 +1506,27 @@ command_seed_entropy(int argc, char *argv[])
 {
 	EFI_STATUS status;
 	EFI_RNG_PROTOCOL *rng;
-	unsigned int size = 2048;
+	unsigned int size_efi = RANDOM_FORTUNA_DEFPOOLSIZE * RANDOM_FORTUNA_NPOOLS;
+	unsigned int size = RANDOM_FORTUNA_DEFPOOLSIZE * RANDOM_FORTUNA_NPOOLS;
+	void *buf_efi;
 	void *buf;
 
 	if (argc > 1) {
-		size = strtol(argv[1], NULL, 0);
+		size_efi = strtol(argv[1], NULL, 0);
+
+		/* Don't *compress* the entropy we get from EFI. */
+		if (size_efi > size)
+			size = size_efi;
+
+		/*
+		 * If the amount of entropy we get from EFI is less than the
+		 * size of a single Fortuna pool -- i.e. not enough to ensure
+		 * that Fortuna is safely seeded -- don't expand it since we
+		 * don't want to trick Fortuna into thinking that it has been
+		 * safely seeded when it has not.
+		 */
+		if (size_efi < RANDOM_FORTUNA_DEFPOOLSIZE)
+			size = size_efi;
 	}
 
 	status = BS->LocateProtocol(&rng_guid, NULL, (VOID **)&rng);
@@ -1246,23 +1540,40 @@ command_seed_entropy(int argc, char *argv[])
 		return (CMD_ERROR);
 	}
 
-	status = rng->GetRNG(rng, NULL, size, (UINT8 *)buf);
+	if ((buf_efi = malloc(size_efi)) == NULL) {
+		free(buf);
+		command_errmsg = "out of memory";
+		return (CMD_ERROR);
+	}
+
+	TSENTER2("rng->GetRNG");
+	status = rng->GetRNG(rng, NULL, size_efi, (UINT8 *)buf_efi);
+	TSEXIT();
 	if (status != EFI_SUCCESS) {
+		free(buf_efi);
 		free(buf);
 		command_errmsg = "GetRNG failed";
 		return (CMD_ERROR);
 	}
+	if (size_efi < size)
+		pkcs5v2_genkey_raw(buf, size, "", 0, buf_efi, size_efi, 1);
+	else
+		memcpy(buf, buf_efi, size);
 
 	if (file_addbuf("efi_rng_seed", "boot_entropy_platform", size, buf) != 0) {
+		free(buf_efi);
 		free(buf);
 		return (CMD_ERROR);
 	}
 
+	explicit_bzero(buf_efi, size_efi);
+	free(buf_efi);
 	free(buf);
 	return (CMD_OK);
 }
 
 COMMAND_SET(poweroff, "poweroff", "power off the system", command_poweroff);
+COMMAND_SET(halt, "halt", "power off the system", command_poweroff);
 
 static int
 command_poweroff(int argc __unused, char *argv[] __unused)
@@ -1570,6 +1881,8 @@ command_chain(int argc, char *argv[])
 	EFI_GUID LoadedImageGUID = LOADED_IMAGE_PROTOCOL;
 	EFI_HANDLE loaderhandle;
 	EFI_LOADED_IMAGE *loaded_image;
+	UINTN ExitDataSize;
+	CHAR16 *ExitData = NULL;
 	EFI_STATUS status;
 	struct stat st;
 	struct devdesc *dev;
@@ -1685,9 +1998,16 @@ command_chain(int argc, char *argv[])
 	}
 
 	dev_cleanup();
-	status = BS->StartImage(loaderhandle, NULL, NULL);
+
+	status = BS->StartImage(loaderhandle, &ExitDataSize, &ExitData);
 	if (status != EFI_SUCCESS) {
-		command_errmsg = "StartImage failed";
+		printf("StartImage failed (%lu)", DECODE_ERROR(status));
+		if (ExitData != NULL) {
+			printf(": %S", ExitData);
+			BS->FreePool(ExitData);
+		}
+		putchar('\n');
+		command_errmsg = "";
 		free(loaded_image->LoadOptions);
 		loaded_image->LoadOptions = NULL;
 		status = BS->UnloadImage(loaded_image);
@@ -1699,6 +2019,7 @@ command_chain(int argc, char *argv[])
 
 COMMAND_SET(chain, "chain", "chain load file", command_chain);
 
+#if defined(LOADER_NET_SUPPORT)
 extern struct in_addr servip;
 static int
 command_netserver(int argc, char *argv[])
@@ -1729,3 +2050,4 @@ command_netserver(int argc, char *argv[])
 
 COMMAND_SET(netserver, "netserver", "change or display netserver URI",
     command_netserver);
+#endif

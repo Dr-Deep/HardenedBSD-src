@@ -26,9 +26,8 @@
 .\" SUCH DAMAGE.
 .\"
 .\" From: $OpenBSD: mktemp.1,v 1.8 1998/03/19 06:13:37 millert Exp $
-.\" $FreeBSD$
 .\"
-.Dd December 30, 2005
+.Dd September 27, 2025
 .Dt MKTEMP 1
 .Os
 .Sh NAME
@@ -37,12 +36,14 @@
 .Sh SYNOPSIS
 .Nm
 .Op Fl d
+.Op Fl p Ar tmpdir
 .Op Fl q
 .Op Fl t Ar prefix
 .Op Fl u
 .Ar template ...
 .Nm
 .Op Fl d
+.Op Fl p Ar tmpdir
 .Op Fl q
 .Op Fl u
 .Fl t Ar prefix
@@ -58,7 +59,7 @@ any file name with some number of
 .Ql X Ns s
 appended
 to it, for example
-.Pa /tmp/temp.XXXX .
+.Pa /tmp/temp.XXXXXXXXXX .
 The trailing
 .Ql X Ns s
 are replaced with the current process number and/or a
@@ -91,10 +92,20 @@ will generate a template string based on the
 and the
 .Ev TMPDIR
 environment variable if set.
-The default location if
+If the
+.Fl p
+option is set, then the given
+.Ar tmpdir
+will be used if the
 .Ev TMPDIR
-is not set is
-.Pa /tmp .
+environment variable is not set.
+Finally,
+.Pa /tmp
+will be used if neither
+.Ev TMPDIR
+or
+.Fl p
+are set and used.
 Care should
 be taken to ensure that it is appropriate to use an environment variable
 potentially supplied by the user.
@@ -132,9 +143,26 @@ be used instead.
 .Sh OPTIONS
 The available options are as follows:
 .Bl -tag -width indent
-.It Fl d
+.It Fl d , Fl -directory
 Make a directory instead of a file.
-.It Fl q
+.It Fl p Ar tmpdir , Fl -tmpdir Ns Oo = Ns Ar tmpdir Oc
+Use
+.Ar tmpdir
+for the
+.Fl t
+flag if the
+.Ev TMPDIR
+environment variable is not set.
+Additionally, any provided
+.Ar template
+arguments will be interpreted relative to the path specified as
+.Ar tmpdir .
+If
+.Ar tmpdir
+is either empty or omitted, then the
+.Ev TMPDIR
+environment variable will be used.
+.It Fl q , Fl -quiet
 Fail silently if an error occurs.
 This is useful if
 a script does not want error output to go to standard error.
@@ -144,7 +172,7 @@ Generate a template (using the supplied
 and
 .Ev TMPDIR
 if set) to create a filename template.
-.It Fl u
+.It Fl u , Fl -dry-run
 Operate in
 .Dq unsafe
 mode.
@@ -157,6 +185,13 @@ but still introduces a race condition.
 Use of this
 option is not encouraged.
 .El
+.Sh ENVIRONMENT
+.Bl -tag -width TMPDIR
+.It Ev TMPDIR
+The directory in which to store temporary files.
+Refer to
+.Xr environ 7 .
+.El
 .Sh EXIT STATUS
 .Ex -std
 .Sh EXAMPLES
@@ -168,11 +203,12 @@ where the script should quit if it cannot get a safe
 temporary file.
 .Bd -literal -offset indent
 tempfoo=`basename $0`
-TMPFILE=`mktemp /tmp/${tempfoo}.XXXXXX` || exit 1
+TMPFILE=`mktemp /tmp/${tempfoo}.XXXXXXXXXX` || exit 1
 echo "program output" >> $TMPFILE
 .Ed
 .Pp
-To allow the use of $TMPDIR:
+To allow the use of
+.Ev TMPDIR :
 .Bd -literal -offset indent
 tempfoo=`basename $0`
 TMPFILE=`mktemp -t ${tempfoo}` || exit 1
@@ -182,7 +218,7 @@ echo "program output" >> $TMPFILE
 In this case, we want the script to catch the error itself.
 .Bd -literal -offset indent
 tempfoo=`basename $0`
-TMPFILE=`mktemp -q /tmp/${tempfoo}.XXXXXX`
+TMPFILE=`mktemp -q /tmp/${tempfoo}.XXXXXXXXXX`
 if [ $? -ne 0 ]; then
 	echo "$0: Can't create temp file, exiting..."
 	exit 1

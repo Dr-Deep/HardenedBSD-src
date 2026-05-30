@@ -25,8 +25,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Nvidia Integrated PCI/PCI-Express controller driver.
  */
@@ -34,7 +32,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
-#include <sys/devmap.h>
 #include <sys/proc.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
@@ -49,10 +46,10 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_kern.h>
 #include <vm/pmap.h>
 
-#include <dev/extres/clk/clk.h>
-#include <dev/extres/hwreset/hwreset.h>
-#include <dev/extres/phy/phy.h>
-#include <dev/extres/regulator/regulator.h>
+#include <dev/clk/clk.h>
+#include <dev/hwreset/hwreset.h>
+#include <dev/phy/phy.h>
+#include <dev/regulator/regulator.h>
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 #include <dev/ofw/ofw_pci.h>
@@ -392,7 +389,7 @@ tegra_pcbib_map_cfg(struct tegra_pcib_softc *sc, u_int bus, u_int slot,
     u_int func, u_int reg)
 {
 	bus_size_t offs;
-	int rv;
+	int flags, rv;
 
 	offs = sc->cfg_base_addr;
 	offs |= PCI_CFG_BUS(bus) | PCI_CFG_DEV(slot) | PCI_CFG_FUN(func) |
@@ -402,7 +399,12 @@ tegra_pcbib_map_cfg(struct tegra_pcib_softc *sc, u_int bus, u_int slot,
 	if (sc->cfg_handle != 0)
 		bus_space_unmap(sc->bus_tag, sc->cfg_handle, 0x800);
 
-	rv = bus_space_map(sc->bus_tag, offs, 0x800, 0, &sc->cfg_handle);
+#if defined(BUS_SPACE_MAP_NONPOSTED)
+	flags = BUS_SPACE_MAP_NONPOSTED;
+#else
+	flags = 0;
+#endif
+	rv = bus_space_map(sc->bus_tag, offs, 0x800, flags, &sc->cfg_handle);
 	if (rv != 0)
 		device_printf(sc->dev, "Cannot map config space\n");
 	else
@@ -1382,7 +1384,7 @@ tegra_pcib_attach_msi(device_t dev)
 
 	sc = device_get_softc(dev);
 
-	sc->msi_page = kmem_alloc_contig(PAGE_SIZE, M_WAITOK, 0,
+	sc->msi_page = (uintptr_t)kmem_alloc_contig(PAGE_SIZE, M_WAITOK, 0,
 	    BUS_SPACE_MAXADDR, PAGE_SIZE, 0, VM_MEMATTR_DEFAULT);
 
 	/* MSI BAR */
@@ -1466,7 +1468,7 @@ tegra_pcib_attach(device_t dev)
 	}
 	/*
 	 * XXX - FIXME
-	 * tag for config space is not filled when RF_ALLOCATED flag is used.
+	 * tag for config space is not filled when RF_ACTIVE flag is not used.
 	 */
 	sc->bus_tag = rman_get_bustag(sc->pads_mem_res);
 
@@ -1480,8 +1482,7 @@ tegra_pcib_attach(device_t dev)
 	}
 
 	rid = 2;
-	sc->cfg_mem_res = bus_alloc_resource_any(dev, SYS_RES_MEMORY, &rid,
-	    RF_ALLOCATED);
+	sc->cfg_mem_res = bus_alloc_resource_any(dev, SYS_RES_MEMORY, &rid, 0);
 	if (sc->cfg_mem_res == NULL) {
 		device_printf(dev, "Cannot allocate config space memory\n");
 		rv = ENXIO;
@@ -1562,9 +1563,10 @@ tegra_pcib_attach(device_t dev)
 	if (rv != 0)
 		 goto out;
 #endif
-	device_add_child(dev, "pci", -1);
+	device_add_child(dev, "pci", DEVICE_UNIT_ANY);
+	bus_attach_children(dev);
 
-	return (bus_generic_attach(dev));
+	return (0);
 
 out:
 

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2000 Doug Rabson
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _SYS_TASKQUEUE_H_
@@ -37,20 +35,12 @@
 
 #include <sys/queue.h>
 #include <sys/_task.h>
-#include <sys/_callout.h>
 #include <sys/_cpuset.h>
 
 struct taskqueue;
 struct taskqgroup;
 struct proc;
 struct thread;
-
-struct timeout_task {
-	struct taskqueue *q;
-	struct task t;
-	struct callout c;
-	int    f;
-};
 
 enum taskqueue_callback_type {
 	TASKQUEUE_CALLBACK_TYPE_INIT,
@@ -224,5 +214,11 @@ TASKQUEUE_DECLARE(fast);
 struct taskqueue *taskqueue_create_fast(const char *name, int mflags,
 				    taskqueue_enqueue_fn enqueue,
 				    void *context);
+
+/*
+ * This queue is used to process asynchronous device events such as
+ * hot plug insertion and removal of devices.
+ */
+TASKQUEUE_DECLARE(bus);
 
 #endif /* !_SYS_TASKQUEUE_H_ */

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2002-2008 Sam Leffler, Errno Consulting
  * All rights reserved.
@@ -26,8 +26,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * IEEE 802.11 power save support.
  */
@@ -90,7 +88,8 @@ ieee80211_power_latevattach(struct ieee80211vap *vap)
 			M_80211_POWER,
 			IEEE80211_M_NOWAIT | IEEE80211_M_ZERO);
 		if (vap->iv_tim_bitmap == NULL) {
-			printf("%s: no memory for TIM bitmap!\n", __func__);
+			net80211_vap_printf(vap,
+			    "%s: no memory for TIM bitmap!\n", __func__);
 			/* XXX good enough to keep from crashing? */
 			vap->iv_tim_len = 0;
 		}

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2018 Ruslan Bukin <br@bsdpad.com>
  * All rights reserved.
@@ -30,9 +30,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include "opt_bus.h"
 
@@ -127,7 +124,7 @@ ehci_msm_attach(device_t dev)
 		panic("%s: unable to subregion USB host registers",
 		    device_get_name(dev));
 
-	sc->sc_bus.bdev = device_add_child(dev, "usbus", -1);
+	sc->sc_bus.bdev = device_add_child(dev, "usbus", DEVICE_UNIT_ANY);
 	if (!sc->sc_bus.bdev) {
 		device_printf(dev, "Could not add USB device\n");
 		goto error;
@@ -173,13 +170,9 @@ ehci_msm_detach(device_t dev)
 
 	sc = device_get_softc(dev);
 
-	if (sc->sc_bus.bdev) {
-		bdev = sc->sc_bus.bdev;
-		device_detach(bdev);
-		device_delete_child(dev, bdev);
-	}
-
-	device_delete_children(dev);
+	err = bus_generic_detach(dev);
+	if (err != 0)
+		return (err);
 
 	if (sc->sc_irq_res && sc->sc_intr_hdl) {
 		/* only call ehci_detach() after ehci_init() */

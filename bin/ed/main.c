@@ -1,6 +1,8 @@
 /* main.c: This file contains the main control and user-interface routines
    for the ed line editor. */
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 1993 Andrew Moore, Talke Studio.
  * All rights reserved.
  *
@@ -25,17 +27,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#ifndef lint
-#if 0
-static const char copyright[] =
-"@(#) Copyright (c) 1993 Andrew Moore, Talke Studio. \n\
- All rights reserved.\n";
-#endif
-#endif /* not lint */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 /*
  * CREDITS
@@ -1300,7 +1291,7 @@ has_trailing_escape(char *s, char *t)
 }
 
 
-/* strip_escapes: return copy of escaped string of at most length PATH_MAX */
+/* strip_escapes: return a copy of escaped string of at most length PATH_MAX */
 char *
 strip_escapes(char *s)
 {

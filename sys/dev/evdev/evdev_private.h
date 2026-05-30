@@ -23,8 +23,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef	_DEV_EVDEV_EVDEV_PRIVATE_H
@@ -113,6 +111,9 @@ struct evdev_dev
 	char			ev_shortname[NAMELEN];
 	char			ev_serial[NAMELEN];
 	struct cdev *		ev_cdev;
+	uid_t			ev_cdev_uid;
+	gid_t			ev_cdev_gid;
+	int			ev_cdev_mode;
 	int			ev_unit;
 	enum evdev_lock_type	ev_lock_type;
 	struct mtx *		ev_state_lock;	/* State lock */

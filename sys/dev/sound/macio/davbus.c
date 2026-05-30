@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright 2008 by Marco Trillo. All rights reserved.
  *
@@ -23,8 +23,6 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -78,7 +76,7 @@ static device_method_t pcm_davbus_methods[] = {
 	/* Device interface. */
 	DEVMETHOD(device_probe,		davbus_probe),
 	DEVMETHOD(device_attach, 	davbus_attach),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t pcm_davbus_driver = {

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2004-2005 Pawel Jakub Dawidek <pjd@FreeBSD.org>
  * All rights reserved.
@@ -25,9 +25,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -457,11 +454,9 @@ g_stripe_start_economic(struct bio *bp, u_int no, off_t offset, off_t length)
 		cbp->bio_done = g_stripe_done;
 	cbp->bio_offset = offset;
 	cbp->bio_length = length;
-	if ((bp->bio_flags & BIO_UNMAPPED) != 0) {
-		bp->bio_ma_n = round_page(bp->bio_ma_offset +
-		    bp->bio_length) / PAGE_SIZE;
+	if ((bp->bio_flags & BIO_UNMAPPED) != 0)
 		addr = NULL;
-	} else
+	else
 		addr = bp->bio_data;
 	cbp->bio_caller2 = sc->sc_disks[no];
 
@@ -594,7 +589,12 @@ g_stripe_start(struct bio *bp)
 		g_stripe_pushdown(sc, bp);
 		return;
 	case BIO_GETATTR:
-		/* To which provider it should be delivered? */
+		if (!strcmp(bp->bio_attribute, "GEOM::candelete")) {
+			int val = (sc->sc_flags & G_STRIPE_FLAG_CANDELETE) != 0;
+			g_handleattr(bp, "GEOM::candelete", &val, sizeof(val));
+			return;
+		}
+		/* otherwise: To which provider it should be delivered? */
 	default:
 		g_io_deliver(bp, EOPNOTSUPP);
 		return;
@@ -797,6 +797,20 @@ g_stripe_add_disk(struct g_stripe_softc *sc, struct g_provider *pp, u_int no)
 	}
 
 	sc->sc_disks[no] = cp;
+
+	/* cascade candelete */
+	error = g_access(cp, 1, 0, 0);
+	if (error == 0) {
+		int can_delete;
+
+		error = g_getattr("GEOM::candelete", cp, &can_delete);
+		if (error == 0 && can_delete != 0)
+			sc->sc_flags |= G_STRIPE_FLAG_CANDELETE;
+		G_STRIPE_DEBUG(1, "Provider %s candelete %i.", pp->name,
+		    can_delete);
+		g_access(cp, -1, 0, 0);
+	}
+
 	G_STRIPE_DEBUG(0, "Disk %s attached to %s.", pp->name, sc->sc_name);
 	g_stripe_check_and_run(sc);
 
@@ -848,7 +862,7 @@ g_stripe_create(struct g_class *mp, const struct g_stripe_metadata *md,
 			return (NULL);
 		}
 	}
-	gp = g_new_geomf(mp, "%s", md->md_name);
+	gp = g_new_geom(mp, md->md_name);
 	sc = malloc(sizeof(*sc), M_STRIPE, M_WAITOK | M_ZERO);
 	gp->start = g_stripe_start;
 	gp->spoiled = g_stripe_orphan;
@@ -949,7 +963,7 @@ g_stripe_taste(struct g_class *mp, struct g_provider *pp, int flags __unused)
 
 	G_STRIPE_DEBUG(3, "Tasting %s.", pp->name);
 
-	gp = g_new_geomf(mp, "stripe:taste");
+	gp = g_new_geom(mp, "stripe:taste");
 	gp->start = g_stripe_start;
 	gp->access = g_stripe_access;
 	gp->orphan = g_stripe_orphan;

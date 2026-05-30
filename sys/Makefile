@@ -1,9 +1,7 @@
-# $FreeBSD$
-
 # Directories to include in cscope name file and TAGS.
 CSCOPEDIRS=	bsm cam cddl compat conf contrib crypto ddb dev fs gdb \
 		geom gnu isa kern libkern modules net net80211 \
-		netgraph netinet netinet6 netipsec netpfil \
+		netgraph netinet netinet6 netipsec netlink netpfil \
 		netsmb nfs nfsclient nfsserver nlm ofed opencrypto \
 		rpc security sys ufs vm xdr xen ${CSCOPE_ARCHDIR}
 .if !defined(CSCOPE_ARCHDIR)
@@ -11,9 +9,6 @@ CSCOPEDIRS=	bsm cam cddl compat conf contrib crypto ddb dev fs gdb \
 CSCOPE_ARCHDIR = amd64 arm arm64 i386 powerpc riscv x86
 .else
 CSCOPE_ARCHDIR = ${MACHINE}
-.if ${MACHINE} != ${MACHINE_CPUARCH}
-CSCOPE_ARCHDIR += ${MACHINE_CPUARCH}
-.endif
 .if ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "amd64"
 CSCOPE_ARCHDIR += x86
 .endif

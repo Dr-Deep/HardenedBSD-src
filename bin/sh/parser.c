@@ -32,19 +32,12 @@
  * SUCH DAMAGE.
  */
 
-#ifndef lint
-#if 0
-static char sccsid[] = "@(#)parser.c	8.7 (Berkeley) 5/16/95";
-#endif
-#endif /* not lint */
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <pwd.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <time.h>
 
 #include "shell.h"
 #include "parser.h"
@@ -62,6 +55,8 @@ __FBSDID("$FreeBSD$");
 #include "show.h"
 #include "eval.h"
 #include "exec.h"	/* to check for special builtins */
+#include "main.h"
+#include "jobs.h"
 #ifndef NO_HISTORY
 #include "myhistedit.h"
 #endif
@@ -70,7 +65,7 @@ __FBSDID("$FreeBSD$");
  * Shell command parser.
  */
 
-#define	PROMPTLEN	128
+#define	PROMPTLEN	192
 
 /* values of checkkwd variable */
 #define CHKALIAS	0x1
@@ -1172,7 +1167,7 @@ parsebackq(char *out, struct nodelist **pbqlist,
 		INTOFF;
 		ostr = ckmalloc(olen);
 		memcpy(ostr, stackblock(), olen);
-		setinputstring(ostr, 1);
+		setinputstring(ostr);
 		INTON;
         }
 	nlpp = pbqlist;
@@ -2056,104 +2051,304 @@ getprompt(void *unused __unused)
 	/*
 	 * Format prompt string.
 	 */
-	for (i = 0; (i < PROMPTLEN - 1) && (*fmt != '\0'); i++, fmt++)
-		if (*fmt == '\\')
-			switch (*++fmt) {
+	for (i = 0; (i < PROMPTLEN - 1) && (*fmt != '\0'); i++, fmt++) {
+		if (*fmt == '$') {
+			const char *varname_start, *varname_end, *value;
+			char varname[256];
+			int namelen, braced = 0;
 
-				/*
-				 * Hostname.
-				 *
-				 * \h specifies just the local hostname,
-				 * \H specifies fully-qualified hostname.
-				 */
-			case 'h':
-			case 'H':
-				ps[i] = '\0';
-				gethostname(&ps[i], PROMPTLEN - i - 1);
-				ps[PROMPTLEN - 1] = '\0';
-				/* Skip to end of hostname. */
-				trim = (*fmt == 'h') ? '.' : '\0';
-				while ((ps[i] != '\0') && (ps[i] != trim))
-					i++;
-				--i;
-				break;
+			fmt++;  /* Skip the '$' */
 
-				/*
-				 * User name.
-				 */
-			case 'u':
-				ps[i] = '\0';
-				getusername(&ps[i], PROMPTLEN - i);
-				/* Skip to end of username. */
-				while (ps[i + 1] != '\0')
-					i++;
-				break;
+			/* Check for ${VAR} syntax */
+			if (*fmt == '{') {
+				braced = 1;
+				fmt++;
+			}
 
+			varname_start = fmt;
+
+			/* Extract variable name */
+			if (is_digit(*fmt)) {
+				/* Positional parameter: $0, $1, etc. */
+				fmt++;
+				varname_end = fmt;
+			} else if (is_special(*fmt)) {
+				/* Special parameter: $?, $!, $$, etc. */
+				fmt++;
+				varname_end = fmt;
+			} else if (is_name(*fmt)) {
+				/* Regular variable name */
+				do
+					fmt++;
+				while (is_in_name(*fmt));
+				varname_end = fmt;
+			} else {
 				/*
-				 * Working directory.
-				 *
-				 * \W specifies just the final component,
-				 * \w specifies the entire path.
+				 * Not a valid variable reference.
+				 * Output literal '$'.
 				 */
-			case 'W':
-			case 'w':
-				pwd = lookupvar("PWD");
-				if (pwd == NULL || *pwd == '\0')
-					pwd = "?";
-				if (*fmt == 'W' &&
-				    *pwd == '/' && pwd[1] != '\0')
-					strlcpy(&ps[i], strrchr(pwd, '/') + 1,
-					    PROMPTLEN - i);
-				else {
-					home = lookupvar("HOME");
-					if (home != NULL)
-						homelen = strlen(home);
-					if (home != NULL &&
-					    strcmp(home, "/") != 0 &&
-					    strncmp(pwd, home, homelen) == 0 &&
-					    (pwd[homelen] == '/' ||
-					    pwd[homelen] == '\0')) {
-						strlcpy(&ps[i], "~",
-						    PROMPTLEN - i);
-						strlcpy(&ps[i + 1],
-						    pwd + homelen,
-						    PROMPTLEN - i - 1);
-					} else {
-						strlcpy(&ps[i], pwd, PROMPTLEN - i);
-					}
+				ps[i] = '$';
+				if (braced && i < PROMPTLEN - 2)
+					ps[++i] = '{';
+				fmt = varname_start - 1;
+				continue;
+			}
+
+			namelen = varname_end - varname_start;
+			if (namelen == 0 || namelen >= (int)sizeof(varname)) {
+				/* Invalid or too long, output literal */
+				ps[i] = '$';
+				fmt = varname_start - 1;
+				continue;
+			}
+
+			/* Copy variable name */
+			memcpy(varname, varname_start, namelen);
+			varname[namelen] = '\0';
+
+			/* Handle closing brace for ${VAR} */
+			if (braced) {
+				if (*fmt == '}') {
+					fmt++;
+				} else {
+					/* Missing closing brace, treat as literal */
+					ps[i] = '$';
+					if (i < PROMPTLEN - 2)
+						ps[++i] = '{';
+					fmt = varname_start - 1;
+					continue;
 				}
-				/* Skip to end of path. */
-				while (ps[i + 1] != '\0')
-					i++;
-				break;
+			}
 
-				/*
-				 * Superuser status.
-				 *
-				 * '$' for normal users, '#' for root.
-				 */
-			case '$':
-				ps[i] = (geteuid() != 0) ? '$' : '#';
-				break;
+			/* Look up the variable */
+			if (namelen == 1 && is_digit(*varname)) {
+				/* Positional parameters - check digits FIRST */
+				int num = *varname - '0';
+				if (num == 0)
+					value = arg0 ? arg0 : "";
+				else if (num > 0 && num <= shellparam.nparam)
+					value = shellparam.p[num - 1];
+				else
+					value = "";
+			} else if (namelen == 1 && is_special(*varname)) {
+				/* Special parameters */
+				char valbuf[20];
+				int num;
 
-				/*
-				 * A literal \.
-				 */
-			case '\\':
+				switch (*varname) {
+				case '$':
+					num = rootpid;
+					break;
+				case '?':
+					num = exitstatus;
+					break;
+				case '#':
+					num = shellparam.nparam;
+					break;
+				case '!':
+					num = backgndpidval();
+					break;
+				default:
+					num = 0;
+					break;
+				}
+				snprintf(valbuf, sizeof(valbuf), "%d", num);
+				value = valbuf;
+			} else {
+				/* Regular variables */
+				value = lookupvar(varname);
+				if (value == NULL)
+					value = "";
+			}
+
+			/* Copy value to output, respecting buffer size */
+			while (*value != '\0' && i < PROMPTLEN - 1) {
+				ps[i++] = *value++;
+			}
+
+			/*
+			 * Adjust fmt and i for the loop increment.
+			 * fmt will be incremented by the for loop,
+			 * so position it one before where we want.
+			 */
+			fmt--;
+			i--;
+			continue;
+		} else if (*fmt != '\\') {
+			ps[i] = *fmt;
+			continue;
+		}
+
+		switch (*++fmt) {
+
+		/*
+		 * Non-printing sequence begin and end.
+		 */
+		case '[':
+		case ']':
+			ps[i] = '\001';
+			break;
+
+		/*
+		 * Literal \ and some ASCII characters:
+		 * \a	BEL
+		 * \e	ESC
+		 * \r	CR
+		 */
+		case '\\':
+		case 'a':
+		case 'e':
+		case 'r':
+			if (*fmt == 'a')
+				ps[i] = '\007';
+			else if (*fmt == 'e')
+				ps[i] = '\033';
+			else if (*fmt == 'r')
+				ps[i] = '\r';
+			else
 				ps[i] = '\\';
-				break;
+			break;
 
+		/*
+		 * CRLF sequence
+		 */
+		case 'n':
+			if (i < PROMPTLEN - 3) {
+				ps[i++] = '\r';
+				ps[i] = '\n';
+			}
+			break;
+
+		/*
+		 * Print the current time as per provided strftime format.
+		 */
+		case 'D': {
+			char tfmt[128] = "%X"; /* \D{} means %X. */
+			struct tm *now;
+
+			if (fmt[1] != '{') {
 				/*
-				 * Emit unrecognized formats verbatim.
+				 * "\D" but not "\D{", so treat the '\'
+				 * literally and rewind fmt to treat 'D'
+				 * literally next iteration.
 				 */
-			default:
 				ps[i] = '\\';
-				if (i < PROMPTLEN - 2)
-					ps[++i] = *fmt;
+				fmt--;
 				break;
 			}
-		else
-			ps[i] = *fmt;
+			fmt += 2; /* Consume "D{". */
+			if (fmt[0] != '}') {
+				char *end;
+
+				end = memccpy(tfmt, fmt, '}', sizeof(tfmt));
+				if (end == NULL) {
+					/*
+					 * Format too long or no '}', so
+					 * ignore "\D{" altogether.
+					 * The loop will do i++, but nothing
+					 * was written to ps, so do i-- here.
+					 * Rewind fmt for similar reason.
+					 */
+					i--;
+					fmt--;
+					break;
+				}
+				*--end = '\0'; /* Ignore the copy of '}'. */
+				fmt += end - tfmt;
+			}
+			now = localtime(&(time_t){time(NULL)});
+			i += strftime(&ps[i], PROMPTLEN - i - 1, tfmt, now);
+			i--; /* The loop will do i++. */
+			break;
+		}
+
+		/*
+		 * Hostname.
+		 *
+		 * \h specifies just the local hostname,
+		 * \H specifies fully-qualified hostname.
+		 */
+		case 'h':
+		case 'H':
+			ps[i] = '\0';
+			gethostname(&ps[i], PROMPTLEN - i - 1);
+			ps[PROMPTLEN - 1] = '\0';
+			/* Skip to end of hostname. */
+			trim = (*fmt == 'h') ? '.' : '\0';
+			while ((ps[i] != '\0') && (ps[i] != trim))
+				i++;
+			--i;
+			break;
+
+		/*
+		 * User name.
+		 */
+		case 'u':
+			ps[i] = '\0';
+			getusername(&ps[i], PROMPTLEN - i);
+			/* Skip to end of username. */
+			while (ps[i + 1] != '\0')
+				i++;
+			break;
+
+		/*
+		 * Working directory.
+		 *
+		 * \W specifies just the final component,
+		 * \w specifies the entire path.
+		 */
+		case 'W':
+		case 'w':
+			pwd = lookupvar("PWD");
+			if (pwd == NULL || *pwd == '\0')
+				pwd = "?";
+			if (*fmt == 'W' &&
+			    *pwd == '/' && pwd[1] != '\0')
+				strlcpy(&ps[i], strrchr(pwd, '/') + 1,
+				    PROMPTLEN - i);
+			else {
+				home = lookupvar("HOME");
+				if (home != NULL)
+					homelen = strlen(home);
+				if (home != NULL &&
+				    strcmp(home, "/") != 0 &&
+				    strncmp(pwd, home, homelen) == 0 &&
+				    (pwd[homelen] == '/' ||
+				    pwd[homelen] == '\0')) {
+					strlcpy(&ps[i], "~",
+					    PROMPTLEN - i);
+					strlcpy(&ps[i + 1],
+					    pwd + homelen,
+					    PROMPTLEN - i - 1);
+				} else {
+					strlcpy(&ps[i], pwd, PROMPTLEN - i);
+				}
+			}
+			/* Skip to end of path. */
+			while (ps[i + 1] != '\0')
+				i++;
+			break;
+
+		/*
+		 * Superuser status.
+		 *
+		 * '$' for normal users, '#' for root.
+		 */
+		case '$':
+			ps[i] = (geteuid() != 0) ? '$' : '#';
+			break;
+
+		/*
+		 * Emit unrecognized formats verbatim.
+		 */
+		default:
+			ps[i] = '\\';
+			if (i < PROMPTLEN - 2)
+				ps[++i] = *fmt;
+			break;
+		}
+
+	}
 	ps[i] = '\0';
 	return (ps);
 }
@@ -2173,7 +2368,7 @@ expandstr(const char *ps)
 	if (!setjmp(jmploc.loc)) {
 		handler = &jmploc;
 		parser_temp = NULL;
-		setinputstring(ps, 1);
+		setinputstring(ps);
 		doprompt = 0;
 		readtoken1(pgetc(), DQSYNTAX, NOEOFMARK, 0);
 		if (backquotelist != NULL)

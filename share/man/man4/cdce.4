@@ -1,3 +1,6 @@
+.\"
+.\" SPDX-License-Identifier: BSD-2-Clause
+.\"
 .\" Copyright (c) 2004 Daniel Hartmeier
 .\" All rights reserved.
 .\"
@@ -26,14 +29,13 @@
 .\" POSSIBILITY OF SUCH DAMAGE.
 .\"
 .\" $NetBSD: cdce.4,v 1.4 2004/12/08 18:35:56 peter Exp $
-.\" $FreeBSD$
 .\"
-.Dd July 10, 2019
+.Dd December 23, 2025
 .Dt CDCE 4
 .Os
 .Sh NAME
 .Nm cdce
-.Nd "USB Communication Device Class Ethernet (CDC ECM/NCM) driver"
+.Nd USB Communication Device Class Ethernet (ECM/NCM) driver
 .Sh SYNOPSIS
 To compile this driver into the kernel,
 place the following lines in your
@@ -45,6 +47,13 @@ kernel configuration file:
 .Cd "device miibus"
 .Cd "device uether"
 .Cd "device cdce"
+.Ed
+.Pp
+Mobile Devices (e.g., Huawei E3372, E5573 and others)
+may need additionally the u3g command port:
+.Bd -ragged -offset indent
+.Cd "device ucom"
+.Cd "device u3g"
 .Ed
 .Pp
 Alternatively, to load the driver as a
@@ -78,22 +87,41 @@ The
 .Nm
 driver does not support different media types or options.
 .Sh HARDWARE
-The following devices are supported by the
+The
 .Nm
-driver:
+driver supports USB Ethernet interfaces implementing the
+USB Communication Device Class Ethernet Control Model (CDC ECM) or
+Network Control Model (CDC NCM) protocol, such as:
 .Pp
 .Bl -bullet -compact
 .It
-Prolific PL-2501 Host-to-Host Bridge Controller
+Android USB tethering
+.It
+iPhone USB tethering
+.It
+Realtek RTL8153 USB 3.0 to Gigabit Ethernet controller
+.It
+Prolific PL-2501 Host-to-Host Bridge controller
 .It
 Sharp Zaurus PDA
 .It
 Terayon TJ-715 DOCSIS Cable Modem
 .It
-Realtek RTL8156 USB GBE/2.5G Ethernet Family Controller
-.It
-Planex USB-LAN2500R
+Huawei 3G/4G LTE (e.g., E3372, E5573) and other mobile network devices
 .El
+.Sh EXAMPLES
+Mobile
+.Nm
+Network Devices may need a connect command sequence via the
+.Xr u3g 4
+serial command port before activating the NCM/ECM/ACM network interface.
+For example:
+.Pp
+.Dl echo 'AT^NDISUP=1,1,"internet"' > /dev/cuaU[0].0
+.Pp
+Wwhere
+.Dq internet
+is your providers apn name.
 .Sh DIAGNOSTICS
 .Bl -diag
 .It "cdce%d: no union descriptor"
@@ -125,6 +153,8 @@ is running low on mbufs.
 .Xr intro 4 ,
 .Xr ipheth 4 ,
 .Xr netintro 4 ,
+.Xr u3g 4 ,
+.Xr ucom 4 ,
 .Xr urndis 4 ,
 .Xr usb 4 ,
 .Xr ifconfig 8

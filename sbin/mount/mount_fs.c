@@ -32,33 +32,19 @@
  * SUCH DAMAGE.
  */
 
-#ifndef lint
-static const char copyright[] =
-"@(#) Copyright (c) 1992, 1993, 1994\n\
-	The Regents of the University of California.  All rights reserved.\n";
-#endif /* not lint */
-
-#ifndef lint
-#if 0
-static char sccsid[] = "@(#)mount_fs.c	8.6 (Berkeley) 4/26/95";
-#endif
-static const char rcsid[] =
-	"$FreeBSD$";
-#endif /* not lint */
-
 #include <sys/param.h>
 #include <sys/mount.h>
 
 #include <err.h>
 #include <getopt.h>
 #include <libgen.h>
+#include <mntopts.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 #include "extern.h"
-#include "mntopts.h"
 
 static struct mntopt mopts[] = {
 	MOPT_STDOPTS,

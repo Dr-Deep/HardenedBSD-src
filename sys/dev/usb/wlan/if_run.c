@@ -17,9 +17,6 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*-
  * Ralink Technology RT2700U/RT2800U/RT3000U/RT3900E chipset driver.
  * http://www.ralinktech.com/
@@ -327,6 +324,7 @@ static const STRUCT_USB_HOST_ID run_devs[] = {
     RUN_DEV(SITECOMEU,		RT2870_3),
     RUN_DEV(SITECOMEU,		RT2870_4),
     RUN_DEV(SITECOMEU,		RT3070),
+    RUN_DEV(SITECOMEU,		RT3070_1),
     RUN_DEV(SITECOMEU,		RT3070_2),
     RUN_DEV(SITECOMEU,		RT3070_3),
     RUN_DEV(SITECOMEU,		RT3070_4),
@@ -414,7 +412,7 @@ static void	run_get_txpower(struct run_softc *);
 static int	run_read_eeprom(struct run_softc *);
 static struct ieee80211_node *run_node_alloc(struct ieee80211vap *,
 			    const uint8_t mac[IEEE80211_ADDR_LEN]);
-static int	run_media_change(struct ifnet *);
+static int	run_media_change(if_t);
 static int	run_newstate(struct ieee80211vap *, enum ieee80211_state, int);
 static int	run_wme_update(struct ieee80211com *);
 static void	run_key_set_cb(void *);
@@ -884,6 +882,7 @@ run_attach(device_t self)
 
 	ic->ic_flags |= IEEE80211_F_DATAPAD;
 	ic->ic_flags_ext |= IEEE80211_FEXT_SWBMISS;
+	ic->ic_flags_ext |= IEEE80211_FEXT_SEQNO_OFFLOAD;
 
 	run_getradiocaps(ic, IEEE80211_CHAN_MAX, &ic->ic_nchans,
 	    ic->ic_channels);
@@ -2116,9 +2115,9 @@ run_node_alloc(struct ieee80211vap *vap, const uint8_t mac[IEEE80211_ADDR_LEN])
 }
 
 static int
-run_media_change(struct ifnet *ifp)
+run_media_change(if_t ifp)
 {
-	struct ieee80211vap *vap = ifp->if_softc;
+	struct ieee80211vap *vap = if_getsoftc(ifp);
 	struct ieee80211com *ic = vap->iv_ic;
 	const struct ieee80211_txparam *tp;
 	struct run_softc *sc = ic->ic_softc;
@@ -2154,8 +2153,8 @@ run_media_change(struct ifnet *ifp)
 	}
 
 #if 0
-	if ((ifp->if_flags & IFF_UP) &&
-	    (ifp->if_drv_flags &  RUN_RUNNING)){
+	if ((if_getflags(ifp) & IFF_UP) &&
+	    (if_getdrvflags(ifp) &  RUN_RUNNING)){
 		run_init_locked(sc);
 	}
 #endif
@@ -2376,7 +2375,7 @@ run_key_set_cb(void *arg)
 	/* map net80211 cipher to RT2860 security mode */
 	switch (cipher) {
 	case IEEE80211_CIPHER_WEP:
-		if(k->wk_keylen < 8)
+		if(ieee80211_crypto_get_key_len(k) < 8) /* TODO: add a specific WEP40/WEP104 call! */
 			mode = RT2860_MODE_WEP40;
 		else
 			mode = RT2860_MODE_WEP104;
@@ -2409,15 +2408,20 @@ run_key_set_cb(void *arg)
 	}
 
 	if (cipher == IEEE80211_CIPHER_TKIP) {
-		if(run_write_region_1(sc, base, k->wk_key, 16))
+		if (run_write_region_1(sc, base,
+		    ieee80211_crypto_get_key_data(k), 16))
 			return;
-		if(run_write_region_1(sc, base + 16, &k->wk_key[16], 8))	/* wk_txmic */
+		if (run_write_region_1(sc, base + 16,
+		    ieee80211_crypto_get_key_txmic_data(k), 8))	/* wk_txmic */
 			return;
-		if(run_write_region_1(sc, base + 24, &k->wk_key[24], 8))	/* wk_rxmic */
+		if (run_write_region_1(sc, base + 24,
+		    ieee80211_crypto_get_key_rxmic_data(k), 8))	/* wk_rxmic */
 			return;
 	} else {
 		/* roundup len to 16-bit: XXX fix write_region_1() instead */
-		if(run_write_region_1(sc, base, k->wk_key, (k->wk_keylen + 1) & ~1))
+		if (run_write_region_1(sc, base,
+		    ieee80211_crypto_get_key_data(k),
+		    (ieee80211_crypto_get_key_len(k) + 1) & ~1))
 			return;
 	}
 
@@ -2687,6 +2691,7 @@ run_iter_func(void *arg, struct ieee80211_node *ni)
 	union run_stats sta[2];
 	uint16_t (*wstat)[3];
 	int error, ridx;
+	uint8_t dot11rate;
 
 	RUN_LOCK(sc);
 
@@ -2739,15 +2744,17 @@ run_iter_func(void *arg, struct ieee80211_node *ni)
 	ieee80211_ratectl_tx_update(vap, txs);
 	ieee80211_ratectl_rate(ni, NULL, 0);
 	/* XXX TODO: methodize with MCS rates */
+	dot11rate = ieee80211_node_get_txrate_dot11rate(ni);
 	for (ridx = 0; ridx < RT2860_RIDX_MAX; ridx++)
-		if (rt2860_rates[ridx].rate == ni->ni_txrate)
+		if (rt2860_rates[ridx].rate == dot11rate)
 			break;
 	rn->amrr_ridx = ridx;
 
 fail:
 	RUN_UNLOCK(sc);
 
-	RUN_DPRINTF(sc, RUN_DEBUG_RATE, "rate=%d, ridx=%d\n", ni->ni_txrate, rn->amrr_ridx);
+	RUN_DPRINTF(sc, RUN_DEBUG_RATE, "rate=0x%02x, ridx=%d\n",
+	    ieee80211_node_get_txrate_dot11rate(ni), rn->amrr_ridx);
 }
 
 static void
@@ -2872,7 +2879,6 @@ run_rx_frame(struct run_softc *sc, struct mbuf *m, uint32_t dmalen)
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct ieee80211_frame *wh;
 	struct ieee80211_node *ni;
-	struct epoch_tracker et;
 	struct rt2870_rxd *rxd;
 	struct rt2860_rxwi *rxwi;
 	uint32_t flags;
@@ -2995,14 +3001,12 @@ run_rx_frame(struct run_softc *sc, struct mbuf *m, uint32_t dmalen)
 		}
 	}
 
-	NET_EPOCH_ENTER(et);
 	if (ni != NULL) {
 		(void)ieee80211_input(ni, m, rssi, nf);
 		ieee80211_free_node(ni);
 	} else {
 		(void)ieee80211_input_all(ic, m, rssi, nf);
 	}
-	NET_EPOCH_EXIT(et);
 
 	return;
 
@@ -3524,6 +3528,9 @@ run_tx(struct run_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 	data->ni = ni;
 	data->ridx = ridx;
 
+	/* Assign sequence number now, regardless of A-MPDU TX or otherwise (for now) */
+	ieee80211_output_seqno_assign(ni, -1, m);
+
 	run_set_tx_desc(sc, data);
 
 	/*
@@ -3600,9 +3607,7 @@ run_tx_mgt(struct run_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 	wh = mtod(m, struct ieee80211_frame *);
 
 	/* tell hardware to add timestamp for probe responses */
-	if ((wh->i_fc[0] &
-	    (IEEE80211_FC0_TYPE_MASK | IEEE80211_FC0_SUBTYPE_MASK)) ==
-	    (IEEE80211_FC0_TYPE_MGT | IEEE80211_FC0_SUBTYPE_PROBE_RESP))
+	if (IEEE80211_IS_MGMT_PROBE_RESP(wh))
 		wflags |= RT2860_TX_TS;
 	else if (!IEEE80211_IS_MULTICAST(wh->i_addr1)) {
 		xflags |= RT2860_TX_ACK;
@@ -3630,6 +3635,9 @@ run_tx_mgt(struct run_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 	data->m = m;
 	data->ni = ni;
 	data->ridx = ridx;
+
+	/* Assign sequence number now, regardless of A-MPDU TX or otherwise (for now) */
+	ieee80211_output_seqno_assign(ni, -1, m);
 
 	run_set_tx_desc(sc, data);
 
@@ -3774,6 +3782,9 @@ run_tx_param(struct run_softc *sc, struct mbuf *m, struct ieee80211_node *ni,
 		if (rt2860_rates[ridx].rate == rate)
 			break;
 	data->ridx = ridx;
+
+	/* Assign sequence number now, regardless of A-MPDU TX or otherwise (for now) */
+	ieee80211_output_seqno_assign(ni, -1, m);
 
         run_set_tx_desc(sc, data);
 
@@ -6420,6 +6431,10 @@ run_ampdu_enable(struct ieee80211_node *ni, struct ieee80211_tx_ampdu *tap)
 {
 
 	/* For now, no A-MPDU TX support in the driver */
+	/*
+	 * TODO: maybe we needed to enable seqno generation too?
+	 * What other TX desc bits are missing/needed?
+	 */
 	return (0);
 }
 

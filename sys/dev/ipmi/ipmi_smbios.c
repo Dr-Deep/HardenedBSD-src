@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2006 IronPort Systems Inc. <ambrisko@ironport.com>
  * All rights reserved.
@@ -25,9 +25,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -104,6 +101,7 @@ smbios_ipmi_info(struct smbios_structure_header *h, void *arg)
 	switch (s->interface_type) {
 	case KCS_MODE:
 	case SMIC_MODE:
+	case BT_MODE:
 		info->address = IPMI_BAR_ADDR(s->base_address) |
 		    IPMI_BAM_ADDR_LSB(s->base_address_modifier);
 		info->io_mode = IPMI_BAR_MODE(s->base_address);
@@ -152,7 +150,7 @@ static void
 ipmi_smbios_probe(struct ipmi_get_info *info)
 {
 #ifdef ARCH_MAY_USE_EFI
-	struct uuid efi_smbios;
+	efi_guid_t efi_smbios = EFI_TABLE_SMBIOS;
 	void *addr_efi;
 #endif
 	struct smbios_eps *header;
@@ -163,15 +161,16 @@ ipmi_smbios_probe(struct ipmi_get_info *info)
 	bzero(info, sizeof(struct ipmi_get_info));
 
 #ifdef ARCH_MAY_USE_EFI
-	efi_smbios = (struct uuid)EFI_TABLE_SMBIOS;
 	if (!efi_get_table(&efi_smbios, &addr_efi))
 		addr = (vm_paddr_t)addr_efi;
 #endif
 
+#if defined(__amd64__) || defined(__i386__)
 	if (addr == 0)
 		/* Find the SMBIOS table header. */
 		addr = bios_sigsearch(SMBIOS_START, SMBIOS_SIG, SMBIOS_LEN,
 			SMBIOS_STEP, SMBIOS_OFF);
+#endif
 	if (addr == 0)
 		return;
 
@@ -182,22 +181,22 @@ ipmi_smbios_probe(struct ipmi_get_info *info)
 	 */
 	header = pmap_mapbios(addr, sizeof(struct smbios_eps));
 	table = pmap_mapbios(addr, header->length);
-	pmap_unmapbios((vm_offset_t)header, sizeof(struct smbios_eps));
+	pmap_unmapbios(header, sizeof(struct smbios_eps));
 	header = table;
 	if (smbios_cksum(header) != 0) {
-		pmap_unmapbios((vm_offset_t)header, header->length);
+		pmap_unmapbios(header, header->length);
 		return;
 	}
 
 	/* Now map the actual table and walk it looking for an IPMI entry. */
 	table = pmap_mapbios(header->structure_table_address,
 	    header->structure_table_length);
-	smbios_walk_table(table, header->number_structures, smbios_ipmi_info,
-	    info);
+	smbios_walk_table(table, header->number_structures,
+	    header->structure_table_length, smbios_ipmi_info, info);
 
 	/* Unmap everything. */
-	pmap_unmapbios((vm_offset_t)table, header->structure_table_length);
-	pmap_unmapbios((vm_offset_t)header, header->length);
+	pmap_unmapbios(table, header->structure_table_length);
+	pmap_unmapbios(header, header->length);
 }
 
 /*

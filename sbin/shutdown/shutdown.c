@@ -29,23 +29,10 @@
  * SUCH DAMAGE.
  */
 
-#if 0
-#ifndef lint
-static const char copyright[] =
-"@(#) Copyright (c) 1988, 1990, 1993\n\
-	The Regents of the University of California.  All rights reserved.\n";
-#endif /* not lint */
-
-#ifndef lint
-static char sccsid[] = "@(#)shutdown.c	8.4 (Berkeley) 4/28/95";
-#endif /* not lint */
-#endif
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/boottrace.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <sys/syslog.h>
 #include <sys/time.h>
 
@@ -57,6 +44,7 @@ __FBSDID("$FreeBSD$");
 #include <pwd.h>
 #include <setjmp.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -92,7 +80,8 @@ static struct interval {
 #undef S
 
 static time_t offset, shuttime;
-static int docycle, dohalt, dopower, doreboot, killflg, mbuflen, oflag;
+static int docycle, dohalt, dopower, doreboot, ign_noshutdown,
+    killflg, mbuflen, oflag;
 static char mbuf[BUFSIZ];
 static const char *nosync, *whom;
 
@@ -100,7 +89,7 @@ static void badtime(void);
 static void die_you_gravy_sucking_pig_dog(void);
 static void finish(int);
 static void getoffset(char *);
-static void loop(void);
+static void loop(bool);
 static void nolog(void);
 static void timeout(int);
 static void timewarn(int);
@@ -113,13 +102,16 @@ main(int argc, char **argv)
 {
 	char *p, *endp;
 	struct passwd *pw;
+	struct stat st;
 	int arglen, ch, len, readstdin;
+	bool dowarn;
 
 #ifndef DEBUG
 	if (geteuid())
 		errx(1, "NOT super-user");
 #endif
 
+	dowarn = true;
 	nosync = NULL;
 	readstdin = 0;
 
@@ -144,13 +136,16 @@ main(int argc, char **argv)
 		goto poweroff;
 	}
 
-	while ((ch = getopt(argc, argv, "-chknopr")) != -1)
+	while ((ch = getopt(argc, argv, "-cfhknopqr")) != -1)
 		switch (ch) {
 		case '-':
 			readstdin = 1;
 			break;
 		case 'c':
 			docycle = 1;
+			break;
+		case 'f':
+			ign_noshutdown = 1;
 			break;
 		case 'h':
 			dohalt = 1;
@@ -166,6 +161,9 @@ main(int argc, char **argv)
 			break;
 		case 'p':
 			dopower = 1;
+			break;
+		case 'q':
+			dowarn = false;
 			break;
 		case 'r':
 			doreboot = 1;
@@ -192,6 +190,8 @@ main(int argc, char **argv)
 	getoffset(*argv++);
 
 poweroff:
+	if (!dowarn && *argv != NULL)
+		usage("warning-message supplied but suppressed with -q");
 	if (*argv) {
 		for (p = mbuf, len = sizeof(mbuf); *argv; ++argv) {
 			arglen = strlen(*argv);
@@ -222,6 +222,12 @@ poweroff:
 	}
 	mbuflen = strlen(mbuf);
 
+	if (!ign_noshutdown && stat(_PATH_NOSHUTDOWN, &st) == 0) {
+		(void)printf("Shutdown cannot be done, " _PATH_NOSHUTDOWN
+		    " is present\n");
+		exit(2);
+	}
+
 	if (offset) {
 		BOOTTRACE("Shutdown at %s", ctime(&shuttime));
 		(void)printf("Shutdown at %.24s.\n", ctime(&shuttime));
@@ -249,12 +255,12 @@ poweroff:
 	setsid();
 #endif
 	openlog("shutdown", LOG_CONS, LOG_AUTH);
-	loop();
+	loop(dowarn);
 	return(0);
 }
 
 static void
-loop(void)
+loop(bool dowarn)
 {
 	struct interval *tp;
 	u_int sltime;
@@ -277,13 +283,14 @@ loop(void)
 		 * the next wait time.
 		 */
 		if ((sltime = offset - tp->timeleft)) {
-			if (sltime > (u_int)(tp->timetowait / 5))
+			if (dowarn && sltime > (u_int)(tp->timetowait / 5))
 				timewarn(offset);
 			(void)sleep(sltime);
 		}
 	}
 	for (;; ++tp) {
-		timewarn(tp->timeleft);
+		if (dowarn)
+			timewarn(tp->timeleft);
 		if (!logged && tp->timeleft <= NOLOG_TIME) {
 			logged = 1;
 			nolog();
@@ -400,7 +407,7 @@ die_you_gravy_sucking_pig_dog(void)
 	} else {
 		if (doreboot) {
 			BOOTTRACE("exec reboot(8) -l...");
-			execle(_PATH_REBOOT, "reboot", "-l", nosync, 
+			execle(_PATH_REBOOT, "fastboot", "-l", nosync,
 				(char *)NULL, empty_environ);
 			syslog(LOG_ERR, "shutdown: can't exec %s: %m.",
 				_PATH_REBOOT);
@@ -408,7 +415,7 @@ die_you_gravy_sucking_pig_dog(void)
 		}
 		else if (dohalt) {
 			BOOTTRACE("exec halt(8) -l...");
-			execle(_PATH_HALT, "halt", "-l", nosync,
+			execle(_PATH_HALT, "fasthalt", "-l", nosync,
 				(char *)NULL, empty_environ);
 			syslog(LOG_ERR, "shutdown: can't exec %s: %m.",
 				_PATH_HALT);
@@ -416,14 +423,14 @@ die_you_gravy_sucking_pig_dog(void)
 		}
 		else if (dopower) {
 			BOOTTRACE("exec halt(8) -l -p...");
-			execle(_PATH_HALT, "halt", "-l", "-p", nosync,
+			execle(_PATH_HALT, "fasthalt", "-l", "-p", nosync,
 				(char *)NULL, empty_environ);
 			syslog(LOG_ERR, "shutdown: can't exec %s: %m.",
 				_PATH_HALT);
 			warn(_PATH_HALT);
 		}
 		else if (docycle) {
-			execle(_PATH_HALT, "halt", "-l", "-c", nosync,
+			execle(_PATH_HALT, "fasthalt", "-l", "-c", nosync,
 				(char *)NULL, empty_environ);
 			syslog(LOG_ERR, "shutdown: can't exec %s: %m.",
 				_PATH_HALT);
@@ -598,7 +605,7 @@ usage(const char *cp)
 	if (cp != NULL)
 		warnx("%s", cp);
 	(void)fprintf(stderr,
-	    "usage: shutdown [-] [-c | -h | -p | -r | -k] [-o [-n]] time [warning-message ...]\n"
+	    "usage: shutdown [-] [-c | -f | -h | -p | -r | -k] [-o [-n]] [-q] time [warning-message ...]\n"
 	    "       poweroff\n");
 	exit(1);
 }

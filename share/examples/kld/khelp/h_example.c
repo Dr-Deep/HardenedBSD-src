@@ -1,8 +1,7 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2010-2011 The FreeBSD Foundation
- * All rights reserved.
  *
  * This software was developed at the Centre for Advanced Internet
  * Architectures, Swinburne University of Technology, Melbourne, Australia by
@@ -37,9 +36,6 @@
  * documented in an attempt to explain how everything fits together.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/hhook.h>
@@ -49,6 +45,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 
+#include <netinet/in.h>
+#include <netinet/in_pcb.h>
 #include <netinet/tcp_var.h>
 
 #include <vm/uma.h>

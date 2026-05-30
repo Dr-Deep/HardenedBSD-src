@@ -48,13 +48,9 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- *	from:	@(#)fd.c	7.4 (Berkeley) 5/25/91
- *
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_fdc.h"
 
 #include <sys/param.h>
@@ -74,6 +70,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/rman.h>
+#include <sys/stdarg.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
 
@@ -81,7 +78,6 @@ __FBSDID("$FreeBSD$");
 
 #include <machine/bus.h>
 #include <machine/clock.h>
-#include <machine/stdarg.h>
 
 #include <isa/isavar.h>
 #include <isa/isareg.h>
@@ -1844,7 +1840,7 @@ int
 fdc_hints_probe(device_t dev)
 {
 	const char *name, *dname;
-	int i, error, dunit;
+	int i, dunit;
 
 	/*
 	 * Probe and attach any children.  We should probably detect
@@ -1857,8 +1853,7 @@ fdc_hints_probe(device_t dev)
 		fdc_add_child(dev, dname, dunit);
 	}
 
-	if ((error = bus_generic_attach(dev)) != 0)
-		return (error);
+	bus_attach_children(dev);
 	return (0);
 }
 
@@ -2092,7 +2087,7 @@ static device_method_t fd_methods[] = {
 	DEVMETHOD(device_shutdown,	bus_generic_shutdown),
 	DEVMETHOD(device_suspend,	bus_generic_suspend), /* XXX */
 	DEVMETHOD(device_resume,	bus_generic_resume), /* XXX */
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t fd_driver = {

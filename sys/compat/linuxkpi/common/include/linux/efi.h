@@ -29,6 +29,7 @@
 #define	_LINUXKPI_LINUX_EFI_H_
 
 #include <sys/param.h>
+#include <sys/queue.h>
 #include <sys/linker.h>
 #include <sys/systm.h>
 
@@ -40,9 +41,6 @@
 static inline bool
 __efi_enabled(int feature)
 {
-#if defined(MODINFOMD_EFI_MAP) && !defined(__amd64__)
-	caddr_t kmdp;
-#endif
 	bool enabled = false;
 
 	switch (feature) {
@@ -51,10 +49,7 @@ __efi_enabled(int feature)
 		/* Use cached value on amd64 */
 		enabled = efi_boot;
 #elif defined(MODINFOMD_EFI_MAP)
-		kmdp = preload_search_by_type("elf kernel");
-		if (kmdp == NULL)
-			kmdp = preload_search_by_type("elf64 kernel");
-		enabled = preload_search_info(kmdp,
+		enabled = preload_search_info(preload_kmdp,
 		    MODINFO_METADATA | MODINFOMD_EFI_MAP) != NULL;
 #endif
 		break;

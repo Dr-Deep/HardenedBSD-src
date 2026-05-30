@@ -79,16 +79,12 @@
  */
 
 #include "assym.inc"
-#include "opt_sched.h"
 
 #include <machine/asm.h>
 #include <machine/asmacros.h>
 #include <machine/armreg.h>
 #include <machine/sysreg.h>
 #include <machine/vfp.h>
-
-__FBSDID("$FreeBSD$");
-
 #if defined(SMP)
 #define GET_PCPU(tmp, tmp2) \
 	mrc 	CP15_MPIDR(tmp);	\
@@ -323,11 +319,9 @@ ENTRY(cpu_switch)
 
 #ifdef VFP
 	ldr	r3, [r10, #(TD_PCB)]
-	fmrx	r0, fpexc		/* If the VFP is enabled */
-	tst	r0, #(VFPEXC_EN)	/* the current thread has */
-	movne	r1, #1			/* used it, so go save */
-	addne	r0, r3, #(PCB_VFPSTATE)	/* the state into the PCB */
-	blne	_C_LABEL(vfp_store)	/* and disable the VFP. */
+	mov	r1, r3
+	mov	r0, r10
+	bl	_C_LABEL(vfp_save_state)
 #endif
 
 	/*
@@ -437,11 +431,7 @@ sw1:
 	 *   r11 = newtd
 	 */
 
-#if defined(SMP) && defined(SCHED_ULE)
-	/*
-	 * 386 and amd64 do the blocked lock test only for SMP and SCHED_ULE
-	 * QQQ: What does it mean in reality and why is it done?
-	 */
+#if defined(SMP)
 	ldr	r6, =blocked_lock
 1:
 	ldr	r3, [r11, #TD_LOCK]	/* atomic write regular read */

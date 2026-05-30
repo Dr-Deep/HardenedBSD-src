@@ -24,9 +24,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/disk.h>
 #include <sys/param.h>
 #include <sys/time.h>
@@ -38,8 +35,9 @@ __FBSDID("$FreeBSD$");
 
 #include <efi.h>
 #include <efilib.h>
-#include <efiprot.h>
 #include <efichar.h>
+#include <Protocol/DevicePath.h>
+#include <Protocol/BlockIo.h>
 #include <disk.h>
 
 static EFI_GUID blkio_guid = BLOCK_IO_PROTOCOL;
@@ -104,6 +102,7 @@ struct devsw efipart_hddev = {
 	.dv_print = efipart_printhd,
 	.dv_cleanup = nullsys,
 	.dv_fmtdev = disk_fmtdev,
+	.dv_parsedev = disk_parsedev,
 };
 
 static pdinfo_list_t fdinfo = STAILQ_HEAD_INITIALIZER(fdinfo);
@@ -390,7 +389,7 @@ efipart_inithandles(void)
 		status = OpenProtocolByHandle(hin[i], &blkio_guid,
 		    (void **)&blkio);
 		if (EFI_ERROR(status)) {
-			printf("error %lu\n", EFI_ERROR_CODE(status));
+			printf("error %lu\n", DECODE_ERROR(status));
 			continue;
 		}
 
@@ -1035,7 +1034,7 @@ efipart_readwrite(EFI_BLOCK_IO *blkio, int rw, daddr_t blk, daddr_t nblks,
 
 	if (EFI_ERROR(status)) {
 		printf("%s: rw=%d, blk=%ju size=%ju status=%lu\n", __func__, rw,
-		    blk, nblks, EFI_ERROR_CODE(status));
+		    blk, nblks, DECODE_ERROR(status));
 	}
 	TSEXIT();
 	return (efi_status_to_errno(status));

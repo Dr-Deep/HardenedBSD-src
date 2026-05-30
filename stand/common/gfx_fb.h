@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _GFX_FB_H
@@ -279,9 +277,12 @@ void gfx_fb_bezier(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
 
 int gfx_fb_putimage(png_t *, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 bool gfx_parse_mode_str(char *, int *, int *, int *);
+void gfx_fb_setcolors(teken_attr_t *, ev_sethook_t, ev_unsethook_t);
 void term_image_display(teken_gfx_t *, const teken_rect_t *);
 
 void reset_font_flags(void);
+
+void gfx_interp_ref(void);
 
 #ifdef __cplusplus
 }

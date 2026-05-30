@@ -22,10 +22,9 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 
-LIB=	pam_deny
-SRCS=	pam_deny.c
-MAN=	pam_deny.8
+LIB=		pam_deny
+SRCS=		pam_deny.c
+MANNODEV=	pam_deny.8
 
 .include <bsd.lib.mk>

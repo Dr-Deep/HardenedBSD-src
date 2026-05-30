@@ -16,9 +16,6 @@
  *
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/lock.h>
 #include <sys/kernel.h>
@@ -79,9 +76,9 @@ ppsidentify(driver_t *driver, device_t parent)
 
 	device_t dev;
 
-	dev = device_find_child(parent, PPS_NAME, -1);
+	dev = device_find_child(parent, PPS_NAME, DEVICE_UNIT_ANY);
 	if (!dev)
-		BUS_ADD_CHILD(parent, 0, PPS_NAME, -1);
+		BUS_ADD_CHILD(parent, 0, PPS_NAME, DEVICE_UNIT_ANY);
 }
 
 static int
@@ -335,7 +332,7 @@ static device_method_t pps_methods[] = {
 	DEVMETHOD(device_identify,	ppsidentify),
 	DEVMETHOD(device_probe,		ppsprobe),
 	DEVMETHOD(device_attach,	ppsattach),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t pps_driver = {

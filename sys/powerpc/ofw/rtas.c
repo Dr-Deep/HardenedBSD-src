@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2011 Nathan Whitehorn
  * All rights reserved.
@@ -27,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/endian.h>
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -36,6 +34,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/mutex.h>
 #include <sys/systm.h>
 #include <sys/proc.h>
+#include <sys/stdarg.h>
 
 #include <vm/vm.h>
 #include <vm/vm_page.h>
@@ -45,7 +44,6 @@ __FBSDID("$FreeBSD$");
 #include <machine/md_var.h>
 #include <machine/pcb.h>
 #include <machine/rtas.h>
-#include <machine/stdarg.h>
 
 #include <dev/ofw/openfirm.h>
 

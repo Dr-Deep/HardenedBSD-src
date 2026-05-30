@@ -44,6 +44,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/Timer.h"
+#include <optional>
 
 namespace clang {
 
@@ -115,7 +116,7 @@ public:
     /// the result nodes. This API is temporary to facilitate
     /// third parties porting existing code to the default
     /// behavior of clang-tidy.
-    virtual llvm::Optional<TraversalKind> getCheckTraversalKind() const;
+    virtual std::optional<TraversalKind> getCheckTraversalKind() const;
   };
 
   /// Called when parsing is finished. Intended for testing only.
@@ -137,7 +138,7 @@ public:
     /// Enables per-check timers.
     ///
     /// It prints a report after match.
-    llvm::Optional<Profiling> CheckProfiling;
+    std::optional<Profiling> CheckProfiling;
   };
 
   MatchFinder(MatchFinderOptions Options = MatchFinderOptions());
@@ -267,7 +268,7 @@ SmallVector<BoundNodes, 1> match(MatcherT Matcher, ASTContext &Context);
 /// Returns \c NULL if there is no match, or if the matching node cannot be
 /// casted to \c NodeT.
 ///
-/// This is useful in combanation with \c match():
+/// This is useful in combination with \c match():
 /// \code
 ///   const Decl *D = selectFirst<Decl>("id", match(Matcher.bind("id"),
 ///                                                 Node, Context));
@@ -289,8 +290,8 @@ public:
     Nodes.push_back(Result.Nodes);
   }
 
-  llvm::Optional<TraversalKind> getCheckTraversalKind() const override {
-    return llvm::None;
+  std::optional<TraversalKind> getCheckTraversalKind() const override {
+    return std::nullopt;
   }
 
   SmallVector<BoundNodes, 1> Nodes;

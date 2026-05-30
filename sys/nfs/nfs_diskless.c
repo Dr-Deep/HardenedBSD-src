@@ -30,13 +30,9 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	from: @(#)autoconf.c	7.1 (Berkeley) 5/9/91
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_bootp.h"
 
 #include <sys/param.h>
@@ -58,6 +54,7 @@ __FBSDID("$FreeBSD$");
 #include <nfs/nfsproto.h>
 #include <nfsclient/nfs.h>
 #include <nfs/nfsdiskless.h>
+#include <fs/nfs/nfsid.h>
 
 #define	NFS_IFACE_TIMEOUT_SECS	10 /* Timeout for interface to appear. */
 
@@ -73,6 +70,9 @@ static int decode_nfshandle(char *ev, u_char *fh, int maxfh);
 struct nfs_diskless	nfs_diskless = { { { 0 } } };
 struct nfsv3_diskless	nfsv3_diskless = { { { 0 } } };
 int			nfs_diskless_valid = 0;
+
+extern struct nfs_prime_userd nfs_prime_userd[];
+extern bool nfs_nfsv4root;
 
 /*
  * Validate/sanity check a rsize/wsize parameter.
@@ -123,6 +123,10 @@ nfs_parse_options(const char *envopts, struct nfs_args *nd)
 		else if (strcmp(o, "nfsv3") == 0) {
 			nd->flags &= ~NFSMNT_NFSV4;
 			nd->flags |= NFSMNT_NFSV3;
+		} else if (strcmp(o, "nfsv4") == 0) {
+			nd->flags &= ~NFSMNT_NFSV3;
+			nd->flags |= NFSMNT_NFSV4;
+			nd->sotype = SOCK_STREAM;
 		} else if (strcmp(o, "tcp") == 0)
 			nd->sotype = SOCK_STREAM;
 		else if (strcmp(o, "udp") == 0)
@@ -146,6 +150,19 @@ nfs_parse_options(const char *envopts, struct nfs_args *nd)
 	free(opts, M_TEMP);
 }
 
+static u_int
+nfs_setup_diskless_ifa_cb(void *arg, struct sockaddr_dl *sdl, u_int count)
+{
+	struct sockaddr_dl *ourdl = arg;
+
+	if ((sdl->sdl_type == ourdl->sdl_type) &&
+	    (sdl->sdl_alen == ourdl->sdl_alen) &&
+	    !bcmp(LLADDR(sdl), LLADDR(ourdl), sdl->sdl_alen))
+		return (1);
+
+	return (0);
+}
+
 /*
  * Populate the essential fields in the nfsv3_diskless structure.
  *
@@ -166,11 +183,12 @@ nfs_parse_options(const char *envopts, struct nfs_args *nd)
 void
 nfs_setup_diskless(void)
 {
+	struct epoch_tracker et;
+	struct if_iter iter;
 	struct nfs_diskless *nd = &nfs_diskless;
 	struct nfsv3_diskless *nd3 = &nfsv3_diskless;
-	struct ifnet *ifp;
-	struct ifaddr *ifa;
-	struct sockaddr_dl *sdl, ourdl;
+	if_t ifp;
+	struct sockaddr_dl ourdl;
 	struct sockaddr_in myaddr, netmask;
 	char *cp;
 	int cnt, fhlen, is_nfsv3;
@@ -219,29 +237,21 @@ nfs_setup_diskless(void)
 		printf("nfs_diskless: no hardware address\n");
 		return;
 	}
-	ifa = NULL;
 	timeout_at = time_uptime + NFS_IFACE_TIMEOUT_SECS;
 retry:
 	CURVNET_SET(TD_TO_VNET(curthread));
-	IFNET_RLOCK();
-	CK_STAILQ_FOREACH(ifp, &V_ifnet, if_link) {
-		CK_STAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
-			if (ifa->ifa_addr->sa_family == AF_LINK) {
-				sdl = (struct sockaddr_dl *)ifa->ifa_addr;
-				if ((sdl->sdl_type == ourdl.sdl_type) &&
-				    (sdl->sdl_alen == ourdl.sdl_alen) &&
-				    !bcmp(LLADDR(sdl),
-					  LLADDR(&ourdl),
-					  sdl->sdl_alen)) {
-				    IFNET_RUNLOCK();
-				    CURVNET_RESTORE();
-				    goto match_done;
-				}
-			}
-		}
+	NET_EPOCH_ENTER(et);
+	for (ifp = if_iter_start(&iter); ifp != NULL; ifp = if_iter_next(&iter)) {
+		cnt = if_foreach_lladdr(ifp, nfs_setup_diskless_ifa_cb, &ourdl);
+		if (cnt > 0)
+			break;
 	}
-	IFNET_RUNLOCK();
+	if_iter_finish(&iter);
+	NET_EPOCH_EXIT(et);
 	CURVNET_RESTORE();
+	if (ifp != NULL)
+		goto match_done;
+
 	if (time_uptime < timeout_at) {
 		pause("nfssdl", hz / 5);
 		goto retry;
@@ -249,9 +259,9 @@ retry:
 	printf("nfs_diskless: no interface\n");
 	return;	/* no matching interface */
 match_done:
-	kern_setenv("boot.netif.name", ifp->if_xname);
+	kern_setenv("boot.netif.name", if_name(ifp));
 	if (is_nfsv3 != 0) {
-		strlcpy(nd3->myif.ifra_name, ifp->if_xname,
+		strlcpy(nd3->myif.ifra_name, if_name(ifp),
 		    sizeof(nd3->myif.ifra_name));
 
 		/* set up gateway */
@@ -269,28 +279,77 @@ match_done:
 			return;
 		}
 		nd3->root_saddr.sin_port = htons(NFS_PORT);
-		fhlen = decode_nfshandle("boot.nfsroot.nfshandle",
-		    &nd3->root_fh[0], NFSX_V3FHMAX);
-		if (fhlen == 0) {
-			printf("nfs_diskless: no NFS handle\n");
-			return;
+		if ((cp = kern_getenv("boot.nfsroot.options")) != NULL) {
+			nfs_parse_options(cp, &nd3->root_args);
+			freeenv(cp);
 		}
-		if (fhlen != nd3->root_fhsize) {
-			printf("nfs_diskless: bad NFS handle len=%d\n", fhlen);
-			return;
+		if ((nd3->root_args.flags & NFSMNT_NFSV4) == 0) {
+			fhlen = decode_nfshandle("boot.nfsroot.nfshandle",
+			    &nd3->root_fh[0], NFSX_V3FHMAX);
+			if (fhlen == 0) {
+				printf("nfs_diskless: no NFS handle\n");
+				return;
+			}
+			if (fhlen != nd3->root_fhsize) {
+				printf("nfs_diskless: bad NFS handle len=%d\n",
+				    fhlen);
+				return;
+			}
+		} else {
+			struct nfsd_idargs nid;
+			int ret;
+
+			/*
+			 * For NFSv4, the file handle is derived from the
+			 * boot.nfsroot.path during mounting by NFSv4.
+			 */
+			nd3->root_fhsize = 0;
+			nfs_nfsv4root = true;
+
+			/*
+			 * Prime the id<-->name mappings just enough to
+			 * make things work until the nfsuserd(8) daemon
+			 * is started, if the nfsuserd_domain is set to a
+			 * non-empty string.
+			 */
+			if ((cp = kern_getenv("boot.nfsroot.user_domain")) !=
+			    NULL) {
+				for (cnt = 0; *cp != '\0' &&
+				    nfs_prime_userd[cnt].flag != 0; cnt++) {
+					nid.nid_flag =
+					    nfs_prime_userd[cnt].flag |
+					    NFSID_SYSSPACE;
+					if (nfs_prime_userd[cnt].flag ==
+					    NFSID_INITIALIZE) {
+						nid.nid_name = cp;
+						nid.nid_usermax = 10;
+					} else {
+						nid.nid_name =
+						    nfs_prime_userd[cnt].nam;
+						nid.nid_usertimeout = 3600;
+					}
+					nid.nid_namelen = strlen(nid.nid_name);
+					nid.nid_uid = nfs_prime_userd[cnt].uid;
+					nid.nid_gid = nfs_prime_userd[cnt].gid;
+					nid.nid_ngroup = 0;
+					nid.nid_grps = NULL;
+					ret = nfssvc_idname(&nid);
+					if (ret != 0)
+						printf("nfs_diskless: "
+						    "nfssvc_idname failed %d\n",
+						    ret);
+				}
+				freeenv(cp);
+			}
 		}
 		if ((cp = kern_getenv("boot.nfsroot.path")) != NULL) {
 			strncpy(nd3->root_hostnam, cp, MNAMELEN - 1);
 			freeenv(cp);
 		}
-		if ((cp = kern_getenv("boot.nfsroot.options")) != NULL) {
-			nfs_parse_options(cp, &nd3->root_args);
-			freeenv(cp);
-		}
 
 		nfs_diskless_valid = 3;
 	} else {
-		strlcpy(nd->myif.ifra_name, ifp->if_xname,
+		strlcpy(nd->myif.ifra_name, if_name(ifp),
 		    sizeof(nd->myif.ifra_name));
 
 		/* set up gateway */
@@ -426,7 +485,7 @@ decode_nfshandle(char *ev, u_char *fh, int maxfh)
 
 #if !defined(BOOTP_NFSROOT)
 static void
-nfs_rootconf(void)
+nfs_rootconf(void *dummy __unused)
 {
 
 	nfs_setup_diskless();

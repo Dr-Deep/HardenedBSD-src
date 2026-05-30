@@ -27,7 +27,6 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSchedule.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
-#include "llvm/IR/Function.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -43,19 +42,18 @@ using namespace llvm;
 #define DEBUG_TYPE "machine-scheduler"
 
 static cl::opt<bool> IgnoreBBRegPressure("ignore-bb-reg-pressure", cl::Hidden,
-                                         cl::ZeroOrMore, cl::init(false));
+                                         cl::init(false));
 
 static cl::opt<bool> UseNewerCandidate("use-newer-candidate", cl::Hidden,
-                                       cl::ZeroOrMore, cl::init(true));
+                                       cl::init(true));
 
 static cl::opt<unsigned> SchedDebugVerboseLevel("misched-verbose-level",
-                                                cl::Hidden, cl::ZeroOrMore,
-                                                cl::init(1));
+                                                cl::Hidden, cl::init(1));
 
 // Check if the scheduler should penalize instructions that are available to
 // early due to a zero-latency dependence.
 static cl::opt<bool> CheckEarlyAvail("check-early-avail", cl::Hidden,
-                                     cl::ZeroOrMore, cl::init(true));
+                                     cl::init(true));
 
 // This value is used to determine if a register class is a high pressure set.
 // We compute the maximum number of registers needed and divided by the total
@@ -132,12 +130,12 @@ bool VLIWResourceModel::isResourceAvailable(SUnit *SU, bool IsTop) {
   // Now see if there are no other dependencies to instructions already
   // in the packet.
   if (IsTop) {
-    for (unsigned i = 0, e = Packet.size(); i != e; ++i)
-      if (hasDependence(Packet[i], SU))
+    for (const SUnit *U : Packet)
+      if (hasDependence(U, SU))
         return false;
   } else {
-    for (unsigned i = 0, e = Packet.size(); i != e; ++i)
-      if (hasDependence(SU, Packet[i]))
+    for (const SUnit *U : Packet)
+      if (hasDependence(SU, U))
         return false;
   }
   return true;
@@ -211,7 +209,7 @@ void VLIWMachineScheduler::schedule() {
   Topo.InitDAGTopologicalSorting();
 
   // Postprocess the DAG to add platform-specific artificial dependencies.
-  postprocessDAG();
+  postProcessDAG();
 
   SmallVector<SUnit *, 8> TopRoots, BotRoots;
   findRootsAndBiasEdges(TopRoots, BotRoots);
@@ -299,9 +297,6 @@ void ConvergingVLIWScheduler::initialize(ScheduleDAGMI *dag) {
     HighPressureSets[i] =
         ((float)MaxPressure[i] > ((float)Limit * RPThreshold));
   }
-
-  assert((!ForceTopDown || !ForceBottomUp) &&
-         "-misched-topdown incompatible with -misched-bottomup");
 }
 
 VLIWResourceModel *ConvergingVLIWScheduler::createVLIWResourceModel(
@@ -581,10 +576,10 @@ static inline bool isSingleUnscheduledSucc(SUnit *SU, SUnit *SU2) {
 /// pressure, then return 0.
 int ConvergingVLIWScheduler::pressureChange(const SUnit *SU, bool isBotUp) {
   PressureDiff &PD = DAG->getPressureDiff(SU);
-  for (auto &P : PD) {
+  for (const auto &P : PD) {
     if (!P.isValid())
       continue;
-    // The pressure differences are computed bottom-up, so the comparision for
+    // The pressure differences are computed bottom-up, so the comparison for
     // an increase is positive in the bottom direction, but negative in the
     //  top-down direction.
     if (HighPressureSets[P.getPSet()])
@@ -956,7 +951,7 @@ SUnit *ConvergingVLIWScheduler::pickNode(bool &IsTopNode) {
     return nullptr;
   }
   SUnit *SU;
-  if (ForceTopDown) {
+  if (PreRADirection == MISched::TopDown) {
     SU = Top.pickOnlyChoice();
     if (!SU) {
       SchedCandidate TopCand;
@@ -967,7 +962,7 @@ SUnit *ConvergingVLIWScheduler::pickNode(bool &IsTopNode) {
       SU = TopCand.SU;
     }
     IsTopNode = true;
-  } else if (ForceBottomUp) {
+  } else if (PreRADirection == MISched::BottomUp) {
     SU = Bot.pickOnlyChoice();
     if (!SU) {
       SchedCandidate BotCand;

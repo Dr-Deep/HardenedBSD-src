@@ -1,6 +1,3 @@
-#  @(#)Makefile 5.1beta 93/09/24
-# $FreeBSD$
-#
 #  ====================================================
 #  Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
 #
@@ -29,7 +26,7 @@ CFLAGS+=	-I${.CURDIR}/x86
 CFLAGS+=	-I${.CURDIR}/ld80
 .elif ${LDBL_PREC} == 113
 .PATH:  ${.CURDIR}/ld128
-CFLAGS+=	-I${.CURDIR}/ld128
+CFLAGS+=	-I${.CURDIR}/ld128 -I${SRCTOP}/contrib/arm-optimized-routines/math
 .endif
 
 CFLAGS+=	-I${.CURDIR}/${ARCH_SUBDIR}
@@ -78,15 +75,20 @@ COMMON_SRCS= b_tgamma.c \
 	s_exp2.c s_exp2f.c s_expm1.c s_expm1f.c s_fabsf.c s_fdim.c \
 	s_finite.c s_finitef.c \
 	s_floor.c s_floorf.c s_fma.c s_fmaf.c \
-	s_fmax.c s_fmaxf.c s_fmin.c \
-	s_fminf.c s_frexp.c s_frexpf.c s_ilogb.c s_ilogbf.c \
+	s_fmax.c s_fmaxf.c s_fmaximum.c s_fmaximumf.c \
+	s_fmaximum_mag.c s_fmaximum_magf.c s_fmaximum_mag_num.c \
+	s_fmaximum_mag_numf.c s_fmaximum_num.c s_fmaximum_numf.c \
+	s_fmin.c s_fminf.c s_fminimum.c s_fminimumf.c \
+	s_fminimum_mag.c s_fminimum_magf.c s_fminimum_mag_num.c \
+	s_fminimum_mag_numf.c s_fminimum_num.c s_fminimum_numf.c \
+	s_frexp.c s_frexpf.c s_ilogb.c s_ilogbf.c \
 	s_ilogbl.c s_isfinite.c s_isnan.c s_isnormal.c \
 	s_llrint.c s_llrintf.c s_llround.c s_llroundf.c s_llroundl.c \
 	s_log1p.c s_log1pf.c s_logb.c s_logbf.c s_lrint.c s_lrintf.c \
 	s_lround.c s_lroundf.c s_lroundl.c s_modff.c \
 	s_nan.c s_nearbyint.c s_nextafter.c s_nextafterf.c \
 	s_nexttowardf.c s_remquo.c s_remquof.c \
-	s_rint.c s_rintf.c s_round.c s_roundf.c \
+	s_rint.c s_rintf.c s_round.c s_roundf.c s_rsqrt.c s_rsqrtf.c \
 	s_scalbln.c s_scalbn.c s_scalbnf.c s_signbit.c \
 	s_signgam.c s_significand.c s_significandf.c s_sin.c \
 	s_sincos.c s_sincosf.c s_sinf.c \
@@ -98,17 +100,28 @@ COMMON_SRCS+= s_cospi.c s_cospif.c \
 	s_sinpi.c s_sinpif.c \
 	s_tanpi.c s_tanpif.c
 
+# LIBCSRCDIR is defined lazily, so can't be used for exists() below
+LIBC_SRCTOP=${SRCTOP}/lib/libc
 # Location of fpmath.h and _fpmath.h
-.if exists(${LIBCSRCDIR}/${MACHINE_ARCH})
-LIBC_ARCH=${MACHINE_ARCH}
+
+# Pick the current architecture directory for libc. In general, this is named
+# MACHINE_CPUARCH, but some ABIs are different enough to require their own libc,
+# so allow a directory named MACHINE_ARCH to override this (though treat
+# powerpc64le and powerpc64 the same).
+# Note: This is copied from libc/Makefile
+M=${MACHINE_ARCH:S/powerpc64le/powerpc64/}
+.if exists(${LIBC_SRCTOP}/${M})
+LIBC_ARCH=${M}
 .else
 LIBC_ARCH=${MACHINE_CPUARCH}
 .endif
-CFLAGS+=	-I${.CURDIR}/src -I${LIBCSRCDIR}/include \
-	-I${LIBCSRCDIR}/${LIBC_ARCH}
-SYM_MAPS+=	${.CURDIR}/Symbol.map
 
-VERSION_DEF=	${LIBCSRCDIR}/Versions.def
+CFLAGS+=	-I${.CURDIR}/src -I${LIBC_SRCTOP}/include \
+		-I${LIBC_SRCTOP}/${LIBC_ARCH}
+SYM_MAPS+=	${.CURDIR}/Symbol.map
+SYM_MAPS+=	${.CURDIR}/${ARCH_SUBDIR}/Symbol.map
+
+VERSION_DEF=	${LIBC_SRCTOP}/Versions.def
 SYMBOL_MAPS=	${SYM_MAPS}
 
 # C99 long double functions
@@ -124,9 +137,13 @@ COMMON_SRCS+=	b_tgammal.c catrigl.c \
 	s_asinhl.c s_atanl.c s_cbrtl.c s_ceill.c s_cexpl.c \
 	s_clogl.c s_cosl.c s_cospil.c s_cprojl.c \
 	s_csqrtl.c s_erfl.c s_exp2l.c s_expl.c s_floorl.c s_fmal.c \
-	s_fmaxl.c s_fminl.c s_frexpl.c s_logbl.c s_logl.c s_nanl.c \
+	s_fmaxl.c s_fmaximuml.c s_fmaximum_magl.c \
+	s_fmaximum_numl.c s_fmaximum_mag_numl.c \
+	s_fminl.c s_fminimuml.c s_fminimum_magl.c \
+	s_fminimum_numl.c s_fminimum_mag_numl.c \
+	s_frexpl.c s_logbl.c s_logl.c s_nanl.c \
 	s_nextafterl.c s_nexttoward.c s_remquol.c s_rintl.c s_roundl.c \
-	s_scalbnl.c s_sinl.c s_sincosl.c s_sinpil.c \
+	s_scalbnl.c s_sinl.c s_sincosl.c s_sinpil.c s_rsqrtl.c \
 	s_tanhl.c s_tanl.c s_tanpil.c s_truncl.c w_cabsl.c
 # Work around this warning from gcc:
 #     lib/msun/ld80/e_powl.c:275:1: error: floating constant exceeds range of
@@ -147,11 +164,12 @@ COMMON_SRCS+=	catrig.c catrigf.c \
 	s_cproj.c s_cprojf.c s_creal.c s_crealf.c s_creall.c \
 	s_csinh.c s_csinhf.c s_ctanh.c s_ctanhf.c
 
-# FreeBSD's C library supplies these functions:
+# FreeBSD's C library supplies these functions (but note we still have s_frexp.c
+# and s_isnan.c enabled above, so they are duplicated):
 #COMMON_SRCS+=	s_fabs.c s_frexp.c s_isnan.c s_ldexp.c s_modf.c
 
 # Exclude the generic versions of what we provide in the MD area.
-.if defined(ARCH_SRCS)
+.if defined(ARCH_SRCS) && "${MK_MACHDEP_OPTIMIZATIONS}" != no
 .for i in ${ARCH_SRCS}
 COMMON_SRCS:=  ${COMMON_SRCS:N${i:R}.c}
 .endfor
@@ -167,8 +185,10 @@ MAN=	acos.3 acosh.3 asin.3 asinh.3 atan.3 atan2.3 atanh.3 \
 	cpow.3 csqrt.3 erf.3 \
 	exp.3 fabs.3 fdim.3 \
 	feclearexcept.3 feenableexcept.3 fegetenv.3 \
-	fegetround.3 fenv.3 floor.3 \
-	fma.3 fmax.3 fmod.3 hypot.3 ieee.3 ieee_test.3 ilogb.3 j0.3 \
+	fegetround.3 fenv.3 floor.3 fma.3 \
+	fmax.3 fmaximum.3 fmaximum_mag.3 \
+	fmaximum_mag_num.3 fmaximum_num.3 fmod.3 \
+	hypot.3 ieee.3 ieee_test.3 ilogb.3 j0.3 \
 	lgamma.3 log.3 lrint.3 lround.3 math.3 nan.3 \
 	nextafter.3 remainder.3 rint.3 \
 	round.3 scalbn.3 signbit.3 sin.3 sincos.3 \
@@ -221,6 +241,18 @@ MLINKS+=floor.3 floorf.3 floor.3 floorl.3
 MLINKS+=fma.3 fmaf.3 fma.3 fmal.3
 MLINKS+=fmax.3 fmaxf.3 fmax.3 fmaxl.3 \
 	fmax.3 fmin.3 fmax.3 fminf.3 fmax.3 fminl.3
+MLINKS+=fmaximum.3 fmaximumf.3 fmaximum.3 fmaximuml.3 \
+	fmaximum.3 fminimum.3 fmaximum.3 fminimumf.3 \
+	fmaximum.3 fminimuml.3
+MLINKS+=fmaximum_mag.3 fmaximum_magf.3 fmaximum_mag.3 fmaximum_magl.3 \
+	fmaximum_mag.3 fminimum_mag.3 fmaximum_mag.3 fminimum_magf.3 \
+	fmaximum_mag.3 fminimum_magl.3
+MLINKS+=fmaximum_mag_num.3 fmaximum_mag_numf.3 fmaximum_mag_num.3 fmaximum_mag_numl.3 \
+	fmaximum_mag_num.3 fminimum_mag_num.3 fmaximum_mag_num.3 fminimum_mag_numf.3 \
+	fmaximum_mag_num.3 fminimum_mag_numl.3
+MLINKS+=fmaximum_num.3 fmaximum_numf.3 fmaximum_num.3 fmaximum_numl.3 \
+	fmaximum_num.3 fminimum_num.3 fmaximum_num.3 fminimum_numf.3 \
+	fmaximum_num.3 fminimum_numl.3
 MLINKS+=fmod.3 fmodf.3 fmod.3 fmodl.3
 MLINKS+=hypot.3 cabs.3 hypot.3 cabsf.3 hypot.3 cabsl.3 \
 	hypot.3 hypotf.3 hypot.3 hypotl.3
@@ -257,7 +289,7 @@ MLINKS+=sincos.3 sincosf.3 sin.3 sincosl.3
 MLINKS+=sinh.3 sinhf.3 sinh.3 sinhl.3
 MLINKS+=sinpi.3 sinpif.3 sinpi.3 sinpil.3
 MLINKS+=sqrt.3 cbrt.3 sqrt.3 cbrtf.3 sqrt.3 cbrtl.3 sqrt.3 sqrtf.3 \
-	sqrt.3 sqrtl.3
+	sqrt.3 sqrtl.3 sqrt.3 rsqrt.3 sqrt.3 rsqrtf.3 sqrt.3 rsqrtl.3
 MLINKS+=tan.3 tanf.3 tan.3 tanl.3
 MLINKS+=tanh.3 tanhf.3 tanh.3 tanhl.3
 MLINKS+=tanpi.3 tanpif.3 tanpi.3 tanpil.3

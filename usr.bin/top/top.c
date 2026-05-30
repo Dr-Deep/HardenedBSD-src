@@ -8,8 +8,6 @@
  *  Copyright (c) 1989 - 1994, William LeFebvre, Northwestern University
  *  Copyright (c) 1994, 1995, William LeFebvre, Argonne National Laboratory
  *  Copyright (c) 1996, William LeFebvre, Group sys Consulting
- *
- * $FreeBSD$
  */
 
 #include <sys/types.h>
@@ -254,7 +252,7 @@ main(int argc, const char *argv[])
     char no_command = 1;
     struct timeval timeout;
     char *order_name = NULL;
-    int order_index = 0;
+    const struct sort_info *sort_info = NULL;
     fd_set readfds;
 	char *nptr;
 
@@ -268,8 +266,8 @@ main(int argc, const char *argv[])
 #endif
 
     if (setlocale(LC_ALL, "") == NULL) {
-        fprintf(stderr, "invalid locale.\n");
-	exit(1);
+	warnx("invalid locale, check your environment");
+	sleep(2);
     }
 
     mypid = getpid();
@@ -465,7 +463,7 @@ main(int argc, const char *argv[])
 
 	      default:
 		errx(1, 
-"[-abCHIijnPqStuvwz] [-d count] [-J jail] [-m cpu | io] [-o field]\n"
+"[-abCHIijnPqSTtuvwz] [-d count] [-J jail] [-m cpu | io] [-o field]\n"
 "     [-p pid] [-s time] [-U username] [number]");
 	    }
 	}
@@ -507,20 +505,17 @@ main(int argc, const char *argv[])
     /* determine sorting order index, if necessary */
     if (order_name != NULL)
     {
-	if ((order_index = string_index(order_name, statics.order_names)) == -1)
-	{
-	    const char * const *pp;
-
+	if ((sort_info = get_sort_info(order_name)) == NULL) {
 	    warnx("'%s' is not a recognized sorting order.", order_name);
 	    fprintf(stderr, "\tTry one of these:");
-	    pp = statics.order_names;
-	    while (*pp != NULL)
-	    {
-		fprintf(stderr, " %s", *pp++);
-	    }
+	    dump_sort_names(stderr);
 	    fputc('\n', stderr);
 	    exit(1);
 	}
+    }
+    else
+    {
+	sort_info = get_sort_info(NULL);
     }
 
     /* initialize termcap */
@@ -604,17 +599,13 @@ restart:
 
     while ((displays == -1) || (displays-- > 0))
     {
-	int (*compare)(const void * const, const void * const);
-
 
 	/* get the current stats */
 	get_system_info(&system_info);
 
-	compare = compares[order_index];
-
 	/* get the current set of processes */
 	processes =
-		get_process_info(&system_info, &ps, compare);
+		get_process_info(&system_info, &ps, sort_info);
 
 	/* display the load averages */
 	(*d_loadave)(system_info.last_pid,
@@ -1049,7 +1040,9 @@ restart:
 				    "Order to sort: ");
 				if (readline(tempbuf2, sizeof(tempbuf2), false) > 0)
 				{
-				  if ((i = string_index(tempbuf2, statics.order_names)) == -1)
+				  const struct sort_info *new_sort_info;
+
+				  if ((new_sort_info = get_sort_info(tempbuf2)) == NULL)
 					{
 					  new_message(MT_standout,
 					      " %s: unrecognized sorting order", tempbuf2);
@@ -1057,7 +1050,7 @@ restart:
 				    }
 				    else
 				    {
-					order_index = i;
+					sort_info = new_sort_info;
 				    }
 				    putchar('\r');
 				}

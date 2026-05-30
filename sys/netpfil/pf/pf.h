@@ -29,7 +29,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  *
  *	$OpenBSD: pfvar.h,v 1.282 2009/01/29 15:12:28 pyr Exp $
- *	$FreeBSD$
  */
 
 #ifndef	_NET_PF_H_
@@ -50,7 +49,7 @@
 enum	{ PF_INOUT, PF_IN, PF_OUT };
 enum	{ PF_PASS, PF_DROP, PF_SCRUB, PF_NOSCRUB, PF_NAT, PF_NONAT,
 	  PF_BINAT, PF_NOBINAT, PF_RDR, PF_NORDR, PF_SYNPROXY_DROP, PF_DEFER,
-	  PF_MATCH };
+	  PF_MATCH, PF_AFRT, PF_RT };
 enum	{ PF_RULESET_SCRUB, PF_RULESET_FILTER, PF_RULESET_NAT,
 	  PF_RULESET_BINAT, PF_RULESET_RDR, PF_RULESET_MAX };
 enum	{ PF_OP_NONE, PF_OP_IRG, PF_OP_EQ, PF_OP_NE, PF_OP_LT,
@@ -67,14 +66,37 @@ enum	{ PF_PEER_SRC, PF_PEER_DST, PF_PEER_BOTH };
  * Note about PFTM_*: real indices into pf_rule.timeout[] come before
  * PFTM_MAX, special cases afterwards. See pf_state_expires().
  */
-enum	{ PFTM_TCP_FIRST_PACKET, PFTM_TCP_OPENING, PFTM_TCP_ESTABLISHED,
-	  PFTM_TCP_CLOSING, PFTM_TCP_FIN_WAIT, PFTM_TCP_CLOSED,
-	  PFTM_UDP_FIRST_PACKET, PFTM_UDP_SINGLE, PFTM_UDP_MULTIPLE,
-	  PFTM_ICMP_FIRST_PACKET, PFTM_ICMP_ERROR_REPLY,
-	  PFTM_OTHER_FIRST_PACKET, PFTM_OTHER_SINGLE,
-	  PFTM_OTHER_MULTIPLE, PFTM_FRAG, PFTM_INTERVAL,
-	  PFTM_ADAPTIVE_START, PFTM_ADAPTIVE_END, PFTM_SRC_NODE,
-	  PFTM_TS_DIFF, PFTM_MAX, PFTM_PURGE, PFTM_UNLINKED };
+enum	{
+	PFTM_TCP_FIRST_PACKET	= 0,
+	PFTM_TCP_OPENING	= 1,
+	PFTM_TCP_ESTABLISHED	= 2,
+	PFTM_TCP_CLOSING	= 3,
+	PFTM_TCP_FIN_WAIT	= 4,
+	PFTM_TCP_CLOSED		= 5,
+	PFTM_UDP_FIRST_PACKET	= 6,
+	PFTM_UDP_SINGLE		= 7,
+	PFTM_UDP_MULTIPLE	= 8,
+	PFTM_ICMP_FIRST_PACKET	= 9,
+	PFTM_ICMP_ERROR_REPLY	= 10,
+	PFTM_OTHER_FIRST_PACKET	= 11,
+	PFTM_OTHER_SINGLE	= 12,
+	PFTM_OTHER_MULTIPLE	= 13,
+	PFTM_FRAG		= 14,
+	PFTM_INTERVAL		= 15,
+	PFTM_ADAPTIVE_START	= 16,
+	PFTM_ADAPTIVE_END	= 17,
+	PFTM_SRC_NODE		= 18,
+	PFTM_TS_DIFF		= 19,
+	PFTM_OLD_MAX		= 20, /* Legacy limit, for binary compatibility with old kernels. */
+	PFTM_SCTP_FIRST_PACKET	= 20,
+	PFTM_SCTP_OPENING	= 21,
+	PFTM_SCTP_ESTABLISHED	= 22,
+	PFTM_SCTP_CLOSING	= 23,
+	PFTM_SCTP_CLOSED	= 24,
+	PFTM_MAX		= 25,
+	PFTM_PURGE		= 26,
+	PFTM_UNLINKED		= 27,
+};
 
 /* PFTM default values */
 #define PFTM_TCP_FIRST_PACKET_VAL	120	/* First TCP packet */
@@ -91,28 +113,38 @@ enum	{ PFTM_TCP_FIRST_PACKET, PFTM_TCP_OPENING, PFTM_TCP_ESTABLISHED,
 #define PFTM_OTHER_FIRST_PACKET_VAL	60	/* First packet */
 #define PFTM_OTHER_SINGLE_VAL		30	/* Unidirectional */
 #define PFTM_OTHER_MULTIPLE_VAL		60	/* Bidirectional */
-#define PFTM_FRAG_VAL			30	/* Fragment expire */
+#define PFTM_FRAG_VAL			60	/* Fragment expire */
 #define PFTM_INTERVAL_VAL		10	/* Expire interval */
 #define PFTM_SRC_NODE_VAL		0	/* Source tracking */
 #define PFTM_TS_DIFF_VAL		30	/* Allowed TS diff */
 
 enum	{ PF_NOPFROUTE, PF_FASTROUTE, PF_ROUTETO, PF_DUPTO, PF_REPLYTO };
 enum	{ PF_LIMIT_STATES, PF_LIMIT_SRC_NODES, PF_LIMIT_FRAGS,
-	  PF_LIMIT_TABLE_ENTRIES, PF_LIMIT_MAX };
+	  PF_LIMIT_TABLE_ENTRIES, PF_LIMIT_ANCHORS, PF_LIMIT_ETH_ANCHORS,
+	  PF_LIMIT_MAX };
 #define PF_POOL_IDMASK		0x0f
 enum	{ PF_POOL_NONE, PF_POOL_BITMASK, PF_POOL_RANDOM,
 	  PF_POOL_SRCHASH, PF_POOL_ROUNDROBIN };
 enum	{ PF_ADDR_ADDRMASK, PF_ADDR_NOROUTE, PF_ADDR_DYNIFTL,
 	  PF_ADDR_TABLE, PF_ADDR_URPFFAILED,
-	  PF_ADDR_RANGE };
+	  PF_ADDR_RANGE, PF_ADDR_NONE };
 #define PF_POOL_TYPEMASK	0x0f
 #define PF_POOL_STICKYADDR	0x20
+#define PF_POOL_ENDPI		0x40
+#define PF_POOL_IPV6NH		0x80
 #define	PF_WSCALE_FLAG		0x80
 #define	PF_WSCALE_MASK		0x0f
 
+#define PF_POOL_DYNTYPE(_o)					\
+	((((_o) & PF_POOL_TYPEMASK) == PF_POOL_ROUNDROBIN) ||	\
+	(((_o) & PF_POOL_TYPEMASK) == PF_POOL_RANDOM) ||	\
+	(((_o) & PF_POOL_TYPEMASK) == PF_POOL_SRCHASH))
+
 #define	PF_LOG			0x01
 #define	PF_LOG_ALL		0x02
-#define	PF_LOG_SOCKET_LOOKUP	0x04
+#define	PF_LOG_USER		0x04
+#define	PF_LOG_FORCE		0x08
+#define	PF_LOG_MATCHES		0x10
 
 /* Reasons code for passing/dropping a packet */
 #define PFRES_MATCH	0		/* Explicit match of a rule */
@@ -131,7 +163,8 @@ enum	{ PF_ADDR_ADDRMASK, PF_ADDR_NOROUTE, PF_ADDR_DYNIFTL,
 #define PFRES_SRCLIMIT	13		/* Source node/conn limit */
 #define PFRES_SYNPROXY	14		/* SYN proxy */
 #define PFRES_MAPFAILED	15		/* pf_map_addr() failed */
-#define PFRES_MAX	16		/* total+1 */
+#define PFRES_TRANSLATE	16		/* No translation address available */
+#define PFRES_MAX	17		/* total+1 */
 
 #define PFRES_NAMES { \
 	"match", \
@@ -150,6 +183,7 @@ enum	{ PF_ADDR_ADDRMASK, PF_ADDR_NOROUTE, PF_ADDR_DYNIFTL,
 	"src-limit", \
 	"synproxy", \
 	"map-failed", \
+	"translate", \
 	NULL \
 }
 
@@ -213,6 +247,12 @@ enum	{ PF_ADDR_ADDRMASK, PF_ADDR_NOROUTE, PF_ADDR_DYNIFTL,
 #define SCNT_SRC_NODE_REMOVALS	2
 #define SCNT_MAX		3
 
+/* fragment counters */
+#define NCNT_FRAG_SEARCH	0
+#define NCNT_FRAG_INSERT	1
+#define NCNT_FRAG_REMOVALS	2
+#define NCNT_MAX		3
+
 #define	PF_TABLE_NAME_SIZE	32
 #define	PF_QNAME_SIZE		64
 
@@ -232,11 +272,9 @@ struct pfi_kif_cmp {
 struct pfi_kif {
 	char				 pfik_name[IFNAMSIZ];
 	union {
-		RB_ENTRY(pfi_kif)	 _pfik_tree;
-		LIST_ENTRY(pfi_kif)	 _pfik_list;
-	} _pfik_glue;
-#define	pfik_tree	_pfik_glue._pfik_tree
-#define	pfik_list	_pfik_glue._pfik_list
+		RB_ENTRY(pfi_kif)	 pfik_tree;
+		LIST_ENTRY(pfi_kif)	 pfik_list;
+	};
 	u_int64_t			 pfik_packets[2][2][2];
 	u_int64_t			 pfik_bytes[2][2][2];
 	u_int32_t			 pfik_tzero;
@@ -252,7 +290,7 @@ struct pf_status {
 	uint64_t	lcounters[LCNT_MAX];
 	uint64_t	fcounters[FCNT_MAX];
 	uint64_t	scounters[SCNT_MAX];
-	uint64_t	pcounters[2][2][3];
+	uint64_t	pcounters[2][2][2];
 	uint64_t	bcounters[2][2];
 	uint32_t	running;
 	uint32_t	states;
@@ -264,6 +302,9 @@ struct pf_status {
 	uint8_t		pf_chksum[PF_MD5_DIGEST_LENGTH];
 };
 
+#define PF_REASS_ENABLED	0x01
+#define PF_REASS_NODF		0x02
+
 struct pf_addr {
 	union {
 		struct in_addr		v4;
@@ -271,12 +312,7 @@ struct pf_addr {
 		u_int8_t		addr8[16];
 		u_int16_t		addr16[8];
 		u_int32_t		addr32[4];
-	} pfa;		    /* 128-bit address */
-#define v4	pfa.v4
-#define v6	pfa.v6
-#define addr8	pfa.addr8
-#define addr16	pfa.addr16
-#define addr32	pfa.addr32
+	};		    /* 128-bit address */
 };
 
 #define PFI_AFLAG_NETWORK	0x01
@@ -340,10 +376,7 @@ struct pf_poolhashkey {
 		u_int8_t		key8[16];
 		u_int16_t		key16[8];
 		u_int32_t		key32[4];
-	} pfk;		    /* 128-bit hash key */
-#define key8	pfk.key8
-#define key16	pfk.key16
-#define key32	pfk.key32
+	};		    /* 128-bit hash key */
 };
 
 struct pf_mape_portset {
@@ -464,6 +497,16 @@ struct pf_osfp_ioctl {
 };
 
 #define	PF_ANCHOR_NAME_SIZE	 64
+#define	PF_ANCHOR_MAXPATH	(MAXPATHLEN - PF_ANCHOR_NAME_SIZE - 1)
+#define	PF_ANCHOR_HIWAT		512
+#define	PF_OPTIMIZER_TABLE_PFX	"__automatic_"
+
+enum {
+	PF_LIMITER_NOMATCH,
+	PF_LIMITER_BLOCK
+};
+
+#define	PF_LIMITER_DEFAULT	PF_LIMITER_BLOCK
 
 struct pf_rule {
 	struct pf_rule_addr	 src;
@@ -473,8 +516,8 @@ struct pf_rule {
 #define PF_SKIP_AF		2
 #define PF_SKIP_PROTO		3
 #define PF_SKIP_SRC_ADDR	4
-#define PF_SKIP_SRC_PORT	5
-#define PF_SKIP_DST_ADDR	6
+#define PF_SKIP_DST_ADDR	5
+#define PF_SKIP_SRC_PORT	6
 #define PF_SKIP_DST_PORT	7
 #define PF_SKIP_COUNT		8
 	union pf_rule_ptr	 skip[PF_SKIP_COUNT];
@@ -504,7 +547,7 @@ struct pf_rule {
 	pf_osfp_t		 os_fingerprint;
 
 	int			 rtableid;
-	u_int32_t		 timeout[PFTM_MAX];
+	u_int32_t		 timeout[PFTM_OLD_MAX];
 	u_int32_t		 max_states;
 	u_int32_t		 max_src_nodes;
 	u_int32_t		 max_src_states;
@@ -582,29 +625,60 @@ struct pf_rule {
 	uint64_t		 u_src_nodes;
 };
 
-/* rule flags */
-#define	PFRULE_DROP		0x0000
-#define	PFRULE_RETURNRST	0x0001
-#define	PFRULE_FRAGMENT		0x0002
-#define	PFRULE_RETURNICMP	0x0004
-#define	PFRULE_RETURN		0x0008
-#define	PFRULE_NOSYNC		0x0010
-#define PFRULE_SRCTRACK		0x0020  /* track source states */
-#define PFRULE_RULESRCTRACK	0x0040  /* per rule */
+/* pf_krule->rule_flag and old-style scrub flags */
+#define	PFRULE_DROP		0x00000000
+#define	PFRULE_RETURNRST	0x00000001
+#define	PFRULE_FRAGMENT		0x00000002
+#define	PFRULE_RETURNICMP	0x00000004
+#define	PFRULE_RETURN		0x00000008
+#define	PFRULE_NOSYNC		0x00000010
+#define	PFRULE_SRCTRACK		0x00000020  /* track source states */
+#define	PFRULE_RULESRCTRACK	0x00000040  /* per rule */
+#define	PFRULE_NODF		0x00000100
+#define	PFRULE_FRAGMENT_NOREASS	0x00000200
+#define	PFRULE_RANDOMID		0x00000800
+#define	PFRULE_REASSEMBLE_TCP	0x00001000
+#define	PFRULE_SET_TOS		0x00002000
+#define	PFRULE_IFBOUND		0x00010000 /* if-bound */
+#define	PFRULE_STATESLOPPY	0x00020000 /* sloppy state tracking */
+#define	PFRULE_PFLOW		0x00040000
+#define	PFRULE_ALLOW_RELATED	0x00080000
+#define	PFRULE_AFTO		0x00200000  /* af-to rule */
+#define	PFRULE_ONCE		0x00400000  /* one shot rule */
+#define	PFRULE_EXPIRED		0x00800000  /* one shot rule hit by pkt */
 
 #ifdef _KERNEL
 #define	PFRULE_REFS		0x0080	/* rule has references */
 #endif
 
-/* scrub flags */
-#define	PFRULE_NODF		0x0100
-#define PFRULE_RANDOMID		0x0800
-#define PFRULE_REASSEMBLE_TCP	0x1000
-#define PFRULE_SET_TOS		0x2000
+/* pf_rule_actions->dnflags */
+#define	PFRULE_DN_IS_PIPE	0x0040
+#define	PFRULE_DN_IS_QUEUE	0x0080
 
-/* rule flags again */
-#define PFRULE_IFBOUND		0x00010000	/* if-bound */
-#define PFRULE_STATESLOPPY	0x00020000	/* sloppy state tracking */
+/* pf_state->state_flags, pf_rule_actions->flags, pf_krule->scrub_flags */
+#define	PFSTATE_ALLOWOPTS	0x0001
+#define	PFSTATE_SLOPPY		0x0002
+#define	PFSTATE_PFLOW		0x0004
+#define	PFSTATE_NOSYNC		0x0008
+#define	PFSTATE_ACK		0x0010
+#define	PFSTATE_NODF		0x0020
+#define	PFSTATE_SETTOS		0x0040
+#define	PFSTATE_RANDOMID	0x0080
+#define	PFSTATE_SCRUB_TCP	0x0100
+#define	PFSTATE_SETPRIO		0x0200
+/* was	PFSTATE_INP_UNLINKED	0x0400 */
+/* FreeBSD-specific flags are added from the end to keep space for porting
+ * flags from OpenBSD */
+#define	PFSTATE_DN_IS_PIPE	0x4000
+#define	PFSTATE_DN_IS_QUEUE	0x8000
+#define	PFSTATE_SCRUBMASK (PFSTATE_NODF|PFSTATE_RANDOMID|PFSTATE_SCRUB_TCP)
+#define	PFSTATE_SETMASK   (PFSTATE_SETTOS|PFSTATE_SETPRIO)
+
+/* pfctl_state->src_node_flags */
+#define PFSTATE_SRC_NODE_LIMIT		0x01
+#define PFSTATE_SRC_NODE_NAT		0x02
+#define PFSTATE_SRC_NODE_ROUTE		0x04
+#define PFSTATE_SRC_NODE_LIMIT_GLOBAL	0x10
 
 #define PFSTATE_HIWAT		100000	/* default state table size */
 #define PFSTATE_ADAPT_START	60000	/* default adaptive timeout start */
@@ -634,6 +708,7 @@ struct pf_src_node {
 	u_int32_t	 creation;
 	u_int32_t	 expire;
 	sa_family_t	 af;
+	sa_family_t	 naf;
 	u_int8_t	 ruletype;
 };
 

@@ -1,6 +1,6 @@
 /* $Id: os_bsd.h,v 1.20 2010/05/11 03:12:11 lcn Exp $ */
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * HighPoint RAID Driver for FreeBSD
  * Copyright (C) 2005-2011 HighPoint Technologies, Inc. All Rights Reserved.
@@ -26,8 +26,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include <dev/hptnr/hptnr_config.h>
@@ -43,6 +41,7 @@
 #include <sys/types.h>
 #include <sys/cons.h>
 #include <sys/time.h>
+#include <sys/stdarg.h>
 #include <sys/systm.h> 
 
 #include <sys/stat.h>
@@ -63,7 +62,6 @@
 #include <machine/resource.h>
 #include <machine/pci_cfgreg.h>
 #include <machine/bus.h>
-#include <machine/stdarg.h>
 #include <sys/rman.h>
 
 #include <vm/vm.h>

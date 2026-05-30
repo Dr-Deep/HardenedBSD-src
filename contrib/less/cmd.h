@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1984-2021  Mark Nudelman
+ * Copyright (C) 1984-2026  Mark Nudelman
  *
  * You may distribute under the terms of either the GNU General Public
  * License or the Less License, as specified in the README file.
@@ -31,6 +31,7 @@
 #define A_HELP                 19
 #define A_NEXT_FILE            20
 #define A_PERCENT              21
+#define A_BF_SCREEN            22
 #define A_PREV_FILE            23
 #define A_QUIT                 24
 #define A_REPAINT              25
@@ -68,6 +69,8 @@
 #define A_GOEND_BUF            57
 #define A_LLSHIFT              58
 #define A_RRSHIFT              59
+#define A_F_NEWLINE            60
+#define A_B_NEWLINE            61
 #define A_CLRMARK              62
 #define A_SETMARKBOT           63
 #define A_X11MOUSE_IN          64
@@ -75,7 +78,15 @@
 #define A_B_MOUSE              67
 /* Note "X116" refers to extended (1006) X11 mouse reporting. */
 #define A_X116MOUSE_IN         68
+#define A_PSHELL               69
 #define A_CLR_SEARCH           70
+#define A_OSC8_F_SEARCH        71
+#define A_OSC8_B_SEARCH        72
+#define A_OSC8_OPEN            73
+#define A_OSC8_JUMP            74
+#define A_START_PASTE          75 /* must not overlap EC_* */
+#define A_END_PASTE            76 /* must not overlap EC_* */
+#define A_F_FOREVER_BELL       77
 
 /* These values must not conflict with any A_* or EC_* value. */
 #define A_INVALID              100
@@ -112,6 +123,8 @@
 #define EC_ABORT               20
 #define EC_X11MOUSE            21
 #define EC_X116MOUSE           22
+#define EC_START_PASTE         A_START_PASTE
+#define EC_END_PASTE           A_END_PASTE
 
 #define EC_UINVALID            102
 
@@ -142,4 +155,28 @@
 #define SK_F1                  14
 #define SK_BACKTAB             15
 #define SK_CTL_BACKSPACE       16
+#define SK_BACKSPACE           17
+#define SK_PAD_U               18
+#define SK_PAD_D               19
+#define SK_PAD_R               20
+#define SK_PAD_L               21
+#define SK_PAD_UR              22
+#define SK_PAD_UL              23
+#define SK_PAD_DR              24
+#define SK_PAD_DL              25
+#define SK_PAD_CENTER          26
+#define SK_PAD_STAR            27
+#define SK_PAD_SLASH           28
+#define SK_PAD_DASH            29
+#define SK_PAD_PLUS            30
+#define SK_PAD_DOT             31
+#define SK_PAD_COMMA           32
+#define SK_PAD_ZERO            33
+#define SK_SHIFT_HOME          34
+#define SK_SHIFT_END           35
+#define SK_CTL_HOME            36
+#define SK_CTL_END             37
+#define SK_SHIFT_LEFT_ARROW    38
+#define SK_SHIFT_RIGHT_ARROW   39
+
 #define SK_CONTROL_K           40

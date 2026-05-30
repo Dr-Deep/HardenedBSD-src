@@ -1,4 +1,3 @@
-/*	$FreeBSD$	*/
 /*	$KAME: config.h,v 1.8 2003/06/17 08:26:22 itojun Exp $	*/
 
 /*-
@@ -53,3 +52,4 @@ extern void get_prefix(struct rainfo *);
 #define MAXROUTE	100
 #define MAXRDNSSENT	100
 #define MAXDNSSLENT	100
+#define MAXPREF64	100

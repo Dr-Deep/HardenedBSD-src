@@ -1,6 +1,5 @@
 # Here are some example (t)csh options and configurations that you may find interesting
 #
-# $FreeBSD$
 #
 
 # Sets SSH_AUTH_SOCK to the user's ssh-agent socket path if running
@@ -138,3 +137,6 @@ setenv CLICOLOR 1
 
 # other autolist options
 set		autolist = TAB
+
+# Case insensitive search in pager and man
+setenv PAGER less -I

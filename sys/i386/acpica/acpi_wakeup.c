@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2001 Takanori Watanabe <takawata@jp.freebsd.org>
  * Copyright (c) 2001-2012 Mitsuru IWASAKI <iwasaki@jp.freebsd.org>
@@ -30,8 +30,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_apic.h"
 
 #include <sys/param.h>
@@ -86,8 +84,7 @@ static cpuset_t		suspcpus;
 static struct susppcb	**susppcbs;
 #endif
 
-static void		*acpi_alloc_wakeup_handler(void **);
-static void		acpi_stop_beep(void *);
+static void		acpi_stop_beep(void *, enum power_stype);
 
 #ifdef SMP
 static int		acpi_wakeup_ap(struct acpi_softc *, int);
@@ -103,7 +100,7 @@ static void		acpi_wakeup_cpus(struct acpi_softc *);
 } while (0)
 
 static void
-acpi_stop_beep(void *arg)
+acpi_stop_beep(void *arg, enum power_stype stype)
 {
 
 	if (acpi_resume_beep != 0)
@@ -243,7 +240,7 @@ acpi_sleep_machdep(struct acpi_softc *sc, int state)
 		pmap_remap_lowptdi(true);
 
 		/* Call ACPICA to enter the desired sleep state */
-		if (state == ACPI_STATE_S4 && sc->acpi_s4bios)
+		if (state == ACPI_STATE_S4 && acpi_should_do_s4bios(sc))
 			status = AcpiEnterSleepStateS4bios();
 		else
 			status = AcpiEnterSleepState(state);
@@ -352,8 +349,7 @@ acpi_alloc_wakeup_handler(void *wakepages[ACPI_WAKEPAGES])
 
 freepages:
 	for (i = 0; i < ACPI_WAKEPAGES; i++)
-		if (wakepages[i] != NULL)
-			contigfree(wakepages[i], PAGE_SIZE, M_DEVBUF);
+		free(wakepages[i], M_DEVBUF);
 	return (NULL);
 }
 

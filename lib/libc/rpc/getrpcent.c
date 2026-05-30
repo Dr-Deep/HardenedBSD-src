@@ -30,12 +30,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#if defined(LIBC_SCCS) && !defined(lint)
-static char *sccsid = "@(#)getrpcent.c 1.14 91/03/11 Copyr 1984 Sun Micro";
-#endif
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Copyright (c) 1984 by Sun Microsystems, Inc.
  */
@@ -784,9 +778,9 @@ rpc_unmarshal_func(char *buffer, size_t buffer_size, void *retval, va_list ap,
 
 	orig_buf = (char *)_ALIGN(orig_buf);
 	memcpy(orig_buf, buffer + sizeof(struct rpcent) + sizeof(char *) +
-	    _ALIGN(p) - (size_t)p,
+	    __nss_buf_misalignment(p),
 	    buffer_size - sizeof(struct rpcent) - sizeof(char *) -
-	    _ALIGN(p) + (size_t)p);
+	    __nss_buf_misalignment(p));
 	p = (char *)_ALIGN(p);
 
 	NS_APPLY_OFFSET(rpc->r_name, orig_buf, p, char *);

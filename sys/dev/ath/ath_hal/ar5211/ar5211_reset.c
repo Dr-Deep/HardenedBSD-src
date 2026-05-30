@@ -15,8 +15,6 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- * $FreeBSD$
  */
 #include "opt_ah.h"
 
@@ -1802,7 +1800,7 @@ ar5211GetInterpolatedValue(uint16_t target,
 /*
  *  Look for value being within 0.1 of the search values
  *  however, NDIS can't do float calculations, so multiply everything
- *  up by EEP_SCALE so can do integer arithmatic
+ *  up by EEP_SCALE so can do integer arithmetic
  *
  * INPUT  value	   -value to search for
  * INPUT  pList	   -ptr to the list to search

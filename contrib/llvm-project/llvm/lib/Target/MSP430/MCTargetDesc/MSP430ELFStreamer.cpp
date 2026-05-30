@@ -12,6 +12,7 @@
 
 #include "MSP430MCTargetDesc.h"
 #include "llvm/BinaryFormat/ELF.h"
+#include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCELFStreamer.h"
 #include "llvm/MC/MCSectionELF.h"
@@ -34,15 +35,11 @@ public:
 MSP430TargetELFStreamer::MSP430TargetELFStreamer(MCStreamer &S,
                                                  const MCSubtargetInfo &STI)
     : MCTargetStreamer(S) {
-  MCAssembler &MCA = getStreamer().getAssembler();
-  unsigned EFlags = MCA.getELFHeaderEFlags();
-  MCA.setELFHeaderEFlags(EFlags);
-
   // Emit build attributes section according to
   // MSP430 EABI (slaa534.pdf, part 13).
   MCSection *AttributeSection = getStreamer().getContext().getELFSection(
       ".MSP430.attributes", ELF::SHT_MSP430_ATTRIBUTES, 0);
-  Streamer.SwitchSection(AttributeSection);
+  Streamer.switchSection(AttributeSection);
 
   // Format version.
   Streamer.emitInt8(0x41);

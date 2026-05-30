@@ -10,6 +10,7 @@
 #include <ldns/config.h>
 
 #include <ldns/ldns.h>
+#include <ldns/internal.h>
 
 #include <strings.h>
 #include <limits.h>
@@ -19,6 +20,12 @@
 #define LDNS_SYNTAX_DATALEN 16
 #define LDNS_TTL_DATALEN    21
 #define LDNS_RRLIST_INIT    8
+
+#define _IS_WHITESPACE(chr) \
+    ( NULL != strchr( LDNS_PARSE_NO_NL, chr) )
+
+#define _BUFFER_IS_AT_WHITESPACE(rd_buf) \
+    _IS_WHITESPACE(*(ldns_buffer_current(rd_buf)))
 
 ldns_rr *
 ldns_rr_new(void)
@@ -111,8 +118,9 @@ ldns_rdf_type_maybe_quoted(ldns_rdf_type rdf_type)
  */
 static ldns_status
 ldns_rr_new_frm_str_internal(ldns_rr **newrr, const char *str,
-							 uint32_t default_ttl, const ldns_rdf *origin,
-							 ldns_rdf **prev, bool question)
+                             uint32_t default_ttl, const ldns_rdf *origin,
+                             ldns_rdf **prev, bool question,
+			     bool *explicit_ttl)
 {
 	ldns_rr *new;
 	const ldns_rr_descriptor *desc;
@@ -125,6 +133,7 @@ ldns_rr_new_frm_str_internal(ldns_rr **newrr, const char *str,
 	ldns_rr_class clas_val;
 	char  *clas = NULL;
 	char  *type = NULL;
+	size_t type_sz;
 	char  *rdata = NULL;
 	char  *rd = NULL;
 	char  *xtok = NULL; /* For RDF types with spaces (i.e. extra tokens) */
@@ -197,6 +206,9 @@ ldns_rr_new_frm_str_internal(ldns_rr **newrr, const char *str,
 		} else {
 			ttl_val = default_ttl;
 		}
+		if (explicit_ttl)
+			*explicit_ttl = false;
+
 		/* we not ASSUMING the TTL is missing and that
 		 * the rest of the RR is still there. That is
 		 * CLASS TYPE RDATA
@@ -208,13 +220,17 @@ ldns_rr_new_frm_str_internal(ldns_rr **newrr, const char *str,
 		 */
 		if (clas_val == 0) {
 			clas_val = LDNS_RR_CLASS_IN;
-			type = LDNS_XMALLOC(char, strlen(ttl) + 1);
+			type_sz = strlen(ttl) + 1;
+			type = LDNS_XMALLOC(char, type_sz);
 			if (!type) {
 				goto memerror;
 			}
-			strncpy(type, ttl, strlen(ttl) + 1);
+			strlcpy(type, ttl, type_sz);
 		}
 	} else {
+		if (explicit_ttl)
+			*explicit_ttl = true;
+
 		if (-1 == ldns_bget_token(
 				rr_buf, clas, "\t\n ", LDNS_SYNTAX_DATALEN)) {
 
@@ -227,11 +243,12 @@ ldns_rr_new_frm_str_internal(ldns_rr **newrr, const char *str,
 		 */
 		if (clas_val == 0) {
 			clas_val = LDNS_RR_CLASS_IN;
-			type = LDNS_XMALLOC(char, strlen(clas) + 1);
+			type_sz = strlen(clas) + 1;
+			type = LDNS_XMALLOC(char, type_sz);
 			if (!type) {
 				goto memerror;
 			}
-			strncpy(type, clas, strlen(clas) + 1);
+			strlcpy(type, clas, type_sz);
 		}
 	}
 	/* the rest should still be waiting for us */
@@ -256,7 +273,7 @@ ldns_rr_new_frm_str_internal(ldns_rr **newrr, const char *str,
 	}
 	ldns_buffer_new_frm_data(rd_buf, rdata, strlen(rdata));
 
-	if (strlen(owner) <= 1 && strncmp(owner, "@", 1) == 0) {
+	if (strncmp(owner, "@", 1) == 0) {
 		if (origin) {
 			ldns_rr_set_owner(new, ldns_rdf_clone(origin));
 		} else if (prev && *prev) {
@@ -344,13 +361,16 @@ ldns_rr_new_frm_str_internal(ldns_rr **newrr, const char *str,
 		switch (ldns_rr_descriptor_field_type(desc, r_cnt)) {
 		case LDNS_RDF_TYPE_B64        :
 		case LDNS_RDF_TYPE_HEX        : /* These rdf types may con- */
-		case LDNS_RDF_TYPE_LOC        : /* tain whitespace, only if */
-		case LDNS_RDF_TYPE_WKS        : /* it is the last rd field. */
+		case LDNS_RDF_TYPE_NSEC       : /* tain whitespace, only if */
+		case LDNS_RDF_TYPE_LOC        : /* it is the last rd field. */
+		case LDNS_RDF_TYPE_WKS        :
 		case LDNS_RDF_TYPE_IPSECKEY   :
-		case LDNS_RDF_TYPE_NSEC       :	if (r_cnt == r_max - 1) {
+		case LDNS_RDF_TYPE_AMTRELAY   :
+		case LDNS_RDF_TYPE_SVCPARAMS  :	if (r_cnt == r_max - 1) {
 							delimiters = "\n";
 							break;
 						}
+						/* fallthrough */
 		default                       :	delimiters = "\n\t "; 
 		}
 
@@ -359,20 +379,17 @@ ldns_rr_new_frm_str_internal(ldns_rr **newrr, const char *str,
 				desc, r_cnt)) &&
 				ldns_buffer_remaining(rd_buf) > 0){
 
-			/* skip spaces */
-			while (*(ldns_buffer_current(rd_buf)) == ' ') {
+			/* skip whitespace */
+			while (ldns_buffer_remaining(rd_buf) > 0 &&
+				_BUFFER_IS_AT_WHITESPACE(rd_buf)) {
 				ldns_buffer_skip(rd_buf, 1);
 			}
 
-			if (*(ldns_buffer_current(rd_buf)) == '\"') {
+			if (ldns_buffer_remaining(rd_buf) > 0 &&
+				*(ldns_buffer_current(rd_buf)) == '\"') {
 				delimiters = "\"\0";
 				ldns_buffer_skip(rd_buf, 1);
 				quoted = true;
-			} else if (ldns_rr_descriptor_field_type(desc, r_cnt)
-					== LDNS_RDF_TYPE_LONG_STR) {
-
-				status = LDNS_STATUS_SYNTAX_RDATA_ERR;
-				goto error;
 			}
 		}
 
@@ -380,19 +397,20 @@ ldns_rr_new_frm_str_internal(ldns_rr **newrr, const char *str,
 		 * _maximum() only
 		 */
 
-		/* skip spaces */
+		/* skip whitespace */
 		while (ldns_buffer_position(rd_buf) < ldns_buffer_limit(rd_buf)
-				&& *(ldns_buffer_current(rd_buf)) == ' '
+				&& _BUFFER_IS_AT_WHITESPACE(rd_buf)
 				&& !quoted) {
 
 			ldns_buffer_skip(rd_buf, 1);
 		}
 
 		pre_data_pos = ldns_buffer_position(rd_buf);
-		if (-1 == (c = ldns_bget_token(
-				rd_buf, rd, delimiters, LDNS_MAX_RDFLEN))) {
+		if (-1 == ldns_bget_token(
+				rd_buf, rd, delimiters, LDNS_MAX_RDFLEN)) {
 
 			done = true;
+			(void)done; /* we're breaking, so done not read anymore */
 			break;
 		}
 		/* hmmz, rfc3597 specifies that any type can be represented 
@@ -403,7 +421,7 @@ ldns_rr_new_frm_str_internal(ldns_rr **newrr, const char *str,
 
 		/* unknown RR data */
 		if (strncmp(rd, "\\#", 2) == 0 && !quoted &&
-				(rd_strlen == 2 || rd[2]==' ')) {
+				(rd_strlen == 2 || _IS_WHITESPACE(rd[2]))) {
 
 			was_unknown_rr_format = 1;
 			/* go back to before \#
@@ -432,18 +450,18 @@ ldns_rr_new_frm_str_internal(ldns_rr **newrr, const char *str,
 			while(cur_hex_data_size < 2 * hex_data_size) {
 				c = ldns_bget_token(rd_buf, rd,
 						delimiters, LDNS_MAX_RDFLEN);
-				if (c != -1) {
-					rd_strlen = strlen(rd);
-				}
-				if (c == -1 || 
-				    (size_t)cur_hex_data_size + rd_strlen >
-				    2 * (size_t)hex_data_size) {
-
+				if (c == -1) {
 					status = LDNS_STATUS_SYNTAX_RDATA_ERR;
 					goto error;
 				}
-				strncpy(hex_data_str + cur_hex_data_size, rd,
-						rd_strlen);
+				rd_strlen = strlen(rd);
+				if ((size_t)cur_hex_data_size + rd_strlen >
+				    2 * (size_t)hex_data_size) {
+					status = LDNS_STATUS_SYNTAX_RDATA_ERR;
+					goto error;
+				}
+				strlcpy(hex_data_str + cur_hex_data_size, rd,
+						rd_strlen + 1);
 
 				cur_hex_data_size += rd_strlen;
 			}
@@ -573,10 +591,12 @@ ldns_rr_new_frm_str_internal(ldns_rr **newrr, const char *str,
 						    LDNS_RDF_TYPE_DNAME, ".")
 					    );
 
-				} else if (r && rd_strlen >= 1 && origin &&
-						!ldns_dname_str_absolute(rd)) {
+				} else if (r && rd_strlen >= 1
+				    && (origin || rr_type == LDNS_RR_TYPE_SOA)
+				    && !ldns_dname_str_absolute(rd)) {
 
-					status = ldns_dname_cat(r, origin);
+					status = ldns_dname_cat(r, origin
+					    ? origin : ldns_rr_owner(new));
 					if (status != LDNS_STATUS_OK) {
 						goto error;
 					}
@@ -594,14 +614,6 @@ ldns_rr_new_frm_str_internal(ldns_rr **newrr, const char *str,
 			}
 			ldns_rr_push_rdf(new, r);
 		}
-		if (quoted) {
-			if (ldns_buffer_available(rd_buf, 1)) {
-				ldns_buffer_skip(rd_buf, 1);
-			} else {
-				done = true;
-			}
-		}
-
 	} /* for (done = false, r_cnt = 0; !done && r_cnt < r_max; r_cnt++) */
 	LDNS_FREE(rd);
 	LDNS_FREE(xtok);
@@ -665,7 +677,8 @@ ldns_rr_new_frm_str(ldns_rr **newrr, const char *str,
 	                                    default_ttl,
 	                                    origin,
 	                                    prev,
-	                                    false);
+	                                    false,
+					    NULL);
 }
 
 ldns_status
@@ -677,7 +690,8 @@ ldns_rr_new_question_frm_str(ldns_rr **newrr, const char *str,
 	                                    0,
 	                                    origin,
 	                                    prev,
-	                                    true);
+	                                    true,
+					    NULL);
 }
 
 /* Strip whitespace from the start and the end of <line>.  */
@@ -703,43 +717,32 @@ ldns_rr_new_frm_fp(ldns_rr **newrr, FILE *fp, uint32_t *ttl, ldns_rdf **origin, 
 }
 
 ldns_status
-ldns_rr_new_frm_fp_l(ldns_rr **newrr, FILE *fp, uint32_t *default_ttl, ldns_rdf **origin, ldns_rdf **prev, int *line_nr)
+_ldns_rr_new_frm_fp_l_internal(ldns_rr **newrr, FILE *fp,
+		uint32_t *default_ttl, ldns_rdf **origin, ldns_rdf **prev,
+		int *line_nr, bool *explicit_ttl);
+ldns_status
+_ldns_rr_new_frm_fp_l_internal(ldns_rr **newrr, FILE *fp,
+		uint32_t *default_ttl, ldns_rdf **origin, ldns_rdf **prev,
+		int *line_nr, bool *explicit_ttl)
 {
-	char *line;
+	char *line = NULL;
+	size_t limit = 0;
 	const char *endptr;  /* unused */
 	ldns_rr *rr;
 	uint32_t ttl;
 	ldns_rdf *tmp;
 	ldns_status s;
-	ssize_t size;
 
 	if (default_ttl) {
 		ttl = *default_ttl;
 	} else {
 		ttl = 0;
 	}
-
-	line = LDNS_XMALLOC(char, LDNS_MAX_LINELEN + 1);
-	if (!line) {
-		return LDNS_STATUS_MEM_ERR;
-	}
-
 	/* read an entire line in from the file */
-	if ((size = ldns_fget_token_l(fp, line, LDNS_PARSE_SKIP_SPACE, LDNS_MAX_LINELEN, line_nr)) == -1) {
+	if ((s = ldns_fget_token_l_st( fp, &line, &limit, false
+	                             , LDNS_PARSE_SKIP_SPACE, line_nr))) {
 		LDNS_FREE(line);
-		/* if last line was empty, we are now at feof, which is not
-		 * always a parse error (happens when for instance last line
-		 * was a comment)
-		 */
-		return LDNS_STATUS_SYNTAX_ERR;
-	}
-
-	/* we can have the situation, where we've read ok, but still got
-	 * no bytes to play with, in this case size is 0
-	 */
-	if (size == 0) {
-		LDNS_FREE(line);
-		return LDNS_STATUS_SYNTAX_EMPTY;
+		return s;
 	}
 
 	if (strncmp(line, "$ORIGIN", 7) == 0 && isspace((unsigned char)line[7])) {
@@ -769,9 +772,11 @@ ldns_rr_new_frm_fp_l(ldns_rr **newrr, FILE *fp, uint32_t *default_ttl, ldns_rdf 
 		return LDNS_STATUS_SYNTAX_EMPTY;
 	} else {
 		if (origin && *origin) {
-			s = ldns_rr_new_frm_str(&rr, (const char*) line, ttl, *origin, prev);
+			s = ldns_rr_new_frm_str_internal(&rr, (const char*)line,
+				ttl, *origin, prev, false, explicit_ttl);
 		} else {
-			s = ldns_rr_new_frm_str(&rr, (const char*) line, ttl, NULL, prev);
+			s = ldns_rr_new_frm_str_internal(&rr, (const char*)line,
+				ttl, NULL, prev, false, explicit_ttl);
 		}
 	}
 	LDNS_FREE(line);
@@ -784,6 +789,14 @@ ldns_rr_new_frm_fp_l(ldns_rr **newrr, FILE *fp, uint32_t *default_ttl, ldns_rdf 
 		}
 	}
 	return s;
+}
+
+ldns_status
+ldns_rr_new_frm_fp_l(ldns_rr **newrr, FILE *fp, uint32_t *default_ttl,
+		ldns_rdf **origin, ldns_rdf **prev, int *line_nr)
+{
+	return _ldns_rr_new_frm_fp_l_internal(newrr, fp, default_ttl, origin,
+			prev, line_nr, NULL);
 }
 
 void
@@ -830,7 +843,7 @@ ldns_rr_set_rdf(ldns_rr *rr, const ldns_rdf *f, size_t position)
 
 	rd_count = ldns_rr_rd_count(rr);
 	if (position < rd_count) {
-		/* dicard the old one */
+		/* discard the old one */
 		pop = rr->_rdata_fields[position];
 		rr->_rdata_fields[position] = (ldns_rdf*)f;
 		return pop;
@@ -1184,6 +1197,7 @@ ldns_rr_list_pop_rr(ldns_rr_list *rr_list)
 		        rr_list->_rrs = a;
 		        rr_list->_rr_capacity = cap;
                 }
+                /* if the realloc fails, the capacity for the list remains unchanged */
 	}
 
 	ldns_rr_list_set_rr_count(rr_list, rr_count - 1);
@@ -1268,7 +1282,47 @@ ldns_is_rrset(const ldns_rr_list *rr_list)
 		if (c != ldns_rr_get_class(tmp)) {
 			return false;
 		}
-		if (ldns_rdf_compare(o, ldns_rr_owner(tmp)) != 0) {
+		if (ldns_dname_compare(o, ldns_rr_owner(tmp)) != 0) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool
+ldns_is_rrset_strict(const ldns_rr_list *rr_list)
+{
+	ldns_rr_type t;
+	ldns_rr_class c;
+	uint32_t l;
+	ldns_rdf *o;
+	ldns_rr *tmp;
+	size_t i;
+
+	if (!rr_list || ldns_rr_list_rr_count(rr_list) == 0) {
+		return false;
+	}
+
+	tmp = ldns_rr_list_rr(rr_list, 0);
+
+	t = ldns_rr_get_type(tmp);
+	c = ldns_rr_get_class(tmp);
+	l = ldns_rr_ttl(tmp);
+	o = ldns_rr_owner(tmp);
+
+	/* compare these with the rest of the rr_list, start with 1 */
+	for (i = 1; i < ldns_rr_list_rr_count(rr_list); i++) {
+		tmp = ldns_rr_list_rr(rr_list, i);
+		if (t != ldns_rr_get_type(tmp)) {
+			return false;
+		}
+		if (c != ldns_rr_get_class(tmp)) {
+			return false;
+		}
+		if (l != ldns_rr_ttl(tmp)) {
+			return false;
+		}
+		if (ldns_dname_compare(o, ldns_rr_owner(tmp)) != 0) {
 			return false;
 		}
 	}
@@ -1311,7 +1365,7 @@ ldns_rr_set_push_rr(ldns_rr_list *rr_list, ldns_rr *rr)
 			return false;
 		}
 		/* ok, still alive - check if the rr already
-		 * exists - if so, dont' add it */
+		 * exists - if so, don't add it */
 		for(i = 0; i < rr_count; i++) {
 			if(ldns_rr_compare(
 					ldns_rr_list_rr(rr_list, i), rr) == 0) {
@@ -1662,8 +1716,8 @@ ldns_rr_compare(const ldns_rr *rr1, const ldns_rr *rr2)
 	return result;
 }
 
-/* convert dnskey to a ds with the given algorithm,
- * then compare the result with the given ds */
+/* convert (c)dnskey to a (c)ds with the given algorithm,
+ * then compare the result with the given (c)ds */
 static int
 ldns_rr_compare_ds_dnskey(ldns_rr *ds,
                           ldns_rr *dnskey)
@@ -1673,8 +1727,10 @@ ldns_rr_compare_ds_dnskey(ldns_rr *ds,
 	ldns_hash algo;
 
 	if (!dnskey || !ds ||
-	    ldns_rr_get_type(ds) != LDNS_RR_TYPE_DS ||
-	    ldns_rr_get_type(dnskey) != LDNS_RR_TYPE_DNSKEY) {
+	    (ldns_rr_get_type(ds) != LDNS_RR_TYPE_DS &&
+	     ldns_rr_get_type(ds) != LDNS_RR_TYPE_CDS) ||
+	    (ldns_rr_get_type(dnskey) != LDNS_RR_TYPE_DNSKEY &&
+	     ldns_rr_get_type(dnskey) != LDNS_RR_TYPE_CDNSKEY)) {
 		return false;
 	}
 
@@ -1707,6 +1763,12 @@ ldns_rr_compare_ds(const ldns_rr *orr1, const ldns_rr *orr2)
 		result = ldns_rr_compare_ds_dnskey(rr1, rr2);
 	} else if (ldns_rr_get_type(rr1) == LDNS_RR_TYPE_DNSKEY &&
 	    ldns_rr_get_type(rr2) == LDNS_RR_TYPE_DS) {
+		result = ldns_rr_compare_ds_dnskey(rr2, rr1);
+	} else if (ldns_rr_get_type(rr1) == LDNS_RR_TYPE_CDS &&
+	    ldns_rr_get_type(rr2) == LDNS_RR_TYPE_CDNSKEY) {
+		result = ldns_rr_compare_ds_dnskey(rr1, rr2);
+	} else if (ldns_rr_get_type(rr1) == LDNS_RR_TYPE_CDNSKEY &&
+	    ldns_rr_get_type(rr2) == LDNS_RR_TYPE_CDS) {
 		result = ldns_rr_compare_ds_dnskey(rr2, rr1);
 	} else {
 		result = (ldns_rr_compare(rr1, rr2) == 0);
@@ -1878,7 +1940,7 @@ static const ldns_rdf_type type_nsap_wireformat[] = {
 	LDNS_RDF_TYPE_NSAP
 };
 static const ldns_rdf_type type_nsap_ptr_wireformat[] = {
-	LDNS_RDF_TYPE_STR
+	LDNS_RDF_TYPE_UNQUOTED
 };
 static const ldns_rdf_type type_sig_wireformat[] = {
 	LDNS_RDF_TYPE_TYPE, LDNS_RDF_TYPE_ALG, LDNS_RDF_TYPE_INT8, LDNS_RDF_TYPE_INT32,
@@ -1892,7 +1954,7 @@ static const ldns_rdf_type type_px_wireformat[] = {
 	LDNS_RDF_TYPE_INT16, LDNS_RDF_TYPE_DNAME, LDNS_RDF_TYPE_DNAME
 };
 static const ldns_rdf_type type_gpos_wireformat[] = {
-	LDNS_RDF_TYPE_STR, LDNS_RDF_TYPE_STR, LDNS_RDF_TYPE_STR
+	LDNS_RDF_TYPE_UNQUOTED, LDNS_RDF_TYPE_UNQUOTED, LDNS_RDF_TYPE_UNQUOTED
 };
 static const ldns_rdf_type type_aaaa_wireformat[] = { LDNS_RDF_TYPE_AAAA };
 static const ldns_rdf_type type_loc_wireformat[] = { LDNS_RDF_TYPE_LOC };
@@ -1958,6 +2020,34 @@ static const ldns_rdf_type type_openpgpkey_wireformat[] = {
 static const ldns_rdf_type type_csync_wireformat[] = {
 	LDNS_RDF_TYPE_INT32, LDNS_RDF_TYPE_INT16, LDNS_RDF_TYPE_NSEC
 };
+static const ldns_rdf_type type_zonemd_wireformat[] = {
+	LDNS_RDF_TYPE_INT32,
+	LDNS_RDF_TYPE_INT8, LDNS_RDF_TYPE_INT8, LDNS_RDF_TYPE_HEX
+};
+#ifdef RRTYPE_SVCB_HTTPS
+static const ldns_rdf_type type_svcb_wireformat[] = {
+	LDNS_RDF_TYPE_INT16,
+	LDNS_RDF_TYPE_DNAME, 
+	LDNS_RDF_TYPE_SVCPARAMS
+};
+#endif
+#ifdef RRTYPE_DSYNC
+static const ldns_rdf_type type_dsync_wireformat[] = {
+	LDNS_RDF_TYPE_TYPE,
+	LDNS_RDF_TYPE_INT8,
+	LDNS_RDF_TYPE_INT16,
+	LDNS_RDF_TYPE_DNAME
+};
+#endif
+#ifdef RRTYPE_HHIT_BRID
+static const ldns_rdf_type type_hhit_wireformat[] = {
+	LDNS_RDF_TYPE_B64
+};
+static const ldns_rdf_type type_brid_wireformat[] = {
+	LDNS_RDF_TYPE_B64
+};
+#endif
+
 /* nsec3 is some vars, followed by same type of data of nsec */
 static const ldns_rdf_type type_nsec3_wireformat[] = {
 /*	LDNS_RDF_TYPE_NSEC3_VARS, LDNS_RDF_TYPE_NSEC3_NEXT_OWNER, LDNS_RDF_TYPE_NSEC*/
@@ -2037,6 +2127,28 @@ static const ldns_rdf_type type_caa_wireformat[] = {
 	LDNS_RDF_TYPE_TAG,
 	LDNS_RDF_TYPE_LONG_STR
 };
+#ifdef RRTYPE_DOA
+static const ldns_rdf_type type_doa_wireformat[] = {
+	LDNS_RDF_TYPE_INT32,
+	LDNS_RDF_TYPE_INT32,
+	LDNS_RDF_TYPE_INT8,
+	LDNS_RDF_TYPE_STR,
+	LDNS_RDF_TYPE_B64
+};
+#endif
+#ifdef RRTYPE_AMTRELAY
+static const ldns_rdf_type type_amtrelay_wireformat[] = {
+	LDNS_RDF_TYPE_AMTRELAY
+};
+#endif
+#ifdef RRTYPE_CLA_IPN
+static const ldns_rdf_type type_ipn_wireformat[] = {
+	LDNS_RDF_TYPE_IPN
+};
+#endif
+
+
+
 /** \endcond */
 
 /** \cond */
@@ -2188,14 +2300,35 @@ static ldns_rr_descriptor rdata_field_descriptors[] = {
 #else
 {LDNS_RR_TYPE_NULL, "TYPE61", 1, 1, type_0_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
 #endif
+	/* 62 */
+	{LDNS_RR_TYPE_CSYNC, "CSYNC", 3, 3, type_csync_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
+	/* 63 */
+	{LDNS_RR_TYPE_ZONEMD, "ZONEMD", 4, 4, type_zonemd_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
+#ifdef RRTYPE_SVCB_HTTPS
+	/* 64 */
+	{LDNS_RR_TYPE_SVCB, "SVCB", 2, 3, type_svcb_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 1 },
+	/* 65 */
+	{LDNS_RR_TYPE_HTTPS, "HTTPS", 2, 3, type_svcb_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 1 },
 
-{LDNS_RR_TYPE_CSYNC, "CSYNC", 3, 3, type_csync_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
-{LDNS_RR_TYPE_NULL, "TYPE63", 1, 1, type_0_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
+#else
 {LDNS_RR_TYPE_NULL, "TYPE64", 1, 1, type_0_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
 {LDNS_RR_TYPE_NULL, "TYPE65", 1, 1, type_0_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
+#endif
+#ifdef RRTYPE_DSYNC
+	/* 66 */
+	{LDNS_RR_TYPE_DSYNC, "DSYNC", 4, 4, type_dsync_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 1 },
+#else
 {LDNS_RR_TYPE_NULL, "TYPE66", 1, 1, type_0_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
+#endif
+#ifdef RRTYPE_HHIT_BRID
+	/* 67 */
+	{LDNS_RR_TYPE_HHIT, "HHIT", 1, 1, type_hhit_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
+	/* 68 */
+	{LDNS_RR_TYPE_BRID, "BRID", 1, 1, type_brid_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
+#else
 {LDNS_RR_TYPE_NULL, "TYPE67", 1, 1, type_0_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
 {LDNS_RR_TYPE_NULL, "TYPE68", 1, 1, type_0_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
+#endif
 {LDNS_RR_TYPE_NULL, "TYPE69", 1, 1, type_0_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
 {LDNS_RR_TYPE_NULL, "TYPE70", 1, 1, type_0_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
 {LDNS_RR_TYPE_NULL, "TYPE71", 1, 1, type_0_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
@@ -2270,7 +2403,7 @@ static ldns_rr_descriptor rdata_field_descriptors[] = {
 {LDNS_RR_TYPE_NULL, "TYPE125", 1, 1, type_0_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
 {LDNS_RR_TYPE_NULL, "TYPE126", 1, 1, type_0_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
 {LDNS_RR_TYPE_NULL, "TYPE127", 1, 1, type_0_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
-{LDNS_RR_TYPE_NULL, "TYPE128", 1, 1, type_0_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
+{LDNS_RR_TYPE_NXNAME, "NXNAME", 1, 1, type_0_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
 {LDNS_RR_TYPE_NULL, "TYPE129", 1, 1, type_0_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
 {LDNS_RR_TYPE_NULL, "TYPE130", 1, 1, type_0_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
 {LDNS_RR_TYPE_NULL, "TYPE131", 1, 1, type_0_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
@@ -2425,7 +2558,35 @@ static ldns_rr_descriptor rdata_field_descriptors[] = {
 #else
 {LDNS_RR_TYPE_NULL, "TYPE258", 1, 1, type_0_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
 #endif
-
+#ifdef RRTYPE_DOA
+	/* 259 */
+	{LDNS_RR_TYPE_DOA, "DOA", 5, 5, type_doa_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
+#else
+{LDNS_RR_TYPE_NULL, "TYPE259", 1, 1, type_0_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
+#endif
+#ifdef RRTYPE_AMTRELAY
+	/* 260 */
+	{LDNS_RR_TYPE_AMTRELAY, "AMTRELAY", 1, 1, type_amtrelay_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
+#else
+{LDNS_RR_TYPE_NULL, "TYPE260", 1, 1, type_0_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
+#endif
+#ifdef RRTYPE_RESINFO
+	/* 261 */
+	{LDNS_RR_TYPE_RESINFO, "RESINFO", 1, 0, NULL, LDNS_RDF_TYPE_UNQUOTED, LDNS_RR_NO_COMPRESS, 0 },
+#else
+{LDNS_RR_TYPE_NULL, "TYPE261", 1, 1, type_0_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
+#endif
+	/* 262 */
+	{LDNS_RR_TYPE_WALLET, "WALLET", 1, 0, NULL, LDNS_RDF_TYPE_STR, LDNS_RR_NO_COMPRESS, 0 },
+#ifdef RRTYPE_CLA_IPN
+	/* 263 */
+	{LDNS_RR_TYPE_CLA, "CLA", 1, 0, NULL, LDNS_RDF_TYPE_STR, LDNS_RR_NO_COMPRESS, 0 },
+	/* 264 */
+	{LDNS_RR_TYPE_IPN, "IPN", 1, 1, type_ipn_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
+#else
+{LDNS_RR_TYPE_NULL, "TYPE263", 1, 1, type_0_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
+{LDNS_RR_TYPE_NULL, "TYPE264", 1, 1, type_0_wireformat, LDNS_RDF_TYPE_NONE, LDNS_RR_NO_COMPRESS, 0 },
+#endif
 /* split in array, no longer contiguous */
 
 #ifdef RRTYPE_TA
@@ -2450,7 +2611,7 @@ static ldns_rr_descriptor rdata_field_descriptors[] = {
 /*---------------------------------------------------------------------------*
  * The functions below return an bitmap RDF with the space required to set
  * or unset all known RR types. Arguably these functions are better situated
- * in rdata.c, however for the space calculation it is necesarry to walk
+ * in rdata.c, however for the space calculation it is necessary to walk
  * through rdata_field_descriptors which is not easily possible from anywhere
  * other than rr.c where it is declared static.
  *
@@ -2511,6 +2672,14 @@ ldns_rdf_bitmap_known_rr_types_set(ldns_rdf** rdf, int value)
 	for (d=rdata_field_descriptors; d < rdata_field_descriptors_end; d++) {
 		window  = d->_type >> 8;
 		subtype = d->_type & 0xff;
+
+		/* In the code below, windows[window] == 0 means that the
+		 * window is not in use. So subtype == 0 is a problem. The
+		 * easiest solution is to set subtype to 1, that marks the
+		 * window as in use and doesn't have negative effects.
+		 */
+		if (subtype == 0)
+			subtype = 1;
 		if (windows[window] < subtype) {
 			windows[window] = subtype;
 		}
@@ -2528,10 +2697,10 @@ ldns_rdf_bitmap_known_rr_types_set(ldns_rdf** rdf, int value)
 		/* Format rdf data according RFC3845 Section 2.1.2 (see above)
 		 */
 		dptr = data = LDNS_XMALLOC(uint8_t, sz);
-		memset(data, value, sz);
 		if (!data) {
 			return LDNS_STATUS_MEM_ERR;
 		}
+		memset(data, value, sz);
 		for (i = 0; i < 256; i++) {
 			if (windows[i]) {
 				*dptr++ = (uint8_t)i;

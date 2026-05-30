@@ -36,6 +36,8 @@ extern struct sldns_struct_lookup_table* sldns_opcodes;
 extern struct sldns_struct_lookup_table* sldns_edns_flags;
 /** EDNS option codes */
 extern struct sldns_struct_lookup_table* sldns_edns_options;
+/** EDNS EDE codes */
+extern struct sldns_struct_lookup_table* sldns_edns_ede_codes;
 /** error string from wireparse */
 extern struct sldns_struct_lookup_table* sldns_wireparse_errors;
 /** tsig errors are the rcodes with extra (higher) values */
@@ -260,7 +262,7 @@ int sldns_wire2str_rdata_unknown_scan(uint8_t** data, size_t* data_len,
  * @param pkt: packet for decompression, if NULL no decompression.
  * @param pktlen: length of packet buffer.
  * @param comprloop: inout bool, that is set true if compression loop failure
- * 	happens.  Pass in 0, if passsed in as true, a lower bound is set
+ * 	happens.  Pass in 0, if passed in as true, a lower bound is set
  * 	on compression loops to stop arbitrary long packet parse times.
  * 	This is meant so you can set it to 0 at the start of a list of dnames,
  * 	and then scan all of them in sequence, if a loop happens, it becomes
@@ -918,6 +920,19 @@ int sldns_wire2str_eui64_scan(uint8_t** data, size_t* data_len, char** str,
 	size_t* str_len);
 
 /**
+ * Scan wireformat UNQUOTED field to string, with user buffers.
+ * It shifts the arguments to move along (see sldns_wire2str_pkt_scan).
+ * @param data: wireformat data.
+ * @param data_len: length of data buffer.
+ * @param str: string buffer.
+ * @param str_len: length of string buffer.
+ * @return number of characters (except null) needed to print.
+ * 	Can return -1 on failure.
+ */
+int sldns_wire2str_unquoted_scan(uint8_t** data, size_t* data_len, char** str,
+	size_t* str_len);
+
+/**
  * Scan wireformat TAG field to string, with user buffers.
  * It shifts the arguments to move along (see sldns_wire2str_pkt_scan).
  * @param data: wireformat data.
@@ -1018,6 +1033,17 @@ int sldns_wire2str_edns_n3u_print(char** str, size_t* str_len,
  * @return number of characters (except null) needed to print.
  */
 int sldns_wire2str_edns_subnet_print(char** str, size_t* str_len,
+	uint8_t* option_data, size_t option_len);
+
+/**
+ * Print EDNS EDE option data to string. User buffers, moves string pointers.
+ * @param str: string buffer.
+ * @param str_len: length of string buffer.
+ * @param option_data: buffer with EDNS option code data.
+ * @param option_len: length of the data for this option.
+ * @return number of characters (except null) needed to print.
+ */
+int sldns_wire2str_edns_ede_print(char** str, size_t* str_len,
 	uint8_t* option_data, size_t option_len);
 
 /**

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2001, 2002 Ian Dowse.  All rights reserved.
  *
@@ -30,8 +30,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_ufs.h"
 
 #ifdef UFS_DIRHASH
@@ -100,7 +98,7 @@ static int ufsdirhash_findslot(struct dirhash *dh, char *name, int namelen,
 	   doff_t offset);
 static doff_t ufsdirhash_getprev(struct direct *dp, doff_t offset);
 static int ufsdirhash_recycle(int wanted);
-static void ufsdirhash_lowmem(void);
+static void ufsdirhash_lowmem(void *, int);
 static void ufsdirhash_free_locked(struct inode *ip);
 
 static uma_zone_t	ufsdirhash_zone;
@@ -348,7 +346,7 @@ ufsdirhash_build(struct inode *ip)
 	struct direct *ep;
 	struct vnode *vp;
 	doff_t bmask, pos;
-	u_int dirblocks, i, narrays, nblocks, nslots;
+	uint64_t dirblocks, i, narrays, nblocks, nslots;
 	int j, memreqd, slot;
 
 	/* Take care of a decreased sysctl value. */
@@ -1034,7 +1032,7 @@ ufsdirhash_checkblock(struct inode *ip, char *buf, doff_t offset)
 static int
 ufsdirhash_hash(struct dirhash *dh, char *name, int namelen)
 {
-	u_int32_t hash;
+	uint32_t hash;
 
 	/*
 	 * We hash the name and then some other bit of data that is
@@ -1181,7 +1179,7 @@ static int
 ufsdirhash_destroy(struct dirhash *dh)
 {
 	doff_t **hash;
-	u_int8_t *blkfree;
+	uint8_t *blkfree;
 	int i, mem, narrays;
 
 	KASSERT(dh->dh_hash != NULL, ("dirhash: NULL hash on list"));
@@ -1249,7 +1247,7 @@ ufsdirhash_recycle(int wanted)
  * Callback that frees some dirhashes when the system is low on virtual memory.
  */
 static void
-ufsdirhash_lowmem(void)
+ufsdirhash_lowmem(void *arg __unused, int flags __unused)
 {
 	struct dirhash *dh, *dh_temp;
 	int memfreed, memwanted;

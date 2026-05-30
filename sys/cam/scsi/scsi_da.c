@@ -1,7 +1,7 @@
 /*-
  * Implementation of SCSI Direct Access Peripheral driver for CAM.
  *
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1997 Justin T. Gibbs.
  * All rights reserved.
@@ -27,9 +27,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 
@@ -90,6 +87,7 @@ typedef enum {
 	DA_STATE_PROBE_WP,
 	DA_STATE_PROBE_RC,
 	DA_STATE_PROBE_RC16,
+	DA_STATE_PROBE_CACHE,
 	DA_STATE_PROBE_LBP,
 	DA_STATE_PROBE_BLK_LIMITS,
 	DA_STATE_PROBE_BDC,
@@ -123,7 +121,8 @@ typedef enum {
 	DA_FLAG_CAN_ATA_SUPCAP	= 0x020000,
 	DA_FLAG_CAN_ATA_ZONE	= 0x040000,
 	DA_FLAG_TUR_PENDING	= 0x080000,
-	DA_FLAG_UNMAPPEDIO	= 0x100000
+	DA_FLAG_UNMAPPEDIO	= 0x100000,
+	DA_FLAG_LBP		= 0x200000,
 } da_flags;
 #define DA_FLAG_STRING		\
 	"\020"			\
@@ -140,14 +139,15 @@ typedef enum {
 	"\013CAN_RC16"		\
 	"\014PROBED"		\
 	"\015DIRTY"		\
-	"\016ANNOUCNED"		\
+	"\016ANNOUNCED"		\
 	"\017CAN_ATA_DMA"	\
 	"\020CAN_ATA_LOG"	\
 	"\021CAN_ATA_IDLOG"	\
 	"\022CAN_ATA_SUPACP"	\
 	"\023CAN_ATA_ZONE"	\
 	"\024TUR_PENDING"	\
-	"\025UNMAPPEDIO"
+	"\025UNMAPPEDIO"	\
+	"\026LBP"		\
 
 typedef enum {
 	DA_Q_NONE		= 0x00,
@@ -193,6 +193,7 @@ typedef enum {
 	DA_CCB_PROBE_ATA_SUP	= 0x10,
 	DA_CCB_PROBE_ATA_ZONE	= 0x11,
 	DA_CCB_PROBE_WP		= 0x12,
+	DA_CCB_PROBE_CACHE	= 0x13,
 	DA_CCB_TYPE_MASK	= 0x1F,
 	DA_CCB_RETRY_UA		= 0x20
 } da_ccb_state;
@@ -302,11 +303,11 @@ static const char *da_delete_method_desc[] =
 #define ccb_bp		ppriv_ptr1
 
 struct disk_params {
-	u_int8_t  heads;
-	u_int32_t cylinders;
-	u_int8_t  secs_per_track;
-	u_int32_t secsize;	/* Number of bytes/sector */
-	u_int64_t sectors;	/* total number sectors */
+	uint8_t  heads;
+	uint32_t cylinders;
+	uint8_t  secs_per_track;
+	uint32_t secsize;	/* Number of bytes/sector */
+	uint64_t sectors;	/* total number sectors */
 	u_int     stripesize;
 	u_int     stripeoffset;
 };
@@ -885,6 +886,11 @@ static struct da_quirk_entry da_quirk_table[] =
 		 "*"}, /*quirks*/ DA_Q_NO_RC16
 	},
 	{
+		/* ADATA USB sticks lie on RC16. */
+		{T_DIRECT, SIP_MEDIA_REMOVABLE, "ADATA", "USB Flash Drive*",
+		 "*"}, /*quirks*/ DA_Q_NO_RC16
+	},
+	{
 		/*
 		 * I-O Data USB Flash Disk
 		 * PR: usb/211716
@@ -1400,6 +1406,22 @@ static struct da_quirk_entry da_quirk_table[] =
 	},
 	{
 		/*
+		 * Samsung 860 SSDs
+		 * 4k optimised & trim only works in 4k requests + 4k aligned
+		 */
+		{ T_DIRECT, SIP_MEDIA_FIXED, "ATA", "Samsung SSD 860*", "*" },
+		/*quirks*/DA_Q_4K
+	},
+	{
+		/*
+		 * Samsung 870 SSDs
+		 * 4k optimised & trim only works in 4k requests + 4k aligned
+		 */
+		{ T_DIRECT, SIP_MEDIA_FIXED, "ATA", "Samsung SSD 870*", "*" },
+		/*quirks*/DA_Q_4K
+	},
+	{
+		/*
 		 * Samsung 843T Series SSDs (MZ7WD*)
 		 * Samsung PM851 Series SSDs (MZ7TE*)
 		 * Samsung PM853T Series SSDs (MZ7GE*)
@@ -1470,7 +1492,7 @@ static struct da_quirk_entry da_quirk_table[] =
 static	disk_strategy_t	dastrategy;
 static	dumper_t	dadump;
 static	periph_init_t	dainit;
-static	void		daasync(void *callback_arg, u_int32_t code,
+static	void		daasync(void *callback_arg, uint32_t code,
 				struct cam_path *path, void *arg);
 static	void		dasysctlinit(void *context, int pending);
 static	int		dasysctlsofttimeout(SYSCTL_HANDLER_ARGS);
@@ -1478,6 +1500,7 @@ static	int		dacmdsizesysctl(SYSCTL_HANDLER_ARGS);
 static	int		dadeletemethodsysctl(SYSCTL_HANDLER_ARGS);
 static	int		dabitsysctl(SYSCTL_HANDLER_ARGS);
 static	int		daflagssysctl(SYSCTL_HANDLER_ARGS);
+static	int		daquirkssysctl(SYSCTL_HANDLER_ARGS);
 static	int		dazonemodesysctl(SYSCTL_HANDLER_ARGS);
 static	int		dazonesupsysctl(SYSCTL_HANDLER_ARGS);
 static	int		dadeletemaxsysctl(SYSCTL_HANDLER_ARGS);
@@ -1506,6 +1529,8 @@ static void		dadone_probeblklimits(struct cam_periph *periph,
 					      union ccb *done_ccb);
 static void		dadone_probebdc(struct cam_periph *periph,
 					union ccb *done_ccb);
+static void		dadone_probecache(struct cam_periph *periph,
+			    union ccb *done_ccb);
 static void		dadone_probeata(struct cam_periph *periph,
 					union ccb *done_ccb);
 static void		dadone_probeatalogdir(struct cam_periph *periph,
@@ -1520,8 +1545,8 @@ static void		dadone_probezone(struct cam_periph *periph,
 					 union ccb *done_ccb);
 static void		dadone_tur(struct cam_periph *periph,
 				   union ccb *done_ccb);
-static  int		daerror(union ccb *ccb, u_int32_t cam_flags,
-				u_int32_t sense_flags);
+static  int		daerror(union ccb *ccb, uint32_t cam_flags,
+				uint32_t sense_flags);
 static void		daprevent(struct cam_periph *periph, int action);
 static void		dareprobe(struct cam_periph *periph);
 static void		dasetgeom(struct cam_periph *periph, uint32_t block_len,
@@ -1785,10 +1810,20 @@ daopen(struct disk *dp)
 	    (softc->quirks & DA_Q_NO_PREVENT) == 0)
 		daprevent(periph, PR_PREVENT);
 
-	if (error == 0) {
+	/*
+	 * Only 'validate' the pack if the media size is non-zero and the
+	 * underlying peripheral isn't invalid (the only error != 0 path).  Once
+	 * the periph is marked invalid, we only get here on lost races with its
+	 * teardown, so keeping the pack invalid also keeps more I/O from
+	 * starting.
+	 */
+	if (error == 0 && softc->params.sectors != 0)
 		softc->flags &= ~DA_FLAG_PACK_INVALID;
+	else
+		softc->flags |= DA_FLAG_PACK_INVALID;
+
+	if (error == 0)
 		softc->flags |= DA_FLAG_OPEN;
-	}
 
 	da_periph_unhold(periph, DA_REF_OPEN_HOLD);
 	cam_periph_unlock(periph);
@@ -1881,7 +1916,15 @@ dastrategy(struct bio *bp)
 	cam_periph_lock(periph);
 
 	/*
-	 * If the device has been made invalid, error out
+	 * If the pack has been invalidated, fail all I/O. The medium is not
+	 * suitable for normal I/O, because one or more is ture:
+	 *	- the medium is missing
+	 *	- its size is unknown
+	 *	- it differs from the medium present at daopen
+	 *	- we're tearing the cam periph device down
+	 * Since we have the cam periph lock, we don't need to check it for
+	 * the last condition since PACK_INVALID is set when we invalidate
+	 * the device.
 	 */
 	if ((softc->flags & DA_FLAG_PACK_INVALID)) {
 		cam_periph_unlock(periph);
@@ -1928,6 +1971,10 @@ dadump(void *arg, void *virtual, off_t offset, size_t length)
 	softc = (struct da_softc *)periph->softc;
 	secsize = softc->params.secsize;
 
+	/*
+	 * Can't dump to a disk that's not there or changed, for whatever
+	 * reason.
+	 */
 	if ((softc->flags & DA_FLAG_PACK_INVALID) != 0)
 		return (ENXIO);
 
@@ -1944,7 +1991,7 @@ dadump(void *arg, void *virtual, off_t offset, size_t length)
 				/*minimum_cmd_size*/ softc->minimum_cmd_size,
 				offset / secsize,
 				length / secsize,
-				/*data_ptr*/(u_int8_t *) virtual,
+				/*data_ptr*/(uint8_t *) virtual,
 				/*dxfer_len*/length,
 				/*sense_len*/SSD_FULL_SIZE,
 				da_default_timeout * 1000);
@@ -2012,8 +2059,9 @@ dainit(void)
 	status = xpt_register_async(AC_FOUND_DEVICE, daasync, NULL, NULL);
 
 	if (status != CAM_REQ_CMP) {
-		printf("da: Failed to attach master async callback "
-		       "due to status 0x%x!\n", status);
+		printf(
+		    "da: Failed to attach master async callback due to status 0x%x!\n",
+		    status);
 	} else if (da_send_ordered) {
 		/* Register our shutdown event handler */
 		if ((EVENTHANDLER_REGISTER(shutdown_post_sync, dashutdown,
@@ -2101,7 +2149,7 @@ dacleanup(struct cam_periph *periph)
 }
 
 static void
-daasync(void *callback_arg, u_int32_t code,
+daasync(void *callback_arg, uint32_t code,
 	struct cam_path *path, void *arg)
 {
 	struct cam_periph *periph;
@@ -2139,10 +2187,10 @@ daasync(void *callback_arg, u_int32_t code,
 					  path, daasync,
 					  AC_FOUND_DEVICE, cgd);
 
-		if (status != CAM_REQ_CMP
-		 && status != CAM_REQ_INPROG)
-			printf("daasync: Unable to attach to new device "
-				"due to status 0x%x\n", status);
+		if (status != CAM_REQ_CMP && status != CAM_REQ_INPROG)
+			printf(
+			    "daasync: Unable to attach to new device due to status 0x%x\n",
+			    status);
 		return;
 	}
 	case AC_ADVINFO_CHANGED:	/* Doesn't touch periph */
@@ -2168,23 +2216,27 @@ daasync(void *callback_arg, u_int32_t code,
 		ccb = (union ccb *)arg;
 
 		/*
-		 * Handle all UNIT ATTENTIONs except our own, as they will be
+		 * Unit attentions are broadcast to all the LUNs of the device
+		 * so handle all UNIT ATTENTIONs except our own, as they will be
 		 * handled by daerror().
 		 */
 		if (xpt_path_periph(ccb->ccb_h.path) != periph &&
 		    scsi_extract_sense_ccb(ccb,
 		     &error_code, &sense_key, &asc, &ascq)) {
 			if (asc == 0x2A && ascq == 0x09) {
+				/* 2a/9: CAPACITY DATA HAS CHANGED */
 				xpt_print(ccb->ccb_h.path,
 				    "Capacity data has changed\n");
 				cam_periph_assert(periph, MA_OWNED);
 				softc->flags &= ~DA_FLAG_PROBED;
 				dareprobe(periph);
 			} else if (asc == 0x28 && ascq == 0x00) {
+				/* 28/0: NOT READY TO READY CHANGE, MEDIUM MAY HAVE CHANGED */
 				cam_periph_assert(periph, MA_OWNED);
 				softc->flags &= ~DA_FLAG_PROBED;
 				disk_media_changed(softc->disk, M_NOWAIT);
 			} else if (asc == 0x3F && ascq == 0x03) {
+				/* 3f/3: INQUIRY DATA HAS CHANGED */
 				xpt_print(ccb->ccb_h.path,
 				    "INQUIRY data has changed\n");
 				cam_periph_assert(periph, MA_OWNED);
@@ -2321,8 +2373,7 @@ dasysctlinit(void *context, int pending)
 		SYSCTL_CHILDREN(softc->sysctl_tree), OID_AUTO,
 		"optimal_nonseq_zones", CTLFLAG_RD,
 		&softc->optimal_nonseq_zones,
-		"Optimal Number of Non-Sequentially Written Sequential Write "
-		"Preferred Zones");
+		"Optimal Number of Non-Sequentially Written Sequential Write Preferred Zones");
 	SYSCTL_ADD_UQUAD(&softc->sysctl_ctx,
 		SYSCTL_CHILDREN(softc->sysctl_tree), OID_AUTO,
 		"max_seq_zones", CTLFLAG_RD, &softc->max_seq_zones,
@@ -2351,13 +2402,17 @@ dasysctlinit(void *context, int pending)
 	    softc, 0, daflagssysctl, "A",
 	    "Flags for drive");
 	SYSCTL_ADD_PROC(&softc->sysctl_ctx, SYSCTL_CHILDREN(softc->sysctl_tree),
+	    OID_AUTO, "quirks", CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE,
+	    softc, 0, daquirkssysctl, "A",
+	    "Active quirks for drive");
+	SYSCTL_ADD_PROC(&softc->sysctl_ctx, SYSCTL_CHILDREN(softc->sysctl_tree),
 	    OID_AUTO, "rotating", CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE,
 	    &softc->flags, (u_int)DA_FLAG_ROTATING, dabitsysctl, "I",
-	    "Rotating media *DEPRECATED* gone in FreeBSD 14");
+	    "Rotating media *DEPRECATED* gone in FreeBSD 16");
 	SYSCTL_ADD_PROC(&softc->sysctl_ctx, SYSCTL_CHILDREN(softc->sysctl_tree),
 	    OID_AUTO, "unmapped_io", CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE,
 	    &softc->flags, (u_int)DA_FLAG_UNMAPPEDIO, dabitsysctl, "I",
-	    "Unmapped I/O support *DEPRECATED* gone in FreeBSD 14");
+	    "Unmapped I/O support *DEPRECATED* gone in FreeBSD 16");
 
 #ifdef CAM_TEST_FAILURE
 	SYSCTL_ADD_PROC(&softc->sysctl_ctx, SYSCTL_CHILDREN(softc->sysctl_tree),
@@ -2667,7 +2722,25 @@ daflagssysctl(SYSCTL_HANDLER_ARGS)
 	if (softc->flags != 0)
 		sbuf_printf(&sbuf, "0x%b", (unsigned)softc->flags, DA_FLAG_STRING);
 	else
-		sbuf_printf(&sbuf, "0");
+		sbuf_putc(&sbuf, '0');
+	error = sbuf_finish(&sbuf);
+	sbuf_delete(&sbuf);
+
+	return (error);
+}
+
+static int
+daquirkssysctl(SYSCTL_HANDLER_ARGS)
+{
+	struct sbuf sbuf;
+	struct da_softc *softc = arg1;
+	int error;
+
+	sbuf_new_for_sysctl(&sbuf, NULL, 0, req);
+	if (softc->quirks != 0)
+		sbuf_printf(&sbuf, "0x%b", (unsigned)softc->quirks, DA_Q_BIT_STRING);
+	else
+		sbuf_putc(&sbuf, '0');
 	error = sbuf_finish(&sbuf);
 	sbuf_delete(&sbuf);
 
@@ -2737,7 +2810,6 @@ dazonemodesysctl(SYSCTL_HANDLER_ARGS)
 static int
 dazonesupsysctl(SYSCTL_HANDLER_ARGS)
 {
-	char tmpbuf[180];
 	struct da_softc *softc;
 	struct sbuf sb;
 	int error, first;
@@ -2745,15 +2817,14 @@ dazonesupsysctl(SYSCTL_HANDLER_ARGS)
 
 	softc = (struct da_softc *)arg1;
 
-	error = 0;
 	first = 1;
-	sbuf_new(&sb, tmpbuf, sizeof(tmpbuf), 0);
+	sbuf_new_for_sysctl(&sb, NULL, 0, req);
 
 	for (i = 0; i < sizeof(da_zone_desc_table) /
 	     sizeof(da_zone_desc_table[0]); i++) {
 		if (softc->zone_flags & da_zone_desc_table[i].value) {
 			if (first == 0)
-				sbuf_printf(&sb, ", ");
+				sbuf_cat(&sb, ", ");
 			else
 				first = 0;
 			sbuf_cat(&sb, da_zone_desc_table[i].desc);
@@ -2761,12 +2832,10 @@ dazonesupsysctl(SYSCTL_HANDLER_ARGS)
 	}
 
 	if (first == 1)
-		sbuf_printf(&sb, "None");
+		sbuf_cat(&sb, "None");
 
-	sbuf_finish(&sb);
-
-	error = sysctl_handle_string(oidp, sbuf_data(&sb), sbuf_len(&sb), req);
-
+	error = sbuf_finish(&sb);
+	sbuf_delete(&sb);
 	return (error);
 }
 
@@ -2790,15 +2859,8 @@ daregister(struct cam_periph *periph, void *arg)
 	    M_NOWAIT|M_ZERO);
 
 	if (softc == NULL) {
-		printf("daregister: Unable to probe new device. "
-		       "Unable to allocate softc\n");
-		return(CAM_REQ_CMP_ERR);
-	}
-
-	if (cam_iosched_init(&softc->cam_iosched, periph) != 0) {
-		printf("daregister: Unable to probe new device. "
-		       "Unable to allocate iosched memory\n");
-		free(softc, M_DEVBUF);
+		printf(
+		    "daregister: Unable to probe new device. Unable to allocate softc\n");
 		return(CAM_REQ_CMP_ERR);
 	}
 
@@ -2970,7 +3032,14 @@ daregister(struct cam_periph *periph, void *arg)
 	softc->disk->d_hba_subdevice = cpi.hba_subdevice;
 	snprintf(softc->disk->d_attachment, sizeof(softc->disk->d_attachment),
 	    "%s%d", cpi.dev_name, cpi.unit_number);
-	cam_periph_lock(periph);
+
+	if (cam_iosched_init(&softc->cam_iosched, periph, softc->disk,
+	    daschedule) != 0) {
+		printf(
+	"daregister: Unable to probe new device. Unable to allocate iosched memory\n");
+		free(softc, M_DEVBUF);
+		return(CAM_REQ_CMP_ERR);
+	}
 
 	/*
 	 * Add async callbacks for events of interest.
@@ -2979,6 +3048,7 @@ daregister(struct cam_periph *periph, void *arg)
 	 * fine without them and the only alternative
 	 * would be to not attach the device on failure.
 	 */
+	cam_periph_lock(periph);
 	xpt_register_async(AC_SENT_BDR | AC_BUS_RESET | AC_LOST_DEVICE |
 	    AC_ADVINFO_CHANGED | AC_SCSI_AEN | AC_UNIT_ATTENTION |
 	    AC_INQ_CHANGED, daasync, periph, periph->path);
@@ -3045,8 +3115,9 @@ da_zone_cmd(struct cam_periph *periph, union ccb *ccb, struct bio *bp,
 
 		zone_sa = da_zone_bio_to_scsi(bp->bio_zone.zone_cmd);
 		if (zone_sa == -1) {
-			xpt_print(periph->path, "Cannot translate zone "
-			    "cmd %#x to SCSI\n", bp->bio_zone.zone_cmd);
+			xpt_print(periph->path,
+			    "Cannot translate zone cmd %#x to SCSI\n",
+			    bp->bio_zone.zone_cmd);
 			error = EINVAL;
 			goto bailout;
 		}
@@ -3110,8 +3181,7 @@ da_zone_cmd(struct cam_periph *periph, union ccb *ccb, struct bio *bp,
 			if (error != 0) {
 				error = EINVAL;
 				xpt_print(periph->path,
-				    "scsi_ata_zac_mgmt_out() returned an "
-				    "error!");
+				    "scsi_ata_zac_mgmt_out() returned an error!");
 				goto bailout;
 			}
 		}
@@ -3128,8 +3198,8 @@ da_zone_cmd(struct cam_periph *periph, union ccb *ccb, struct bio *bp,
 
 		num_entries = rep->entries_allocated;
 		if (num_entries == 0) {
-			xpt_print(periph->path, "No entries allocated for "
-			    "Report Zones request\n");
+			xpt_print(periph->path,
+			    "No entries allocated for Report Zones request\n");
 			error = EINVAL;
 			goto bailout;
 		}
@@ -3138,8 +3208,8 @@ da_zone_cmd(struct cam_periph *periph, union ccb *ccb, struct bio *bp,
 		alloc_size = min(alloc_size, softc->disk->d_maxsize);
 		rz_ptr = malloc(alloc_size, M_SCSIDA, M_NOWAIT | M_ZERO);
 		if (rz_ptr == NULL) {
-			xpt_print(periph->path, "Unable to allocate memory "
-			   "for Report Zones request\n");
+			xpt_print(periph->path,
+			    "Unable to allocate memory for Report Zones request\n");
 			error = ENOMEM;
 			goto bailout;
 		}
@@ -3196,8 +3266,7 @@ da_zone_cmd(struct cam_periph *periph, union ccb *ccb, struct bio *bp,
 			if (error != 0) {
 				error = EINVAL;
 				xpt_print(periph->path,
-				    "scsi_ata_zac_mgmt_in() returned an "
-				    "error!");
+				    "scsi_ata_zac_mgmt_in() returned an error!");
 				goto bailout;
 			}
 		}
@@ -3299,11 +3368,32 @@ static void
 dastart(struct cam_periph *periph, union ccb *start_ccb)
 {
 	struct da_softc *softc;
+	uint32_t priority = start_ccb->ccb_h.pinfo.priority;
 
 	cam_periph_assert(periph, MA_OWNED);
 	softc = (struct da_softc *)periph->softc;
 
 	CAM_DEBUG(periph->path, CAM_DEBUG_TRACE, ("dastart\n"));
+
+	/*
+	 * When we're running the state machine, we should only accept DEV CCBs.
+	 * When we're doing normal I/O we should only accept NORMAL CCBs.
+	 *
+	 * While in the state machine, we carefully single step the queue, but
+	 * there's no protection for 'extra' calls to xpt_schedule() at the
+	 * wrong priority. Guard against that so that we filter any CCBs that
+	 * are offered at the wrong priority. This avoids generating requests
+	 * that are at normal priority. In addition, though we can't easily
+	 * enforce it, one must not transition to the NORMAL state via the
+	 * skipstate mechanism.
+`        */
+	if ((softc->state != DA_STATE_NORMAL && priority != CAM_PRIORITY_DEV) ||
+	    (softc->state == DA_STATE_NORMAL && priority != CAM_PRIORITY_NORMAL)) {
+		xpt_print(periph->path, "Bad priority for state %d prio %d\n",
+		    softc->state, priority);
+		xpt_release_ccb(start_ccb);
+		return;
+	}
 
 skipstate:
 	switch (softc->state) {
@@ -3446,10 +3536,19 @@ more:
 
 			queue_ccb = 0;
 
-			error = da_zone_cmd(periph, start_ccb, bp,&queue_ccb);
+			error = da_zone_cmd(periph, start_ccb, bp, &queue_ccb);
 			if ((error != 0)
 			 || (queue_ccb == 0)) {
+				/*
+				 * g_io_deliver will recurisvely call start
+				 * routine for ENOMEM, so drop the periph
+				 * lock to allow that recursion.
+				 */
+				if (error == ENOMEM)
+					cam_periph_unlock(periph);
 				biofinish(bp, NULL, error);
+				if (error == ENOMEM)
+					cam_periph_lock(periph);
 				xpt_release_ccb(start_ccb);
 				return;
 			}
@@ -3499,8 +3598,8 @@ out:
 		mode_buf_len = 192;
 		mode_buf = malloc(mode_buf_len, M_SCSIDA, M_NOWAIT);
 		if (mode_buf == NULL) {
-			xpt_print(periph->path, "Unable to send mode sense - "
-			    "malloc failure\n");
+			xpt_print(periph->path,
+			    "Unable to send mode sense - malloc failure\n");
 			if ((softc->flags & DA_FLAG_CAN_RC16) != 0)
 				softc->state = DA_STATE_PROBE_RC16;
 			else
@@ -3605,7 +3704,7 @@ out:
 			     /*retries*/da_retry_count,
 			     /*cbfcnp*/dadone_probelbp,
 			     /*tag_action*/MSG_SIMPLE_Q_TAG,
-			     /*inq_buf*/(u_int8_t *)lbp,
+			     /*inq_buf*/(uint8_t *)lbp,
 			     /*inq_len*/sizeof(*lbp),
 			     /*evpd*/TRUE,
 			     /*page_code*/SVPD_LBP,
@@ -3639,7 +3738,7 @@ out:
 			     /*retries*/da_retry_count,
 			     /*cbfcnp*/dadone_probeblklimits,
 			     /*tag_action*/MSG_SIMPLE_Q_TAG,
-			     /*inq_buf*/(u_int8_t *)block_limits,
+			     /*inq_buf*/(uint8_t *)block_limits,
 			     /*inq_len*/sizeof(*block_limits),
 			     /*evpd*/TRUE,
 			     /*page_code*/SVPD_BLOCK_LIMITS,
@@ -3672,7 +3771,7 @@ out:
 			     /*retries*/da_retry_count,
 			     /*cbfcnp*/dadone_probebdc,
 			     /*tag_action*/MSG_SIMPLE_Q_TAG,
-			     /*inq_buf*/(u_int8_t *)bdc,
+			     /*inq_buf*/(uint8_t *)bdc,
 			     /*inq_len*/sizeof(*bdc),
 			     /*evpd*/TRUE,
 			     /*page_code*/SVPD_BDC,
@@ -3680,6 +3779,45 @@ out:
 			     /*timeout*/da_default_timeout * 1000);
 		start_ccb->ccb_h.ccb_bp = NULL;
 		start_ccb->ccb_h.ccb_state = DA_CCB_PROBE_BDC;
+		xpt_action(start_ccb);
+		break;
+	}
+	case DA_STATE_PROBE_CACHE:
+	{
+		void  *mode_buf;
+		int    mode_buf_len;
+
+		/* XXX Future: skip if already not doing SYNC CACHE */
+
+		/*
+		 * Probe the CACHE mode page to see if we need to do a
+		 * SYNCHRONIZE CACHE command or not. If there's no
+		 * caching page, or we get back garbage when we ask
+		 * for the caching page or MODE SENSE isn't supported,
+		 * we set DA_Q_NO_SYNC_CACHE.
+		 */
+		mode_buf_len = sizeof(struct scsi_mode_header_6) +
+		    sizeof(struct scsi_mode_blk_desc) +
+		    sizeof(struct scsi_caching_page);
+		mode_buf = malloc(mode_buf_len, M_SCSIDA, M_NOWAIT);
+		if (mode_buf == NULL) {
+			printf("dastart: Couldn't malloc mode_buf data\n");
+			/* da_free_periph??? */
+			break;
+		}
+		scsi_mode_sense(&start_ccb->csio,
+		    /*retries*/4,
+		    dadone_probecache,
+		    MSG_SIMPLE_Q_TAG,
+		    /*dbd*/FALSE,
+		    SMS_PAGE_CTRL_CURRENT,
+		    SMS_CACHE_PAGE,
+		    mode_buf,
+		    mode_buf_len,
+		    SSD_FULL_SIZE,
+		    /*timeout*/60000);
+		start_ccb->ccb_h.ccb_bp = NULL;
+		start_ccb->ccb_h.ccb_state = DA_CCB_PROBE_CACHE;
 		xpt_action(start_ccb);
 		break;
 	}
@@ -3710,7 +3848,7 @@ out:
 				  /*retries*/da_retry_count,
 				  /*cbfcnp*/dadone_probeata,
                                   /*tag_action*/MSG_SIMPLE_Q_TAG,
-				  /*data_ptr*/(u_int8_t *)ata_params,
+				  /*data_ptr*/(uint8_t *)ata_params,
 				  /*dxfer_len*/sizeof(*ata_params),
 				  /*sense_len*/SSD_FULL_SIZE,
 				  /*timeout*/da_default_timeout * 1000);
@@ -3743,8 +3881,7 @@ out:
 
 		log_dir = malloc(sizeof(*log_dir), M_SCSIDA, M_NOWAIT|M_ZERO);
 		if (log_dir == NULL) {
-			xpt_print(periph->path, "Couldn't malloc log_dir "
-			    "data\n");
+			xpt_print(periph->path, "Couldn't malloc log_dir data\n");
 			daprobedone(periph, start_ccb);
 			break;
 		}
@@ -3793,8 +3930,7 @@ out:
 
 		id_dir = malloc(sizeof(*id_dir), M_SCSIDA, M_NOWAIT | M_ZERO);
 		if (id_dir == NULL) {
-			xpt_print(periph->path, "Couldn't malloc id_dir "
-			    "data\n");
+			xpt_print(periph->path, "Couldn't malloc id_dir data\n");
 			daprobedone(periph, start_ccb);
 			break;
 		}
@@ -3842,8 +3978,7 @@ out:
 
 		sup_cap = malloc(sizeof(*sup_cap), M_SCSIDA, M_NOWAIT|M_ZERO);
 		if (sup_cap == NULL) {
-			xpt_print(periph->path, "Couldn't malloc sup_cap "
-			    "data\n");
+			xpt_print(periph->path, "Couldn't malloc sup_cap data\n");
 			daprobedone(periph, start_ccb);
 			break;
 		}
@@ -3893,8 +4028,7 @@ out:
 		ata_zone = malloc(sizeof(*ata_zone), M_SCSIDA,
 				  M_NOWAIT|M_ZERO);
 		if (ata_zone == NULL) {
-			xpt_print(periph->path, "Couldn't malloc ata_zone "
-			    "data\n");
+			xpt_print(periph->path, "Couldn't malloc ata_zone data\n");
 			daprobedone(periph, start_ccb);
 			break;
 		}
@@ -3945,15 +4079,14 @@ out:
 
 		if (bdc == NULL) {
 			xpt_release_ccb(start_ccb);
-			xpt_print(periph->path, "Couldn't malloc zone VPD "
-			    "data\n");
+			xpt_print(periph->path, "Couldn't malloc zone VPD data\n");
 			break;
 		}
 		scsi_inquiry(&start_ccb->csio,
 			     /*retries*/da_retry_count,
 			     /*cbfcnp*/dadone_probezone,
 			     /*tag_action*/MSG_SIMPLE_Q_TAG,
-			     /*inq_buf*/(u_int8_t *)bdc,
+			     /*inq_buf*/(uint8_t *)bdc,
 			     /*inq_len*/sizeof(*bdc),
 			     /*evpd*/TRUE,
 			     /*page_code*/SVPD_ZONED_BDC,
@@ -4062,8 +4195,7 @@ da_delete_unmap(struct cam_periph *periph, union ccb *ccb, struct bio *bp)
 			if (totalcount + c > softc->unmap_max_lba ||
 			    ranges >= softc->unmap_max_ranges) {
 				xpt_print(periph->path,
-				    "%s issuing short delete %ld > %ld"
-				    "|| %d >= %d",
+				    "%s issuing short delete %ld > %ld || %d >= %d",
 				    da_delete_method_desc[softc->delete_method],
 				    totalcount + c, softc->unmap_max_lba,
 				    ranges, softc->unmap_max_ranges);
@@ -4199,6 +4331,9 @@ da_delete_trim(struct cam_periph *periph, union ccb *ccb, struct bio *bp)
 		      da_default_timeout * 1000);
 	ccb->ccb_h.ccb_state = DA_CCB_DELETE;
 	ccb->ccb_h.flags |= CAM_UNLOCKED;
+	softc->trim_count++;
+	softc->trim_ranges += ranges;
+	softc->trim_lbas += block_count;
 	cam_iosched_submit_trim(softc->cam_iosched);
 }
 
@@ -4259,6 +4394,9 @@ da_delete_ws(struct cam_periph *periph, union ccb *ccb, struct bio *bp)
 			da_default_timeout * 1000);
 	ccb->ccb_h.ccb_state = DA_CCB_DELETE;
 	ccb->ccb_h.flags |= CAM_UNLOCKED;
+	softc->trim_count++;
+	softc->trim_ranges++;
+	softc->trim_lbas += count;
 	cam_iosched_submit_trim(softc->cam_iosched);
 }
 
@@ -4268,7 +4406,7 @@ cmd6workaround(union ccb *ccb)
 	struct scsi_rw_6 cmd6;
 	struct scsi_rw_10 *cmd10;
 	struct da_softc *softc;
-	u_int8_t *cdb;
+	uint8_t *cdb;
 	struct bio *bp;
 	int frozen;
 
@@ -4338,8 +4476,8 @@ cmd6workaround(union ccb *ccb)
 	    (*cdb != READ_6 && *cdb != WRITE_6))
 		return 0;
 
-	xpt_print(ccb->ccb_h.path, "READ(6)/WRITE(6) not supported, "
-	    "increasing minimum_cmd_size to 10.\n");
+	xpt_print(ccb->ccb_h.path,
+	    "READ(6)/WRITE(6) not supported, increasing minimum_cmd_size to 10.\n");
 	softc->minimum_cmd_size = 10;
 
 	bcopy(cdb, &cmd6, sizeof(struct scsi_rw_6));
@@ -4548,35 +4686,53 @@ dadone(struct cam_periph *periph, union ccb *done_ccb)
 			cam_periph_unlock(periph);
 			return;
 		}
+		/*
+		 * refresh bp, since cmd6workaround may set it to NULL when
+		 * there's no delete methos available since it pushes the bp
+		 * back onto the work queue to reschedule it (since different
+		 * delete methods have different size limitations).
+		 */
 		bp = (struct bio *)done_ccb->ccb_h.ccb_bp;
 		if (error != 0) {
-			int queued_error;
+			bool pack_invalid =
+			    (softc->flags & DA_FLAG_PACK_INVALID) != 0;
 
-			/*
-			 * return all queued I/O with EIO, so that
-			 * the client can retry these I/Os in the
-			 * proper order should it attempt to recover.
-			 */
-			queued_error = EIO;
-
-			if (error == ENXIO
-			 && (softc->flags & DA_FLAG_PACK_INVALID)== 0) {
+			if (error == ENXIO && !pack_invalid) {
 				/*
-				 * Catastrophic error.  Mark our pack as
-				 * invalid.
+				 * ENXIO flags ASC/ASCQ codes for either media
+				 * missing, or the drive being extremely
+				 * unhealthy.  Invalidate peripheral on this
+				 * catestrophic error when the pack is valid
+				 * since we set the pack invalid bit only for
+				 * the few ASC/ASCQ codes indicating missing
+				 * media.  The invalidation will flush any
+				 * queued I/O and short-circuit retries for
+				 * other I/O. We only invalidate the da device
+				 * so the passX device remains for recovery and
+				 * diagnostics.
 				 *
-				 * XXX See if this is really a media
-				 * XXX change first?
+				 * While we do also set the pack invalid bit
+				 * after invalidating the peripheral, the
+				 * pending I/O will have been flushed then with
+				 * no new I/O starting, so this 'edge' case
+				 * doesn't matter.
 				 */
 				xpt_print(periph->path, "Invalidating pack\n");
-				softc->flags |= DA_FLAG_PACK_INVALID;
-#ifdef CAM_IO_STATS
-				softc->invalidations++;
-#endif
-				queued_error = ENXIO;
+				cam_periph_invalidate(periph);
+			} else {
+				/*
+				 * Return all queued I/O with EIO, so that the
+				 * client can retry these I/Os in the proper
+				 * order should it attempt to recover. When the
+				 * pack is invalid, fail all I/O with ENXIO
+				 * since we can't assume when the media returns
+				 * it's the same media and we force a trip
+				 * through daclose / daopen and the client won't
+				 * retry.
+				 */
+				cam_iosched_flush(softc->cam_iosched, NULL,
+				    pack_invalid ? ENXIO : EIO);
 			}
-			cam_iosched_flush(softc->cam_iosched, NULL,
-			   queued_error);
 			if (bp != NULL) {
 				bp->bio_error = error;
 				bp->bio_resid = bp->bio_bcount;
@@ -4675,7 +4831,7 @@ dadone_probewp(struct cam_periph *periph, union ccb *done_ccb)
 {
 	struct da_softc *softc;
 	struct ccb_scsiio *csio;
-	u_int32_t  priority;
+	uint32_t  priority;
 
 	CAM_DEBUG(periph->path, CAM_DEBUG_TRACE, ("dadone_probewp\n"));
 
@@ -4759,8 +4915,8 @@ dadone_proberc(struct cam_periph *periph, union ccb *done_ccb)
 	struct ccb_scsiio *csio;
 	da_ccb_state state;
 	char *announce_buf;
-	u_int32_t  priority;
-	int lbp, n;
+	uint32_t  priority;
+	int n;
 
 	CAM_DEBUG(periph->path, CAM_DEBUG_TRACE, ("dadone_proberc\n"));
 
@@ -4776,7 +4932,6 @@ dadone_proberc(struct cam_periph *periph, union ccb *done_ccb)
 	    ("CCB State (%lu) not PROBE_RC* in dadone_probewp, periph %p ccb %p",
 		(unsigned long)state, periph, done_ccb));
 
-	lbp = 0;
 	rdcap = NULL;
 	rcaplong = NULL;
 	/* XXX TODO: can this be a malloc? */
@@ -4847,7 +5002,9 @@ dadone_proberc(struct cam_periph *periph, union ccb *done_ccb)
 			 */
 			dasetgeom(periph, block_size, maxsector,
 				  rcaplong, sizeof(*rcaplong));
-			lbp = (lalba & SRC16_LBPME_A);
+			if ((lalba & SRC16_LBPME_A) != 0 &&
+			    (softc->quirks & DA_Q_NO_UNMAP) == 0)
+				softc->flags |= DA_FLAG_LBP;
 			dp = &softc->params;
 			n = snprintf(announce_buf, DA_ANNOUNCETMP_SZ,
 			    "%juMB (%ju %u byte sectors",
@@ -4892,11 +5049,7 @@ dadone_proberc(struct cam_periph *periph, union ccb *done_ccb)
 						 /*timeout*/0,
 						 /*getcount_only*/0);
 
-			memset(&cgd, 0, sizeof(cgd));
-			xpt_setup_ccb(&cgd.ccb_h, done_ccb->ccb_h.path,
-				      CAM_PRIORITY_NORMAL);
-			cgd.ccb_h.func_code = XPT_GDEV_TYPE;
-			xpt_action((union ccb *)&cgd);
+			xpt_gdev_type(&cgd, done_ccb->ccb_h.path);
 
 			if (scsi_extract_sense_ccb(done_ccb,
 			    &error_code, &sense_key, &asc, &ascq))
@@ -4926,18 +5079,34 @@ dadone_proberc(struct cam_periph *periph, union ccb *done_ccb)
 			}
 
 			/*
-			 * Attach to anything that claims to be a
-			 * direct access or optical disk device,
-			 * as long as it doesn't return a "Logical
-			 * unit not supported" (0x25) error.
-			 * "Internal Target Failure" (0x44) is also
-			 * special and typically means that the
-			 * device is a SATA drive behind a SATL
-			 * translation that's fallen into a
+			 * Attach to anything that claims to be a direct access
+			 * or optical disk device, as long as it doesn't return
+			 * a "Logical unit not supported" (25/0) error.
+			 * "Internal Target Failure" (44/0) is also special and
+			 * typically means that the device is a SATA drive
+			 * behind a SATL translation that's fallen into a
 			 * terminally fatal state.
+			 *
+			 * 4/2 happens on some HGST drives that are quite
+			 * ill. We've already sent the start unit command (for
+			 * which we ignore a 44/0 asc/ascq, which I'm hesitant
+			 * to change since it's so basic and there's other error
+			 * conditions to the START UNIT we should ignore). So to
+			 * require initialization at this point when it should
+			 * be fine implies to me, at least, that we should
+			 * invalidate. Since we do read capacity in geom tasting
+			 * a lot, and since this timeout is long, this leads to
+			 * up to a 10 minute delay in booting.
+			 *
+			 * 4/2: LOGICAL UNIT NOT READY, INITIALIZING COMMAND REQUIRED
+			 * 25/0: LOGICAL UNIT NOT SUPPORTED
+			 * 44/0: INTERNAL TARGET FAILURE
+			 * 44/1: PERSISTENT RESERVATION INFORMATION LOST
+			 * 44/71: ATA DEVICE FAILED SET FEATURES
 			 */
 			if ((have_sense)
 			 && (asc != 0x25) && (asc != 0x44)
+			 && (asc != 0x04 && ascq != 0x02)
 			 && (error_code == SSD_CURRENT_ERROR
 			  || error_code == SSD_DESC_CURRENT_ERROR)) {
 				const char *sense_key_desc;
@@ -4948,8 +5117,7 @@ dadone_proberc(struct cam_periph *periph, union ccb *done_ccb)
 						&cgd.inq_data, &sense_key_desc,
 						&asc_desc);
 				snprintf(announce_buf, DA_ANNOUNCETMP_SZ,
-				    "Attempt to query device "
-				    "size failed: %s, %s",
+				    "Attempt to query device size failed: %s, %s",
 				    sense_key_desc, asc_desc);
 			} else {
 				if (have_sense)
@@ -4959,9 +5127,8 @@ dadone_proberc(struct cam_periph *periph, union ccb *done_ccb)
 					    "got CAM status %#x\n",
 					    done_ccb->ccb_h.status);
 				}
-
-				xpt_print(periph->path, "fatal error, "
-				    "failed to attach to device\n");
+				xpt_print(periph->path,
+				    "fatal error, failed to attach to device\n");
 
 				announce_buf = NULL;
 
@@ -4995,8 +5162,8 @@ dadone_proberc(struct cam_periph *periph, union ccb *done_ccb)
 					  &softc->sysctl_task);
 		} else {
 			/* XXX This message is useless! */
-			xpt_print(periph->path, "fatal error, "
-			    "could not acquire reference count\n");
+			xpt_print(periph->path,
+			    "fatal error, could not acquire reference count\n");
 		}
 	}
 
@@ -5006,34 +5173,7 @@ dadone_proberc(struct cam_periph *periph, union ccb *done_ccb)
 		return;
 	}
 
-	/* Ensure re-probe doesn't see old delete. */
-	softc->delete_available = 0;
-	dadeleteflag(softc, DA_DELETE_ZERO, 1);
-	if (lbp && (softc->quirks & DA_Q_NO_UNMAP) == 0) {
-		/*
-		 * Based on older SBC-3 spec revisions
-		 * any of the UNMAP methods "may" be
-		 * available via LBP given this flag so
-		 * we flag all of them as available and
-		 * then remove those which further
-		 * probes confirm aren't available
-		 * later.
-		 *
-		 * We could also check readcap(16) p_type
-		 * flag to exclude one or more invalid
-		 * write same (X) types here
-		 */
-		dadeleteflag(softc, DA_DELETE_WS16, 1);
-		dadeleteflag(softc, DA_DELETE_WS10, 1);
-		dadeleteflag(softc, DA_DELETE_UNMAP, 1);
-
-		softc->state = DA_STATE_PROBE_LBP;
-		xpt_release_ccb(done_ccb);
-		xpt_schedule(periph, priority);
-		return;
-	}
-
-	softc->state = DA_STATE_PROBE_BDC;
+	softc->state = DA_STATE_PROBE_CACHE;
 	xpt_release_ccb(done_ccb);
 	xpt_schedule(periph, priority);
 	return;
@@ -5045,7 +5185,7 @@ dadone_probelbp(struct cam_periph *periph, union ccb *done_ccb)
 	struct scsi_vpd_logical_block_prov *lbp;
 	struct da_softc *softc;
 	struct ccb_scsiio *csio;
-	u_int32_t  priority;
+	uint32_t  priority;
 
 	CAM_DEBUG(periph->path, CAM_DEBUG_TRACE, ("dadone_probelbp\n"));
 
@@ -5103,7 +5243,7 @@ dadone_probeblklimits(struct cam_periph *periph, union ccb *done_ccb)
 	struct scsi_vpd_block_limits *block_limits;
 	struct da_softc *softc;
 	struct ccb_scsiio *csio;
-	u_int32_t  priority;
+	uint32_t  priority;
 
 	CAM_DEBUG(periph->path, CAM_DEBUG_TRACE, ("dadone_probeblklimits\n"));
 
@@ -5197,7 +5337,7 @@ dadone_probebdc(struct cam_periph *periph, union ccb *done_ccb)
 	struct scsi_vpd_block_device_characteristics *bdc;
 	struct da_softc *softc;
 	struct ccb_scsiio *csio;
-	u_int32_t  priority;
+	uint32_t  priority;
 
 	CAM_DEBUG(periph->path, CAM_DEBUG_TRACE, ("dadone_probebdc\n"));
 
@@ -5215,7 +5355,7 @@ dadone_probebdc(struct cam_periph *periph, union ccb *done_ccb)
 		 * Disable queue sorting for non-rotational media
 		 * by default.
 		 */
-		u_int16_t old_rate = softc->disk->d_rotation_rate;
+		uint16_t old_rate = softc->disk->d_rotation_rate;
 
 		valid_len = csio->dxfer_len - csio->resid;
 		if (SBDC_IS_PRESENT(bdc, valid_len,
@@ -5261,8 +5401,7 @@ dadone_probebdc(struct cam_periph *periph, union ccb *done_ccb)
 				   DA_ZONE_IF_ATA_SAT : DA_ZONE_IF_SCSI;
 			} else if ((bdc->flags & SVPD_ZBC_MASK) !=
 				  SVPD_ZBC_NR) {
-				xpt_print(periph->path, "Unknown zoned "
-				    "type %#x",
+				xpt_print(periph->path, "Unknown zoned type %#x",
 				    bdc->flags & SVPD_ZBC_MASK);
 			}
 		}
@@ -5292,12 +5431,172 @@ dadone_probebdc(struct cam_periph *periph, union ccb *done_ccb)
 }
 
 static void
+dadone_probecache(struct cam_periph *periph, union ccb *done_ccb)
+{
+	struct da_softc *softc;
+	struct ccb_scsiio *csio;
+	uint32_t  priority;
+	struct scsi_mode_header_6 *sense_hdr;
+	struct scsi_caching_page *cache_page;
+
+	CAM_DEBUG(periph->path, CAM_DEBUG_TRACE, ("dadone_probecache\n"));
+
+	softc = (struct da_softc *)periph->softc;
+	priority = done_ccb->ccb_h.pinfo.priority;
+	csio = &done_ccb->csio;
+	sense_hdr = (struct scsi_mode_header_6 *)csio->data_ptr;
+	cache_page = (struct scsi_caching_page *)(csio->data_ptr +
+	    sizeof(struct scsi_mode_header_6) + sense_hdr->blk_desc_len);
+
+	if ((csio->ccb_h.status & CAM_STATUS_MASK) == CAM_REQ_CMP) {
+		/*
+		 * Sanity check different fields of the data. We make sure
+		 * there's enough data, in total, and that the page part of the
+		 * data is long enough and that the page number is correct. Some
+		 * devices will return sense data as if we'd requested page 0x3f
+		 * always, for exmaple, and those devices can't be trusted
+		 * (which is why we don't walk the list of pages or try to
+		 * request a bigger buffer). The devices that have problems are
+		 * typically cheap USB thumb drives.
+		 */
+		if (sense_hdr->data_length + 1 <
+		    sense_hdr->blk_desc_len + sizeof(*cache_page)) {
+			xpt_print(done_ccb->ccb_h.path,
+		"CACHE PAGE TOO SHORT data len %d desc len %d\n",
+			    sense_hdr->data_length,
+			    sense_hdr->blk_desc_len);
+			goto bad;
+		}
+		if ((cache_page->page_code & ~SMS_PAGE_CTRL_MASK) !=
+		    SMS_CACHE_PAGE) {
+			xpt_print(done_ccb->ccb_h.path,
+			    "Bad cache page %#x\n",
+			    cache_page->page_code);
+			goto bad;
+		}
+		if (cache_page->page_length != sizeof(*cache_page) -
+			offsetof(struct scsi_caching_page, flags1)) {
+			xpt_print(done_ccb->ccb_h.path,
+			    "CACHE PAGE length bogus %#x\n",
+			    cache_page->page_length);
+			goto bad;
+		}
+		/*
+		 * If there's a block descritor header, we could save the block
+		 * count to compare later against READ CAPACITY or READ CAPACITY
+		 * (16), but the same devices that get those wrongs often don't
+		 * provide a block descritptor header to store away for later.
+		 */
+
+		/*
+		 * Warn about aparently unsafe quirking. A couple of
+		 * my USB sticks have WCE enabled, but some quirk somewhere
+		 * disables the necessary SYCHRONIZE CACHE ops.
+		 */
+		if (softc->quirks & DA_Q_NO_SYNC_CACHE &&
+			cache_page->flags1 & SCP_WCE)
+			xpt_print(done_ccb->ccb_h.path,
+    "Devices quirked NO_SYNC_CACHE, but WCE=1 enabling write cache.\n");
+	} else {
+		int error, error_code, sense_key, asc, ascq;
+		bool mark_bad;
+
+		/*
+		 * Three types of errors observed here:
+		 * 24h/00h  DZTPROMAEBKVF  INVALID FIELD IN CDB
+		 * 26h/00h  DZTPROMAEBKVF  INVALID FIELD IN PARAMETER LIST
+		 * 3Ah/00h  DZT ROM  BK    MEDIUM NOT PRESENT
+		 *
+		 * The first two are legit ways of saying page 8 doesn't exist
+		 * and set the NO_SYNC_CACHE quirk.  The third is a null result:
+		 * At least some devices that report this when a slot is empty
+		 * none-the-less have working SYNCHRONIZE CACHE. Take our
+		 * chances and refrain from setting the quirk. The one device I
+		 * have that does this, but doesn't support the command doesn't
+		 * hang on the command either. I conjecture that the exact card
+		 * that's inserted will determine if SYNC is supported which
+		 * would make repeated probings hard.
+		 */
+		mark_bad = true;
+		if (scsi_extract_sense_ccb(done_ccb, &error_code, &sense_key,
+		    &asc, &ascq)) {
+			if (sense_key == SSD_KEY_NOT_READY && asc == 0x3a)
+				mark_bad = false;
+		}
+		error = daerror(done_ccb, CAM_RETRY_SELTO, SF_RETRY_UA | SF_NO_PRINT);
+		if (error == ERESTART) {
+			return;
+		} else if (error != 0) {
+			if ((done_ccb->ccb_h.status & CAM_DEV_QFRZN) != 0) {
+				/* Don't wedge this device's queue */
+				cam_release_devq(done_ccb->ccb_h.path,
+						 /*relsim_flags*/0,
+						 /*reduction*/0,
+						 /*timeout*/0,
+						 /*getcount_only*/0);
+			}
+		}
+		xpt_print(done_ccb->ccb_h.path,
+		    "MODE SENSE for CACHE page command failed.\n");
+
+		/*
+		 * There's no cache page, the command wasn't
+		 * supported, retries failed or the data returned was
+		 * junk. Any one of these reasons is enough to
+		 * conclude that the drive doesn't support caching, so
+		 * SYNCHRONIZE CACHE isn't needed and may hang the
+		 * drive!
+		 */
+		if (mark_bad) {
+bad:
+			xpt_print(done_ccb->ccb_h.path,
+			    "Mode page 8 missing, disabling SYNCHRONIZE CACHE\n");
+			if (softc->quirks & DA_Q_NO_SYNC_CACHE)
+				xpt_print(done_ccb->ccb_h.path,
+    "Devices already quirked for NO_SYNC_CACHE, maybe remove quirk table\n");
+			softc->quirks |= DA_Q_NO_SYNC_CACHE;
+			softc->disk->d_flags &= ~DISKFLAG_CANFLUSHCACHE;
+		}
+	}
+	free(sense_hdr, M_SCSIDA);
+
+	/* Ensure re-probe doesn't see old delete. */
+	softc->delete_available = 0;
+	dadeleteflag(softc, DA_DELETE_ZERO, 1);
+	if ((softc->flags & DA_FLAG_LBP) != 0) {
+		/*
+		 * Based on older SBC-3 spec revisions
+		 * any of the UNMAP methods "may" be
+		 * available via LBP given this flag so
+		 * we flag all of them as available and
+		 * then remove those which further
+		 * probes confirm aren't available
+		 * later.
+		 *
+		 * We could also check readcap(16) p_type
+		 * flag to exclude one or more invalid
+		 * write same (X) types here
+		 */
+		dadeleteflag(softc, DA_DELETE_WS16, 1);
+		dadeleteflag(softc, DA_DELETE_WS10, 1);
+		dadeleteflag(softc, DA_DELETE_UNMAP, 1);
+
+		softc->state = DA_STATE_PROBE_LBP;
+	} else {
+		softc->state = DA_STATE_PROBE_BDC;
+	}
+	xpt_release_ccb(done_ccb);
+	xpt_schedule(periph, priority);
+	return;
+}
+
+static void
 dadone_probeata(struct cam_periph *periph, union ccb *done_ccb)
 {
 	struct ata_params *ata_params;
 	struct ccb_scsiio *csio;
 	struct da_softc *softc;
-	u_int32_t  priority;
+	uint32_t  priority;
 	int continue_probe;
 	int error;
 
@@ -5436,7 +5735,7 @@ dadone_probeatalogdir(struct cam_periph *periph, union ccb *done_ccb)
 {
 	struct da_softc *softc;
 	struct ccb_scsiio *csio;
-	u_int32_t  priority;
+	uint32_t  priority;
 	int error;
 
 	CAM_DEBUG(periph->path, CAM_DEBUG_TRACE, ("dadone_probeatalogdir\n"));
@@ -5517,7 +5816,7 @@ dadone_probeataiddir(struct cam_periph *periph, union ccb *done_ccb)
 {
 	struct da_softc *softc;
 	struct ccb_scsiio *csio;
-	u_int32_t  priority;
+	uint32_t  priority;
 	int error;
 
 	CAM_DEBUG(periph->path, CAM_DEBUG_TRACE, ("dadone_probeataiddir\n"));
@@ -5608,7 +5907,7 @@ dadone_probeatasup(struct cam_periph *periph, union ccb *done_ccb)
 {
 	struct da_softc *softc;
 	struct ccb_scsiio *csio;
-	u_int32_t  priority;
+	uint32_t  priority;
 	int error;
 
 	CAM_DEBUG(periph->path, CAM_DEBUG_TRACE, ("dadone_probeatasup\n"));
@@ -5937,7 +6236,7 @@ dareprobe(struct cam_periph *periph)
 }
 
 static int
-daerror(union ccb *ccb, u_int32_t cam_flags, u_int32_t sense_flags)
+daerror(union ccb *ccb, uint32_t cam_flags, uint32_t sense_flags)
 {
 	struct da_softc	  *softc;
 	struct cam_periph *periph;
@@ -5970,22 +6269,40 @@ daerror(union ccb *ccb, u_int32_t cam_flags, u_int32_t sense_flags)
 		 */
 		else if (sense_key == SSD_KEY_UNIT_ATTENTION &&
 		    asc == 0x2A && ascq == 0x09) {
+			/* 2a/9: CAPACITY DATA HAS CHANGED */
 			xpt_print(periph->path, "Capacity data has changed\n");
 			softc->flags &= ~DA_FLAG_PROBED;
 			dareprobe(periph);
 			sense_flags |= SF_NO_PRINT;
 		} else if (sense_key == SSD_KEY_UNIT_ATTENTION &&
 		    asc == 0x28 && ascq == 0x00) {
+			/* 28/0: NOT READY TO READY CHANGE, MEDIUM MAY HAVE CHANGED */
 			softc->flags &= ~DA_FLAG_PROBED;
 			disk_media_changed(softc->disk, M_NOWAIT);
+			/*
+			 * In an ideal world, we'd make sure that we have the
+			 * same medium mounted (if we'd seen one already) but
+			 * instead we don't invalidate the pack here and flag
+			 * below to retry the UAs. If we exhaust retries, then
+			 * we'll invalidate it in dadone for ENXIO errors (which
+			 * 28/0 will fail with eventually). Usually, retrying
+			 * just works and/or we get this before we've opened the
+			 * device (which clears the invalid flag).
+			 */
 		} else if (sense_key == SSD_KEY_UNIT_ATTENTION &&
 		    asc == 0x3F && ascq == 0x03) {
+			/* 3f/3: INQUIRY DATA HAS CHANGED */
 			xpt_print(periph->path, "INQUIRY data has changed\n");
 			softc->flags &= ~DA_FLAG_PROBED;
 			dareprobe(periph);
 			sense_flags |= SF_NO_PRINT;
 		} else if (sense_key == SSD_KEY_NOT_READY &&
 		    asc == 0x3a && (softc->flags & DA_FLAG_PACK_INVALID) == 0) {
+			/* 3a/0: MEDIUM NOT PRESENT */
+			/* 3a/1: MEDIUM NOT PRESENT - TRAY CLOSED */
+			/* 3a/2: MEDIUM NOT PRESENT - TRAY OPEN */
+			/* 3a/3: MEDIUM NOT PRESENT - LOADABLE */
+			/* 3a/4: MEDIUM NOT PRESENT - MEDIUM AUXILIARY MEMORY ACCESSIBLE */
 			softc->flags |= DA_FLAG_PACK_INVALID;
 			disk_media_gone(softc->disk, M_NOWAIT);
 		}
@@ -6189,8 +6506,9 @@ dasetgeom(struct cam_periph *periph, uint32_t block_len, uint64_t maxsector,
 		if ((cdai.ccb_h.status & CAM_DEV_QFRZN) != 0)
 			cam_release_devq(cdai.ccb_h.path, 0, 0, 0, FALSE);
 		if (cdai.ccb_h.status != CAM_REQ_CMP) {
-			xpt_print(periph->path, "%s: failed to set read "
-				  "capacity advinfo\n", __func__);
+			xpt_print(periph->path,
+			    "%s: failed to set read capacity advinfo\n",
+			    __func__);
 			/* Use cam_error_print() to decode the status */
 			cam_error_print((union ccb *)&cdai, CAM_ESF_CAM_STATUS,
 					CAM_EPF_ALL);
@@ -6301,11 +6619,11 @@ dashutdown(void * arg, int howto)
  * be moved so they are included both in the kernel and userland.
  */
 void
-scsi_format_unit(struct ccb_scsiio *csio, u_int32_t retries,
+scsi_format_unit(struct ccb_scsiio *csio, uint32_t retries,
 		 void (*cbfcnp)(struct cam_periph *, union ccb *),
-		 u_int8_t tag_action, u_int8_t byte2, u_int16_t ileave,
-		 u_int8_t *data_ptr, u_int32_t dxfer_len, u_int8_t sense_len,
-		 u_int32_t timeout)
+		 uint8_t tag_action, uint8_t byte2, uint16_t ileave,
+		 uint8_t *data_ptr, uint32_t dxfer_len, uint8_t sense_len,
+		 uint32_t timeout)
 {
 	struct scsi_format_unit *scsi_cmd;
 
@@ -6380,11 +6698,11 @@ scsi_read_defects(struct ccb_scsiio *csio, uint32_t retries,
 }
 
 void
-scsi_sanitize(struct ccb_scsiio *csio, u_int32_t retries,
+scsi_sanitize(struct ccb_scsiio *csio, uint32_t retries,
 	      void (*cbfcnp)(struct cam_periph *, union ccb *),
-	      u_int8_t tag_action, u_int8_t byte2, u_int16_t control,
-	      u_int8_t *data_ptr, u_int32_t dxfer_len, u_int8_t sense_len,
-	      u_int32_t timeout)
+	      uint8_t tag_action, uint8_t byte2, uint16_t control,
+	      uint8_t *data_ptr, uint32_t dxfer_len, uint8_t sense_len,
+	      uint32_t timeout)
 {
 	struct scsi_sanitize *scsi_cmd;
 
@@ -6524,7 +6842,7 @@ scsi_ata_zac_mgmt_out(struct ccb_scsiio *csio, uint32_t retries,
 			/*
 			 * For SEND FPDMA QUEUED, the transfer length is
 			 * encoded in the FEATURE register, and 0 means
-			 * that 65536 512 byte blocks are to be tranferred.
+			 * that 65536 512 byte blocks are to be transferred.
 			 * In practice, it seems unlikely that we'll see
 			 * a transfer that large, and it may confuse the
 			 * the SAT layer, because generally that means that
@@ -6610,7 +6928,7 @@ scsi_ata_zac_mgmt_in(struct ccb_scsiio *csio, uint32_t retries,
 		/*
 		 * For RECEIVE FPDMA QUEUED, the transfer length is
 		 * encoded in the FEATURE register, and 0 means
-		 * that 65536 512 byte blocks are to be tranferred.
+		 * that 65536 512 byte blocks are to be transferred.
 		 * In practice, it seems unlikely that we'll see
 		 * a transfer that large, and it may confuse the
 		 * the SAT layer, because generally that means that

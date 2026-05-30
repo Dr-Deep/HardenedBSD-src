@@ -1,7 +1,7 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
- * Copyright (c) 2020 Greg V <greg@unrelenting.technology>
+ * Copyright (c) 2020 Val Packett <val@packett.cool>
  * Copyright (c) 2021 Ruslan Bukin <br@bsdpad.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,7 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
 #include <sys/param.h>
 #include <sys/bus.h>
 #include <sys/kernel.h>
@@ -82,7 +81,6 @@ madt_handler(ACPI_SUBTABLE_HEADER *entry, void *arg)
 		/* pcpu not found. */
 		device_printf(sc->dev, "MADT: could not find pcpu, "
 		    "ArmMpidr %lx\n", intr->ArmMpidr);
-		ctx->error = ENODEV;
 		return;
 	}
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -36,6 +37,7 @@
 #include <sys/zio_checksum.h>
 #include "zfs_fletcher.h"
 #include "zstream.h"
+#include "zstream_util.h"
 
 
 #define	MAX_RDT_PHYSMEM_PERCENT		20
@@ -56,43 +58,6 @@ typedef struct redup_table {
 	int		numhashbits;
 } redup_table_t;
 
-int
-highbit64(uint64_t i)
-{
-	if (i == 0)
-		return (0);
-
-	return (NBBY * sizeof (uint64_t) - __builtin_clzll(i));
-}
-
-void *
-safe_calloc(size_t n)
-{
-	void *rv = calloc(1, n);
-	if (rv == NULL) {
-		fprintf(stderr,
-		    "Error: could not allocate %u bytes of memory\n",
-		    (int)n);
-		exit(1);
-	}
-	return (rv);
-}
-
-/*
- * Safe version of fread(), exits on error.
- */
-int
-sfread(void *buf, size_t size, FILE *fp)
-{
-	int rv = fread(buf, size, 1, fp);
-	if (rv == 0 && ferror(fp)) {
-		(void) fprintf(stderr, "Error while reading file: %s\n",
-		    strerror(errno));
-		exit(1);
-	}
-	return (rv);
-}
-
 /*
  * Safe version of pread(), exits on error.
  */
@@ -112,36 +77,11 @@ spread(int fd, void *buf, size_t count, off_t offset)
 	}
 }
 
-static int
-dump_record(dmu_replay_record_t *drr, void *payload, int payload_len,
-    zio_cksum_t *zc, int outfd)
-{
-	assert(offsetof(dmu_replay_record_t, drr_u.drr_checksum.drr_checksum)
-	    == sizeof (dmu_replay_record_t) - sizeof (zio_cksum_t));
-	fletcher_4_incremental_native(drr,
-	    offsetof(dmu_replay_record_t, drr_u.drr_checksum.drr_checksum), zc);
-	if (drr->drr_type != DRR_BEGIN) {
-		assert(ZIO_CHECKSUM_IS_ZERO(&drr->drr_u.
-		    drr_checksum.drr_checksum));
-		drr->drr_u.drr_checksum.drr_checksum = *zc;
-	}
-	fletcher_4_incremental_native(&drr->drr_u.drr_checksum.drr_checksum,
-	    sizeof (zio_cksum_t), zc);
-	if (write(outfd, drr, sizeof (*drr)) == -1)
-		return (errno);
-	if (payload_len != 0) {
-		fletcher_4_incremental_native(payload, payload_len, zc);
-		if (write(outfd, payload, payload_len) == -1)
-			return (errno);
-	}
-	return (0);
-}
-
 static void
 rdt_insert(redup_table_t *rdt,
     uint64_t guid, uint64_t object, uint64_t offset, uint64_t stream_offset)
 {
-	uint64_t ch = cityhash4(guid, object, offset, 0);
+	uint64_t ch = cityhash3(guid, object, offset);
 	uint64_t hashcode = BF64_GET(ch, 0, rdt->numhashbits);
 	redup_entry_t **rdepp;
 
@@ -161,7 +101,7 @@ rdt_lookup(redup_table_t *rdt,
     uint64_t guid, uint64_t object, uint64_t offset,
     uint64_t *stream_offsetp)
 {
-	uint64_t ch = cityhash4(guid, object, offset, 0);
+	uint64_t ch = cityhash3(guid, object, offset);
 	uint64_t hashcode = BF64_GET(ch, 0, rdt->numhashbits);
 
 	for (redup_entry_t *rde = rdt->redup_hash_array[hashcode];
@@ -186,7 +126,7 @@ static void
 zfs_redup_stream(int infd, int outfd, boolean_t verbose)
 {
 	int bufsz = SPA_MAXBLOCKSIZE;
-	dmu_replay_record_t thedrr = { 0 };
+	dmu_replay_record_t thedrr;
 	dmu_replay_record_t *drr = &thedrr;
 	redup_table_t rdt;
 	zio_cksum_t stream_cksum;
@@ -194,12 +134,14 @@ zfs_redup_stream(int infd, int outfd, boolean_t verbose)
 	uint64_t num_records = 0;
 	uint64_t num_write_byref_records = 0;
 
+	memset(&thedrr, 0, sizeof (dmu_replay_record_t));
+
 #ifdef _ILP32
 	uint64_t max_rde_size = SMALLEST_POSSIBLE_MAX_RDT_MB << 20;
 #else
-	uint64_t physmem = sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE);
+	uint64_t physbytes = sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE);
 	uint64_t max_rde_size =
-	    MAX((physmem * MAX_RDT_PHYSMEM_PERCENT) / 100,
+	    MAX((physbytes * MAX_RDT_PHYSMEM_PERCENT) / 100,
 	    SMALLEST_POSSIBLE_MAX_RDT_MB << 20);
 #endif
 
@@ -222,6 +164,8 @@ zfs_redup_stream(int infd, int outfd, boolean_t verbose)
 	char *buf = safe_calloc(bufsz);
 	FILE *ofp = fdopen(infd, "r");
 	long offset = ftell(ofp);
+	int begin = 0;
+	boolean_t seen = B_FALSE;
 	while (sfread(drr, sizeof (*drr), ofp) != 0) {
 		num_records++;
 
@@ -240,6 +184,8 @@ zfs_redup_stream(int infd, int outfd, boolean_t verbose)
 			struct drr_begin *drrb = &drr->drr_u.drr_begin;
 			int fflags;
 			ZIO_SET_CHECKSUM(&stream_cksum, 0, 0, 0, 0);
+			VERIFY0(begin++);
+			seen = B_TRUE;
 
 			assert(drrb->drr_magic == DMU_BACKUP_MAGIC);
 
@@ -250,7 +196,10 @@ zfs_redup_stream(int infd, int outfd, boolean_t verbose)
 			/* cppcheck-suppress syntaxError */
 			DMU_SET_FEATUREFLAGS(drrb->drr_versioninfo, fflags);
 
-			int sz = drr->drr_payloadlen;
+			uint32_t sz = drr->drr_payloadlen;
+
+			VERIFY3U(sz, <=, 1U << 28);
+
 			if (sz != 0) {
 				if (sz > bufsz) {
 					free(buf);
@@ -267,6 +216,13 @@ zfs_redup_stream(int infd, int outfd, boolean_t verbose)
 		{
 			struct drr_end *drre = &drr->drr_u.drr_end;
 			/*
+			 * We would prefer to just check --begin == 0, but
+			 * replication streams have an end of stream END
+			 * record, so we must avoid tripping it.
+			 */
+			VERIFY3B(seen, ==, B_TRUE);
+			begin--;
+			/*
 			 * Use the recalculated checksum, unless this is
 			 * the END record of a stream package, which has
 			 * no checksum.
@@ -279,6 +235,7 @@ zfs_redup_stream(int infd, int outfd, boolean_t verbose)
 		case DRR_OBJECT:
 		{
 			struct drr_object *drro = &drr->drr_u.drr_object;
+			VERIFY3S(begin, ==, 1);
 
 			if (drro->drr_bonuslen > 0) {
 				payload_size = DRR_OBJECT_PAYLOAD_SIZE(drro);
@@ -290,6 +247,7 @@ zfs_redup_stream(int infd, int outfd, boolean_t verbose)
 		case DRR_SPILL:
 		{
 			struct drr_spill *drrs = &drr->drr_u.drr_spill;
+			VERIFY3S(begin, ==, 1);
 			payload_size = DRR_SPILL_PAYLOAD_SIZE(drrs);
 			(void) sfread(buf, payload_size, ofp);
 			break;
@@ -299,6 +257,7 @@ zfs_redup_stream(int infd, int outfd, boolean_t verbose)
 		{
 			struct drr_write_byref drrwb =
 			    drr->drr_u.drr_write_byref;
+			VERIFY3S(begin, ==, 1);
 
 			num_write_byref_records++;
 
@@ -334,6 +293,7 @@ zfs_redup_stream(int infd, int outfd, boolean_t verbose)
 		case DRR_WRITE:
 		{
 			struct drr_write *drrw = &drr->drr_u.drr_write;
+			VERIFY3S(begin, ==, 1);
 			payload_size = DRR_WRITE_PAYLOAD_SIZE(drrw);
 			(void) sfread(buf, payload_size, ofp);
 
@@ -346,6 +306,7 @@ zfs_redup_stream(int infd, int outfd, boolean_t verbose)
 		{
 			struct drr_write_embedded *drrwe =
 			    &drr->drr_u.drr_write_embedded;
+			VERIFY3S(begin, ==, 1);
 			payload_size =
 			    P2ROUNDUP((uint64_t)drrwe->drr_psize, 8);
 			(void) sfread(buf, payload_size, ofp);
@@ -355,6 +316,7 @@ zfs_redup_stream(int infd, int outfd, boolean_t verbose)
 		case DRR_FREEOBJECTS:
 		case DRR_FREE:
 		case DRR_OBJECT_RANGE:
+			VERIFY3S(begin, ==, 1);
 			break;
 
 		default:

@@ -1,8 +1,5 @@
 # Makefile.powerpc -- with config changes.
 # Copyright 1990 W. Jolitz
-#	from: @(#)Makefile.i386	7.1 5/10/91
-# $FreeBSD$
-#
 # Makefile for FreeBSD
 #
 # This makefile is constructed from a machine description:
@@ -35,11 +32,6 @@ LDSCRIPT_NAME?= ldscript.${MACHINE_ARCH}
 
 INCLUDES+= -I$S/contrib/libfdt
 
-.if "${MACHINE_ARCH}" == "powerpcspe"
-# Force __SPE__, since the builtin will be removed later with -mno-spe
-CFLAGS.gcc+= -mabi=spe -D__SPE__
-CFLAGS.clang+= -mspe -D__SPE__ -m32
-.endif
 CFLAGS+= -msoft-float
 CFLAGS.gcc+= -Wa,-many
 

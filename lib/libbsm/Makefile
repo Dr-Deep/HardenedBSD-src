@@ -1,10 +1,8 @@
-#
-# $FreeBSD$
-#
+PACKAGE=	audit
+LIB_PACKAGE=
 
-PACKAGE=	lib${LIB}
-OPENBSMDIR=		${SRCTOP}/contrib/openbsm
-_LIBBSMDIR=		${OPENBSMDIR}/libbsm
+OPENBSMDIR=	${SRCTOP}/contrib/openbsm
+_LIBBSMDIR=	${OPENBSMDIR}/libbsm
 
 LIB=		bsm
 SHLIB_MAJOR=	3
@@ -61,12 +59,6 @@ MAN=	libbsm.3							\
 # they're not all libbsm parts.
 #
 MAN+=	audit.2								\
-	audit.log.5							\
-	audit_class.5							\
-	audit_control.5							\
-	audit_event.5							\
-	audit_user.5							\
-	audit_warn.5							\
 	auditctl.2							\
 	auditon.2							\
 	getaudit.2							\

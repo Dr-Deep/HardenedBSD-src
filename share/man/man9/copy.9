@@ -32,8 +32,6 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
 .Dd May 11, 2020
 .Dt COPY 9
 .Os
@@ -45,7 +43,7 @@
 .Nm copyout_nofault ,
 .Nm copystr ,
 .Nm copyinstr
-.Nd heterogenous address space copy functions
+.Nd heterogeneous address space copy functions
 .Sh SYNOPSIS
 .In sys/types.h
 .In sys/systm.h
@@ -69,9 +67,10 @@ to another.
 .Pp
 .Fn copystr
 is deprecated and should be replaced with
-.Xr strlcpy 9 .
+.Xr strlcpy 3 ,
+which has a kernel-to-kernel version.
 It will be removed from
-.Fx 13 .
+.Fx 16 .
 .Pp
 The
 .Fn copyin

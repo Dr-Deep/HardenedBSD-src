@@ -27,10 +27,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)socketvar.h	8.3 (Berkeley) 2/19/95
- *
- * $FreeBSD$
  */
 #ifndef _SYS_SOCKBUF_H_
 #define _SYS_SOCKBUF_H_
@@ -44,15 +40,16 @@
 #define	SB_SEL		0x08		/* someone is selecting */
 #define	SB_ASYNC	0x10		/* ASYNC I/O, need signals */
 #define	SB_UPCALL	0x20		/* someone wants an upcall */
-#define	SB_NOINTR	0x40		/* operations not interruptible */
+#define	SB_AUTOLOWAT	0x40		/* sendfile(2) may autotune sb_lowat */
 #define	SB_AIO		0x80		/* AIO operations queued */
 #define	SB_KNOTE	0x100		/* kernel note attached */
 #define	SB_NOCOALESCE	0x200		/* don't coalesce new data into existing mbufs */
 #define	SB_IN_TOE	0x400		/* socket buffer is in the middle of an operation */
 #define	SB_AUTOSIZE	0x800		/* automatically size socket buffer */
-#define	SB_STOP		0x1000		/* backpressure indicator */
+/* was	SB_STOP		0x1000		*/
 #define	SB_AIO_RUNNING	0x2000		/* AIO operation running */
-#define	SB_TLS_IFNET	0x4000		/* has used / is using ifnet KTLS */
+#define	SB_SPLICED	0x4000		/* socket buffer is spliced;
+					   previously used for SB_TLS_IFNET */
 #define	SB_TLS_RX_RESYNC 0x8000		/* KTLS RX lost HW sync */
 
 #define	SBS_CANTSENDMORE	0x0010	/* can't send more data to peer */
@@ -65,12 +62,13 @@
 #include <sys/_sx.h>
 #include <sys/_task.h>
 
-#define	SB_MAX		(2*1024*1024)	/* default for max chars in sockbuf */
+#define	SB_MAX		(8*1024*1024)	/* default for max chars in sockbuf */
 
 struct ktls_session;
 struct mbuf;
 struct sockaddr;
 struct socket;
+struct sockopt;
 struct thread;
 struct selinfo;
 
@@ -131,7 +129,20 @@ struct sockbuf {
 			struct	mbuf *sb_mtls;	/*  TLS mbuf chain */
 			struct	mbuf *sb_mtlstail; /* last mbuf in TLS chain */
 			uint64_t sb_tls_seqno;	/* TLS seqno */
-			struct	ktls_session *sb_tls_info; /* TLS state */
+			/* TLS state, locked by sockbuf and sock I/O mutexes. */
+			struct	ktls_session *sb_tls_info;
+		};
+		/*
+		 * PF_UNIX/SOCK_STREAM and PF_UNIX/SOCK_SEQPACKET
+		 * A simple stream buffer with not ready data pointer.
+		 */
+		struct {
+			STAILQ_HEAD(, mbuf)	uxst_mbq;
+			struct mbuf		*uxst_fnrdy;
+			struct socket		*uxst_peer;
+			u_int			uxst_flags;
+#define	UXST_PEER_AIO	0x1
+#define	UXST_PEER_SEL	0x2
 		};
 		/*
 		 * PF_UNIX/SOCK_DGRAM
@@ -166,6 +177,12 @@ struct sockbuf {
 			u_int uxdg_ctl;
 			u_int uxdg_mbcnt;
 		};
+		/*
+		 * Netlink socket.
+		 */
+		struct {
+			TAILQ_HEAD(, nl_buf)	nl_queue;
+		};
 	};
 };
 
@@ -193,8 +210,6 @@ typedef enum { SO_RCV, SO_SND } sb_which;
  * Socket buffer private mbuf(9) flags.
  */
 #define	M_NOTREADY	M_PROTO1	/* m_data not populated yet */
-#define	M_BLOCKED	M_PROTO2	/* M_NOTREADY in front of m */
-#define	M_NOTAVAIL	(M_NOTREADY | M_BLOCKED)
 
 void	sbappend(struct sockbuf *sb, struct mbuf *m, int flags);
 void	sbappend_locked(struct sockbuf *sb, struct mbuf *m, int flags);
@@ -227,9 +242,11 @@ void	sbflush(struct sockbuf *sb);
 void	sbflush_locked(struct sockbuf *sb);
 void	sbrelease(struct socket *, sb_which);
 void	sbrelease_locked(struct socket *, sb_which);
-int	sbsetopt(struct socket *so, int cmd, u_long cc);
+int	sbsetopt(struct socket *so, struct sockopt *);
 bool	sbreserve_locked(struct socket *so, sb_which which, u_long cc,
 	    struct thread *td);
+bool	sbreserve_locked_limit(struct socket *so, sb_which which, u_long cc,
+	    u_long buf_max, struct thread *td);
 void	sbsndptr_adv(struct sockbuf *sb, struct mbuf *mb, u_int len);
 struct mbuf *
 	sbsndptr_noadv(struct sockbuf *sb, u_int off, u_int *moff);
@@ -283,9 +300,6 @@ sbspace(struct sockbuf *sb)
 #if 0
 	SOCKBUF_LOCK_ASSERT(sb);
 #endif
-
-	if (sb->sb_flags & SB_STOP)
-		return(0);
 
 	bleft = sb->sb_hiwat - sb->sb_ccc;
 	mleft = sb->sb_mbmax - sb->sb_mbcnt;

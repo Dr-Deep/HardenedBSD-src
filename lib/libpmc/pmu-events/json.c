@@ -27,8 +27,6 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
  * OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * $FreeBSD$
- *
 */
 
 #include <stdlib.h>
@@ -161,4 +159,18 @@ int json_streq(char *map, jsmntok_t *t, const char *s)
 {
 	unsigned len = json_len(t);
 	return len == strlen(s) && !strncasecmp(map + t->start, s, len);
+}
+
+int json_copystr(char *map, jsmntok_t *t, char *s, int len)
+{
+	int jlen;
+
+	jlen = json_len(t);
+	if (jlen > len)
+		jlen = len - 1;
+
+	memcpy(s, map + t->start, jlen);
+	s[jlen] = '\0';
+
+	return (jlen);
 }

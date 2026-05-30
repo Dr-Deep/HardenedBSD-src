@@ -1,4 +1,56 @@
+[20240124] Provide mechanism to disable new USB connections
+__HardenedBSD_version = 1500001
+
+	HBSD: Provide support for prohibiting new USB device connections
+
+	This commit introduces the hardening.pax.prohibit_new_usb sysctl
+	tunable node. This node can be set to one of three values:
+
+	0: Disabled
+	1: Enabled
+	2: Enabled without possibility to disable
+
+	When set to 2, a reboot is required to end the prohibition on new USB
+	connections.
+
+	This is based on a patch by Loic F <loic.f@hardenedbsd.org>.
+
+[20230826] Catch up with FreeBSD version bump to 15
+__HardenedBSD_version = 1500000
+
+	HBSD: Now that __FreeBSD_version is 1500000, let's bump up
+	__HardenedBSD_version to reflect major version bump to 15.
+
+[20230621] Further restrict ptrace access to capsicumized processes
+__HardenedBSD_version = 1400005
+
+	HBSD: Further restrict ptrace access targeting capsicumized processes
+
+	Prevent capsicumized processes from being ptraced. Introduce a new
+	4-state per-jail sysctl node, hardening.prohibit_ptrace_capsicum,
+	defaulted to process opt-out (2). Introduce a new hbsdcontrol knob,
+	prohibit_ptrace_capsicum, to toggle the feature on a per-application
+	basis.
+
+	The intent behind this change is to make post-exploitation tasks more
+	difficult. Abusing ptrace to inject code or to perform process hollowing
+	is commonplace.
+
+[20230528] Introduce shared memory (SHM) hardening
+__HardenedBSD_version = 1400004
+
+	SHM hardening places restrictions on what can be done with the shared
+	memory subsystem (see `shm_open(2)`.) This feature is launching with
+	one technique:
+
+	Use of `shm_open(2)/__sys_shm_open2` system calls is prohibited when:
+
+	1. The `hardening.harden_shm` sysctl tunable is enabled;
+	2. The process has not opted out of the feature;
+	3. The process has entered capability mode (aka, Capsicum mode)
+
 [20220610] Introduce Trusted Path Execution (TPE)
+__HardenedBSD_version = 1400003
 
 	TPE limits the scope of what files can be executed. By default, TPE is
 	left disabled, but can be enabled via the `hardening.pax.tpe.status`

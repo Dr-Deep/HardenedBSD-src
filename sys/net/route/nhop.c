@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2020 Alexander V. Chernikov
  *
@@ -26,9 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 #include "opt_inet.h"
-#include "opt_route.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -116,9 +114,7 @@ destroy_ctl(struct nh_control *ctl)
 	NHOPS_LOCK_DESTROY(ctl);
 	free(ctl->nh_head.ptr, M_NHOP);
 	free(ctl->nh_idx_head.idx, M_NHOP);
-#ifdef ROUTE_MPATH
 	nhgrp_ctl_free(ctl);
-#endif
 	free(ctl, M_NHOP);
 }
 
@@ -161,17 +157,14 @@ nhops_destroy_rib(struct rib_head *rh)
 		FIB_RH_LOG(LOG_DEBUG3, rh, "marking nhop %u unlinked", nh_priv->nh_idx);
 		refcount_release(&nh_priv->nh_linked);
 	} CHT_SLIST_FOREACH_END;
-#ifdef ROUTE_MPATH
 	nhgrp_ctl_unlink_all(ctl);
-#endif
 	NHOPS_WUNLOCK(ctl);
 
 	/*
 	 * Postpone destruction till the end of current epoch
 	 * so nhop_free() can safely use nh_control pointer.
 	 */
-	epoch_call(net_epoch_preempt, destroy_ctl_epoch,
-	    &ctl->ctl_epoch_ctx);
+	NET_EPOCH_CALL(destroy_ctl_epoch, &ctl->ctl_epoch_ctx);
 }
 
 /*

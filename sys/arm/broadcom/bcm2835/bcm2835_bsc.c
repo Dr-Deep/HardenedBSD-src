@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2001 Tsubai Masanari.
  * Copyright (c) 2012 Oleksandr Tymoshenko <gonzo@freebsd.org>
@@ -30,8 +30,6 @@
  *
  */
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Driver for bcm2835 i2c-compatible two-wire bus, named 'BSC' on this SoC.
  *
@@ -344,14 +342,15 @@ bcm_bsc_attach(device_t dev)
 	bcm_bsc_reset(sc);
 	BCM_BSC_UNLOCK(sc);
 
-	sc->sc_iicbus = device_add_child(dev, "iicbus", -1);
+	sc->sc_iicbus = device_add_child(dev, "iicbus", DEVICE_UNIT_ANY);
 	if (sc->sc_iicbus == NULL) {
 		bcm_bsc_detach(dev);
 		return (ENXIO);
 	}
 
 	/* Probe and attach the iicbus when interrupts are available. */
-	return (bus_delayed_attach_children(dev));
+	bus_delayed_attach_children(dev);
+	return (0);
 }
 
 static int
@@ -362,8 +361,6 @@ bcm_bsc_detach(device_t dev)
 	bus_generic_detach(dev);
 
 	sc = device_get_softc(dev);
-	if (sc->sc_iicbus != NULL)
-		device_delete_child(dev, sc->sc_iicbus);
 	mtx_destroy(&sc->sc_mtx);
 	if (sc->sc_intrhand)
 		bus_teardown_intr(dev, sc->sc_irq_res, sc->sc_intrhand);
@@ -422,7 +419,7 @@ bcm_bsc_fill_tx_fifo(struct bcm_bsc_softc *sc)
 		} while (sc->sc_resid > 0 && (status & BCM_BSC_STATUS_TXD));
 		/*
 		 * If a repeat-start was pending and we just hit the end of a tx
-		 * buffer, see if it's also the end of the writes that preceeded
+		 * buffer, see if it's also the end of the writes that preceded
 		 * the repeat-start.  If so, log the repeat-start and the start
 		 * of the following read, and return because we're not writing
 		 * anymore (and TXD will be true because there's room to write

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2005-2007 Joseph Koshy
  * Copyright (c) 2007 The FreeBSD Foundation
@@ -36,9 +36,6 @@
  * Logging code for hwpmc(4)
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/capsicum.h>
 #include <sys/domainset.h>
@@ -61,6 +58,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/uio.h>
 #include <sys/unistd.h>
 #include <sys/vnode.h>
+#include <sys/syslog.h>
 
 #if defined(__i386__) || defined(__amd64__)
 #include <machine/clock.h>
@@ -79,9 +77,6 @@ SYSCTL_DECL(_kern_hwpmc);
  */
 
 static int pmclog_buffer_size = PMC_LOG_BUFFER_SIZE;
-#if (__FreeBSD_version < 1100000)
-TUNABLE_INT(PMC_SYSCTL_NAME_PREFIX "logbuffersize", &pmclog_buffer_size);
-#endif
 SYSCTL_INT(_kern_hwpmc, OID_AUTO, logbuffersize, CTLFLAG_RDTUN,
     &pmclog_buffer_size, 0, "size of log buffers in kilobytes");
 
@@ -90,9 +85,6 @@ SYSCTL_INT(_kern_hwpmc, OID_AUTO, logbuffersize, CTLFLAG_RDTUN,
  */
 
 static int pmc_nlogbuffers_pcpu = PMC_NLOGBUFFERS_PCPU;
-#if (__FreeBSD_version < 1100000)
-TUNABLE_INT(PMC_SYSCTL_NAME_PREFIX "nbuffers", &pmc_nlogbuffers_pcpu);
-#endif
 SYSCTL_INT(_kern_hwpmc, OID_AUTO, nbuffers_pcpu, CTLFLAG_RDTUN,
     &pmc_nlogbuffers_pcpu, 0, "number of log buffers per cpu");
 
@@ -102,90 +94,93 @@ SYSCTL_INT(_kern_hwpmc, OID_AUTO, nbuffers_pcpu, CTLFLAG_RDTUN,
 
 static struct mtx pmc_kthread_mtx;	/* sleep lock */
 
-#define	PMCLOG_INIT_BUFFER_DESCRIPTOR(D, buf, domain) do {						\
-		(D)->plb_fence = ((char *) (buf)) +	1024*pmclog_buffer_size;			\
-		(D)->plb_base  = (D)->plb_ptr = ((char *) (buf));				\
-		(D)->plb_domain = domain; \
-	} while (0)
+#define	PMCLOG_INIT_BUFFER_DESCRIPTOR(D, buf, domain) do {		\
+	(D)->plb_fence = ((char *)(buf)) + 1024 * pmclog_buffer_size;	\
+	(D)->plb_base = (D)->plb_ptr = ((char *)(buf));			\
+	(D)->plb_domain = domain;					\
+} while (0)
 
-#define	PMCLOG_RESET_BUFFER_DESCRIPTOR(D) do {			\
-		(D)->plb_ptr  = (D)->plb_base; \
-	} while (0)
+#define	PMCLOG_RESET_BUFFER_DESCRIPTOR(D) do {				\
+	(D)->plb_ptr = (D)->plb_base;					\
+} while (0)
 
 /*
  * Log file record constructors.
  */
-#define	_PMCLOG_TO_HEADER(T,L)						\
-	((PMCLOG_HEADER_MAGIC << 24) |					\
-	 (PMCLOG_TYPE_ ## T << 16)   |					\
-	 ((L) & 0xFFFF))
+#define	_PMCLOG_TO_HEADER(T, L)						\
+	((PMCLOG_HEADER_MAGIC << 24) | (T << 16) | ((L) & 0xFFFF))
 
 /* reserve LEN bytes of space and initialize the entry header */
-#define	_PMCLOG_RESERVE_SAFE(PO,TYPE,LEN,ACTION, TSC) do {	\
-		uint32_t *_le;						\
-		int _len = roundup((LEN), sizeof(uint32_t));	\
-		struct pmclog_header *ph;							\
-		if ((_le = pmclog_reserve((PO), _len)) == NULL) {	\
-			ACTION;											\
-		}													\
-		ph = (struct pmclog_header *)_le;					\
-		ph->pl_header =_PMCLOG_TO_HEADER(TYPE,_len);	\
-		ph->pl_tsc = (TSC);									\
-		_le += sizeof(*ph)/4	/* skip over timestamp */
+#define	_PMCLOG_RESERVE_SAFE(PO, TYPE, LEN, ACTION, TSC) do {		\
+	uint32_t *_le;							\
+	int _len = roundup((LEN), sizeof(uint32_t));			\
+	struct pmclog_header *ph;					\
+									\
+	if ((_le = pmclog_reserve((PO), _len)) == NULL) {		\
+		ACTION;							\
+	}								\
+	ph = (struct pmclog_header *)_le;				\
+	ph->pl_header =_PMCLOG_TO_HEADER(TYPE,_len);			\
+	ph->pl_tsc = (TSC);						\
+	_le += sizeof(*ph) / 4	/* skip over timestamp */
 
 /* reserve LEN bytes of space and initialize the entry header */
-#define	_PMCLOG_RESERVE(PO,TYPE,LEN,ACTION) do {			\
-		uint32_t *_le;						\
-		int _len = roundup((LEN), sizeof(uint32_t));	\
-		uint64_t tsc;										\
-		struct pmclog_header *ph;							\
-		tsc = pmc_rdtsc();									\
-		spinlock_enter();									\
-		if ((_le = pmclog_reserve((PO), _len)) == NULL) {	\
-			spinlock_exit();								\
-			ACTION;											\
-		}												\
-		ph = (struct pmclog_header *)_le;					\
-		ph->pl_header =_PMCLOG_TO_HEADER(TYPE,_len);	\
-		ph->pl_tsc = tsc;									\
-		_le += sizeof(*ph)/4	/* skip over timestamp */
+#define	_PMCLOG_RESERVE(PO, TYPE, LEN, ACTION) do {			\
+	uint32_t *_le;							\
+	int _len = roundup((LEN), sizeof(uint32_t));			\
+	uint64_t tsc;							\
+	struct pmclog_header *ph;					\
+									\
+	tsc = pmc_rdtsc();						\
+	spinlock_enter();						\
+	if ((_le = pmclog_reserve((PO), _len)) == NULL) {		\
+		spinlock_exit();					\
+		ACTION;							\
+	}								\
+	ph = (struct pmclog_header *)_le;				\
+	ph->pl_header =_PMCLOG_TO_HEADER(TYPE,_len);			\
+	ph->pl_tsc = tsc;						\
+	_le += sizeof(*ph) / 4	/* skip over timestamp */
 
-
-
-#define	PMCLOG_RESERVE_SAFE(P,T,L,TSC)		_PMCLOG_RESERVE_SAFE(P,T,L,return,TSC)
-#define	PMCLOG_RESERVE(P,T,L)		_PMCLOG_RESERVE(P,T,L,return)
-#define	PMCLOG_RESERVE_WITH_ERROR(P,T,L) _PMCLOG_RESERVE(P,T,L,		\
-	error=ENOMEM;goto error)
+#define	PMCLOG_RESERVE_SAFE(P, T, L, TSC)				\
+	_PMCLOG_RESERVE_SAFE(P, T, L, return, TSC)
+#define	PMCLOG_RESERVE(P,T,L)						\
+	_PMCLOG_RESERVE(P, T, L, return)
+#define	PMCLOG_RESERVE_WITH_ERROR(P, T, L)				\
+	_PMCLOG_RESERVE(P, T, L, error = ENOMEM; goto error)
 
 #define	PMCLOG_EMIT32(V)	do { *_le++ = (V); } while (0)
 #define	PMCLOG_EMIT64(V)	do { 					\
-		*_le++ = (uint32_t) ((V) & 0xFFFFFFFF);			\
-		*_le++ = (uint32_t) (((V) >> 32) & 0xFFFFFFFF);		\
-	} while (0)
+	*_le++ = (uint32_t) ((V) & 0xFFFFFFFF);				\
+	*_le++ = (uint32_t) (((V) >> 32) & 0xFFFFFFFF);			\
+} while (0)
 
 
 /* Emit a string.  Caution: does NOT update _le, so needs to be last */
-#define	PMCLOG_EMITSTRING(S,L)	do { bcopy((S), _le, (L)); } while (0)
-#define	PMCLOG_EMITNULLSTRING(L) do { bzero(_le, (L)); } while (0)
+#define	PMCLOG_EMITSTRING(S,L)	do {					\
+	bcopy((S), _le, (L));						\
+} while (0)
+#define	PMCLOG_EMITNULLSTRING(L) do {					\
+	bzero(_le, (L));						\
+} while (0)
 
-#define	PMCLOG_DESPATCH_SAFE(PO)						\
-	    pmclog_release((PO));						\
-	} while (0)
+#define	PMCLOG_DESPATCH_SAFE(PO)					\
+	pmclog_release((PO));						\
+} while (0)
 
-#define	PMCLOG_DESPATCH_SCHED_LOCK(PO)						\
-	     pmclog_release_flags((PO), 0);							\
-	} while (0)
+#define	PMCLOG_DESPATCH_SCHED_LOCK(PO)					\
+	pmclog_release_flags((PO), 0);					\
+} while (0)
 
-#define	PMCLOG_DESPATCH(PO)							\
-	    pmclog_release((PO));						\
-		spinlock_exit();							\
-	} while (0)
+#define	PMCLOG_DESPATCH(PO)						\
+	pmclog_release((PO));						\
+	spinlock_exit();						\
+} while (0)
 
-#define	PMCLOG_DESPATCH_SYNC(PO)						\
-	    pmclog_schedule_io((PO), 1);						\
-		spinlock_exit();								\
-		} while (0)
-
+#define	PMCLOG_DESPATCH_SYNC(PO)					\
+	pmclog_schedule_io((PO), 1);					\
+	spinlock_exit();						\
+} while (0)
 
 #define TSDELTA 4
 /*
@@ -206,9 +201,9 @@ CTASSERT(offsetof(struct pmclog_pmcattach,pl_pathname) == 5*4 + TSDELTA);
 CTASSERT(sizeof(struct pmclog_pmcdetach) == 5*4 + TSDELTA);
 CTASSERT(sizeof(struct pmclog_proccsw) == 7*4 + 8 + TSDELTA);
 CTASSERT(sizeof(struct pmclog_procexec) == 5*4 + PATH_MAX +
-    sizeof(uintfptr_t) + TSDELTA);
+    2*sizeof(uintptr_t) + TSDELTA);
 CTASSERT(offsetof(struct pmclog_procexec,pl_pathname) == 5*4 + TSDELTA +
-    sizeof(uintfptr_t));
+    2*sizeof(uintptr_t));
 CTASSERT(sizeof(struct pmclog_procexit) == 5*4 + 8 + TSDELTA);
 CTASSERT(sizeof(struct pmclog_procfork) == 5*4 + TSDELTA);
 CTASSERT(sizeof(struct pmclog_sysexit) == 6*4);
@@ -722,7 +717,7 @@ pmclog_configure_log(struct pmc_mdep *md, struct pmc_owner *po, int logfd)
 	PROC_UNLOCK(p);
 	nanotime(&ts);
 	/* create a log initialization entry */
-	PMCLOG_RESERVE_WITH_ERROR(po, INITIALIZE,
+	PMCLOG_RESERVE_WITH_ERROR(po, PMCLOG_TYPE_INITIALIZE,
 	    sizeof(struct pmclog_initialize));
 	PMCLOG_EMIT32(PMC_VERSION);
 	PMCLOG_EMIT32(md->pmd_cputype);
@@ -922,7 +917,7 @@ pmclog_process_callchain(struct pmc *pm, struct pmc_sample *ps)
 	    ps->ps_nsamples * sizeof(uintfptr_t);
 	po = pm->pm_owner;
 	flags = PMC_CALLCHAIN_TO_CPUFLAGS(ps->ps_cpu,ps->ps_flags);
-	PMCLOG_RESERVE_SAFE(po, CALLCHAIN, recordlen, ps->ps_tsc);
+	PMCLOG_RESERVE_SAFE(po, PMCLOG_TYPE_CALLCHAIN, recordlen, ps->ps_tsc);
 	PMCLOG_EMIT32(ps->ps_pid);
 	PMCLOG_EMIT32(ps->ps_tid);
 	PMCLOG_EMIT32(pm->pm_id);
@@ -935,14 +930,16 @@ pmclog_process_callchain(struct pmc *pm, struct pmc_sample *ps)
 void
 pmclog_process_closelog(struct pmc_owner *po)
 {
-	PMCLOG_RESERVE(po,CLOSELOG,sizeof(struct pmclog_closelog));
+	PMCLOG_RESERVE(po, PMCLOG_TYPE_CLOSELOG,
+	    sizeof(struct pmclog_closelog));
 	PMCLOG_DESPATCH_SYNC(po);
 }
 
 void
 pmclog_process_dropnotify(struct pmc_owner *po)
 {
-	PMCLOG_RESERVE(po,DROPNOTIFY,sizeof(struct pmclog_dropnotify));
+	PMCLOG_RESERVE(po, PMCLOG_TYPE_DROPNOTIFY,
+	    sizeof(struct pmclog_dropnotify));
 	PMCLOG_DESPATCH(po);
 }
 
@@ -958,7 +955,7 @@ pmclog_process_map_in(struct pmc_owner *po, pid_t pid, uintfptr_t start,
 	recordlen = offsetof(struct pmclog_map_in, pl_pathname) +
 	    pathlen;
 
-	PMCLOG_RESERVE(po, MAP_IN, recordlen);
+	PMCLOG_RESERVE(po, PMCLOG_TYPE_MAP_IN, recordlen);
 	PMCLOG_EMIT32(pid);
 	PMCLOG_EMIT32(0);
 	PMCLOG_EMITADDR(start);
@@ -972,7 +969,7 @@ pmclog_process_map_out(struct pmc_owner *po, pid_t pid, uintfptr_t start,
 {
 	KASSERT(start <= end, ("[pmclog,%d] start > end", __LINE__));
 
-	PMCLOG_RESERVE(po, MAP_OUT, sizeof(struct pmclog_map_out));
+	PMCLOG_RESERVE(po, PMCLOG_TYPE_MAP_OUT, sizeof(struct pmclog_map_out));
 	PMCLOG_EMIT32(pid);
 	PMCLOG_EMIT32(0);
 	PMCLOG_EMITADDR(start);
@@ -991,7 +988,7 @@ pmclog_process_pmcallocate(struct pmc *pm)
 	PMCDBG1(LOG,ALL,1, "pm=%p", pm);
 
 	if (PMC_TO_CLASS(pm) == PMC_CLASS_SOFT) {
-		PMCLOG_RESERVE(po, PMCALLOCATEDYN,
+		PMCLOG_RESERVE(po, PMCLOG_TYPE_PMCALLOCATEDYN,
 		    sizeof(struct pmclog_pmcallocatedyn));
 		PMCLOG_EMIT32(pm->pm_id);
 		PMCLOG_EMIT32(pm->pm_event);
@@ -1006,7 +1003,7 @@ pmclog_process_pmcallocate(struct pmc *pm)
 		pmc_soft_ev_release(ps);
 		PMCLOG_DESPATCH_SYNC(po);
 	} else {
-		PMCLOG_RESERVE(po, PMCALLOCATE,
+		PMCLOG_RESERVE(po, PMCLOG_TYPE_PMCALLOCATE,
 		    sizeof(struct pmclog_pmcallocate));
 		PMCLOG_EMIT32(pm->pm_id);
 		PMCLOG_EMIT32(pm->pm_event);
@@ -1030,7 +1027,7 @@ pmclog_process_pmcattach(struct pmc *pm, pid_t pid, char *path)
 	pathlen = strlen(path) + 1;	/* #bytes for the string */
 	recordlen = offsetof(struct pmclog_pmcattach, pl_pathname) + pathlen;
 
-	PMCLOG_RESERVE(po, PMCATTACH, recordlen);
+	PMCLOG_RESERVE(po, PMCLOG_TYPE_PMCATTACH, recordlen);
 	PMCLOG_EMIT32(pm->pm_id);
 	PMCLOG_EMIT32(pid);
 	PMCLOG_EMITSTRING(path, pathlen);
@@ -1046,7 +1043,8 @@ pmclog_process_pmcdetach(struct pmc *pm, pid_t pid)
 
 	po = pm->pm_owner;
 
-	PMCLOG_RESERVE(po, PMCDETACH, sizeof(struct pmclog_pmcdetach));
+	PMCLOG_RESERVE(po, PMCLOG_TYPE_PMCDETACH,
+	    sizeof(struct pmclog_pmcdetach));
 	PMCLOG_EMIT32(pm->pm_id);
 	PMCLOG_EMIT32(pid);
 	PMCLOG_DESPATCH_SYNC(po);
@@ -1056,13 +1054,15 @@ void
 pmclog_process_proccreate(struct pmc_owner *po, struct proc *p, int sync)
 {
 	if (sync) {
-		PMCLOG_RESERVE(po, PROC_CREATE, sizeof(struct pmclog_proccreate));
+		PMCLOG_RESERVE(po, PMCLOG_TYPE_PROC_CREATE,
+		    sizeof(struct pmclog_proccreate));
 		PMCLOG_EMIT32(p->p_pid);
 		PMCLOG_EMIT32(p->p_flag);
 		PMCLOG_EMITSTRING(p->p_comm, MAXCOMLEN+1);
 		PMCLOG_DESPATCH_SYNC(po);
 	} else {
-		PMCLOG_RESERVE(po, PROC_CREATE, sizeof(struct pmclog_proccreate));
+		PMCLOG_RESERVE(po, PMCLOG_TYPE_PROC_CREATE,
+		    sizeof(struct pmclog_proccreate));
 		PMCLOG_EMIT32(p->p_pid);
 		PMCLOG_EMIT32(p->p_flag);
 		PMCLOG_EMITSTRING(p->p_comm, MAXCOMLEN+1);
@@ -1087,7 +1087,8 @@ pmclog_process_proccsw(struct pmc *pm, struct pmc_process *pp, pmc_value_t v, st
 
 	po = pm->pm_owner;
 
-	PMCLOG_RESERVE_SAFE(po, PROCCSW, sizeof(struct pmclog_proccsw), pmc_rdtsc());
+	PMCLOG_RESERVE_SAFE(po, PMCLOG_TYPE_PROCCSW,
+	    sizeof(struct pmclog_proccsw), pmc_rdtsc());
 	PMCLOG_EMIT64(v);
 	PMCLOG_EMIT32(pm->pm_id);
 	PMCLOG_EMIT32(pp->pp_proc->p_pid);
@@ -1098,7 +1099,7 @@ pmclog_process_proccsw(struct pmc *pm, struct pmc_process *pp, pmc_value_t v, st
 
 void
 pmclog_process_procexec(struct pmc_owner *po, pmc_id_t pmid, pid_t pid,
-    uintfptr_t startaddr, char *path)
+    uintptr_t baseaddr, uintptr_t dynaddr, char *path)
 {
 	int pathlen, recordlen;
 
@@ -1106,10 +1107,11 @@ pmclog_process_procexec(struct pmc_owner *po, pmc_id_t pmid, pid_t pid,
 
 	pathlen   = strlen(path) + 1;	/* #bytes for the path */
 	recordlen = offsetof(struct pmclog_procexec, pl_pathname) + pathlen;
-	PMCLOG_RESERVE(po, PROCEXEC, recordlen);
+	PMCLOG_RESERVE(po, PMCLOG_TYPE_PROCEXEC, recordlen);
 	PMCLOG_EMIT32(pid);
 	PMCLOG_EMIT32(pmid);
-	PMCLOG_EMITADDR(startaddr);
+	PMCLOG_EMITADDR(baseaddr);
+	PMCLOG_EMITADDR(dynaddr);
 	PMCLOG_EMITSTRING(path,pathlen);
 	PMCLOG_DESPATCH_SYNC(po);
 }
@@ -1130,7 +1132,8 @@ pmclog_process_procexit(struct pmc *pm, struct pmc_process *pp)
 
 	po = pm->pm_owner;
 
-	PMCLOG_RESERVE(po, PROCEXIT, sizeof(struct pmclog_procexit));
+	PMCLOG_RESERVE(po, PMCLOG_TYPE_PROCEXIT,
+	    sizeof(struct pmclog_procexit));
 	PMCLOG_EMIT32(pm->pm_id);
 	PMCLOG_EMIT32(pp->pp_proc->p_pid);
 	PMCLOG_EMIT64(pp->pp_pmcs[ri].pp_pmcval);
@@ -1144,7 +1147,8 @@ pmclog_process_procexit(struct pmc *pm, struct pmc_process *pp)
 void
 pmclog_process_procfork(struct pmc_owner *po, pid_t oldpid, pid_t newpid)
 {
-	PMCLOG_RESERVE(po, PROCFORK, sizeof(struct pmclog_procfork));
+	PMCLOG_RESERVE(po, PMCLOG_TYPE_PROCFORK,
+	    sizeof(struct pmclog_procfork));
 	PMCLOG_EMIT32(oldpid);
 	PMCLOG_EMIT32(newpid);
 	PMCLOG_DESPATCH(po);
@@ -1157,7 +1161,7 @@ pmclog_process_procfork(struct pmc_owner *po, pid_t oldpid, pid_t newpid)
 void
 pmclog_process_sysexit(struct pmc_owner *po, pid_t pid)
 {
-	PMCLOG_RESERVE(po, SYSEXIT, sizeof(struct pmclog_sysexit));
+	PMCLOG_RESERVE(po, PMCLOG_TYPE_SYSEXIT, sizeof(struct pmclog_sysexit));
 	PMCLOG_EMIT32(pid);
 	PMCLOG_DESPATCH(po);
 }
@@ -1169,7 +1173,8 @@ pmclog_process_threadcreate(struct pmc_owner *po, struct thread *td, int sync)
 
 	p = td->td_proc;
 	if (sync) {
-		PMCLOG_RESERVE(po, THR_CREATE, sizeof(struct pmclog_threadcreate));
+		PMCLOG_RESERVE(po, PMCLOG_TYPE_THR_CREATE,
+		    sizeof(struct pmclog_threadcreate));
 		PMCLOG_EMIT32(td->td_tid);
 		PMCLOG_EMIT32(p->p_pid);
 		PMCLOG_EMIT32(p->p_flag);
@@ -1177,7 +1182,8 @@ pmclog_process_threadcreate(struct pmc_owner *po, struct thread *td, int sync)
 		PMCLOG_EMITSTRING(td->td_name, MAXCOMLEN+1);
 		PMCLOG_DESPATCH_SYNC(po);
 	} else {
-		PMCLOG_RESERVE(po, THR_CREATE, sizeof(struct pmclog_threadcreate));
+		PMCLOG_RESERVE(po, PMCLOG_TYPE_THR_CREATE,
+		    sizeof(struct pmclog_threadcreate));
 		PMCLOG_EMIT32(td->td_tid);
 		PMCLOG_EMIT32(p->p_pid);
 		PMCLOG_EMIT32(p->p_flag);
@@ -1191,7 +1197,8 @@ void
 pmclog_process_threadexit(struct pmc_owner *po, struct thread *td)
 {
 
-	PMCLOG_RESERVE(po, THR_EXIT, sizeof(struct pmclog_threadexit));
+	PMCLOG_RESERVE(po, PMCLOG_TYPE_THR_EXIT,
+	    sizeof(struct pmclog_threadexit));
 	PMCLOG_EMIT32(td->td_tid);
 	PMCLOG_DESPATCH(po);
 }
@@ -1209,7 +1216,7 @@ pmclog_process_userlog(struct pmc_owner *po, struct pmc_op_writelog *wl)
 
 	error = 0;
 
-	PMCLOG_RESERVE_WITH_ERROR(po, USERDATA,
+	PMCLOG_RESERVE_WITH_ERROR(po, PMCLOG_TYPE_USERDATA,
 	    sizeof(struct pmclog_userdata));
 	PMCLOG_EMIT32(wl->pm_userdata);
 	PMCLOG_DESPATCH(po);
@@ -1230,24 +1237,39 @@ pmclog_initialize(void)
 	struct pmclog_buffer *plb;
 	int domain, ncpus, total;
 
-	if (pmclog_buffer_size <= 0 || pmclog_buffer_size > 16*1024) {
-		(void) printf("hwpmc: tunable logbuffersize=%d must be "
-					  "greater than zero and less than or equal to 16MB.\n",
-					  pmclog_buffer_size);
+	if (pmclog_buffer_size <= 0 ||
+	    pmclog_buffer_size > PMC_LOG_BUFFER_SIZE_MAX) {
+		log(LOG_WARNING,
+		    "hwpmc: logbuffersize=%d must be greater than zero "
+		    "and less than or equal to %d, resetting to %d\n",
+		    pmclog_buffer_size, PMC_LOG_BUFFER_SIZE_MAX,
+		    PMC_LOG_BUFFER_SIZE);
+
 		pmclog_buffer_size = PMC_LOG_BUFFER_SIZE;
 	}
 
 	if (pmc_nlogbuffers_pcpu <= 0) {
-		(void) printf("hwpmc: tunable nlogbuffers=%d must be greater "
-					  "than zero.\n", pmc_nlogbuffers_pcpu);
+		log(LOG_WARNING,
+		    "hwpmc: nbuffers_pcpu=%d must be greater than zero, "
+		    "resetting to %d\n",
+		    pmc_nlogbuffers_pcpu, PMC_NLOGBUFFERS_PCPU);
+
 		pmc_nlogbuffers_pcpu = PMC_NLOGBUFFERS_PCPU;
 	}
-	if (pmc_nlogbuffers_pcpu*pmclog_buffer_size > 32*1024) {
-		(void) printf("hwpmc: memory allocated pcpu must be less than 32MB (is %dK).\n",
-					  pmc_nlogbuffers_pcpu*pmclog_buffer_size);
+
+	if (pmc_nlogbuffers_pcpu * pmclog_buffer_size >
+	    PMC_NLOGBUFFERS_PCPU_MEM_MAX) {
+		log(LOG_WARNING,
+		    "hwpmc: nbuffers_pcpu=%d * logbuffersize=%d exceeds "
+		    "%dMB per CPU limit, resetting to defaults (%d * %d)\n",
+		    pmc_nlogbuffers_pcpu, pmclog_buffer_size,
+		    PMC_NLOGBUFFERS_PCPU_MEM_MAX / 1024,
+		    PMC_NLOGBUFFERS_PCPU, PMC_LOG_BUFFER_SIZE);
+
 		pmc_nlogbuffers_pcpu = PMC_NLOGBUFFERS_PCPU;
 		pmclog_buffer_size = PMC_LOG_BUFFER_SIZE;
 	}
+
 	for (domain = 0; domain < vm_ndomains; domain++) {
 		ncpus = pmc_dom_hdrs[domain]->pdbh_ncpus;
 		total = ncpus * pmc_nlogbuffers_pcpu;
@@ -1264,6 +1286,7 @@ pmclog_initialize(void)
 			pmc_plb_rele_unlocked(plb);
 		}
 	}
+
 	mtx_init(&pmc_kthread_mtx, "pmc-kthread", "pmc-sleep", MTX_DEF);
 }
 

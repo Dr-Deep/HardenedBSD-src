@@ -13,7 +13,6 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Comdat.h"
@@ -23,8 +22,8 @@
 #include "llvm/IR/Mangler.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/RuntimeLibcalls.h"
 #include "llvm/MC/StringTableBuilder.h"
-#include "llvm/Object/IRObjectFile.h"
 #include "llvm/Object/ModuleSymbolTable.h"
 #include "llvm/Object/SymbolicFile.h"
 #include "llvm/Support/Allocator.h"
@@ -34,6 +33,7 @@
 #include "llvm/Support/StringSaver.h"
 #include "llvm/Support/VCSRevision.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Triple.h"
 #include <cassert>
 #include <string>
 #include <utility>
@@ -42,16 +42,13 @@
 using namespace llvm;
 using namespace irsymtab;
 
-cl::opt<bool> DisableBitcodeVersionUpgrade(
-    "disable-bitcode-version-upgrade", cl::init(false), cl::Hidden,
+static cl::opt<bool> DisableBitcodeVersionUpgrade(
+    "disable-bitcode-version-upgrade", cl::Hidden,
     cl::desc("Disable automatic bitcode upgrade for version mismatch"));
 
 static const char *PreservedSymbols[] = {
-#define HANDLE_LIBCALL(code, name) name,
-#include "llvm/IR/RuntimeLibcalls.def"
-#undef HANDLE_LIBCALL
     // There are global variables, so put it here instead of in
-    // RuntimeLibcalls.def.
+    // RuntimeLibcalls.td.
     // TODO: Are there similar such variables?
     "__ssp_canary_word",
     "__stack_chk_guard",
@@ -143,7 +140,7 @@ Error Builder::addModule(Module *M) {
   SmallVector<GlobalValue *, 4> UsedV;
   collectUsedGlobalVariables(*M, UsedV, /*CompilerUsed=*/false);
   collectUsedGlobalVariables(*M, UsedV, /*CompilerUsed=*/true);
-  SmallPtrSet<GlobalValue *, 4> Used(UsedV.begin(), UsedV.end());
+  SmallPtrSet<GlobalValue *, 4> Used(llvm::from_range, UsedV);
 
   ModuleSymbolTable Msymtab;
   Msymtab.addModule(M);
@@ -216,6 +213,18 @@ Expected<int> Builder::getComdatIndex(const Comdat *C, const Module *M) {
   return P.first->second;
 }
 
+static DenseSet<StringRef> buildPreservedSymbolsSet(const Triple &TT) {
+  DenseSet<StringRef> PreservedSymbolSet(std::begin(PreservedSymbols),
+                                         std::end(PreservedSymbols));
+  // FIXME: Do we need to pass in ABI fields from TargetOptions?
+  RTLIB::RuntimeLibcallsInfo Libcalls(TT);
+  for (RTLIB::LibcallImpl Impl : Libcalls.getLibcallImpls()) {
+    if (Impl != RTLIB::Unsupported)
+      PreservedSymbolSet.insert(Libcalls.getLibcallImplName(Impl));
+  }
+  return PreservedSymbolSet;
+}
+
 Error Builder::addSymbol(const ModuleSymbolTable &Msymtab,
                          const SmallPtrSet<GlobalValue *, 4> &Used,
                          ModuleSymbolTable::Symbol Msym) {
@@ -260,7 +269,7 @@ Error Builder::addSymbol(const ModuleSymbolTable &Msymtab,
     Sym.Flags |= 1 << storage::Symbol::FB_executable;
 
   Sym.ComdatIndex = -1;
-  auto *GV = Msym.dyn_cast<GlobalValue *>();
+  auto *GV = dyn_cast_if_present<GlobalValue *>(Msym);
   if (!GV) {
     // Undefined module asm symbols act as GC roots and are implicitly used.
     if (Flags & object::BasicSymbolRef::SF_Undefined)
@@ -271,7 +280,9 @@ Error Builder::addSymbol(const ModuleSymbolTable &Msymtab,
 
   setStr(Sym.IRName, GV->getName());
 
-  bool IsPreservedSymbol = llvm::is_contained(PreservedSymbols, GV->getName());
+  static const DenseSet<StringRef> PreservedSymbolsSet =
+      buildPreservedSymbolsSet(GV->getParent()->getTargetTriple());
+  bool IsPreservedSymbol = PreservedSymbolsSet.contains(GV->getName());
 
   if (Used.count(GV) || IsPreservedSymbol)
     Sym.Flags |= 1 << storage::Symbol::FB_used;
@@ -289,8 +300,8 @@ Error Builder::addSymbol(const ModuleSymbolTable &Msymtab,
       return make_error<StringError>("Only variables can have common linkage!",
                                      inconvertibleErrorCode());
     Uncommon().CommonSize =
-        GV->getParent()->getDataLayout().getTypeAllocSize(GV->getValueType());
-    Uncommon().CommonAlign = GVar->getAlignment();
+        GV->getDataLayout().getTypeAllocSize(GV->getValueType());
+    Uncommon().CommonAlign = GVar->getAlign() ? GVar->getAlign()->value() : 0;
   }
 
   const GlobalObject *GO = GV->getAliaseeObject();
@@ -338,9 +349,9 @@ Error Builder::build(ArrayRef<Module *> IRMods) {
   assert(!IRMods.empty());
   Hdr.Version = storage::Header::kCurrentVersion;
   setStr(Hdr.Producer, kExpectedProducerName);
-  setStr(Hdr.TargetTriple, IRMods[0]->getTargetTriple());
+  setStr(Hdr.TargetTriple, IRMods[0]->getTargetTriple().str());
   setStr(Hdr.SourceFileName, IRMods[0]->getSourceFileName());
-  TT = Triple(IRMods[0]->getTargetTriple());
+  TT = IRMods[0]->getTargetTriple();
 
   for (auto *M : IRMods)
     if (Error Err = addModule(M))

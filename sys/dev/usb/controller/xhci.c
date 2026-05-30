@@ -1,6 +1,5 @@
-/* $FreeBSD$ */
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2010-2022 Hans Petter Selasky
  *
@@ -157,6 +156,7 @@ struct xhci_std_temp {
 
 static void	xhci_do_poll(struct usb_bus *);
 static void	xhci_device_done(struct usb_xfer *, usb_error_t);
+static void	xhci_get_xecp(struct xhci_softc *);
 static void	xhci_root_intr(struct xhci_softc *);
 static void	xhci_free_device_ext(struct usb_device *);
 static struct xhci_endpoint_ext *xhci_get_endpoint_ext(struct usb_device *,
@@ -549,7 +549,7 @@ xhci_init(struct xhci_softc *sc, device_t self, uint8_t dma32)
 		return (ENXIO);
 	}
 
-	temp = XREAD4(sc, capa, XHCI_HCSPARAMS0);
+	temp = XREAD4(sc, capa, XHCI_HCCPARAMS1);
 
 	DPRINTF("HCS0 = 0x%08x\n", temp);
 
@@ -566,6 +566,8 @@ xhci_init(struct xhci_softc *sc, device_t self, uint8_t dma32)
 
 	device_printf(self, "%d bytes context size, %d-bit DMA\n",
 	    sc->sc_ctx_is_64_byte ? 64 : 32, (int)sc->sc_bus.dma_bits);
+
+	xhci_get_xecp(sc);
 
 	/* enable 64Kbyte control endpoint quirk */
 	sc->sc_bus.control_ep_quirk = (xhcictlquirk ? 1 : 0);
@@ -655,6 +657,88 @@ xhci_uninit(struct xhci_softc *sc)
 }
 
 static void
+xhci_get_xecp(struct xhci_softc *sc)
+{
+
+	uint32_t hccp1;
+	uint32_t eec;
+	uint32_t eecp;
+	bool first = true;
+
+	hccp1 = XREAD4(sc, capa, XHCI_HCCPARAMS1);
+
+	if (XHCI_HCS0_XECP(hccp1) == 0)  {
+		device_printf(sc->sc_bus.parent,
+		    "xECP: no capabilities found\n");
+		return;
+	}
+
+	/*
+	 * Parse the xECP Capabilities table and print known caps.
+	 * Implemented, vendor and reserved xECP Capabilities values are
+	 * documented in Table 7.2 of eXtensible Host Controller Interface for
+	 * Universal Serial Bus (xHCI) Rev 1.2b 2023.
+	 */
+	device_printf(sc->sc_bus.parent, "xECP capabilities <");
+
+	eec = -1;
+	for (eecp = XHCI_HCS0_XECP(hccp1) << 2;
+	     eecp != 0 && XHCI_XECP_NEXT(eec) != 0;
+	     eecp += XHCI_XECP_NEXT(eec) << 2) {
+		eec = XREAD4(sc, capa, eecp);
+
+		uint8_t xecpid = XHCI_XECP_ID(eec);
+
+		if ((xecpid >= 11 && xecpid <= 16) ||
+		    (xecpid >= 19 && xecpid <= 191)) {
+			if (!first)
+				printf(",");
+			printf("RES(%x)", xecpid);
+		} else if (xecpid > 191) {
+			if (!first)
+				printf(",");
+			printf("VEND(%x)", xecpid);
+		} else {
+			if (!first)
+				printf(",");
+			switch (xecpid)
+			{
+			case XHCI_ID_USB_LEGACY:
+				printf("LEGACY");
+				break;
+			case XHCI_ID_PROTOCOLS:
+				printf("PROTO");
+				break;
+			case XHCI_ID_POWER_MGMT:
+				printf("POWER");
+				break;
+			case XHCI_ID_VIRTUALIZATION:
+				printf("VIRT");
+				break;
+			case XHCI_ID_MSG_IRQ:
+				printf("MSG IRQ");
+				break;
+			case XHCI_ID_USB_LOCAL_MEM:
+				printf("LOCAL MEM");
+				break;
+			case XHCI_ID_USB_DEBUG:
+				printf("DEBUG");
+				break;
+			case XHCI_ID_EXT_MSI:
+				printf("EXT MSI");
+				break;
+			case XHCI_ID_USB3_TUN:
+				printf("TUN");
+				break;
+
+			}
+		}
+		first = false;
+	}
+	printf(">\n");
+}
+
+static void
 xhci_set_hw_power_sleep(struct usb_bus *bus, uint32_t state)
 {
 	struct xhci_softc *sc = XHCI_BUS2SC(bus);
@@ -700,10 +784,10 @@ xhci_generic_done_sub(struct usb_xfer *xfer)
 		len = td->remainder;
 
 		DPRINTFN(4, "xfer=%p[%u/%u] rem=%u/%u status=%u\n",
-		    xfer, (unsigned int)xfer->aframes,
-		    (unsigned int)xfer->nframes,
-		    (unsigned int)len, (unsigned int)td->len,
-		    (unsigned int)status);
+		    xfer, (unsigned)xfer->aframes,
+		    (unsigned)xfer->nframes,
+		    (unsigned)len, (unsigned)td->len,
+		    (unsigned)status);
 
 		/*
 	         * Verify the status length and
@@ -3427,7 +3511,7 @@ xhci_roothub_exec(struct usb_device *udev,
 			goto done;
 		}
 
-		v = XREAD4(sc, capa, XHCI_HCSPARAMS0);
+		v = XREAD4(sc, capa, XHCI_HCCPARAMS1);
 
 		sc->sc_hub_desc.hubd = xhci_hubd;
 
@@ -3814,10 +3898,8 @@ xhci_configure_reset_endpoint(struct usb_xfer *xfer)
 	 */
 	switch (xhci_get_endpoint_state(udev, epno)) {
 	case XHCI_EPCTX_0_EPSTATE_DISABLED:
-		drop = 0;
-		break;
 	case XHCI_EPCTX_0_EPSTATE_STOPPED:
-		drop = 1;
+		drop = 0;
 		break;
 	case XHCI_EPCTX_0_EPSTATE_HALTED:
 		err = xhci_cmd_reset_ep(sc, 0, epno, index);
@@ -3826,9 +3908,15 @@ xhci_configure_reset_endpoint(struct usb_xfer *xfer)
 			DPRINTF("Could not reset endpoint %u\n", epno);
 		break;
 	default:
-		drop = 1;
+		/*
+		 * xHCI spec 4.6.8:
+		 * The Drop and Add operation resets the toggle bit, which can
+		 * cause a toggle mismatch between the device and host. As a
+		 * result, xHCI may refuse to receive or process the packet.
+		 */
 		err = xhci_cmd_stop_ep(sc, 0, epno, index);
-		if (err != 0)
+		drop = (err != 0);
+		if (drop)
 			DPRINTF("Could not stop endpoint %u\n", epno);
 		break;
 	}
@@ -4030,7 +4118,47 @@ xhci_ep_init(struct usb_device *udev, struct usb_endpoint_descriptor *edesc,
 static void
 xhci_ep_uninit(struct usb_device *udev, struct usb_endpoint *ep)
 {
+	struct xhci_softc *sc = XHCI_BUS2SC(udev->bus);
+	const struct usb_endpoint_descriptor *edesc = ep->edesc;
+	struct usb_page_search buf_inp;
+	struct usb_page_cache *pcinp;
+	uint32_t mask;
+	uint8_t index;
+	uint8_t epno;
+	usb_error_t err;
 
+	if (udev->parent_hub == NULL) {
+		/* root HUB has special endpoint handling */
+		return;
+	}
+
+	if ((edesc->bEndpointAddress & UE_ADDR) == 0) {
+		/* control endpoint is never unconfigured */
+		return;
+	}
+
+	XHCI_CMD_LOCK(sc);
+	index = udev->controller_slot_id;
+	epno = XHCI_EPNO2EPID(edesc->bEndpointAddress);
+	mask = 1U << epno;
+
+	if (sc->sc_hw.devs[index].ep_configured & mask) {
+		USB_BUS_LOCK(udev->bus);
+		xhci_configure_mask(udev, mask, 1);
+		USB_BUS_UNLOCK(udev->bus);
+
+		pcinp = &sc->sc_hw.devs[index].input_pc;
+		usbd_get_page(pcinp, 0, &buf_inp);
+		err = xhci_cmd_configure_ep(sc, buf_inp.physaddr, 0, index);
+		if (err) {
+			DPRINTF("Unconfiguring endpoint failed: %d\n", err);
+		} else {
+			USB_BUS_LOCK(udev->bus);
+			sc->sc_hw.devs[index].ep_configured &= ~mask;
+			USB_BUS_UNLOCK(udev->bus);
+		}
+	}
+	XHCI_CMD_UNLOCK(sc);
 }
 
 static void
@@ -4367,3 +4495,5 @@ static const struct usb_bus_methods xhci_bus_methods = {
 	.set_hw_power_sleep = xhci_set_hw_power_sleep,
 	.set_endpoint_mode = xhci_set_endpoint_mode,
 };
+
+MODULE_VERSION(xhci, 1);

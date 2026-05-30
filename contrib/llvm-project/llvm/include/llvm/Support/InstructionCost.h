@@ -18,9 +18,10 @@
 #ifndef LLVM_SUPPORT_INSTRUCTIONCOST_H
 #define LLVM_SUPPORT_INSTRUCTIONCOST_H
 
-#include "llvm/ADT/Optional.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/MathExtras.h"
 #include <limits>
+#include <tuple>
 
 namespace llvm {
 
@@ -84,10 +85,9 @@ public:
   /// This function is intended to be used as sparingly as possible, since the
   /// class provides the full range of operator support required for arithmetic
   /// and comparisons.
-  Optional<CostType> getValue() const {
-    if (isValid())
-      return Value;
-    return None;
+  CostType getValue() const {
+    assert(isValid());
+    return Value;
   }
 
   /// For all of the arithmetic operators provided here any invalid state is
@@ -193,15 +193,11 @@ public:
   /// the states are valid and users can test for validity of the cost
   /// explicitly.
   bool operator<(const InstructionCost &RHS) const {
-    if (State != RHS.State)
-      return State < RHS.State;
-    return Value < RHS.Value;
+    return std::tie(State, Value) < std::tie(RHS.State, RHS.Value);
   }
 
-  // Implement in terms of operator< to ensure that the two comparisons stay in
-  // sync
   bool operator==(const InstructionCost &RHS) const {
-    return !(*this < RHS) && !(RHS < *this);
+    return State == RHS.State && Value == RHS.Value;
   }
 
   bool operator!=(const InstructionCost &RHS) const { return !(*this == RHS); }
@@ -239,12 +235,12 @@ public:
     return *this >= RHS2;
   }
 
-  void print(raw_ostream &OS) const;
+  LLVM_ABI void print(raw_ostream &OS) const;
 
   template <class Function>
   auto map(const Function &F) const -> InstructionCost {
     if (isValid())
-      return F(*getValue());
+      return F(Value);
     return getInvalid();
   }
 };

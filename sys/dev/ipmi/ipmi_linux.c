@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2009 IronPort Systems Inc. <ambrisko@ironport.com>
  * All rights reserved.
@@ -27,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Linux ioctl handler for the ipmi device driver
  */
@@ -68,15 +66,7 @@ __FBSDID("$FreeBSD$");
 #define L_IPMICTL_SET_MY_LUN_CMD          _IOW(IPMI_IOC_MAGIC, 19, unsigned int)
 #define L_IPMICTL_GET_MY_LUN_CMD          _IOW(IPMI_IOC_MAGIC, 20, unsigned int)
 
-static linux_ioctl_function_t ipmi_linux_ioctl;
-static struct linux_ioctl_handler ipmi_linux_handler = {ipmi_linux_ioctl,
-						       IPMI_LINUX_IOCTL_MIN,
-						       IPMI_LINUX_IOCTL_MAX};
-
-SYSINIT  (ipmi_linux_register,   SI_SUB_KLD, SI_ORDER_MIDDLE,
-	  linux_ioctl_register_handler, &ipmi_linux_handler);
-SYSUNINIT(ipmi_linux_unregister, SI_SUB_KLD, SI_ORDER_MIDDLE,
-	  linux_ioctl_unregister_handler, &ipmi_linux_handler);
+LINUX_IOCTL_SET(ipmi, IPMI_LINUX_IOCTL_MIN, IPMI_LINUX_IOCTL_MAX);
 
 static int
 ipmi_linux_modevent(module_t mod, int type, void *data)

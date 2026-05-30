@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 SHLIBDIR?=      /lib
 
 .include <src.opts.mk>
@@ -30,6 +28,7 @@ MAN+=	xo_attr.3 \
 	xo_create.3 \
 	xo_emit.3 \
 	xo_emit_err.3 \
+	xo_emit_f.3 \
 	xo_err.3 \
 	xo_error.3 \
 	xo_finish.3 \
@@ -52,7 +51,7 @@ MAN+=	xo_attr.3 \
 
 MAN+=	xo_format.5
 
-MAN+=	xo_options.7
+MANNODEV=	xo_options.7
 
 MLINKS=	xo_attr.3 xo_attr_h.3 \
 	xo_attr.3 xo_attr_hv.3 \

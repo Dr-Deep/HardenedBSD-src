@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008 Isilon Inc http://www.isilon.com/
  * Authors: Doug Rabson <dfr@rabson.org>
@@ -29,9 +29,6 @@
 
 #include "opt_inet6.h"
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/fail.h>
 #include <sys/fcntl.h>
@@ -42,6 +39,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/mount.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
+#include <sys/jail.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/syscall.h>
@@ -345,6 +343,12 @@ nlm_get_rpc(struct sockaddr *sa, rpcprog_t prog, rpcvers_t vers)
 	bool_t tryagain = FALSE;
 	struct portmap mapping;
 	u_short port = 0;
+	struct sockaddr_in *sin4;
+	char namebuf[INET_ADDRSTRLEN];
+#ifdef INET6
+	struct sockaddr_in6 *sin6;
+	char namebuf6[INET6_ADDRSTRLEN];
+#endif
 
 	/*
 	 * First we need to contact the remote RPCBIND service to find
@@ -491,8 +495,26 @@ again:
 		}
 
 		/* Otherwise, bad news. */
-		NLM_ERR("NLM: failed to contact remote rpcbind, "
-		    "stat = %d, port = %d\n", (int) stat, port);
+		switch (ss.ss_family) {
+			case AF_INET:
+				sin4 = (struct sockaddr_in *)&ss;
+				inet_ntop(ss.ss_family, &sin4->sin_addr,
+				    namebuf, sizeof namebuf);
+				NLM_ERR("NLM: failed to contact remote rpcbind, "
+				    "stat = %d, host = %s, port = %d\n",
+				    (int) stat, namebuf, htons(port));
+				break;
+#ifdef INET6
+			case AF_INET6:
+				sin6 = (struct sockaddr_in6 *)&ss;
+				inet_ntop(ss.ss_family, &sin6->sin6_addr,
+				    namebuf6, sizeof namebuf6);
+				NLM_ERR("NLM: failed to contact remote rpcbind, "
+				    "stat = %d, host = %s, port = %d\n",
+				    (int) stat, namebuf6, htons(port));
+				break;
+#endif
+		}
 		CLNT_DESTROY(rpcb);
 		return (NULL);
 	}
@@ -829,7 +851,7 @@ nlm_create_host(const char* caller_name)
 	if (!host)
 		return (NULL);
 	mtx_init(&host->nh_lock, "nh_lock", NULL, MTX_DEF);
-	host->nh_refs = 1;
+	refcount_init(&host->nh_refs, 1);
 	strlcpy(host->nh_caller_name, caller_name, MAXNAMELEN);
 	host->nh_sysid = nlm_next_sysid++;
 	snprintf(host->nh_sysid_string, sizeof(host->nh_sysid_string),
@@ -1690,7 +1712,11 @@ sys_nlm_syscall(struct thread *td, struct nlm_syscall_args *uap)
 	nlm_grace_threshold = time_uptime + uap->grace_period;
 	nlm_next_idle_check = time_uptime + NLM_IDLE_PERIOD;
 
-	return nlm_server_main(uap->addr_count, uap->addrs);
+	CURVNET_SET(TD_TO_VNET(td));
+	error = nlm_server_main(uap->addr_count, uap->addrs);
+	CURVNET_RESTORE();
+
+	return (error);
 }
 
 /**********************************************************************/

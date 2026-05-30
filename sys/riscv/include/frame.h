@@ -30,8 +30,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _MACHINE_FRAME_H_
@@ -59,10 +57,9 @@ struct trapframe {
 	uint64_t tf_scause;
 };
 
-struct riscv_frame {
-	struct riscv_frame	*f_frame;
-	u_long			f_retaddr;
-};
+#ifdef _KERNEL
+#define	TF_SIZE	(roundup2(sizeof(struct trapframe), STACKALIGNBYTES + 1))
+#endif
 
 /*
  * Signal frame. Pushed onto user stack before calling sigcode.
@@ -71,6 +68,16 @@ struct sigframe {
 	siginfo_t	sf_si;	/* actual saved siginfo */
 	ucontext_t	sf_uc;	/* actual saved ucontext */
 };
+
+#ifdef _KERNEL
+/*
+ * Kernel frame. Reserved near the top of kernel stacks for saving kernel
+ * state while in userspace.
+ */
+struct kernframe {
+	register_t	kf_tp;
+};
+#endif
 
 #endif /* !LOCORE */
 

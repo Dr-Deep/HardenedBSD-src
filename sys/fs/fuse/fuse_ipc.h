@@ -58,8 +58,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _FUSE_IPC_H_
@@ -196,8 +194,6 @@ struct fuse_data {
 	 */
 	u_long				ticketer;
 
-	struct sx			rename_lock;
-
 	uint32_t			fuse_libabi_major;
 	uint32_t			fuse_libabi_minor;
 
@@ -229,8 +225,6 @@ struct fuse_data {
                                          /* (and being observed by the daemon) */
 #define FSESS_PUSH_SYMLINKS_IN    0x0020 /* prefix absolute symlinks with mp */
 #define FSESS_DEFAULT_PERMISSIONS 0x0040 /* kernel does permission checking */
-#define FSESS_NO_OPEN_SUPPORT     0x0080 /* can elide FUSE_OPEN ops */
-#define FSESS_NO_OPENDIR_SUPPORT  0x0100 /* can elide FUSE_OPENDIR ops */
 #define FSESS_ASYNC_READ          0x1000 /* allow multiple reads of some file */
 #define FSESS_POSIX_LOCKS         0x2000 /* daemon supports POSIX locks */
 #define FSESS_EXPORT_SUPPORT      0x10000 /* daemon supports NFS-style lookups */
@@ -241,9 +235,15 @@ struct fuse_data {
 #define FSESS_WARN_CACHE_INCOHERENT 0x200000	/* Read cache incoherent */
 #define FSESS_WARN_WB_CACHE_INCOHERENT 0x400000	/* WB cache incoherent */
 #define	FSESS_WARN_ILLEGAL_INODE  0x800000 /* Illegal inode for new file */
+#define FSESS_WARN_READLINK_EMBEDDED_NUL 0x1000000 /* corrupt READLINK output */
+#define FSESS_WARN_DOT_LOOKUP	  0x2000000 /* Inconsistent . LOOKUP response */
+#define FSESS_WARN_INODE_MISMATCH 0x4000000 /* ino != nodeid */
+#define	FSESS_SETXATTR_EXT	  0x8000000 /* extended fuse_setxattr_in */
+#define FSESS_AUTO_UNMOUNT	  0x10000000 /* perform unmount when server dies */
+#define FSESS_WARN_LSEXTATTR_NUL 0x20000000 /* Non nul-terminated xattr list */
 #define FSESS_MNTOPTS_MASK	( \
 	FSESS_DAEMON_CAN_SPY | FSESS_PUSH_SYMLINKS_IN | \
-	FSESS_DEFAULT_PERMISSIONS | FSESS_INTR)
+	FSESS_DEFAULT_PERMISSIONS | FSESS_INTR | FSESS_AUTO_UNMOUNT)
 
 extern int fuse_data_cache_mode;
 

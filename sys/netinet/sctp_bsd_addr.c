@@ -32,9 +32,6 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <netinet/sctp_os.h>
 #include <netinet/sctp_var.h>
 #include <netinet/sctp_pcb.h>
@@ -120,25 +117,26 @@ sctp_gather_internal_ifa_flags(struct sctp_ifa *ifa)
 {
 	struct in6_ifaddr *ifa6;
 
+	KASSERT(ifa->address.sa.sa_family == AF_INET6,
+	    ("sctp_gather_internal_ifa_flags() called with address family %u",
+	    ifa->address.sa.sa_family));
 	ifa6 = (struct in6_ifaddr *)ifa->ifa;
 	ifa->flags = ifa6->ia6_flags;
-	if (!MODULE_GLOBAL(ip6_use_deprecated)) {
-		if (ifa->flags &
-		    IN6_IFF_DEPRECATED) {
+	if (MODULE_GLOBAL(ip6_use_deprecated)) {
+		ifa->localifa_flags &= ~SCTP_ADDR_IFA_UNUSEABLE;
+	} else {
+		if (ifa->flags & IN6_IFF_DEPRECATED) {
 			ifa->localifa_flags |= SCTP_ADDR_IFA_UNUSEABLE;
 		} else {
 			ifa->localifa_flags &= ~SCTP_ADDR_IFA_UNUSEABLE;
 		}
-	} else {
-		ifa->localifa_flags &= ~SCTP_ADDR_IFA_UNUSEABLE;
 	}
-	if (ifa->flags &
-	    (IN6_IFF_DETACHED |
-	    IN6_IFF_ANYCAST |
-	    IN6_IFF_NOTREADY)) {
+	if (ifa->flags & (IN6_IFF_DETACHED | IN6_IFF_DUPLICATED)) {
 		ifa->localifa_flags |= SCTP_ADDR_IFA_UNUSEABLE;
-	} else {
-		ifa->localifa_flags &= ~SCTP_ADDR_IFA_UNUSEABLE;
+	}
+	/* Right now, do not support IPv6 anycast addresses */
+	if (ifa->flags & IN6_IFF_ANYCAST) {
+		ifa->localifa_flags |= SCTP_ADDR_IFA_UNUSEABLE;
 	}
 }
 #endif				/* INET6 */
@@ -176,6 +174,7 @@ sctp_is_desired_interface_type(struct ifnet *ifn)
 	case IFT_IPOVERCLAW:
 	case IFT_PROPVIRTUAL:	/* NetGraph Virtual too */
 	case IFT_VIRTUALIPADDRESS:
+	case IFT_BRIDGE:
 		result = 1;
 		break;
 	default:
@@ -341,8 +340,8 @@ sctp_addr_change(struct ifaddr *ifa, int cmd)
 		    (void *)ifa, ifa->ifa_addr, ifa_flags, 1);
 	} else {
 		sctp_del_addr_from_vrf(SCTP_DEFAULT_VRFID, ifa->ifa_addr,
-		    ifa->ifa_ifp->if_index,
-		    ifa->ifa_ifp->if_xname);
+		    (void *)ifa->ifa_ifp,
+		    ifa->ifa_ifp->if_index);
 
 		/*
 		 * We don't bump refcount here so when it completes the

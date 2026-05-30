@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2012 Chelsio Communications, Inc.
  * All rights reserved.
@@ -28,8 +28,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_inet.h"
 #include "opt_inet6.h"
 
@@ -80,6 +78,7 @@ do_act_establish(struct sge_iq *iq, const struct rss_header *rss,
 	u_int atid = G_TID_TID(ntohl(cpl->tos_atid));
 	struct toepcb *toep = lookup_atid(sc, atid);
 	struct inpcb *inp = toep->inp;
+	struct tcpcb *tp = intotcpcb(inp);
 
 	KASSERT(m == NULL, ("%s: wasn't expecting payload", __func__));
 	KASSERT(toep->tid == atid, ("%s: toep tid/atid mismatch", __func__));
@@ -91,7 +90,13 @@ do_act_establish(struct sge_iq *iq, const struct rss_header *rss,
 	INP_WLOCK(inp);
 	toep->tid = tid;
 	insert_tid(sc, tid, toep, inp->inp_vflag & INP_IPV6 ? 2 : 1);
-	if (inp->inp_flags & INP_DROPPED) {
+	if (sc->params.tid_qid_sel_mask != 0) {
+		update_tid_qid_sel(toep->vi, &toep->params, tid);
+		toep->ofld_txq = &sc->sge.ofld_txq[toep->params.txq_idx];
+		toep->ctrlq = &sc->sge.ctrlq[toep->params.ctrlq_idx];
+	}
+
+	if (tp->t_flags & TF_DISCONNECTED) {
 
 		/* socket closed by the kernel before hw told us it connected */
 
@@ -112,15 +117,23 @@ done:
 }
 
 void
-act_open_failure_cleanup(struct adapter *sc, u_int atid, u_int status)
+act_open_failure_cleanup(struct adapter *sc, struct toepcb *toep, u_int status)
 {
-	struct toepcb *toep = lookup_atid(sc, atid);
 	struct inpcb *inp = toep->inp;
 	struct toedev *tod = &toep->td->tod;
 	struct epoch_tracker et;
+	struct tom_data *td = sc->tom_softc;
 
-	free_atid(sc, atid);
-	toep->tid = -1;
+	if (toep->tid >= 0) {
+		free_atid(sc, toep->tid);
+		toep->tid = -1;
+		mtx_lock(&td->toep_list_lock);
+		if (toep->flags & TPF_IN_TOEP_LIST) {
+			toep->flags &= ~TPF_IN_TOEP_LIST;
+			TAILQ_REMOVE(&td->toep_list, toep, link);
+		}
+		mtx_unlock(&td->toep_list_lock);
+	}
 
 	CURVNET_SET(toep->vnet);
 	if (status != EAGAIN)
@@ -160,7 +173,7 @@ do_act_open_rpl(struct sge_iq *iq, const struct rss_header *rss,
 		release_tid(sc, GET_TID(cpl), toep->ctrlq);
 
 	rc = act_open_rpl_status_to_errno(status);
-	act_open_failure_cleanup(sc, atid, rc);
+	act_open_failure_cleanup(sc, toep, rc);
 
 	return (0);
 }
@@ -199,7 +212,7 @@ static inline int
 act_open_cpl_size(struct adapter *sc, int isipv6)
 {
 	int idx;
-	static const int sz_table[3][2] = {
+	static const int sz_table[4][2] = {
 		{
 			sizeof (struct cpl_act_open_req),
 			sizeof (struct cpl_act_open_req6)
@@ -212,10 +225,14 @@ act_open_cpl_size(struct adapter *sc, int isipv6)
 			sizeof (struct cpl_t6_act_open_req),
 			sizeof (struct cpl_t6_act_open_req6)
 		},
+		{
+			sizeof (struct cpl_t7_act_open_req),
+			sizeof (struct cpl_t7_act_open_req6)
+		},
 	};
 
 	MPASS(chip_id(sc) >= CHELSIO_T4);
-	idx = min(chip_id(sc) - CHELSIO_T4, 2);
+	idx = min(chip_id(sc) - CHELSIO_T4, 3);
 
 	return (sz_table[idx][!!isipv6]);
 }
@@ -235,9 +252,10 @@ t4_connect(struct toedev *tod, struct socket *so, struct nhop_object *nh,
     struct sockaddr *nam)
 {
 	struct adapter *sc = tod->tod_softc;
+	struct tom_data *td;
 	struct toepcb *toep = NULL;
 	struct wrqe *wr = NULL;
-	struct ifnet *rt_ifp = nh->nh_ifp;
+	if_t rt_ifp = nh->nh_ifp;
 	struct vi_info *vi;
 	int qid_atid, rc, isipv6;
 	struct inpcb *inp = sotoinpcb(so);
@@ -248,20 +266,21 @@ t4_connect(struct toedev *tod, struct socket *so, struct nhop_object *nh,
 	struct offload_settings settings;
 	struct epoch_tracker et;
 	uint16_t vid = 0xfff, pcp = 0;
+	uint64_t ntuple;
 
 	INP_WLOCK_ASSERT(inp);
 	KASSERT(nam->sa_family == AF_INET || nam->sa_family == AF_INET6,
 	    ("%s: dest addr %p has family %u", __func__, nam, nam->sa_family));
 
-	if (rt_ifp->if_type == IFT_ETHER)
-		vi = rt_ifp->if_softc;
-	else if (rt_ifp->if_type == IFT_L2VLAN) {
-		struct ifnet *ifp = VLAN_TRUNKDEV(rt_ifp);
+	if (if_gettype(rt_ifp) == IFT_ETHER)
+		vi = if_getsoftc(rt_ifp);
+	else if (if_gettype(rt_ifp) == IFT_L2VLAN) {
+		if_t ifp = VLAN_TRUNKDEV(rt_ifp);
 
-		vi = ifp->if_softc;
+		vi = if_getsoftc(ifp);
 		VLAN_TAG(rt_ifp, &vid);
 		VLAN_PCP(rt_ifp, &pcp);
-	} else if (rt_ifp->if_type == IFT_IEEE8023ADLAG)
+	} else if (if_gettype(rt_ifp) == IFT_IEEE8023ADLAG)
 		DONT_OFFLOAD_ACTIVE_OPEN(ENOSYS); /* XXX: implement lagg+TOE */
 	else
 		DONT_OFFLOAD_ACTIVE_OPEN(ENOTSUP);
@@ -301,10 +320,12 @@ t4_connect(struct toedev *tod, struct socket *so, struct nhop_object *nh,
 	qid_atid = V_TID_QID(toep->ofld_rxq->iq.abs_id) | V_TID_TID(toep->tid) |
 	    V_TID_COOKIE(CPL_COOKIE_TOM);
 
+	ntuple = select_ntuple(vi, toep->l2te);
 	if (isipv6) {
 		struct cpl_act_open_req6 *cpl = wrtod(wr);
 		struct cpl_t5_act_open_req6 *cpl5 = (void *)cpl;
 		struct cpl_t6_act_open_req6 *cpl6 = (void *)cpl;
+		struct cpl_t7_act_open_req6 *cpl7 = (void *)cpl;
 
 		if ((inp->inp_vflag & INP_IPV6) == 0)
 			DONT_OFFLOAD_ACTIVE_OPEN(ENOTSUP);
@@ -316,18 +337,23 @@ t4_connect(struct toedev *tod, struct socket *so, struct nhop_object *nh,
 		switch (chip_id(sc)) {
 		case CHELSIO_T4:
 			INIT_TP_WR(cpl, 0);
-			cpl->params = select_ntuple(vi, toep->l2te);
+			cpl->params = htobe32((uint32_t)ntuple);
 			break;
 		case CHELSIO_T5:
 			INIT_TP_WR(cpl5, 0);
 			cpl5->iss = htobe32(tp->iss);
-			cpl5->params = select_ntuple(vi, toep->l2te);
+			cpl5->params = htobe64(V_FILTER_TUPLE(ntuple));
 			break;
 		case CHELSIO_T6:
-		default:
 			INIT_TP_WR(cpl6, 0);
 			cpl6->iss = htobe32(tp->iss);
-			cpl6->params = select_ntuple(vi, toep->l2te);
+			cpl6->params = htobe64(V_FILTER_TUPLE(ntuple));
+			break;
+		case CHELSIO_T7:
+		default:
+			INIT_TP_WR(cpl7, 0);
+			cpl7->iss = htobe32(tp->iss);
+			cpl7->params = htobe64(V_T7_FILTER_TUPLE(ntuple));
 			break;
 		}
 		OPCODE_TID(cpl) = htobe32(MK_OPCODE_TID(CPL_ACT_OPEN_REQ6,
@@ -349,23 +375,28 @@ t4_connect(struct toedev *tod, struct socket *so, struct nhop_object *nh,
 		struct cpl_act_open_req *cpl = wrtod(wr);
 		struct cpl_t5_act_open_req *cpl5 = (void *)cpl;
 		struct cpl_t6_act_open_req *cpl6 = (void *)cpl;
+		struct cpl_t7_act_open_req *cpl7 = (void *)cpl;
 
 		switch (chip_id(sc)) {
 		case CHELSIO_T4:
 			INIT_TP_WR(cpl, 0);
-			cpl->params = select_ntuple(vi, toep->l2te);
+			cpl->params = htobe32((uint32_t)ntuple);
 			break;
 		case CHELSIO_T5:
 			INIT_TP_WR(cpl5, 0);
 			cpl5->iss = htobe32(tp->iss);
-			cpl5->params = select_ntuple(vi, toep->l2te);
+			cpl5->params = htobe64(V_FILTER_TUPLE(ntuple));
 			break;
 		case CHELSIO_T6:
-		default:
 			INIT_TP_WR(cpl6, 0);
 			cpl6->iss = htobe32(tp->iss);
-			cpl6->params = select_ntuple(vi, toep->l2te);
+			cpl6->params = htobe64(V_FILTER_TUPLE(ntuple));
 			break;
+		case CHELSIO_T7:
+		default:
+			INIT_TP_WR(cpl7, 0);
+			cpl7->iss = htobe32(tp->iss);
+			cpl7->params = htobe64(V_T7_FILTER_TUPLE(ntuple));
 		}
 		OPCODE_TID(cpl) = htobe32(MK_OPCODE_TID(CPL_ACT_OPEN_REQ,
 		    qid_atid));
@@ -381,6 +412,12 @@ t4_connect(struct toedev *tod, struct socket *so, struct nhop_object *nh,
 	}
 
 	offload_socket(so, toep);
+	/* Add the TOE PCB to the active list */
+	td = toep->td;
+	mtx_lock(&td->toep_list_lock);
+	TAILQ_INSERT_TAIL(&td->toep_list, toep, link);
+	toep->flags |= TPF_IN_TOEP_LIST;
+	mtx_unlock(&td->toep_list_lock);
 	NET_EPOCH_ENTER(et);
 	rc = t4_l2t_send(sc, wr, toep->l2te);
 	NET_EPOCH_EXIT(et);

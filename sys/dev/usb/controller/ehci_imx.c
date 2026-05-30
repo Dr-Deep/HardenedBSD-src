@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2010-2012 Semihalf
  * Copyright (c) 2012 The FreeBSD Foundation
@@ -30,9 +30,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 /*
  * EHCI driver for Freescale i.MX SoCs which incorporate the USBOH3 controller.
@@ -316,7 +313,7 @@ imx_ehci_detach(device_t dev)
 	esc = &sc->ehci_softc;
 
 	/* First detach all children; we can't detach if that fails. */
-	if ((err = device_delete_children(dev)) != 0)
+	if ((err = bus_generic_detach(dev)) != 0)
 		return (err);
 
 	if (esc->sc_flags & EHCI_SCFLG_DONEINIT)
@@ -440,7 +437,7 @@ imx_ehci_attach(device_t dev)
 		imx_ehci_disable_oc(sc);
 
 	/* Add USB bus device. */
-	esc->sc_bus.bdev = device_add_child(dev, "usbus", -1);
+	esc->sc_bus.bdev = device_add_child(dev, "usbus", DEVICE_UNIT_ANY);
 	if (esc->sc_bus.bdev == NULL) {
 		device_printf(dev, "Could not add USB device\n");
 		goto out;

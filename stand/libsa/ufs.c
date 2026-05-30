@@ -67,9 +67,6 @@
  * rights to redistribute these changes.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  *	Stand-alone file reading package.
  */
@@ -96,6 +93,7 @@ static int	ufs_unmount(const char *dev, void *data);
 
 struct fs_ops ufs_fsops = {
 	.fs_name = "ufs",
+	.fs_flags = 0,
 	.fo_open = ufs_open,
 	.fo_close = ufs_close,
 	.fo_read = ufs_read,
@@ -113,10 +111,7 @@ struct fs_ops ufs_fsops = {
 struct file {
 	off_t		f_seekp;	/* seek pointer */
 	struct fs	*f_fs;		/* pointer to super-block */
-	union dinode {
-		struct ufs1_dinode di1;
-		struct ufs2_dinode di2;
-	}		f_di;		/* copy of on-disk inode */
+	union dinode	f_dp;		/* copy of on-disk inode */
 	int		f_nindir[UFS_NIADDR];
 					/* number of blocks mapped by
 					   indirect block at level i */
@@ -132,7 +127,7 @@ struct file {
 };
 #define DIP(fp, field) \
 	((fp)->f_fs->fs_magic == FS_UFS1_MAGIC ? \
-	(fp)->f_di.di1.field : (fp)->f_di.di2.field)
+	(fp)->f_dp.dp1.field : (fp)->f_dp.dp2.field)
 
 typedef struct ufs_mnt {
 	char			*um_dev;
@@ -188,10 +183,10 @@ read_inode(ino_t inumber, struct open_file *f)
 	}
 
 	if (fp->f_fs->fs_magic == FS_UFS1_MAGIC)
-		fp->f_di.di1 = ((struct ufs1_dinode *)buf)
+		fp->f_dp.dp1 = ((struct ufs1_dinode *)buf)
 		    [ino_to_fsbo(fs, inumber)];
 	else
-		fp->f_di.di2 = ((struct ufs2_dinode *)buf)
+		fp->f_dp.dp2 = ((struct ufs2_dinode *)buf)
 		    [ino_to_fsbo(fs, inumber)];
 
 	/*
@@ -409,7 +404,7 @@ buf_read_file(struct open_file *f, char **buf_p, size_t *size_p)
 	block_size = sblksize(fs, DIP(fp, di_size), file_block);
 
 	if (file_block != fp->f_buf_blkno) {
-		if (fp->f_buf == (char *)0)
+		if (fp->f_buf == NULL)
 			fp->f_buf = malloc(fs->fs_bsize);
 
 		rc = block_map(f, file_block, &disk_block);
@@ -888,16 +883,23 @@ ufs_readdir(struct open_file *f, struct dirent *d)
 	/*
 	 * assume that a directory entry will not be split across blocks
 	 */
-again:
-	if (fp->f_seekp >= DIP(fp, di_size))
-		return (ENOENT);
-	error = buf_read_file(f, &buf, &buf_size);
-	if (error)
-		return (error);
-	dp = (struct direct *)buf;
-	fp->f_seekp += dp->d_reclen;
-	if (dp->d_ino == (ino_t)0)
-		goto again;
+
+	do {
+		if (fp->f_seekp >= DIP(fp, di_size))
+			return (ENOENT);
+		error = buf_read_file(f, &buf, &buf_size);
+		if (error)
+			return (error);
+		dp = (struct direct *)buf;
+		/*
+		 * Check for corrupt directory entry and bail out rather
+		 * than spin forever hoping that the user has other options.
+		 */
+		if (dp->d_reclen == 0)
+			return (0);
+		fp->f_seekp += dp->d_reclen;
+	} while (dp->d_ino == (ino_t)0);
+
 	d->d_type = dp->d_type;
 	strcpy(d->d_name, dp->d_name);
 	return (0);

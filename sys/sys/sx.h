@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2007 Attilio Rao <attilio@freebsd.org>
  * Copyright (c) 2001 Jason Evans <jasone@freebsd.org>
@@ -27,8 +27,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
  * DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef	_SYS_SX_H_
@@ -101,7 +99,7 @@
  * Function prototipes.  Routines that start with an underscore are not part
  * of the public interface and are wrappered with a macro.
  */
-void	sx_sysinit(void *arg);
+void	sx_sysinit(const void *arg);
 #define	sx_init(sx, desc)	sx_init_flags((sx), (desc), 0)
 void	sx_init_flags(struct sx *sx, const char *description, int opts);
 void	sx_destroy(struct sx *sx);
@@ -261,6 +259,10 @@ __sx_xunlock(struct sx *sx, struct thread *td, const char *file, int line)
 	(void)0; /* ensure void type for expression */			\
 })
 
+/* Return true if there are threads waiting to acquire this sx lock. */
+#define	sx_has_waiters(sx)						\
+	((SX_READ_VALUE(sx) & SX_LOCK_WAITERS) != 0)
+
 #define	sx_unlock(sx)	sx_unlock_((sx), LOCK_FILE, LOCK_LINE)
 
 #define	sx_sleep(chan, sx, pri, wmesg, timo)				\
@@ -303,12 +305,12 @@ __sx_xunlock(struct sx *sx, struct thread *td, const char *file, int line)
 
 #ifdef _STANDALONE
 /* since we have no threads in the boot loader, trivially implement no-op version */
-#define sx_xlock(s) (1)
-#define sx_try_xlock(s) (1)
-#define sx_xunlock(s) (1)
-#define SX_DUPOK 0
-#define SX_NEW 0
-#define SX_NOWITNESS 0
+#define	sx_xlock(s)	do {} while (0)
+#define	sx_try_xlock(s)	(1)
+#define	sx_xunlock(s)	do {} while (0)
+#define	SX_DUPOK	0
+#define	SX_NEW		0
+#define	SX_NOWITNESS	0
 
 static __inline void
 sx_init_flags(struct sx *sx, const char *description, int opts)

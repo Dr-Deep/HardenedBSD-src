@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2020 Alexander Motin <mav@FreeBSD.org>
  *
@@ -26,8 +26,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_acpi.h"
 #include "opt_pci.h"
 
@@ -88,7 +86,6 @@ struct apei_pges {
 };
 
 struct apei_softc {
-	ACPI_TABLE_HEST *hest;
 	TAILQ_HEAD(, apei_ge) ges;
 	struct apei_nges nges;
 	struct apei_iges iges;
@@ -564,9 +561,8 @@ hest_parse_structure(struct apei_softc *sc, void *addr, int remaining)
 }
 
 static void
-hest_parse_table(struct apei_softc *sc)
+hest_parse_table(ACPI_TABLE_HEST *hest, struct apei_softc *sc)
 {
-	ACPI_TABLE_HEST *hest = sc->hest;
 	char *cp;
 	int remaining, consumed;
 
@@ -664,6 +660,7 @@ static int
 apei_attach(device_t dev)
 {
 	struct apei_softc *sc = device_get_softc(dev);
+	ACPI_TABLE_HEADER *hest;
 	struct acpi_softc *acpi_sc;
 	struct apei_pges *pges;
 	struct apei_ge *ge;
@@ -693,16 +690,16 @@ apei_attach(device_t dev)
 	}
 
 	/* Search and parse HEST table. */
-	status = AcpiGetTable(ACPI_SIG_HEST, 0, (ACPI_TABLE_HEADER **)&sc->hest);
+	status = AcpiGetTable(ACPI_SIG_HEST, 0, &hest);
 	if (ACPI_FAILURE(status))
 		return (ENXIO);
-	hest_parse_table(sc);
-	AcpiPutTable((ACPI_TABLE_HEADER *)sc->hest);
+	hest_parse_table((ACPI_TABLE_HEST *)hest, sc);
+	AcpiPutTable(hest);
 
 	rid = 0;
 	TAILQ_FOREACH(ge, &sc->ges, link) {
 		ge->res_rid = rid++;
-		acpi_bus_alloc_gas(dev, &ge->res_type, &ge->res_rid,
+		acpi_bus_alloc_gas(dev, &ge->res_type, ge->res_rid,
 		    &ge->v1.ErrorStatusAddress, &ge->res, 0);
 		if (ge->res) {
 			ge->buf = pmap_mapdev_attr(READ8(ge->res, 0),
@@ -712,8 +709,8 @@ apei_attach(device_t dev)
 		}
 		if (ge->v1.Header.Type == ACPI_HEST_TYPE_GENERIC_ERROR_V2) {
 			ge->res2_rid = rid++;
-			acpi_bus_alloc_gas(dev, &ge->res2_type, &ge->res2_rid,
-			    &ge->v2.ReadAckRegister, &ge->res2, 0);
+			acpi_bus_alloc_gas(dev, &ge->res2_type, ge->res2_rid,
+			    &ge->v2.ReadAckRegister, &ge->res2, RF_SHAREABLE);
 			if (ge->res2 == NULL)
 				device_printf(dev, "Can't allocate ack resource.\n");
 		}
@@ -756,7 +753,7 @@ apei_detach(device_t dev)
 	apei_nmi = NULL;
 	apei_nmi_nges = NULL;
 	if (sc->nges.swi_ih != NULL) {
-		swi_remove(&sc->nges.swi_ih);
+		swi_remove(sc->nges.swi_ih);
 		sc->nges.swi_ih = NULL;
 	}
 	if (acpi_get_handle(dev) != NULL) {
@@ -787,8 +784,7 @@ apei_detach(device_t dev)
 			free(ge->copybuf, M_DEVBUF);
 		}
 		if (ge->buf) {
-			pmap_unmapdev((vm_offset_t)ge->buf,
-			    ge->v1.ErrorBlockLength);
+			pmap_unmapdev(ge->buf, ge->v1.ErrorBlockLength);
 		}
 		free(ge, M_DEVBUF);
 	}

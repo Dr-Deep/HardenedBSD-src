@@ -1,5 +1,5 @@
 /*-
- * Copyright 2016-2021 Microchip Technology, Inc. and/or its subsidiaries.
+ * Copyright 2016-2025 Microchip Technology, Inc. and/or its subsidiaries.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -23,7 +23,6 @@
  * SUCH DAMAGE.
  */
 
-/* $FreeBSD$ */
 
 #ifndef	_PQI_IOCTL_H_
 #define	_PQI_IOCTL_H_
@@ -31,7 +30,7 @@
 /* IOCTL passthrough macros and structures */
 
 #define SENSEINFOBYTES	32              /* note that this value may vary
-					   between host implementations */
+ 										 between host implementations */
 
 /* transfer direction */
 #define PQIIOCTL_NONE			0x00
@@ -138,5 +137,12 @@ typedef struct pqi_ioctl_passthruCmd_struct {
 
 }OS_ATTRIBUTE_PACKED IOCTL_Command_struct;
 
+typedef struct _BIG_IOCTL_Command_struct {
+	LUNAddr_struct           LUN_info;
+	RequestBlock_struct      Request;
+	ErrorInfo_struct         error_info;
+	DWORD                    buf_size;  /* size in bytes of the buf */
+	passthru_buf_type_t      buf;
+}OS_ATTRIBUTE_PACKED BIG_IOCTL_Command_struct;
 
 #endif  /* _PQI_IOCTL_H_ */

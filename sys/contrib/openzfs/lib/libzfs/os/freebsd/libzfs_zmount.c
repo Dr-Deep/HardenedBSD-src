@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2006 Pawel Jakub Dawidek <pjd@FreeBSD.org>
  * All rights reserved.
@@ -27,9 +28,6 @@
 /*
  * This file implements Solaris compatible zmount() function.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/mount.h>
@@ -73,33 +71,30 @@ build_iovec(struct iovec **iov, int *iovlen, const char *name, void *val,
 	*iovlen = ++i;
 }
 
-static int
-do_mount_(const char *spec, const char *dir, int mflag,
-    char *dataptr, int datalen, const char *optptr, int optlen)
+int
+do_mount(zfs_handle_t *zhp, const char *mntpt, const char *opts, int flags)
 {
 	struct iovec *iov;
 	char *optstr, *p, *tofree;
 	int iovlen, rv;
+	const char *spec = zfs_get_name(zhp);
 
 	assert(spec != NULL);
-	assert(dir != NULL);
-	assert(dataptr == NULL), (void) dataptr;
-	assert(datalen == 0), (void) datalen;
-	assert(optptr != NULL);
-	assert(optlen > 0), (void) optlen;
+	assert(mntpt != NULL);
+	assert(opts != NULL);
 
-	tofree = optstr = strdup(optptr);
+	tofree = optstr = strdup(opts);
 	assert(optstr != NULL);
 
 	iov = NULL;
 	iovlen = 0;
 	if (strstr(optstr, MNTOPT_REMOUNT) != NULL)
 		build_iovec(&iov, &iovlen, "update", NULL, 0);
-	if (mflag & MS_RDONLY)
+	if (flags & MS_RDONLY)
 		build_iovec(&iov, &iovlen, "ro", NULL, 0);
 	build_iovec(&iov, &iovlen, "fstype", __DECONST(char *, MNTTYPE_ZFS),
 	    (size_t)-1);
-	build_iovec(&iov, &iovlen, "fspath", __DECONST(char *, dir),
+	build_iovec(&iov, &iovlen, "fspath", __DECONST(char *, mntpt),
 	    (size_t)-1);
 	build_iovec(&iov, &iovlen, "from", __DECONST(char *, spec), (size_t)-1);
 	while ((p = strsep(&optstr, ",/")) != NULL)
@@ -109,14 +104,7 @@ do_mount_(const char *spec, const char *dir, int mflag,
 	if (rv < 0)
 		return (errno);
 	return (rv);
-}
 
-int
-do_mount(zfs_handle_t *zhp, const char *mntpt, const char *opts, int flags)
-{
-
-	return (do_mount_(zfs_get_name(zhp), mntpt, flags, NULL, 0,
-	    opts, sizeof (mntpt)));
 }
 
 int
@@ -126,6 +114,17 @@ do_unmount(zfs_handle_t *zhp, const char *mntpt, int flags)
 	if (unmount(mntpt, flags) < 0)
 		return (errno);
 	return (0);
+}
+
+/*
+ * FreeBSD does not support mount_setattr(2).  Fall back to a full
+ * remount so that the updated namespace property takes effect.
+ */
+int
+zfs_mount_setattr(zfs_handle_t *zhp, uint32_t nspflags)
+{
+	(void) nspflags;
+	return (zfs_mount(zhp, MNTOPT_REMOUNT, 0));
 }
 
 int

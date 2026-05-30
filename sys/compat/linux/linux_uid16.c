@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2001  The FreeBSD Project
  * All rights reserved.
@@ -26,23 +26,15 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
-#include "opt_compat.h"
-
-#include <sys/fcntl.h>
 #include <sys/param.h>
-#include <sys/kernel.h>
+#include <sys/fcntl.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/mutex.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
-#include <sys/sdt.h>
 #include <sys/syscallsubr.h>
 #include <sys/sysproto.h>
-#include <sys/systm.h>
 
 #ifdef COMPAT_LINUX32
 #include <machine/../linux32/linux.h>
@@ -67,8 +59,6 @@ LIN_SDT_PROBE_DEFINE1(uid16, linux_setgroups16, copyin_error, "int");
 LIN_SDT_PROBE_DEFINE1(uid16, linux_setgroups16, priv_check_cred_error, "int");
 LIN_SDT_PROBE_DEFINE1(uid16, linux_getgroups16, copyout_error, "int");
 
-DUMMY(setfsuid16);
-DUMMY(setfsgid16);
 DUMMY(getresuid16);
 DUMMY(getresgid16);
 
@@ -77,65 +67,29 @@ DUMMY(getresgid16);
 int
 linux_chown16(struct thread *td, struct linux_chown16_args *args)
 {
-	char *path;
-	int error;
 
-	if (!LUSECONVPATH(td) && !SDT_PROBES_ENABLED()) {
-		error = kern_fchownat(td, AT_FDCWD, args->path, UIO_USERSPACE,
-		    CAST_NOCHG(args->uid), CAST_NOCHG(args->gid), 0);
-	} else {
-		LCONVPATHEXIST(args->path, &path);
-		/*
-		 * The DTrace probes have to be after the LCONVPATHEXIST, as
-		 * LCONVPATHEXIST may return on its own and we do not want to
-		 * have a stray entry without the corresponding return.
-		 */
-		LIN_SDT_PROBE1(uid16, linux_chown16, conv_path, path);
-
-		error = kern_fchownat(td, AT_FDCWD, path, UIO_SYSSPACE,
-		    CAST_NOCHG(args->uid), CAST_NOCHG(args->gid), 0);
-		LFREEPATH(path);
-	}
-	return (error);
+	return (kern_fchownat(td, AT_FDCWD, args->path, UIO_USERSPACE,
+	    CAST_NOCHG(args->uid), CAST_NOCHG(args->gid), 0));
 }
 
 int
 linux_lchown16(struct thread *td, struct linux_lchown16_args *args)
 {
-	char *path;
-	int error;
 
-	if (!LUSECONVPATH(td) && !SDT_PROBES_ENABLED()) {
-		error = kern_fchownat(td, AT_FDCWD, args->path, UIO_USERSPACE,
-		    CAST_NOCHG(args->uid), CAST_NOCHG(args->gid), AT_SYMLINK_NOFOLLOW);
-	} else {
-		LCONVPATHEXIST(args->path, &path);
-
-		/*
-		 * The DTrace probes have to be after the LCONVPATHEXIST, as
-		 * LCONVPATHEXIST may return on its own and we do not want to
-		 * have a stray entry without the corresponding return.
-		 */
-		LIN_SDT_PROBE1(uid16, linux_lchown16, conv_path, path);
-
-		error = kern_fchownat(td, AT_FDCWD, path, UIO_SYSSPACE,
-		    CAST_NOCHG(args->uid), CAST_NOCHG(args->gid), AT_SYMLINK_NOFOLLOW);
-		LFREEPATH(path);
-	}
-	return (error);
+	return (kern_fchownat(td, AT_FDCWD, args->path, UIO_USERSPACE,
+	    CAST_NOCHG(args->uid), CAST_NOCHG(args->gid), AT_SYMLINK_NOFOLLOW));
 }
 
 int
 linux_setgroups16(struct thread *td, struct linux_setgroups16_args *args)
 {
+	const int ngrp = args->gidsetsize;
 	struct ucred *newcred, *oldcred;
 	l_gid16_t *linux_gidset;
-	gid_t *bsd_gidset;
-	int ngrp, error;
+	int error;
 	struct proc *p;
 
-	ngrp = args->gidsetsize;
-	if (ngrp < 0 || ngrp >= ngroups_max + 1)
+	if (ngrp < 0 || ngrp > ngroups_max)
 		return (EINVAL);
 	linux_gidset = malloc(ngrp * sizeof(*linux_gidset), M_LINUX, M_WAITOK);
 	error = copyin(args->gidset, linux_gidset, ngrp * sizeof(l_gid16_t));
@@ -144,16 +98,12 @@ linux_setgroups16(struct thread *td, struct linux_setgroups16_args *args)
 		free(linux_gidset, M_LINUX);
 		return (error);
 	}
+
 	newcred = crget();
+	crextend(newcred, ngrp);
 	p = td->td_proc;
 	PROC_LOCK(p);
 	oldcred = crcopysafe(p, newcred);
-
-	/*
-	 * cr_groups[0] holds egid. Setting the whole set from
-	 * the supplied set will cause egid to be changed too.
-	 * Keep cr_groups[0] unchanged to prevent that.
-	 */
 
 	if ((error = priv_check_cred(oldcred, PRIV_CRED_SETGROUPS)) != 0) {
 		PROC_UNLOCK(p);
@@ -164,18 +114,10 @@ linux_setgroups16(struct thread *td, struct linux_setgroups16_args *args)
 		goto out;
 	}
 
-	if (ngrp > 0) {
-		newcred->cr_ngroups = ngrp + 1;
-
-		bsd_gidset = newcred->cr_groups;
-		ngrp--;
-		while (ngrp >= 0) {
-			bsd_gidset[ngrp + 1] = linux_gidset[ngrp];
-			ngrp--;
-		}
-	}
-	else
-		newcred->cr_ngroups = 1;
+	newcred->cr_ngroups = ngrp;
+	for (int i = 0; i < ngrp; i++)
+		newcred->cr_groups[i] = linux_gidset[i];
+	newcred->cr_flags |= CRED_FLAG_GROUPSET;
 
 	setsugid(td->td_proc);
 	proc_set_cred(p, newcred);
@@ -191,40 +133,29 @@ out:
 int
 linux_getgroups16(struct thread *td, struct linux_getgroups16_args *args)
 {
-	struct ucred *cred;
+	const struct ucred *const cred = td->td_ucred;
 	l_gid16_t *linux_gidset;
-	gid_t *bsd_gidset;
-	int bsd_gidsetsz, ngrp, error;
+	int ngrp, error;
 
-	cred = td->td_ucred;
-	bsd_gidset = cred->cr_groups;
-	bsd_gidsetsz = cred->cr_ngroups - 1;
+	ngrp = args->gidsetsize;
 
-	/*
-	 * cr_groups[0] holds egid. Returning the whole set
-	 * here will cause a duplicate. Exclude cr_groups[0]
-	 * to prevent that.
-	 */
-
-	if ((ngrp = args->gidsetsize) == 0) {
-		td->td_retval[0] = bsd_gidsetsz;
+	if (ngrp == 0) {
+		td->td_retval[0] = cred->cr_ngroups;
 		return (0);
 	}
-
-	if (ngrp < bsd_gidsetsz)
+	if (ngrp < cred->cr_ngroups)
 		return (EINVAL);
 
-	ngrp = 0;
-	linux_gidset = malloc(bsd_gidsetsz * sizeof(*linux_gidset),
-	    M_LINUX, M_WAITOK);
-	while (ngrp < bsd_gidsetsz) {
-		linux_gidset[ngrp] = bsd_gidset[ngrp + 1];
-		ngrp++;
-	}
+	ngrp = cred->cr_ngroups;
+
+	linux_gidset = malloc(ngrp * sizeof(*linux_gidset), M_LINUX, M_WAITOK);
+	for (int i = 0; i < ngrp; ++i)
+		linux_gidset[i] = cred->cr_groups[i];
 
 	error = copyout(linux_gidset, args->gidset, ngrp * sizeof(l_gid16_t));
 	free(linux_gidset, M_LINUX);
-	if (error) {
+
+	if (error != 0) {
 		LIN_SDT_PROBE1(uid16, linux_getgroups16, copyout_error, error);
 		return (error);
 	}
@@ -350,4 +281,18 @@ linux_setresuid16(struct thread *td, struct linux_setresuid16_args *args)
 	error = sys_setresuid(td, &bsd);
 
 	return (error);
+}
+
+int
+linux_setfsuid16(struct thread *td, struct linux_setfsuid16_args *args)
+{
+	td->td_retval[0] = td->td_ucred->cr_uid;
+	return (0);
+}
+
+int
+linux_setfsgid16(struct thread *td, struct linux_setfsgid16_args *args)
+{
+	td->td_retval[0] = td->td_ucred->cr_gid;
+	return (0);
 }

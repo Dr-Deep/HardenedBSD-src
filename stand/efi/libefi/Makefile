@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 .include <bsd.init.mk>
 
 LIB=	efi
@@ -11,6 +9,7 @@ SRCS=	delay.c \
 	efi_console.c \
 	efi_driver_utils.c \
 	efichar.c \
+	eficom.c \
 	efienv.c \
 	efihttp.c \
 	efinet.c \
@@ -25,7 +24,7 @@ SRCS=	delay.c \
 .PATH:  ${SYSDIR}/teken
 SRCS+=  teken.c
 
-.if ${MACHINE_CPUARCH} == "amd64" || ${MACHINE_CPUARCH} == "i386"
+.if ${MACHINE_CPUARCH} == "amd64"
 SRCS+=	time.c
 .elif ${MACHINE_CPUARCH} == "arm" || ${MACHINE_CPUARCH} == "riscv"
 SRCS+=	time_event.c
@@ -49,13 +48,13 @@ CFLAGS+=	-mgeneral-regs-only
 .if ${MACHINE_ARCH} == "amd64"
 CFLAGS+= -fPIC -mno-red-zone
 .endif
-CFLAGS+= -I${EFIINC}
+CFLAGS+= -I${EFIINC} -I${EDK2INC}
 CFLAGS+= -I${EFIINCMD}
 CFLAGS.efi_console.c+= -I${SRCTOP}/sys/teken -I${SRCTOP}/contrib/pnglite
 CFLAGS.efi_console.c+= -I${.CURDIR}/../loader
 CFLAGS.teken.c+= -I${SRCTOP}/sys/teken
 .if ${MK_LOADER_ZFS} != "no"
-CFLAGS+=	-I${ZFSSRC}
+CFLAGS+=	-I${SAZFSSRC}
 CFLAGS+=	-I${SYSDIR}/cddl/boot/zfs
 CFLAGS+=	-I${SYSDIR}/cddl/contrib/opensolaris/uts/common
 CFLAGS+=	-DEFI_ZFS_BOOT

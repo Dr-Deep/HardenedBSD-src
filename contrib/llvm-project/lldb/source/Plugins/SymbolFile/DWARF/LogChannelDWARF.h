@@ -10,6 +10,7 @@
 #define LLDB_SOURCE_PLUGINS_SYMBOLFILE_DWARF_LOGCHANNELDWARF_H
 
 #include "lldb/Utility/Log.h"
+#include "llvm/ADT/BitmaskEnum.h"
 
 namespace lldb_private {
 
@@ -19,8 +20,10 @@ enum class DWARFLog : Log::MaskType {
   DebugMap = Log::ChannelFlag<2>,
   Lookups = Log::ChannelFlag<3>,
   TypeCompletion = Log::ChannelFlag<4>,
+  SplitDwarf = Log::ChannelFlag<5>,
   LLVM_MARK_AS_BITMASK_ENUM(TypeCompletion)
 };
+LLVM_ENABLE_BITMASK_ENUMS_IN_NAMESPACE();
 
 class LogChannelDWARF {
 public:

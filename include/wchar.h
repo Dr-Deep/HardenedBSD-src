@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: (BSD-2-Clause AND BSD-2-Clause-NetBSD)
+ * SPDX-License-Identifier: (BSD-2-Clause)
  *
  * Copyright (c)1999 Citrus Project,
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*-
@@ -80,7 +78,7 @@ typedef	__size_t	size_t;
 
 #if __POSIX_VISIBLE >= 200809 || __XSI_VISIBLE
 #ifndef _VA_LIST_DECLARED
-typedef	__va_list	va_list;
+typedef	__builtin_va_list	va_list;
 #define	_VA_LIST_DECLARED
 #endif
 #endif
@@ -109,6 +107,14 @@ typedef	__wint_t	wint_t;
 typedef struct __sFILE FILE;
 #endif
 struct tm;
+
+__BEGIN_DECLS
+size_t	wcslen(const wchar_t *) __pure;
+__END_DECLS
+
+#if !defined(_STANDALONE) && defined(_FORTIFY_SOURCE) && _FORTIFY_SOURCE > 0
+#include <ssp/wchar.h>
+#endif
 
 __BEGIN_DECLS
 wint_t	btowc(int);
@@ -148,7 +154,6 @@ wchar_t	*wcscpy(wchar_t * __restrict, const wchar_t * __restrict);
 size_t	wcscspn(const wchar_t *, const wchar_t *) __pure;
 size_t	wcsftime(wchar_t * __restrict, size_t, const wchar_t * __restrict,
 	    const struct tm * __restrict);
-size_t	wcslen(const wchar_t *) __pure;
 wchar_t	*wcsncat(wchar_t * __restrict, const wchar_t * __restrict,
 	    size_t);
 int	wcsncmp(const wchar_t *, const wchar_t *, size_t) __pure;

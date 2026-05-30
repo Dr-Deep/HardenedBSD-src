@@ -1,11 +1,9 @@
-# $FreeBSD$
-
 PACKAGE=	kerberos-lib
 
 LIB=	hdb
-LDFLAGS=	-Wl,--no-undefined ${LDAPLDFLAGS}
+LDFLAGS+=	-Wl,--no-undefined ${LDAPLDFLAGS}
 VERSION_MAP=	${KRB5DIR}/lib/hdb/version-script.map
-LIBADD=	asn1 com_err krb5 roken sqlite3
+LIBADD=	asn1 com_err krb5 roken sqlite3 heimbase
 LDADD=	${LDAPLDADD}
 DPADD=	${LDAPDPADD}
 
@@ -43,7 +41,6 @@ INCS=	hdb-protos.h \
 
 SRCS=	common.c \
 	db.c \
-	db3.c \
 	dbinfo.c \
 	ext.c \
 	hdb-ldap.c \
@@ -79,6 +76,7 @@ GEN=	asn1_Salt.x \
 	asn1_HDB_Ext_Lan_Manager_OWF.x \
 	asn1_HDB_Ext_Password.x \
 	asn1_HDB_Ext_Aliases.x \
+	asn1_HDB_Ext_KeySet.x \
 	asn1_HDB_extension.x \
 	asn1_HDB_extensions.x \
 	asn1_hdb_entry.x \

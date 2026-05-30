@@ -27,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_watchdog.h"
 
 #include <sys/param.h>
@@ -132,7 +130,7 @@ blk_write(struct dumperinfo *di, char *ptr, vm_paddr_t pa, size_t sz)
 			ptr += len;
 			sz -= len;
 		} else {
-			dump_va = (void *)PHYS_TO_DMAP(pa);
+			dump_va = PHYS_TO_DMAP(pa);
 			fragsz += len;
 			pa += len;
 			sz -= len;

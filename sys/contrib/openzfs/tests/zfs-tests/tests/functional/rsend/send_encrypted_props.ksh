@@ -1,4 +1,5 @@
 #!/bin/ksh -p
+# SPDX-License-Identifier: CDDL-1.0
 #
 # CDDL HEADER START
 #
@@ -40,6 +41,7 @@
 #    encryption child
 # 10. Verify that an unencrypted recursive send can be received as an
 #     encryption child
+# 11. Verify an encrypted pool can be sent with props only when -U is set
 #
 
 verify_runnable "both"
@@ -76,7 +78,7 @@ log_must zfs create -o keyformat=passphrase -o keylocation=file://$keyfile \
 
 log_must mkfile 1M /$TESTPOOL/ds/$TESTFILE0
 log_must cp /$TESTPOOL/ds/$TESTFILE0 /$TESTPOOL/crypt/$TESTFILE0
-typeset cksum=$(md5digest /$TESTPOOL/ds/$TESTFILE0)
+typeset cksum=$(xxh128digest /$TESTPOOL/ds/$TESTFILE0)
 
 log_must zfs snap -r $snap
 log_must zfs snap -r $snap2
@@ -118,6 +120,13 @@ log_mustnot eval "zfs send -i $esnap $esnap2 |" \
 	"zfs recv -o pbkdf2iters=100k $TESTPOOL/recv"
 log_must zfs destroy -r $TESTPOOL/recv
 
+# The user has to explicitly allow sending a dataset unecrypted when sending
+# an encrypted dataset with properties
+log_note "Must not be able to send an encrypted dataset with props unless the -U flag is set"
+log_mustnot eval "zfs send -p $esnap | zfs recv $TESTPOOL/recv"
+log_must eval "zfs send -p -U $esnap | zfs recv $TESTPOOL/recv"
+log_must zfs destroy -r $TESTPOOL/recv
+
 # Test that we can receive a simple stream as an encryption root.
 log_note "Must be able to receive stream as encryption root"
 ds=$TESTPOOL/recv
@@ -129,8 +138,16 @@ log_must test "$(get_prop 'encryptionroot' $ds)" == "$ds"
 log_must test "$(get_prop 'keyformat' $ds)" == "passphrase"
 log_must test "$(get_prop 'keylocation' $ds)" == "file://$keyfile"
 log_must test "$(get_prop 'mounted' $ds)" == "yes"
-recv_cksum=$(md5digest /$ds/$TESTFILE0)
+recv_cksum=$(xxh128digest /$ds/$TESTFILE0)
 log_must test "$recv_cksum" == "$cksum"
+log_must zfs destroy -r $ds
+
+# Test that we can override sharesmb property for encrypted raw stream.
+log_note "Must be able to override sharesmb property for encrypted raw stream"
+ds=$TESTPOOL/recv
+log_must eval "zfs send -w $esnap > $sendfile"
+log_must eval "zfs recv -o sharesmb=on $ds < $sendfile"
+log_must test "$(get_prop 'sharesmb' $ds)" == "on"
 log_must zfs destroy -r $ds
 
 # Test that we can override encryption properties on a properties stream
@@ -145,7 +162,7 @@ log_must test "$(get_prop 'encryptionroot' $ds)" == "$ds"
 log_must test "$(get_prop 'keyformat' $ds)" == "passphrase"
 log_must test "$(get_prop 'keylocation' $ds)" == "file://$keyfile"
 log_must test "$(get_prop 'mounted' $ds)" == "yes"
-recv_cksum=$(md5digest /$ds/$TESTFILE0)
+recv_cksum=$(xxh128digest /$ds/$TESTFILE0)
 log_must test "$recv_cksum" == "$cksum"
 log_must zfs destroy -r $ds
 
@@ -163,7 +180,7 @@ log_must test "$(get_prop 'encryptionroot' $ds)" == "$ds"
 log_must test "$(get_prop 'keyformat' $ds)" == "passphrase"
 log_must test "$(get_prop 'keylocation' $ds)" == "file://$keyfile"
 log_must test "$(get_prop 'mounted' $ds)" == "yes"
-recv_cksum=$(md5digest /$ds/$TESTFILE0)
+recv_cksum=$(xxh128digest /$ds/$TESTFILE0)
 log_must test "$recv_cksum" == "$cksum"
 log_must zfs destroy -r $ds
 
@@ -177,7 +194,7 @@ log_must test "$(get_prop 'encryptionroot' $ds)" == "$TESTPOOL/crypt"
 log_must test "$(get_prop 'encryption' $ds)" == "aes-256-gcm"
 log_must test "$(get_prop 'keyformat' $ds)" == "passphrase"
 log_must test "$(get_prop 'mounted' $ds)" == "yes"
-recv_cksum=$(md5digest /$ds/$TESTFILE0)
+recv_cksum=$(xxh128digest /$ds/$TESTFILE0)
 log_must test "$recv_cksum" == "$cksum"
 log_must zfs destroy -r $ds
 
@@ -191,7 +208,7 @@ log_must test "$(get_prop 'encryptionroot' $ds)" == "$TESTPOOL/crypt"
 log_must test "$(get_prop 'encryption' $ds)" == "aes-256-gcm"
 log_must test "$(get_prop 'keyformat' $ds)" == "passphrase"
 log_must test "$(get_prop 'mounted' $ds)" == "yes"
-recv_cksum=$(md5digest /$ds/$TESTFILE0)
+recv_cksum=$(xxh128digest /$ds/$TESTFILE0)
 log_must test "$recv_cksum" == "$cksum"
 log_must zfs destroy -r $ds
 
@@ -205,7 +222,7 @@ log_must test "$(get_prop 'encryptionroot' $ds)" == "$TESTPOOL/crypt"
 log_must test "$(get_prop 'encryption' $ds)" == "aes-256-gcm"
 log_must test "$(get_prop 'keyformat' $ds)" == "passphrase"
 log_must test "$(get_prop 'mounted' $ds)" == "yes"
-recv_cksum=$(md5digest /$ds/$TESTFILE0)
+recv_cksum=$(xxh128digest /$ds/$TESTFILE0)
 log_must test "$recv_cksum" == "$cksum"
 log_must zfs destroy -r $ds
 

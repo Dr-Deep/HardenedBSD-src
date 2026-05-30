@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * This file and its contents are supplied under the terms of the
  * Common Development and Distribution License ("CDDL"), version 1.0.
@@ -96,7 +97,7 @@ main(int argc, char *argv[])
 		off += bytes;
 	}
 
-	if (diff_len != 0 && diff_len != 0) {
+	if (diff_len != 0) {
 		(void) fprintf(stdout, "%lld,%lld\n", (long long)diff_off,
 		    (long long)diff_len);
 	}

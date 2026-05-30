@@ -1,14 +1,9 @@
-/*	$FreeBSD$	*/
 
 /*
  * Copyright (C) 2012 by Darren Reed.
  *
  * See the IPFILTER.LICENCE file for details on licencing.
  */
-#if !defined(lint)
-static const char sccsid[] = "@(#)ip_fil.c	2.41 6/5/96 (C) 1993-2000 Darren Reed";
-static const char rcsid[] = "@(#)$Id$";
-#endif
 
 #if defined(KERNEL) || defined(_KERNEL)
 # undef KERNEL
@@ -39,7 +34,6 @@ static const char rcsid[] = "@(#)$Id$";
 #include <sys/sockopt.h>
 #include <sys/socket.h>
 #include <sys/selinfo.h>
-#include <netinet/tcp_var.h>
 #include <net/if.h>
 #include <net/if_var.h>
 #include <net/netisr.h>
@@ -53,6 +47,7 @@ static const char rcsid[] = "@(#)$Id$";
 #include <netinet/ip.h>
 #include <netinet/ip_var.h>
 #include <netinet/tcp.h>
+#include <netinet/tcp_var.h>
 #include <net/vnet.h>
 #include <netinet/udp.h>
 #include <netinet/tcpip.h>
@@ -93,26 +88,17 @@ VNET_DEFINE(ipf_main_softc_t, ipfmain) = {
 	.ipf_running		= -2,
 };
 #define	V_ipfmain		VNET(ipfmain)
+#define V0_ipfmain		VNET_VNET(vnet0,ipfmain)
 
 #include <sys/conf.h>
 #include <net/pfil.h>
 
 VNET_DEFINE_STATIC(eventhandler_tag, ipf_arrivetag);
 VNET_DEFINE_STATIC(eventhandler_tag, ipf_departtag);
+VNET_DEFINE_STATIC(eventhandler_tag, ipf_renametag);
 #define	V_ipf_arrivetag		VNET(ipf_arrivetag)
 #define	V_ipf_departtag		VNET(ipf_departtag)
-#if 0
-/*
- * Disable the "cloner" event handler;  we are getting interface
- * events before the firewall is fully initiallized and also no vnet
- * information thus leading to uninitialised memory accesses.
- * In addition it is unclear why we need it in first place.
- * If it turns out to be needed, well need a dedicated event handler
- * for it to deal with the ifc and the correct vnet.
- */
-VNET_DEFINE_STATIC(eventhandler_tag, ipf_clonetag);
-#define	V_ipf_clonetag		VNET(ipf_clonetag)
-#endif
+#define	V_ipf_renametag		VNET(ipf_renametag)
 
 static void ipf_ifevent(void *arg, struct ifnet *ifp);
 
@@ -138,6 +124,8 @@ ipf_check_wrapper(struct mbuf **mp, struct ifnet *ifp, int flags,
 	rv = ipf_check(&V_ipfmain, ip, ip->ip_hl << 2, ifp,
 	    !!(flags & PFIL_OUT), mp);
 	CURVNET_RESTORE();
+	if (rv == 0 && *mp == NULL)
+		return (PFIL_CONSUMED);
 	return (rv == 0 ? PFIL_PASS : PFIL_DROPPED);
 }
 
@@ -152,6 +140,8 @@ ipf_check_wrapper6(struct mbuf **mp, struct ifnet *ifp, int flags,
 	rv = ipf_check(&V_ipfmain, mtod(*mp, struct ip *),
 	    sizeof(struct ip6_hdr), ifp, !!(flags & PFIL_OUT), mp);
 	CURVNET_RESTORE();
+	if (rv == 0 && *mp == NULL)
+		return (PFIL_CONSUMED);
 
 	return (rv == 0 ? PFIL_PASS : PFIL_DROPPED);
 }
@@ -173,21 +163,15 @@ ipf_timer_func(void *arg)
 	SPL_INT(s);
 
 	SPL_NET(s);
-	READ_ENTER(&softc->ipf_global);
 
 	if (softc->ipf_running > 0)
 		ipf_slowtimer(softc);
 
 	if (softc->ipf_running == -1 || softc->ipf_running == 1) {
-#if 0
-		softc->ipf_slow_ch = timeout(ipf_timer_func, softc, hz/2);
-#endif
-		callout_init(&softc->ipf_slow_ch, 1);
 		callout_reset(&softc->ipf_slow_ch,
 			(hz / IPF_HZ_DIVIDE) * IPF_HZ_MULT,
 			ipf_timer_func, softc);
 	}
-	RWLOCK_EXIT(&softc->ipf_global);
 	SPL_X(s);
 }
 
@@ -218,11 +202,7 @@ ipfattach(ipf_main_softc_t *softc)
 		V_ipforwarding = 1;
 
 	SPL_X(s);
-#if 0
-	softc->ipf_slow_ch = timeout(ipf_timer_func, softc,
-				     (hz / IPF_HZ_DIVIDE) * IPF_HZ_MULT);
-#endif
-	callout_init(&softc->ipf_slow_ch, 1);
+	callout_init_rw(&softc->ipf_slow_ch, &softc->ipf_global.ipf_lk, CALLOUT_SHAREDLOCK);
 	callout_reset(&softc->ipf_slow_ch, (hz / IPF_HZ_DIVIDE) * IPF_HZ_MULT,
 		ipf_timer_func, softc);
 	return (0);
@@ -245,11 +225,6 @@ ipfdetach(ipf_main_softc_t *softc)
 
 	SPL_NET(s);
 
-#if 0
-	if (softc->ipf_slow_ch.callout != NULL)
-		untimeout(ipf_timer_func, softc, softc->ipf_slow_ch);
-	bzero(&softc->ipf_slow, sizeof(softc->ipf_slow));
-#endif
 	callout_drain(&softc->ipf_slow_ch);
 
 	ipf_fini_all(softc);
@@ -280,6 +255,20 @@ ipfioctl(struct cdev *dev, ioctlcmd_t cmd, caddr_t data,
 		V_ipfmain.ipf_interror = 130001;
 		CURVNET_RESTORE();
 		return (EPERM);
+	}
+
+	/*
+	 * Remember, the host system (with its vnet0) controls
+	 * whether a jail is allowed to use ipfilter or not.
+	 * The default is ipfilter cannot be used by a jail
+	 * unless the sysctl allows it.
+	 */
+	if (V0_ipfmain.ipf_jail_allowed == 0) {
+		if (jailed(p->p_cred)) {
+			V_ipfmain.ipf_interror = 130019;
+			CURVNET_RESTORE();
+			return (EOPNOTSUPP);
+		}
 	}
 
 	if (jailed_without_vnet(p->p_cred)) {
@@ -342,15 +331,15 @@ ipf_send_reset(fr_info_t *fin)
 	ip_t *ip;
 
 	tcp = fin->fin_dp;
-	if (tcp->th_flags & TH_RST)
+	if (tcp_get_flags(tcp) & TH_RST)
 		return (-1);		/* feedback loop */
 
 	if (ipf_checkl4sum(fin) == -1)
 		return (-1);
 
 	tlen = fin->fin_dlen - (TCP_OFF(tcp) << 2) +
-			((tcp->th_flags & TH_SYN) ? 1 : 0) +
-			((tcp->th_flags & TH_FIN) ? 1 : 0);
+			((tcp_get_flags(tcp) & TH_SYN) ? 1 : 0) +
+			((tcp_get_flags(tcp) & TH_FIN) ? 1 : 0);
 
 #ifdef USE_INET6
 	hlen = (fin->fin_v == 6) ? sizeof(ip6_t) : sizeof(ip_t);
@@ -384,18 +373,17 @@ ipf_send_reset(fr_info_t *fin)
 	tcp2->th_sport = tcp->th_dport;
 	tcp2->th_dport = tcp->th_sport;
 
-	if (tcp->th_flags & TH_ACK) {
+	if (tcp_get_flags(tcp) & TH_ACK) {
 		tcp2->th_seq = tcp->th_ack;
-		tcp2->th_flags = TH_RST;
+		tcp_set_flags(tcp2, TH_RST);
 		tcp2->th_ack = 0;
 	} else {
 		tcp2->th_seq = 0;
 		tcp2->th_ack = ntohl(tcp->th_seq);
 		tcp2->th_ack += tlen;
 		tcp2->th_ack = htonl(tcp2->th_ack);
-		tcp2->th_flags = TH_RST|TH_ACK;
+		tcp_set_flags(tcp2, TH_RST|TH_ACK);
 	}
-	TCP_X2_A(tcp2, 0);
 	TCP_OFF_A(tcp2, sizeof(*tcp2) >> 2);
 	tcp2->th_win = tcp->th_win;
 	tcp2->th_sum = 0;
@@ -492,13 +480,14 @@ ipf_send_ip(fr_info_t *fin, mb_t *m)
 int
 ipf_send_icmp_err(int type, fr_info_t *fin, int dst)
 {
-	int err, hlen, xtra, iclen, ohlen, avail, code;
+	int err, hlen, xtra, iclen, ohlen, avail;
 	struct in_addr dst4;
 	struct icmp *icmp;
 	struct mbuf *m;
 	i6addr_t dst6;
 	void *ifp;
 #ifdef USE_INET6
+	int code;
 	ip6_t *ip6;
 #endif
 	ip_t *ip, *ip2;
@@ -506,8 +495,8 @@ ipf_send_icmp_err(int type, fr_info_t *fin, int dst)
 	if ((type < 0) || (type >= ICMP_MAXTYPE))
 		return (-1);
 
-	code = fin->fin_icode;
 #ifdef USE_INET6
+	code = fin->fin_icode;
 	/* See NetBSD ip_fil_netbsd.c r1.4: */
 	if ((code < 0) || (code >= sizeof(icmptoicmp6unreach)/sizeof(int)))
 		return (-1);
@@ -924,8 +913,7 @@ bad:
 
 
 int
-ipf_verifysrc(fin)
-	fr_info_t *fin;
+ipf_verifysrc(fr_info_t *fin)
 {
 	struct nhop_object *nh;
 
@@ -1010,8 +998,7 @@ ipf_ifpaddr(ipf_main_softc_t *softc, int v, int atype, void *ifptr,
 
 
 u_32_t
-ipf_newisn(fin)
-	fr_info_t *fin;
+ipf_newisn(fr_info_t *fin)
 {
 	u_32_t newiss;
 	newiss = arc4random();
@@ -1178,17 +1165,17 @@ mbufchainlen(struct mbuf *m0)
 /* We assume that 'xmin' is a pointer to a buffer that is part of the chain */
 /* of buffers that starts at *fin->fin_mp.                                  */
 /* ------------------------------------------------------------------------ */
-void *
+ip_t *
 ipf_pullup(mb_t *xmin, fr_info_t *fin, int len)
 {
 	int dpoff, ipoff;
 	mb_t *m = xmin;
-	char *ip;
+	ip_t *ip;
 
 	if (m == NULL)
 		return (NULL);
 
-	ip = (char *)fin->fin_ip;
+	ip = fin->fin_ip;
 	if ((fin->fin_flx & FI_COALESCE) != 0)
 		return (ip);
 
@@ -1233,6 +1220,7 @@ ipf_pullup(mb_t *xmin, fr_info_t *fin, int len)
 #endif
 		} else
 		{
+
 			m = m_pullup(m, len);
 		}
 		if (n != NULL)
@@ -1259,9 +1247,9 @@ ipf_pullup(mb_t *xmin, fr_info_t *fin, int len)
 			m = m->m_next;
 		}
 		fin->fin_m = m;
-		ip = MTOD(m, char *) + ipoff;
+		ip = MTOD(m, ip_t *) + ipoff;
 
-		fin->fin_ip = (ip_t *)ip;
+		fin->fin_ip = ip;
 		if (fin->fin_dp != NULL)
 			fin->fin_dp = (char *)fin->fin_ip + dpoff;
 		if (fin->fin_fraghdr != NULL)
@@ -1312,31 +1300,31 @@ int ipf_pfil_unhook(void) {
 }
 
 int ipf_pfil_hook(void) {
-	struct pfil_hook_args pha;
-	struct pfil_link_args pla;
 	int error, error6;
 
-	pha.pa_version = PFIL_VERSION;
-	pha.pa_flags = PFIL_IN | PFIL_OUT;
-	pha.pa_modname = "ipfilter";
-	pha.pa_rulname = "default-ip4";
-	pha.pa_func = ipf_check_wrapper;
-	pha.pa_ruleset = NULL;
-	pha.pa_type = PFIL_TYPE_IP4;
+	struct pfil_hook_args pha = {
+		.pa_version = PFIL_VERSION,
+		.pa_flags = PFIL_IN | PFIL_OUT,
+		.pa_modname = "ipfilter",
+		.pa_rulname = "default-ip4",
+		.pa_mbuf_chk = ipf_check_wrapper,
+		.pa_type = PFIL_TYPE_IP4,
+	};
 	V_ipf_inet_hook = pfil_add_hook(&pha);
 
 #ifdef USE_INET6
 	pha.pa_rulname = "default-ip6";
-	pha.pa_func = ipf_check_wrapper6;
+	pha.pa_mbuf_chk = ipf_check_wrapper6;
 	pha.pa_type = PFIL_TYPE_IP6;
 	V_ipf_inet6_hook = pfil_add_hook(&pha);
 #endif
 
-	pla.pa_version = PFIL_VERSION;
-	pla.pa_flags = PFIL_IN | PFIL_OUT |
-	    PFIL_HEADPTR | PFIL_HOOKPTR;
-	pla.pa_head = V_inet_pfil_head;
-	pla.pa_hook = V_ipf_inet_hook;
+	struct pfil_link_args pla = {
+		.pa_version = PFIL_VERSION,
+		.pa_flags = PFIL_IN | PFIL_OUT | PFIL_HEADPTR | PFIL_HOOKPTR,
+		.pa_head = V_inet_pfil_head,
+		.pa_hook = V_ipf_inet_hook,
+	};
 	error = pfil_link(&pla);
 
 	error6 = 0;
@@ -1363,10 +1351,9 @@ ipf_event_reg(void)
 	V_ipf_departtag = EVENTHANDLER_REGISTER(ifnet_departure_event, \
 					       ipf_ifevent, NULL, \
 					       EVENTHANDLER_PRI_ANY);
-#if 0
-	V_ipf_clonetag  = EVENTHANDLER_REGISTER(if_clone_event, ipf_ifevent, \
-					       NULL, EVENTHANDLER_PRI_ANY);
-#endif
+	V_ipf_renametag = EVENTHANDLER_REGISTER(ifnet_rename_event, \
+					       ipf_ifevent, NULL, \
+					       EVENTHANDLER_PRI_ANY);
 }
 
 void
@@ -1378,11 +1365,9 @@ ipf_event_dereg(void)
 	if (V_ipf_departtag != NULL) {
 		EVENTHANDLER_DEREGISTER(ifnet_departure_event, V_ipf_departtag);
 	}
-#if 0
-	if (V_ipf_clonetag != NULL) {
-		EVENTHANDLER_DEREGISTER(if_clone_event, V_ipf_clonetag);
+	if (V_ipf_renametag != NULL) {
+		EVENTHANDLER_DEREGISTER(ifnet_rename_event, V_ipf_renametag);
 	}
-#endif
 }
 
 
@@ -1462,4 +1447,6 @@ ipf_fbsd_kenv_get(ipf_main_softc_t *softc)
 {
 	TUNABLE_INT_FETCH("net.inet.ipf.large_nat",
 		&softc->ipf_large_nat);
+	TUNABLE_INT_FETCH("net.inet.ipf.jail_allowed",
+		&softc->ipf_jail_allowed);
 }

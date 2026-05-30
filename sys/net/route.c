@@ -27,9 +27,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)route.c	8.3.1.1 (Berkeley) 2/23/95
- * $FreeBSD$
  */
 /************************************************************************
  * Note: In this file a 'fib' is a "forwarding information base"	*
@@ -39,7 +36,6 @@
 #include "opt_inet.h"
 #include "opt_inet6.h"
 #include "opt_mrouting.h"
-#include "opt_route.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -59,6 +55,7 @@
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_private.h>
 #include <net/if_dl.h>
 #include <net/route.h>
 #include <net/route/route_ctl.h>
@@ -77,6 +74,10 @@ VNET_PCPUSTAT_SYSINIT(rtstat);
 VNET_PCPUSTAT_SYSUNINIT(rtstat);
 #endif
 
+SYSCTL_DECL(_net_route);
+SYSCTL_VNET_PCPUSTAT(_net_route, OID_AUTO, stats, struct rtstat,
+    rtstat, "route statistics");
+
 EVENTHANDLER_LIST_DEFINE(rt_addrmsg);
 
 static int rt_ifdelroute(const struct rtentry *rt, const struct nhop_object *,
@@ -87,7 +88,7 @@ static int rt_ifdelroute(const struct rtentry *rt, const struct nhop_object *,
  * SI_ORDER_MIDDLE.
  */
 static void
-route_init(void)
+route_init(void *dummy __unused)
 {
 
 	nhops_init();
@@ -217,6 +218,7 @@ rib_add_redirect(u_int fibnum, struct sockaddr *dst, struct sockaddr *gateway,
 	nhop_set_pxtype_flag(nh, NHF_HOST);
 	nhop_set_expire(nh, lifetime_sec + time_uptime);
 	nhop_set_redirect(nh, true);
+	nhop_set_origin(nh, NH_ORIGIN_REDIRECT);
 	rnd.rnd_nhop = nhop_get_nhop(nh, &error);
 	if (error == 0) {
 		error = rib_add_route_px(fibnum, dst, -1,
@@ -505,26 +507,27 @@ rt_getifa_fib(struct rt_addrinfo *info, u_int fibnum)
 	return (error);
 }
 
+/*
+ * Try to update rt_mtu for all routes using this interface.  Unfortunately the
+ * only way to do this is to traverse all routing tables in all fibs.
+ */
 void
 rt_updatemtu(struct ifnet *ifp)
 {
-	struct rib_head *rnh;
-	int mtu;
-	int i, j;
+#ifdef INET6
+	uint32_t in6mtu;
 
-	/*
-	 * Try to update rt_mtu for all routes using this interface
-	 * Unfortunately the only way to do this is to traverse all
-	 * routing tables in all fibs/domains.
-	 */
-	for (i = 1; i <= AF_MAX; i++) {
-		mtu = if_getmtu_family(ifp, i);
-		for (j = 0; j < rt_numfibs; j++) {
-			rnh = rt_tables_get_rnh(j, i);
-			if (rnh == NULL)
-				continue;
-			nhops_update_ifmtu(rnh, ifp, mtu);
-		}
+	in6mtu = in6_ifmtu(ifp);
+#endif
+
+	for (u_int j = 0; j < rt_numfibs; j++) {
+#ifdef INET
+		nhops_update_ifmtu(rt_tables_get_rnh(j, AF_INET), ifp,
+		    ifp->if_mtu);
+#endif
+#ifdef INET6
+		nhops_update_ifmtu(rt_tables_get_rnh(j, AF_INET6), ifp, in6mtu);
+#endif
 	}
 }
 
@@ -660,7 +663,7 @@ rt_routemsg(int cmd, struct rtentry *rt, struct nhop_object *nh,
     int fibnum)
 {
 
-	KASSERT(cmd == RTM_ADD || cmd == RTM_DELETE,
+	KASSERT(cmd == RTM_ADD || cmd == RTM_DELETE || cmd == RTM_CHANGE,
 	    ("unexpected cmd %d", cmd));
 
 	KASSERT(fibnum == RT_ALL_FIBS || (fibnum >= 0 && fibnum < rt_numfibs),
@@ -693,3 +696,11 @@ rt_routemsg_info(int cmd, struct rt_addrinfo *info, int fibnum)
 
 	return (rtsock_routemsg_info(cmd, info, fibnum));
 }
+
+void
+rt_ifmsg(struct ifnet *ifp, int if_flags_mask)
+{
+	rtsock_callback_p->ifmsg_f(ifp, if_flags_mask);
+	netlink_callback_p->ifmsg_f(ifp, if_flags_mask);
+}
+

@@ -23,8 +23,6 @@
  * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef DOSIO_H
@@ -96,12 +94,15 @@ typedef union {
 
 typedef struct {
     struct open_file *fd;       /* file descriptor */
+    u_char *secbuf;		/* sector cache */
     u_char *fatbuf;             /* FAT cache buffer */
     u_int fatbuf_blknum;        /* number of 128K block in FAT cache buffer */
     u_int links;                /* active links to structure */
+    u_int sshift;		/* sector shift */
     u_int spc;                  /* sectors per cluster */
     u_int bsize;                /* cluster size in bytes */
     u_int bshift;               /* cluster conversion shift */
+    u_int dshift;		/* directory entries shift */
     u_int dirents;              /* root directory entries */
     u_int spf;                  /* sectors per fat */
     u_int rdcl;                 /* root directory start cluster */

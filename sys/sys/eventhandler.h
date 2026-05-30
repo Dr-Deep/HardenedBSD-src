@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1999 Michael Smith <msmith@freebsd.org>
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _SYS_EVENTHANDLER_H_
@@ -35,6 +33,7 @@
 #include <sys/lock.h>
 #include <sys/ktr.h>
 #include <sys/mutex.h>
+#include <sys/power.h>
 #include <sys/queue.h>
 
 #ifdef VIMAGE
@@ -47,7 +46,7 @@ struct eventhandler_entry_vimage {
 
 struct eventhandler_list {
 	char				*el_name;
-	int				el_flags;	/* Unused. */
+	u_int				el_deadcount;
 	u_int				el_runcount;
 	struct mtx			el_lock;
 	TAILQ_ENTRY(eventhandler_list)	el_link;
@@ -83,7 +82,7 @@ struct eventhandler_list {
 	KASSERT((list)->el_runcount > 0,				\
 	    ("eventhandler_invoke: runcount underflow"));		\
 	(list)->el_runcount--;						\
-	if ((list)->el_runcount == 0)					\
+	if ((list)->el_runcount == 0 && (list)->el_deadcount != 0)	\
 		eventhandler_prune_list(list);				\
 	EHL_UNLOCK((list));						\
 } while (0)
@@ -184,7 +183,14 @@ eventhandler_tag vimage_eventhandler_register(struct eventhandler_list *list,
 #define	EVENTHANDLER_PRI_ANY	10000
 #define	EVENTHANDLER_PRI_LAST	20000
 
-/* Shutdown events */
+/*
+ * Successive shutdown events invoked by kern_reboot(9).
+ *
+ * Handlers will receive the 'howto' value as their second argument.
+ *
+ * All handlers must be prepared to be executed from a panic/debugger context;
+ * see the man page for details.
+ */
 typedef void (*shutdown_fn)(void *, int);
 
 #define	SHUTDOWN_PRI_FIRST	EVENTHANDLER_PRI_FIRST
@@ -196,7 +202,7 @@ EVENTHANDLER_DECLARE(shutdown_post_sync, shutdown_fn);	/* after fs sync */
 EVENTHANDLER_DECLARE(shutdown_final, shutdown_fn);
 
 /* Power state change events */
-typedef void (*power_change_fn)(void *);
+typedef void (*power_change_fn)(void *, enum power_stype stype);
 EVENTHANDLER_DECLARE(power_resume, power_change_fn);
 EVENTHANDLER_DECLARE(power_suspend, power_change_fn);
 EVENTHANDLER_DECLARE(power_suspend_early, power_change_fn);
@@ -320,5 +326,10 @@ EVENTHANDLER_DECLARE(device_nomatch, device_nomatch_fn);
 struct ifaddr;
 typedef void (*rt_addrmsg_fn)(void *, struct ifaddr *, int);
 EVENTHANDLER_DECLARE(rt_addrmsg, rt_addrmsg_fn);
+
+/* Kernel environment variable change event */
+typedef void (*env_change_fn)(void *, const char *);
+EVENTHANDLER_DECLARE(setenv, env_change_fn);
+EVENTHANDLER_DECLARE(unsetenv, env_change_fn);
 
 #endif /* _SYS_EVENTHANDLER_H_ */

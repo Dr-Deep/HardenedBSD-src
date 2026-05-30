@@ -1,6 +1,5 @@
-# $FreeBSD$
 #
-# SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+# SPDX-License-Identifier: BSD-2-Clause
 #
 # Copyright (c) 2021 Kristof Provost <kp@FreeBSD.org>
 #
@@ -34,7 +33,7 @@ dup_to_head()
 {
 	atf_set descr 'dup-to test'
 	atf_set require.user root
-	atf_set require.progs scapy
+	atf_set require.progs python3 scapy
 }
 
 dup_to_body()
@@ -67,8 +66,7 @@ dup_to_body()
 	atf_check -s exit:0 ${common_dir}/pft_ping.py \
 		--sendif ${epair_send}a \
 		--to 198.51.100.3 \
-		--recv ${epair_recv}a \
-		--checkdup ${epair_dupto}a
+		--recv ${epair_recv}a ${epair_dupto}a
 }
 
 dup_to_cleanup()

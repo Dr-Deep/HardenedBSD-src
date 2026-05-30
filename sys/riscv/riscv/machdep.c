@@ -33,10 +33,9 @@
  * SUCH DAMAGE.
  */
 
+#include "opt_ddb.h"
+#include "opt_kstack_pages.h"
 #include "opt_platform.h"
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -45,7 +44,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/bus.h>
 #include <sys/cons.h>
 #include <sys/cpu.h>
-#include <sys/devmap.h>
+#include <sys/efi_map.h>
 #include <sys/exec.h>
 #include <sys/imgact.h>
 #include <sys/kdb.h>
@@ -81,6 +80,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_pager.h>
 
 #include <machine/cpu.h>
+#include <machine/fpe.h>
 #include <machine/intr.h>
 #include <machine/kdb.h>
 #include <machine/machdep.h>
@@ -92,8 +92,8 @@ __FBSDID("$FreeBSD$");
 #include <machine/trap.h>
 #include <machine/vmparam.h>
 
-#ifdef FPE
-#include <machine/fpe.h>
+#ifdef DDB
+#include <ddb/ddb.h>
 #endif
 
 #ifdef FDT
@@ -105,6 +105,7 @@ __FBSDID("$FreeBSD$");
 struct pcpu __pcpu[MAXCPU];
 
 static struct trapframe proc0_tf;
+static struct pcb pcb0;
 
 int early_boot = 1;
 int cold = 1;
@@ -113,16 +114,12 @@ int cold = 1;
 
 struct kva_md_info kmi;
 
-int64_t dcache_line_size;	/* The minimum D cache line size */
-int64_t icache_line_size;	/* The minimum I cache line size */
-int64_t idcache_line_size;	/* The minimum cache line size */
-
 #define BOOT_HART_INVALID	0xffffffff
 uint32_t boot_hart = BOOT_HART_INVALID;	/* The hart we booted on. */
 
 cpuset_t all_harts;
 
-extern int *end;
+extern char end[];
 
 static char static_kenv[PAGE_SIZE];
 
@@ -131,7 +128,7 @@ cpu_startup(void *dummy)
 {
 
 	sbi_print_version();
-	identify_cpu();
+	printcpuinfo(0);
 
 	printf("real memory  = %ju (%ju MB)\n", ptoa((uintmax_t)realmem),
 	    ptoa((uintmax_t)realmem) / (1024 * 1024));
@@ -160,8 +157,6 @@ cpu_startup(void *dummy)
 	printf("avail memory = %ju (%ju MB)\n",
 	    ptoa((uintmax_t)vm_free_count()),
 	    ptoa((uintmax_t)vm_free_count()) / (1024 * 1024));
-	if (bootverbose)
-		devmap_print_table();
 
 	bufinit();
 	vm_pager_bufferinit();
@@ -223,8 +218,18 @@ cpu_flush_dcache(void *ptr, size_t len)
 int
 cpu_est_clockrate(int cpu_id, uint64_t *rate)
 {
+	struct pcpu *pc;
 
-	panic("cpu_est_clockrate");
+	pc = pcpu_find(cpu_id);
+	if (pc == NULL || rate == NULL)
+		return (EINVAL);
+
+	if (pc->pc_clock == 0)
+		return (EOPNOTSUPP);
+
+	*rate = pc->pc_clock;
+
+	return (0);
 }
 
 void
@@ -283,7 +288,7 @@ makectx(struct trapframe *tf, struct pcb *pcb)
 }
 
 static void
-init_proc0(vm_offset_t kstack)
+init_proc0(void *kstack)
 {
 	struct pcpu *pcpup;
 
@@ -292,8 +297,7 @@ init_proc0(vm_offset_t kstack)
 	proc_linkup0(&proc0, &thread0);
 	thread0.td_kstack = kstack;
 	thread0.td_kstack_pages = KSTACK_PAGES;
-	thread0.td_pcb = (struct pcb *)(thread0.td_kstack +
-	    thread0.td_kstack_pages * PAGE_SIZE) - 1;
+	thread0.td_pcb = &pcb0;
 	thread0.td_pcb->pcb_fpflags = 0;
 	thread0.td_frame = &proc0_tf;
 	pcpup->pc_curpcb = thread0.td_pcb;
@@ -301,11 +305,11 @@ init_proc0(vm_offset_t kstack)
 
 #ifdef FDT
 static void
-try_load_dtb(caddr_t kmdp)
+try_load_dtb(void)
 {
 	vm_offset_t dtbp;
 
-	dtbp = MD_FETCH(kmdp, MODINFOMD_DTBP, vm_offset_t);
+	dtbp = MD_FETCH(preload_kmdp, MODINFOMD_DTBP, vm_offset_t);
 
 #if defined(FDT_DTB_STATIC)
 	/*
@@ -321,24 +325,13 @@ try_load_dtb(caddr_t kmdp)
 		return;
 	}
 
-	if (OF_install(OFW_FDT, 0) == FALSE)
+	if (!OF_install(OFW_FDT, 0))
 		panic("Cannot install FDT");
 
 	if (OF_init((void *)dtbp) != 0)
 		panic("OF_init failed with the found device tree");
 }
 #endif
-
-static void
-cache_setup(void)
-{
-
-	/* TODO */
-
-	dcache_line_size = 0;
-	icache_line_size = 0;
-	idcache_line_size = 0;
-}
 
 /*
  * Fake up a boot descriptor table.
@@ -370,7 +363,7 @@ fake_preload_metadata(struct riscv_bootparams *rvbp)
 	PRELOAD_PUSH_VALUE(uint32_t, MODINFO_NAME);
 	PRELOAD_PUSH_STRING("kernel");
 	PRELOAD_PUSH_VALUE(uint32_t, MODINFO_TYPE);
-	PRELOAD_PUSH_STRING("elf kernel");
+	PRELOAD_PUSH_STRING(preload_kerntype);
 
 	PRELOAD_PUSH_VALUE(uint32_t, MODINFO_ADDR);
 	PRELOAD_PUSH_VALUE(uint32_t, sizeof(vm_offset_t));
@@ -380,13 +373,16 @@ fake_preload_metadata(struct riscv_bootparams *rvbp)
 	PRELOAD_PUSH_VALUE(uint32_t, sizeof(size_t));
 	PRELOAD_PUSH_VALUE(uint64_t, (size_t)((vm_offset_t)&end - KERNBASE));
 
-	/* Copy the DTB to KVA space. */
+	/*
+	 * Copy the DTB to KVA space. We are able to dereference the physical
+	 * address due to the identity map created in locore.
+	 */
 	lastaddr = roundup(lastaddr, sizeof(int));
 	PRELOAD_PUSH_VALUE(uint32_t, MODINFO_METADATA | MODINFOMD_DTBP);
 	PRELOAD_PUSH_VALUE(uint32_t, sizeof(vm_offset_t));
 	PRELOAD_PUSH_VALUE(vm_offset_t, lastaddr);
-	dtb_size = fdt_totalsize(rvbp->dtbp_virt);
-	memmove((void *)lastaddr, (const void *)rvbp->dtbp_virt, dtb_size);
+	dtb_size = fdt_totalsize(rvbp->dtbp_phys);
+	memmove((void *)lastaddr, (const void *)rvbp->dtbp_phys, dtb_size);
 	lastaddr = roundup(lastaddr + dtb_size, sizeof(int));
 
 	PRELOAD_PUSH_VALUE(uint32_t, MODINFO_METADATA | MODINFOMD_KERNEND);
@@ -420,6 +416,45 @@ fake_preload_metadata(struct riscv_bootparams *rvbp)
 /* Support for FDT configurations only. */
 CTASSERT(FDT);
 
+static void
+parse_boot_hartid(void)
+{
+	uint64_t *mdp;
+#ifdef FDT
+	phandle_t chosen;
+	uint32_t hart;
+#endif
+
+	mdp = (uint64_t *)preload_search_info(preload_kmdp,
+	    MODINFO_METADATA | MODINFOMD_BOOT_HARTID);
+	if (mdp != NULL && *mdp < UINT32_MAX) {
+		boot_hart = (uint32_t)*mdp;
+		goto out;
+	}
+
+#ifdef FDT
+	/*
+	 * Deprecated:
+	 *
+	 * Look for the boot hart ID. This was either passed in directly from
+	 * the SBI firmware and handled by locore, or was stored in the device
+	 * tree by an earlier boot stage.
+	 */
+	chosen = OF_finddevice("/chosen");
+	if (OF_getencprop(chosen, "boot-hartid", &hart, sizeof(hart)) != -1) {
+		boot_hart = hart;
+	}
+#endif
+
+	/* We failed... */
+	if (boot_hart == BOOT_HART_INVALID) {
+		panic("Boot hart ID was not properly set");
+	}
+
+out:
+	PCPU_SET(hart, boot_hart);
+}
+
 #ifdef FDT
 static void
 parse_fdt_bootargs(void)
@@ -436,52 +471,97 @@ parse_fdt_bootargs(void)
 static vm_offset_t
 parse_metadata(void)
 {
-	caddr_t kmdp;
 	vm_offset_t lastaddr;
 #ifdef DDB
 	vm_offset_t ksym_start, ksym_end;
 #endif
 	char *kern_envp;
 
-	/* Find the kernel address */
-	kmdp = preload_search_by_type("elf kernel");
-	if (kmdp == NULL)
-		kmdp = preload_search_by_type("elf64 kernel");
-	KASSERT(kmdp != NULL, ("No preload metadata found!"));
+	/* Initialize preload_kmdp */
+	preload_initkmdp(true);
 
 	/* Read the boot metadata */
-	boothowto = MD_FETCH(kmdp, MODINFOMD_HOWTO, int);
-	lastaddr = MD_FETCH(kmdp, MODINFOMD_KERNEND, vm_offset_t);
-	kern_envp = MD_FETCH(kmdp, MODINFOMD_ENVP, char *);
+	boothowto = MD_FETCH(preload_kmdp, MODINFOMD_HOWTO, int);
+	lastaddr = MD_FETCH(preload_kmdp, MODINFOMD_KERNEND, vm_offset_t);
+	kern_envp = MD_FETCH(preload_kmdp, MODINFOMD_ENVP, char *);
 	if (kern_envp != NULL)
 		init_static_kenv(kern_envp, 0);
 	else
 		init_static_kenv(static_kenv, sizeof(static_kenv));
 #ifdef DDB
-	ksym_start = MD_FETCH(kmdp, MODINFOMD_SSYM, uintptr_t);
-	ksym_end = MD_FETCH(kmdp, MODINFOMD_ESYM, uintptr_t);
-	db_fetch_ksymtab(ksym_start, ksym_end);
+	ksym_start = MD_FETCH(preload_kmdp, MODINFOMD_SSYM, uintptr_t);
+	ksym_end = MD_FETCH(preload_kmdp, MODINFOMD_ESYM, uintptr_t);
+	db_fetch_ksymtab(ksym_start, ksym_end, 0);
 #endif
 #ifdef FDT
-	try_load_dtb(kmdp);
+	try_load_dtb();
 	if (kern_envp == NULL)
 		parse_fdt_bootargs();
 #endif
+	parse_boot_hartid();
+
 	return (lastaddr);
+}
+
+#ifdef FDT
+static void
+fdt_physmem_hardware_region_cb(const struct mem_region *mr, void *arg)
+{
+	bool *first = arg;
+
+	physmem_hardware_region(mr->mr_start, mr->mr_size);
+
+	if (*first) {
+		/*
+		 * XXX: Unconditionally exclude the lowest 2MB of physical
+		 * memory, as this area is assumed to contain the SBI firmware,
+		 * and this is not properly reserved in all cases (e.g. in
+		 * older firmware like BBL).
+		 *
+		 * This is a little fragile, but it is consistent with the
+		 * platforms we support so far.
+		 *
+		 * TODO: remove this when the all regular booting methods
+		 * properly report their reserved memory in the device tree.
+		 */
+		physmem_exclude_region(mr->mr_start, L2_SIZE,
+		    EXFLAG_NODUMP | EXFLAG_NOALLOC);
+		*first = false;
+	}
+}
+
+static void
+fdt_physmem_exclude_region_cb(const struct mem_region *mr, void *arg __unused)
+{
+	physmem_exclude_region(mr->mr_start, mr->mr_size,
+	    EXFLAG_NODUMP | EXFLAG_NOALLOC);
+}
+#endif
+
+static void
+efi_exclude_sbi_pmp_cb(struct efi_md *p, void *argp)
+{
+	bool *first = (bool *)argp;
+
+	if (!*first)
+		return;
+
+	*first = false;
+	if (p->md_type == EFI_MD_TYPE_BS_DATA) {
+		physmem_exclude_region(p->md_phys,
+		    min(p->md_pages * EFI_PAGE_SIZE, L2_SIZE),
+		    EXFLAG_NOALLOC);
+	}
 }
 
 void
 initriscv(struct riscv_bootparams *rvbp)
 {
-	struct mem_region mem_regions[FDT_MEM_REGIONS];
+	struct efi_map_header *efihdr;
 	struct pcpu *pcpup;
-	int mem_regions_sz;
 	vm_offset_t lastaddr;
 	vm_size_t kernlen;
-#ifdef FDT
-	phandle_t chosen;
-	uint32_t hart;
-#endif
+	bool first;
 	char *env;
 
 	TSRAW(&thread0, TS_ENTER, __func__, NULL);
@@ -506,64 +586,56 @@ initriscv(struct riscv_bootparams *rvbp)
 	}
 	lastaddr = parse_metadata();
 
+	efihdr = (struct efi_map_header *)preload_search_info(preload_kmdp,
+	    MODINFO_METADATA | MODINFOMD_EFI_MAP);
+	if (efihdr != NULL) {
+		efi_map_add_entries(efihdr);
+		efi_map_exclude_entries(efihdr);
+
+		/*
+		 * OpenSBI uses the first PMP entry to prevent buggy supervisor
+		 * software from overwriting the firmware. However, this
+		 * region may not be properly marked as reserved, leading
+		 * to an access violation exception whenever the kernel
+		 * attempts to write to a page from that region.
+		 *
+		 * Fix this by excluding first EFI memory map entry
+		 * if it is marked as "BootServicesData".
+		 */
+		first = true;
+		efi_map_foreach_entry(efihdr, efi_exclude_sbi_pmp_cb, &first);
+	}
 #ifdef FDT
-	/*
-	 * Look for the boot hart ID. This was either passed in directly from
-	 * the SBI firmware and handled by locore, or was stored in the device
-	 * tree by an earlier boot stage.
-	 */
-	chosen = OF_finddevice("/chosen");
-	if (OF_getencprop(chosen, "boot-hartid", &hart, sizeof(hart)) != -1) {
-		boot_hart = hart;
+	else {
+		/* Exclude reserved memory specified by the device tree. */
+		fdt_foreach_reserved_mem(fdt_physmem_exclude_region_cb, NULL);
+
+		/* Grab physical memory regions information from device tree. */
+		first = true;
+		if (fdt_foreach_mem_region(fdt_physmem_hardware_region_cb,
+		    &first) != 0)
+			panic("Cannot get physical memory regions");
+
 	}
 #endif
-	if (boot_hart == BOOT_HART_INVALID) {
-		panic("Boot hart ID was not properly set");
-	}
-	pcpup->pc_hart = boot_hart;
 
-#ifdef FDT
 	/*
-	 * Exclude reserved memory specified by the device tree. Typically,
-	 * this contains an entry for memory used by the runtime SBI firmware.
+	 * Identify CPU/ISA features.
 	 */
-	if (fdt_get_reserved_mem(mem_regions, &mem_regions_sz) == 0) {
-		physmem_exclude_regions(mem_regions, mem_regions_sz,
-		    EXFLAG_NODUMP | EXFLAG_NOALLOC);
-	}
+	identify_cpu(0);
 
-	/* Grab physical memory regions information from device tree. */
-	if (fdt_get_mem_regions(mem_regions, &mem_regions_sz, NULL) != 0) {
-		panic("Cannot get physical memory regions");
-	}
-	physmem_hardware_regions(mem_regions, mem_regions_sz);
-#endif
+	sched_instance_select();
+
+	link_elf_ireloc();
 
 	/* Do basic tuning, hz etc */
 	init_param1();
 
-	cache_setup();
-
 	/* Bootstrap enough of pmap to enter the kernel proper */
 	kernlen = (lastaddr - KERNBASE);
-	pmap_bootstrap(rvbp->kern_l1pt, rvbp->kern_phys, kernlen);
+	pmap_bootstrap(rvbp->kern_phys, kernlen);
 
-#ifdef FDT
-	/*
-	 * XXX: Unconditionally exclude the lowest 2MB of physical memory, as
-	 * this area is assumed to contain the SBI firmware. This is a little
-	 * fragile, but it is consistent with the platforms we support so far.
-	 *
-	 * TODO: remove this when the all regular booting methods properly
-	 * report their reserved memory in the device tree.
-	 */
-	physmem_exclude_region(mem_regions[0].mr_start, L2_SIZE,
-	    EXFLAG_NODUMP | EXFLAG_NOALLOC);
-#endif
 	physmem_init_kernel_globals();
-
-	/* Establish static device mappings */
-	devmap_bootstrap(0, NULL);
 
 	cninit();
 
@@ -590,10 +662,17 @@ initriscv(struct riscv_bootparams *rvbp)
 	if (env != NULL)
 		strlcpy(kernelname, env, sizeof(kernelname));
 
-	if (boothowto & RB_VERBOSE)
+	if (boothowto & RB_VERBOSE) {
+		if (efihdr != NULL)
+			efi_map_print_entries(efihdr);
 		physmem_print_tables();
+	}
 
 	early_boot = 0;
+
+	if (bootverbose && kstack_pages != KSTACK_PAGES)
+		printf("kern.kstack_pages = %d ignored for thread0\n",
+		    kstack_pages);
 
 	TSEXIT();
 }

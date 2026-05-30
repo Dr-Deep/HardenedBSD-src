@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2013,2014 Juniper Networks, Inc.
  * All rights reserved.
  *
@@ -25,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/stat.h>
 #include <assert.h>
 #include <errno.h>
@@ -58,6 +58,9 @@ static struct {
 	{ "mbr", ALIAS_MBR },
 	{ "ntfs", ALIAS_NTFS },
 	{ "prepboot", ALIAS_PPCBOOT },
+	{ "hifive-bbl", ALIAS_HIFIVE_BBL },
+	{ "xbootldr", ALIAS_XBOOTLDR },
+	{ "hifive-fsbl", ALIAS_HIFIVE_FSBL },
 	{ NULL, ALIAS_NONE }		/* Keep last! */
 };
 

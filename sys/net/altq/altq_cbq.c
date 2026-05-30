@@ -28,7 +28,6 @@
  * These notices must be retained in any copies of any part of this software.
  *
  * $KAME: altq_cbq.c,v 1.19 2003/09/17 14:23:25 kjc Exp $
- * $FreeBSD$
  */
 
 #include "opt_altq.h"
@@ -47,6 +46,7 @@
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_private.h>
 #include <netinet/in.h>
 
 #include <netpfil/pf/pf.h>
@@ -173,6 +173,8 @@ cbq_request(struct ifaltq *ifq, int req, void *arg)
 static void
 get_class_stats(class_stats_t *statsp, struct rm_class *cl)
 {
+	memset(statsp, 0, sizeof(*statsp));
+
 	statsp->xmit_cnt	= cl->stats_.xmit_cnt;
 	statsp->drop_cnt	= cl->stats_.drop_cnt;
 	statsp->over		= cl->stats_.over;

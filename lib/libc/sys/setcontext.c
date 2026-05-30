@@ -29,14 +29,10 @@
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/types.h>
 #include <ucontext.h>
 #include "libc_private.h"
 
-__weak_reference(__sys_setcontext, __setcontext);
 __sym_compat(setcontext, __impl_setcontext, FBSD_1.0);
 __weak_reference(setcontext, __impl_setcontext);
 __sym_default(setcontext, setcontext, FBSD_1.2);
@@ -45,7 +41,5 @@ __sym_default(setcontext, setcontext, FBSD_1.2);
 int
 setcontext(const ucontext_t *uc)
 {
-
-	return (((int (*)(const ucontext_t *))
-	    __libc_interposing[INTERPOS_setcontext])(uc));
+	return (INTERPOS_SYS(setcontext, uc));
 }

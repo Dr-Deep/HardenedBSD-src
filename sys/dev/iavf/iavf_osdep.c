@@ -28,7 +28,6 @@
  *  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  *  POSSIBILITY OF SUCH DAMAGE.
  */
-/*$FreeBSD$*/
 
 /**
  * @file iavf_osdep.c
@@ -38,7 +37,7 @@
  * independent layer for sharing code between drivers on different operating
  * systems.
  */
-#include <machine/stdarg.h>
+#include <sys/stdarg.h>
 
 #include "iavf_iflib.h"
 

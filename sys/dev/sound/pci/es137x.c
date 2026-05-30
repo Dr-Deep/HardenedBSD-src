@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD AND BSD-4-Clause
+ * SPDX-License-Identifier: BSD-2-Clause AND BSD-4-Clause
  *
  * Copyright (c) 1999 Russell Cattelan <cattelan@thebarn.com>
  * Copyright (c) 1998 Joachim Kuebart <joachim.kuebart@gmx.net>
@@ -89,8 +89,6 @@
 #include <sys/sysctl.h>
 
 #include "mixer_if.h"
-
-SND_DECLARE_FILE("$FreeBSD$");
 
 #define MEM_MAP_REG 0x14
 
@@ -226,14 +224,14 @@ struct es_info {
 	uint32_t	sctrl;
 	uint32_t	escfg;
 	struct es_chinfo ch[ES_NCHANS];
-	struct mtx	*lock;
+	struct mtx	lock;
 	struct callout	poll_timer;
 	int poll_ticks, polling;
 };
 
-#define ES_LOCK(sc)		snd_mtxlock((sc)->lock)
-#define ES_UNLOCK(sc)		snd_mtxunlock((sc)->lock)
-#define ES_LOCK_ASSERT(sc)	snd_mtxassert((sc)->lock)
+#define ES_LOCK(sc)		mtx_lock(&(sc)->lock)
+#define ES_UNLOCK(sc)		mtx_unlock(&(sc)->lock)
+#define ES_LOCK_ASSERT(sc)	mtx_assert(&(sc)->lock, MA_OWNED)
 
 /* prototypes */
 static void     es_intr(void *);
@@ -510,21 +508,21 @@ eschan_init(kobj_t obj, void *devinfo, struct snd_dbuf *b,
 			es_wr(es, ES1370_REG_MEMPAGE,
 			    ES1370_REG_DAC1_FRAMEADR >> 8, 1);
 			es_wr(es, ES1370_REG_DAC1_FRAMEADR & 0xff,
-			    sndbuf_getbufaddr(ch->buffer), 4);
+			    ch->buffer->buf_addr, 4);
 			es_wr(es, ES1370_REG_DAC1_FRAMECNT & 0xff,
 			    (ch->bufsz >> 2) - 1, 4);
 		} else {
 			es_wr(es, ES1370_REG_MEMPAGE,
 			    ES1370_REG_DAC2_FRAMEADR >> 8, 1);
 			es_wr(es, ES1370_REG_DAC2_FRAMEADR & 0xff,
-			    sndbuf_getbufaddr(ch->buffer), 4);
+			    ch->buffer->buf_addr, 4);
 			es_wr(es, ES1370_REG_DAC2_FRAMECNT & 0xff,
 			    (ch->bufsz >> 2) - 1, 4);
 		}
 	} else {
 		es_wr(es, ES1370_REG_MEMPAGE, ES1370_REG_ADC_FRAMEADR >> 8, 1);
 		es_wr(es, ES1370_REG_ADC_FRAMEADR & 0xff,
-		    sndbuf_getbufaddr(ch->buffer), 4);
+		    ch->buffer->buf_addr, 4);
 		es_wr(es, ES1370_REG_ADC_FRAMECNT & 0xff,
 		    (ch->bufsz >> 2) - 1, 4);
 	}
@@ -639,8 +637,8 @@ eschan_setfragments(kobj_t obj, void *data, uint32_t blksz, uint32_t blkcnt)
 
 	blksz &= ES_BLK_ALIGN;
 
-	if (blksz > (sndbuf_getmaxsize(ch->buffer) / ES_DMA_SEGS_MIN))
-		blksz = sndbuf_getmaxsize(ch->buffer) / ES_DMA_SEGS_MIN;
+	if (blksz > (ch->buffer->maxsize / ES_DMA_SEGS_MIN))
+		blksz = ch->buffer->maxsize / ES_DMA_SEGS_MIN;
 	if (blksz < ES_BLK_MIN)
 		blksz = ES_BLK_MIN;
 	if (blkcnt > ES_DMA_SEGS_MAX)
@@ -648,7 +646,7 @@ eschan_setfragments(kobj_t obj, void *data, uint32_t blksz, uint32_t blkcnt)
 	if (blkcnt < ES_DMA_SEGS_MIN)
 		blkcnt = ES_DMA_SEGS_MIN;
 
-	while ((blksz * blkcnt) > sndbuf_getmaxsize(ch->buffer)) {
+	while ((blksz * blkcnt) > ch->buffer->maxsize) {
 		if ((blkcnt >> 1) >= ES_DMA_SEGS_MIN)
 			blkcnt >>= 1;
 		else if ((blksz >> 1) >= ES_BLK_MIN)
@@ -657,15 +655,15 @@ eschan_setfragments(kobj_t obj, void *data, uint32_t blksz, uint32_t blkcnt)
 			break;
 	}
 
-	if ((sndbuf_getblksz(ch->buffer) != blksz ||
-	    sndbuf_getblkcnt(ch->buffer) != blkcnt) &&
+	if ((ch->buffer->blksz != blksz ||
+	    ch->buffer->blkcnt != blkcnt) &&
 	    sndbuf_resize(ch->buffer, blkcnt, blksz) != 0)
 		device_printf(es->dev, "%s: failed blksz=%u blkcnt=%u\n",
 		    __func__, blksz, blkcnt);
 
-	ch->bufsz = sndbuf_getsize(ch->buffer);
-	ch->blksz = sndbuf_getblksz(ch->buffer);
-	ch->blkcnt = sndbuf_getblkcnt(ch->buffer);
+	ch->bufsz = ch->buffer->bufsize;
+	ch->blksz = ch->buffer->blksz;
+	ch->blkcnt = ch->buffer->blkcnt;
 
 	return (0);
 }
@@ -764,7 +762,7 @@ eschan_trigger(kobj_t obj, void *data, int go)
 		return 0;
 
 	ES_LOCK(es);
-	cnt = (ch->blksz / sndbuf_getalign(ch->buffer)) - 1;
+	cnt = (ch->blksz / ch->buffer->align) - 1;
 	if (ch->fmt & AFMT_16BIT)
 		b |= 0x02;
 	if (AFMT_CHANNEL(ch->fmt) > 1)
@@ -989,7 +987,7 @@ es1370_init(struct es_info *es)
 		es->escfg = ES_SET_FIXED_RATE(es->escfg, fixed_rate);
 	else {
 		es->escfg = ES_SET_FIXED_RATE(es->escfg, 0);
-		fixed_rate = DSP_DEFAULT_SPEED;
+		fixed_rate = 8000;
 	}
 	if (single_pcm)
 		es->escfg = ES_SET_SINGLE_PCM_MIX(es->escfg, 1);
@@ -1542,10 +1540,6 @@ sysctl_es137x_single_pcm_mixer(SYSCTL_HANDLER_ARGS)
 		PCM_RELEASE_QUICK(d);
 		return (ENODEV);
 	}
-	if (mixer_busy(m) != 0) {
-		PCM_RELEASE_QUICK(d);
-		return (EBUSY);
-	}
 	level = mix_get(m, SOUND_MIXER_PCM);
 	recsrc = mix_getrecsrc(m);
 	if (level < 0 || recsrc < 0) {
@@ -1714,7 +1708,8 @@ es_pci_attach(device_t dev)
 	uint32_t devid;
 
 	es = malloc(sizeof *es, M_DEVBUF, M_WAITOK | M_ZERO);
-	es->lock = snd_mtxcreate(device_get_nameunit(dev), "snd_es137x softc");
+	mtx_init(&es->lock, device_get_nameunit(dev), "snd_es137x softc",
+	    MTX_DEF);
 	es->dev = dev;
 	es->escfg = 0;
 	mapped = 0;
@@ -1858,18 +1853,18 @@ es_pci_attach(device_t dev)
 		goto bad;
 	}
 
-	snprintf(status, SND_STATUSLEN, "at %s 0x%jx irq %jd %s",
-	    (es->regtype == SYS_RES_IOPORT)? "io" : "memory",
+	snprintf(status, SND_STATUSLEN, "%s 0x%jx irq %jd on %s",
+	    (es->regtype == SYS_RES_IOPORT)? "port" : "mem",
 	    rman_get_start(es->reg), rman_get_start(es->irq),
-	    PCM_KLDSTRING(snd_es137x));
+	    device_get_nameunit(device_get_parent(dev)));
 
-	if (pcm_register(dev, es, numplay, 1))
-		goto bad;
+	pcm_init(dev, es);
 	for (i = 0; i < numplay; i++)
 		pcm_addchan(dev, PCMDIR_PLAY, ct, es);
 	pcm_addchan(dev, PCMDIR_REC, ct, es);
 	es_init_sysctls(dev);
-	pcm_setstatus(dev, status);
+	if (pcm_register(dev, status))
+		goto bad;
 	es->escfg = ES_SET_GP(es->escfg, 0);
 	if (numplay == 1)
 		device_printf(dev, "<Playback: DAC%d / Record: ADC>\n",
@@ -1890,10 +1885,8 @@ bad:
 		ac97_destroy(codec);
 	if (es->reg)
 		bus_release_resource(dev, es->regtype, es->regid, es->reg);
-	if (es->lock)
-		snd_mtxfree(es->lock);
-	if (es)
-		free(es, M_DEVBUF);
+	mtx_destroy(&es->lock);
+	free(es, M_DEVBUF);
 	return (ENXIO);
 }
 
@@ -1921,7 +1914,7 @@ es_pci_detach(device_t dev)
 	bus_release_resource(dev, SYS_RES_IRQ, es->irqid, es->irq);
 	bus_release_resource(dev, es->regtype, es->regid, es->reg);
 	bus_dma_tag_destroy(es->parent_dmat);
-	snd_mtxfree(es->lock);
+	mtx_destroy(&es->lock);
 	free(es, M_DEVBUF);
 
 	return (0);
@@ -1932,7 +1925,7 @@ static device_method_t es_methods[] = {
 	DEVMETHOD(device_probe,		es_pci_probe),
 	DEVMETHOD(device_attach,	es_pci_attach),
 	DEVMETHOD(device_detach,	es_pci_detach),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t es_driver = {

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2000-2004
  *	Poul-Henning Kamp.  All rights reserved.
@@ -29,11 +29,7 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)kernfs_vnops.c	8.15 (Berkeley) 5/21/95
  * From: FreeBSD: src/sys/miscfs/kernfs/kernfs_vnops.c 1.43
- *
- * $FreeBSD$
  */
 
 /*
@@ -70,7 +66,7 @@
 
 static struct vop_vector devfs_vnodeops;
 static struct vop_vector devfs_specops;
-static struct fileops devfs_ops_f;
+static const struct fileops devfs_ops_f;
 
 #include <fs/devfs/devfs.h>
 #include <fs/devfs/devfs_int.h>
@@ -181,17 +177,48 @@ devfs_set_cdevpriv(void *priv, d_priv_dtor_t *priv_dtr)
 	return (error);
 }
 
+int
+devfs_foreach_cdevpriv(struct cdev *dev, int (*cb)(void *data, void *arg),
+    void *arg)
+{
+	struct cdev_priv *cdp;
+	struct cdev_privdata *p;
+	int error;
+
+	cdp = cdev2priv(dev);
+	error = 0;
+	mtx_lock(&cdevpriv_mtx);
+	LIST_FOREACH(p, &cdp->cdp_fdpriv, cdpd_list) {
+		error = cb(p->cdpd_data, arg);
+		if (error != 0)
+			break;
+	}
+	mtx_unlock(&cdevpriv_mtx);
+	return (error);
+}
+
 void
 devfs_destroy_cdevpriv(struct cdev_privdata *p)
 {
+	struct file *fp;
+	struct cdev_priv *cdp;
 
 	mtx_assert(&cdevpriv_mtx, MA_OWNED);
-	KASSERT(p->cdpd_fp->f_cdevpriv == p,
-	    ("devfs_destoy_cdevpriv %p != %p", p->cdpd_fp->f_cdevpriv, p));
-	p->cdpd_fp->f_cdevpriv = NULL;
+	fp = p->cdpd_fp;
+	KASSERT(fp->f_cdevpriv == p,
+	    ("devfs_destoy_cdevpriv %p != %p", fp->f_cdevpriv, p));
+	cdp = cdev2priv((struct cdev *)fp->f_data);
+	cdp->cdp_fdpriv_dtrc++;
+	fp->f_cdevpriv = NULL;
 	LIST_REMOVE(p, cdpd_list);
 	mtx_unlock(&cdevpriv_mtx);
 	(p->cdpd_dtr)(p->cdpd_data);
+	mtx_lock(&cdevpriv_mtx);
+	MPASS(cdp->cdp_fdpriv_dtrc >= 1);
+	cdp->cdp_fdpriv_dtrc--;
+	if (cdp->cdp_fdpriv_dtrc == 0)
+		wakeup(&cdp->cdp_fdpriv_dtrc);
+	mtx_unlock(&cdevpriv_mtx);
 	free(p, M_CDEVPDATA);
 }
 
@@ -339,6 +366,9 @@ devfs_populate_vp(struct vnode *vp)
 	int locked;
 
 	ASSERT_VOP_LOCKED(vp, "devfs_populate_vp");
+
+	if (VN_IS_DOOMED(vp))
+		return (ENOENT);
 
 	dmp = VFSTODEVFS(vp->v_mount);
 	if (!devfs_populate_needed(dmp)) {
@@ -539,8 +569,7 @@ loop:
 		if (devfs_allocv_drop_refs(0, dmp, de)) {
 			vput(vp);
 			return (ENOENT);
-		}
-		else if (VN_IS_DOOMED(vp)) {
+		} else if (VN_IS_DOOMED(vp)) {
 			mtx_lock(&devfs_de_interlock);
 			if (de->de_vnode == vp) {
 				de->de_vnode = NULL;
@@ -613,6 +642,7 @@ loop:
 		return (error);
 	}
 	if (devfs_allocv_drop_refs(0, dmp, de)) {
+		vgone(vp);
 		vput(vp);
 		return (ENOENT);
 	}
@@ -620,6 +650,7 @@ loop:
 	mac_devfs_vnode_associate(mp, de, vp);
 #endif
 	sx_xunlock(&dmp->dm_lock);
+	vn_set_state(vp, VSTATE_CONSTRUCTED);
 	*vpp = vp;
 	return (0);
 }
@@ -1044,7 +1075,7 @@ devfs_lookupx(struct vop_lookup_args *ap, int *dm_unlock)
 	mp = dvp->v_mount;
 	dmp = VFSTODEVFS(mp);
 	dd = dvp->v_data;
-	*vpp = NULLVP;
+	*vpp = NULL;
 
 	if ((flags & ISLASTCN) && nameiop == RENAME)
 		return (EOPNOTSUPP);
@@ -1063,7 +1094,7 @@ devfs_lookupx(struct vop_lookup_args *ap, int *dm_unlock)
 		if ((flags & ISLASTCN) && nameiop != LOOKUP)
 			return (EINVAL);
 		*vpp = dvp;
-		VREF(dvp);
+		vref(dvp);
 		return (0);
 	}
 
@@ -1100,8 +1131,25 @@ devfs_lookupx(struct vop_lookup_args *ap, int *dm_unlock)
 		cdev = NULL;
 		DEVFS_DMP_HOLD(dmp);
 		sx_xunlock(&dmp->dm_lock);
+		dvplocked = VOP_ISLOCKED(dvp);
+
+		/*
+		 * Invoke the dev_clone handler.  Unlock dvp around it
+		 * to simplify the cloner operations.
+		 *
+		 * If dvp is reclaimed while we unlocked it, we return
+		 * with ENOENT by some of the paths below.  If cloner
+		 * returned cdev, then devfs_populate_vp() notes the
+		 * reclamation.  Otherwise, note that either our devfs
+		 * mount is being unmounted, then DEVFS_DMP_DROP()
+		 * returns true, and we return ENOENT this way.  Or,
+		 * because de == NULL, the check for it after the loop
+		 * returns ENOENT.
+		 */
+		VOP_UNLOCK(dvp);
 		EVENTHANDLER_INVOKE(dev_clone,
 		    td->td_ucred, pname, strlen(pname), &cdev);
+		vn_lock(dvp, dvplocked | LK_RETRY);
 
 		if (cdev == NULL)
 			sx_xlock(&dmp->dm_lock);
@@ -1140,7 +1188,6 @@ devfs_lookupx(struct vop_lookup_args *ap, int *dm_unlock)
 	if (de == NULL || de->de_flags & DE_WHITEOUT) {
 		if ((nameiop == CREATE || nameiop == RENAME) &&
 		    (flags & (LOCKPARENT | WANTPARENT)) && (flags & ISLASTCN)) {
-			cnp->cn_flags |= SAVENAME;
 			return (EJUSTRETURN);
 		}
 		return (ENOENT);
@@ -1154,7 +1201,7 @@ devfs_lookupx(struct vop_lookup_args *ap, int *dm_unlock)
 		if (error)
 			return (error);
 		if (*vpp == dvp) {
-			VREF(dvp);
+			vref(dvp);
 			*vpp = dvp;
 			return (0);
 		}
@@ -1434,6 +1481,7 @@ devfs_readdir(struct vop_readdir_args *ap)
 	struct devfs_mount *dmp;
 	off_t off;
 	int *tmp_ncookies = NULL;
+	ssize_t startresid;
 
 	if (ap->a_vp->v_type != VDIR)
 		return (ENOTDIR);
@@ -1466,6 +1514,7 @@ devfs_readdir(struct vop_readdir_args *ap)
 	error = 0;
 	de = ap->a_vp->v_data;
 	off = 0;
+	startresid = uio->uio_resid;
 	TAILQ_FOREACH(dd, &de->de_dlist, de_list) {
 		KASSERT(dd->de_cdp != (void *)0xdeadc0de, ("%s %d\n", __func__, __LINE__));
 		if (dd->de_flags & (DE_COVERED | DE_WHITEOUT))
@@ -1478,8 +1527,13 @@ devfs_readdir(struct vop_readdir_args *ap)
 			de = dd;
 		dp = dd->de_dirent;
 		MPASS(dp->d_reclen == GENERIC_DIRSIZ(dp));
-		if (dp->d_reclen > uio->uio_resid)
+		if (dp->d_reclen > uio->uio_resid) {
+			/* Nothing was copied out, return EINVAL. */
+			if (uio->uio_resid == startresid)
+				error = EINVAL;
+			/* Otherwise stop. */
 			break;
+		}
 		dp->d_fileno = de->de_inode;
 		/* NOTE: d_off is the offset for the *next* entry. */
 		dp->d_off = off + dp->d_reclen;
@@ -1499,6 +1553,8 @@ devfs_readdir(struct vop_readdir_args *ap)
 	 */
 	if (tmp_ncookies != NULL)
 		ap->a_ncookies = tmp_ncookies;
+	if (dd == NULL && error == 0 && ap->a_eofflag != NULL)
+		*ap->a_eofflag = 1;
 
 	return (error);
 }
@@ -1665,6 +1721,10 @@ devfs_revoke(struct vop_revoke_args *ap)
 	dev_lock();
 	cdp->cdp_inuse--;
 	if (!(cdp->cdp_flags & CDP_ACTIVE) && cdp->cdp_inuse == 0) {
+		KASSERT((cdp->cdp_flags & CDP_ON_ACTIVE_LIST) != 0,
+		    ("%s: cdp %p (%s) not on active list",
+		    __func__, cdp, dev->si_name));
+		cdp->cdp_flags &= ~CDP_ON_ACTIVE_LIST;
 		TAILQ_REMOVE(&cdevp_list, cdp, cdp_list);
 		dev_unlock();
 		dev_rel(&cdp->cdp_c);
@@ -2009,7 +2069,15 @@ dev2udev(struct cdev *x)
 	return (cdev2priv(x)->cdp_inode);
 }
 
-static struct fileops devfs_ops_f = {
+static int
+devfs_cmp_f(struct file *fp1, struct file *fp2, struct thread *td)
+{
+	if (fp2->f_type != DTYPE_VNODE || fp2->f_ops != &devfs_ops_f)
+		return (3);
+	return (kcmp_cmp((uintptr_t)fp1->f_data, (uintptr_t)fp2->f_data));
+}
+
+static const struct fileops devfs_ops_f = {
 	.fo_read =	devfs_read_f,
 	.fo_write =	devfs_write_f,
 	.fo_truncate =	devfs_truncate_f,
@@ -2024,6 +2092,7 @@ static struct fileops devfs_ops_f = {
 	.fo_seek =	vn_seek,
 	.fo_fill_kinfo = vn_fill_kinfo,
 	.fo_mmap =	devfs_mmap_f,
+	.fo_cmp =	devfs_cmp_f,
 	.fo_flags =	DFLAG_PASSABLE | DFLAG_SEEKABLE
 };
 

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2011 Fabien Thomas <fabient@FreeBSD.org>
  * All rights reserved.
@@ -25,9 +25,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/eventhandler.h>
@@ -128,7 +125,7 @@ viawd_identify(driver_t *driver, device_t parent)
 	if (viawd_find(parent) == NULL)
 		return;
 
-	if (device_find_child(parent, driver->name, -1) == NULL)
+	if (device_find_child(parent, driver->name, DEVICE_UNIT_ANY) == NULL)
 		BUS_ADD_CHILD(parent, 0, driver->name, 0);
 }
 

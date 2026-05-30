@@ -25,20 +25,17 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <stand.h>
 #include <string.h>
 #include <setjmp.h>
 #include <sys/disk.h>
-#include <sys/zfs_bootenv.h>
 
 #include "bootstrap.h"
 #include "disk.h"
 #include "libuserboot.h"
 
 #if defined(USERBOOT_ZFS_SUPPORT)
+#include <sys/zfs_bootenv.h>
 #include "libzfs.h"
 
 static void userboot_zfs_probe(void);
@@ -58,7 +55,16 @@ void *callbacks_arg;
 
 static jmp_buf jb;
 
-struct arch_switch archsw;	/* MI/MD interface boundary */
+struct arch_switch archsw = {	/* MI/MD interface boundary */
+	.arch_autoload = userboot_autoload,
+	.arch_getdev = userboot_getdev,
+	.arch_copyin = userboot_copyin,
+	.arch_copyout = userboot_copyout,
+	.arch_readin = userboot_readin,
+#if defined(USERBOOT_ZFS_SUPPORT)
+	.arch_zfs_probe = userboot_zfs_probe,
+#endif
+};
 
 static void	extract_currdev(void);
 static void	check_interpreter(void);
@@ -172,8 +178,7 @@ loader_main(struct loader_callbacks *cb, void *arg, int version, int ndisks)
 	cons_probe();
 
 	/* Set up currdev variable to have hooks in place. */
-	env_setenv("currdev", EV_VOLATILE, "",
-	    userboot_setcurrdev, env_nounset);
+	env_setenv("currdev", EV_VOLATILE, "", gen_setcurrdev, env_nounset);
 
 	printf("\n%s", bootprog_info);
 #if 0
@@ -193,27 +198,17 @@ loader_main(struct loader_callbacks *cb, void *arg, int version, int ndisks)
 		putenv(var);
 	}
 
-	archsw.arch_autoload = userboot_autoload;
-	archsw.arch_getdev = userboot_getdev;
-	archsw.arch_copyin = userboot_copyin;
-	archsw.arch_copyout = userboot_copyout;
-	archsw.arch_readin = userboot_readin;
-#if defined(USERBOOT_ZFS_SUPPORT)
-	archsw.arch_zfs_probe = userboot_zfs_probe;
-#endif
-
 	/*
 	 * Initialise the block cache. Set the upper limit.
 	 */
 	bcache_init(32768, 512);
-	/*
-	 * March through the device switch probing for things.
-	 */
-	for (i = 0; devsw[i] != NULL; i++)
-		if (devsw[i]->dv_init != NULL)
-			(devsw[i]->dv_init)();
-
+	devinit();
 	extract_currdev();
+
+#if !defined(USERBOOT_KERNEL_SUPPORT)
+	printf("WARNING: This userboot does not support loading a kernel\n");
+	delay(1500000);
+#endif
 
 	/*
 	 * Checking the interpreter isn't worth the overhead unless we
@@ -231,16 +226,6 @@ loader_main(struct loader_callbacks *cb, void *arg, int version, int ndisks)
 	exit(0);
 }
 
-static void
-set_currdev(const char *devname)
-{
-
-	env_setenv("currdev", EV_VOLATILE, devname,
-	    userboot_setcurrdev, env_nounset);
-	env_setenv("loaddev", EV_VOLATILE, devname,
-	    env_noset, env_nounset);
-}
-
 /*
  * Set the 'current device' by (if possible) recovering the boot device as 
  * supplied by the initial bootstrap.
@@ -252,7 +237,6 @@ extract_currdev(void)
 	struct devdesc *dd;
 #if defined(USERBOOT_ZFS_SUPPORT)
 	struct zfs_devdesc zdev;
-	char *buf = NULL;
 
 	if (userboot_zfs_found) {
 	
@@ -289,17 +273,14 @@ extract_currdev(void)
 
 #if defined(USERBOOT_ZFS_SUPPORT)
 	if (userboot_zfs_found) {
-		buf = malloc(VDEV_PAD_SIZE);
-		if (buf != NULL) {
-			if (zfs_get_bootonce(&zdev, OS_BOOTONCE, buf,
-			    VDEV_PAD_SIZE) == 0) {
-				printf("zfs bootonce: %s\n", buf);
-				set_currdev(buf);
-				setenv("zfs-bootonce", buf, 1);
-			}
-			free(buf);
-			(void) zfs_attach_nvstore(&zdev);
+		char buf[VDEV_PAD_SIZE];
+
+		if (zfs_get_bootonce(&zdev, OS_BOOTONCE, buf, sizeof(buf)) == 0) {
+			printf("zfs bootonce: %s\n", buf);
+			set_currdev(buf);
+			setenv("zfs-bootonce", buf, 1);
 		}
+		(void)zfs_attach_nvstore(&zdev);
 	}
 #endif
 }
@@ -319,7 +300,7 @@ userboot_zfs_probe(void)
 	for (unit = 0; unit < userboot_disk_maxunit; unit++) {
 		sprintf(devname, "disk%d:", unit);
 		pool_guid = 0;
-		zfs_probe_dev(devname, &pool_guid);
+		zfs_probe_dev(devname, &pool_guid, true);
 		if (pool_guid != 0)
 			userboot_zfs_found = 1;
 	}

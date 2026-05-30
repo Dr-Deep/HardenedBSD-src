@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -54,7 +55,7 @@ extern void zfs_onexit_destroy(zfs_onexit_t *zo);
 extern zfs_file_t *zfs_onexit_fd_hold(int fd, minor_t *minorp);
 extern void zfs_onexit_fd_rele(zfs_file_t *);
 extern int zfs_onexit_add_cb(minor_t minor, void (*func)(void *), void *data,
-    uint64_t *action_handle);
+    uintptr_t *action_handle);
 
 #ifdef	__cplusplus
 }

@@ -1,6 +1,8 @@
-# $Id: gendirdeps.mk,v 1.47 2022/04/23 21:37:03 sjg Exp $
+# $Id: gendirdeps.mk,v 1.55 2026/05/09 20:46:13 sjg Exp $
 
-# Copyright (c) 2011-2020, Simon J. Gerraty
+# SPDX-License-Identifier: BSD-2-Clause
+#
+# Copyright (c) 2011-2026, Simon J. Gerraty
 # Copyright (c) 2010-2018, Juniper Networks, Inc.
 # All rights reserved.
 #
@@ -41,7 +43,44 @@
 #		symlink to another filesystem.
 #		_objroot must be a prefix match for _objtop
 
+# If any of GENDIRDEPS_FILTER, GENDIRDEPS_FILTER_DIR_VARS
+# or GENDIRDEPS_FILTER_VARS are set, we use them to filter the
+# output from filemon(4).
+# Any references to variables that dirdeps.mk will set
+# such as DEP_MACHINE, DEP_RELDIR etc, should use that form.
+# Thus we want ${DEP_MACHINE} not ${MACHINE} used in DIRDEPS.
+#
+# If any manually maintained Makefile.depend files will use any
+# DEP_* variables in conditionals, precautions are needed to avoid
+# errors when Makefile.depend is read at level 1+ (ie not via
+# dirdeps.mk)
+# Using MACHINE as an example; such makefiles can do:
+#
+# 	DEP_MACHINE ?= ${MACHINE}
+# 	.if ${DEP_MACHINE} == "xyz"
+#
+# or:
+# 
+# 	.if ${DEP_MACHINE:U${MACHINE}} == "xyz"
+#
+# but it might be safer to set GENDIRDEPS_FILTER_DIR_VARS and
+# GENDIRDEPS_FILTER_VARS via local.meta.sys.mk rather than
+# local.gendirdeps.mk and then:
+#
+# 	.if ${.MAKE.LEVEL} > 0
+# 	.for V in ${GENDIRDEPS_FILTER_DIR_VARS:MDEP_*} \
+# 		${GENDIRDEPS_FILTER_VARS:MDEP_*}
+# 	$V ?= ${${V:S,DEP_,,}}
+# 	.endfor
+# 	.endif
+# 
 .MAIN: all
+
+.if ${DEBUG_GENDIRDEPS:Uno:@m@${RELDIR:M$m}@} != ""
+_debug.gendirdeps = 1
+.else
+_debug.gendirdeps = 0
+.endif
 
 # keep this simple
 .MAKE.MODE = compat
@@ -69,8 +108,15 @@ _DEPENDFILE := ${_CURDIR}/${.MAKE.DEPENDFILE:T}
 
 # caller should have set this
 META_FILES ?= ${.MAKE.META.FILES}
+# this sometimes needs to be passed separately
+.if !empty(META_XTRAS)
+META_FILES += ${META_XTRAS:N\*.meta}
+.endif
 
 .if !empty(META_FILES)
+.if ${_debug.gendirdeps} && ${DEBUG_GENDIRDEPS:Mmeta*} != ""
+.info ${RELDIR}: META_FILES=${META_FILES}
+.endif
 
 .if ${.MAKE.LEVEL} > 0 && !empty(GENDIRDEPS_FILTER)
 # so we can compare below
@@ -88,7 +134,7 @@ META_FILES := ${META_FILES:T:O:u}
 # they should all be absolute paths
 SKIP_GENDIRDEPS ?=
 .if !empty(SKIP_GENDIRDEPS)
-_skip_gendirdeps = egrep -v '^(${SKIP_GENDIRDEPS:O:u:ts|})' |
+_skip_gendirdeps = ${EGREP:Uegrep} -v '^(${SKIP_GENDIRDEPS:O:u:ts|})' |
 .else
 _skip_gendirdeps =
 .endif
@@ -109,7 +155,7 @@ GENDIRDEPS_FILTER += ${GENDIRDEPS_FILTER_VARS:@v@S,/${$v}/,/_{${v}}/,@:NS,//,*:u
 META2DEPS ?= ${.PARSEDIR}/meta2deps.sh
 META2DEPS := ${META2DEPS}
 
-.if ${DEBUG_GENDIRDEPS:Uno:@x@${RELDIR:M$x}@} != "" && ${DEBUG_GENDIRDEPS:Uno:Mmeta2d*} != ""
+.if ${_debug.gendirdeps} && ${DEBUG_GENDIRDEPS:Mmeta2d*} != ""
 _time = time
 _sh_x = sh -x
 _py_d = -ddd
@@ -200,7 +246,7 @@ dir_list != cd ${_OBJDIR} && \
 	sed ${GENDIRDEPS_SEDCMDS}
 
 .if ${dir_list:M*ERROR\:*} != ""
-.warning ${dir_list:tW:C,.*(ERROR),\1,}
+.warning ${dir_list:C,.*(ERROR),\1,W}
 .warning Skipping ${_DEPENDFILE:S,${SRCTOP}/,,}
 # we are not going to update anything
 .else
@@ -223,7 +269,7 @@ dpadd_dir_list += ${f:H:tA}
 ddeps != cat ${ddep_list:O:u} | ${META2DEPS_FILTER} ${_skip_gendirdeps} \
 	sed ${GENDIRDEPS_SEDCMDS}
 
-.if ${DEBUG_GENDIRDEPS:Uno:@x@${RELDIR:M$x}@} != ""
+.if ${_debug.gendirdeps}
 .info ${RELDIR}: raw_dir_list='${dir_list}'
 .info ${RELDIR}: ddeps='${ddeps}'
 .endif
@@ -252,12 +298,13 @@ M2D_OBJROOTS := ${M2D_OBJROOTS:O:u:[-1..1]}
 # anything we use from an object dir other than ours
 # needs to be qualified with its .<machine> suffix
 # (we used the pseudo machine "host" for the HOST_TARGET).
-skip_ql= ${SRCTOP}* ${_objtops:@o@$o*@}
+skip_ql = ${SRCTOP}* ${_objtops:@o@$o*@}
+M_ListToSkip ?= O:u:S,^,N,:ts:
 .for o in ${M2D_OBJROOTS:${skip_ql:${M_ListToSkip}}}
 # we need := so only skip_ql to this point applies
 ql.$o := ${dir_list:${skip_ql:${M_ListToSkip}}:M$o*/*/*:C,$o([^/]+)/(.*),\2.\1,:S,.${HOST_TARGET},.host,}
 qualdir_list += ${ql.$o}
-.if ${DEBUG_GENDIRDEPS:Uno:@x@${RELDIR:M$x}@} != ""
+.if ${_debug.gendirdeps}
 .info ${RELDIR}: o=$o ${ql.$o qualdir_list:L:@v@$v=${$v}@}
 .endif
 skip_ql+= $o*
@@ -284,9 +331,9 @@ DIRDEPS += \
 
 # what modifiers do we allow in GENDIRDEPS_FILTER
 GENDIRDEPS_FILTER_MASK += @CMNS
-DIRDEPS := ${DIRDEPS:${GENDIRDEPS_FILTER:UNno:M[${GENDIRDEPS_FILTER_MASK:O:u:ts}]*:ts:}:C,//+,/,g:O:u}
+DIRDEPS := ${DIRDEPS:${GENDIRDEPS_FILTER:UNno:M[${GENDIRDEPS_FILTER_MASK:O:u:ts}]*:ts:}:C,//+,/,g:S,/$,,:C,/(\.[^.]+)$,\1,:O:u}
 
-.if ${DEBUG_GENDIRDEPS:Uno:@x@${RELDIR:M$x}@} != ""
+.if ${_debug.gendirdeps}
 .info ${RELDIR}: M2D_OBJROOTS=${M2D_OBJROOTS}
 .info ${RELDIR}: M2D_EXCLUDES=${M2D_EXCLUDES}
 .info ${RELDIR}: dir_list='${dir_list}'
@@ -306,7 +353,7 @@ src_dirdep_list = \
 SRC_DIRDEPS = \
 	${src_dirdep_list:N${RELDIR}:N${RELDIR}/*:C,(/h)/.*,,}
 
-SRC_DIRDEPS := ${SRC_DIRDEPS:${GENDIRDEPS_SRC_FILTER:UN/*:ts:}:C,//+,/,g:O:u}
+SRC_DIRDEPS := ${SRC_DIRDEPS:${GENDIRDEPS_SRC_FILTER:UN/*:ts:}:C,//+,/,g:S,/$,,:C,/(\.[^.]+)$,\1,:O:u}
 
 # if you want to capture SRC_DIRDEPS in .MAKE.DEPENDFILE put
 # SRC_DIRDEPS_FILE = ${_DEPENDFILE}

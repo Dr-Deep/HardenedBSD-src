@@ -2,9 +2,6 @@
  * Copyright (C) 2012 by Darren Reed.
  *
  * See the IPFILTER.LICENCE file for details on licencing.
- *
- * @(#)ip_fil.h	1.35 6/5/96
- * $FreeBSD$
  * Id: ip_fil.h,v 2.170.2.51 2007/10/10 09:48:03 darrenr Exp $
  */
 
@@ -594,8 +591,8 @@ typedef	struct	fripf	{
 	u_short		fri_icmp;
 
 	frtuc_t		fri_tuc;
-	fr_atypes_t	fri_satype;	/* addres type */
-	fr_atypes_t	fri_datype;	/* addres type */
+	fr_atypes_t	fri_satype;	/* address type */
+	fr_atypes_t	fri_datype;	/* address type */
 	int		fri_sifpidx;	/* doing dynamic addressing */
 	int		fri_difpidx;	/* index into fr_ifps[] to use when */
 } fripf_t;
@@ -833,7 +830,7 @@ typedef	struct	frentry {
 #define	FR_STATESYNC	0x1000000	/* synchronize state to slave */
 #define	FR_COPIED	0x2000000	/* copied from user space */
 #define	FR_INACTIVE	0x4000000	/* only used when flush'ing rules */
-#define	FR_NOMATCH	0x8000000	/* no match occured */
+#define	FR_NOMATCH	0x8000000	/* no match occurred */
 		/*	0x10000000 	FF_LOGPASS */
 		/*	0x20000000 	FF_LOGBLOCK */
 		/*	0x40000000 	FF_LOGNOMATCH */
@@ -1476,7 +1473,7 @@ typedef struct ipfexp {
 	int		ipfe_cmd;
 	int		ipfe_not;
 	int		ipfe_narg;
-	int		ipfe_size;
+	u_int		ipfe_size;
 	int		ipfe_arg0[1];
 } ipfexp_t;
 
@@ -1532,6 +1529,7 @@ typedef struct ipf_main_softc_s {
 	int		ipf_pass;
 	int		ipf_minttl;
 	int		ipf_icmpminfragmtu;
+	int		ipf_max_namelen;
 	int		ipf_interror;	/* Should be in a struct that is per  */
 					/* thread or process. Does not belong */
 					/* here but there's a lot more work   */
@@ -1552,6 +1550,7 @@ typedef struct ipf_main_softc_s {
 	u_int		ipf_icmpacktimeout;
 	u_int		ipf_iptimeout;
 	u_int		ipf_large_nat;
+	u_int		ipf_jail_allowed;
 	u_long		ipf_ticks;
 	u_long		ipf_userifqs;
 	u_long		ipf_rb_no_mem;
@@ -1680,8 +1679,9 @@ extern	char	*getifname(struct ifnet *);
 extern	int	ipfattach(ipf_main_softc_t *);
 extern	int	ipfdetach(ipf_main_softc_t *);
 extern	u_short	ipf_cksum(u_short *, int);
-extern	int	copyinptr(ipf_main_softc_t *, void *, void *, size_t);
-extern	int	copyoutptr(ipf_main_softc_t *, void *, void *, size_t);
+extern	int	ipf_copyin_indirect(ipf_main_softc_t *, void *, void *, size_t);
+extern	int	ipf_copyout_indirect(ipf_main_softc_t *, void *, void *,
+					  size_t);
 extern	int	ipf_fastroute(mb_t *, mb_t **, fr_info_t *, frdest_t *);
 extern	int	ipf_inject(fr_info_t *, mb_t *);
 extern	int	ipf_inobj(ipf_main_softc_t *, void *, ipfobj_t *,
@@ -1700,7 +1700,7 @@ extern	int	ipf_outobj(ipf_main_softc_t *, void *, void *, int);
 extern	int	ipf_outobjk(ipf_main_softc_t *, ipfobj_t *, void *);
 extern	int	ipf_outobjsz(ipf_main_softc_t *, void *, void *,
 				  int, int);
-extern	void	*ipf_pullup(mb_t *, fr_info_t *, int);
+extern	ip_t	*ipf_pullup(mb_t *, fr_info_t *, int);
 extern	int	ipf_resolvedest(ipf_main_softc_t *, char *,
 				     struct frdest *, int);
 extern	int	ipf_resolvefunc(ipf_main_softc_t *, void *);
@@ -1862,5 +1862,6 @@ extern	int	ipf_ht_node_del(host_track_t *, int, i6addr_t *);
 extern	void	ipf_rb_ht_flush(host_track_t *);
 extern	void	ipf_rb_ht_freenode(host_node_t *, void *);
 extern	void	ipf_rb_ht_init(host_track_t *);
+extern	int	ipf_check_names_string(char *, int, int);
 
 #endif	/* __IP_FIL_H__ */

@@ -1,4 +1,3 @@
-# $FreeBSD$
 
 . $(atf_get_srcdir)/utils.subr
 
@@ -12,7 +11,7 @@ v4_head()
 v4_body()
 {
 	# Can't use filename "null" for this script: PR 223564
-	ist_test 4 null ""
+	ist_test 4 null "1234"
 }
 
 v4_cleanup()
@@ -29,7 +28,7 @@ v6_head()
 
 v6_body()
 {
-	ist_test 6 null ""
+	ist_test 6 null "5678"
 }
 
 v6_cleanup()

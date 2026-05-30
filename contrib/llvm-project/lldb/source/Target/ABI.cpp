@@ -9,13 +9,14 @@
 #include "lldb/Target/ABI.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Core/Value.h"
-#include "lldb/Core/ValueObjectConstResult.h"
 #include "lldb/Expression/ExpressionVariable.h"
 #include "lldb/Symbol/CompilerType.h"
 #include "lldb/Symbol/TypeSystem.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Target/Thread.h"
+#include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
+#include "lldb/ValueObject/ValueObjectConstResult.h"
 #include "llvm/MC/TargetRegistry.h"
 #include <cctype>
 
@@ -146,6 +147,39 @@ ValueObjectSP ABI::GetReturnValueObject(Thread &thread, CompilerType &ast_type,
   return return_valobj_sp;
 }
 
+addr_t ABI::FixCodeAddress(lldb::addr_t pc) {
+  ProcessSP process_sp(GetProcessSP());
+
+  addr_t mask = process_sp->GetCodeAddressMask();
+  if (mask == LLDB_INVALID_ADDRESS_MASK)
+    return pc;
+
+  // Assume the high bit is used for addressing, which
+  // may not be correct on all architectures e.g. AArch64
+  // where Top Byte Ignore mode is often used to store
+  // metadata in the top byte, and b55 is the bit used for
+  // differentiating between low- and high-memory addresses.
+  // That target's ABIs need to override this method.
+  bool is_highmem = pc & (1ULL << 63);
+  return is_highmem ? pc | mask : pc & (~mask);
+}
+
+addr_t ABI::FixDataAddress(lldb::addr_t pc) {
+  ProcessSP process_sp(GetProcessSP());
+  addr_t mask = process_sp->GetDataAddressMask();
+  if (mask == LLDB_INVALID_ADDRESS_MASK)
+    return pc;
+
+  // Assume the high bit is used for addressing, which
+  // may not be correct on all architectures e.g. AArch64
+  // where Top Byte Ignore mode is often used to store
+  // metadata in the top byte, and b55 is the bit used for
+  // differentiating between low- and high-memory addresses.
+  // That target's ABIs need to override this method.
+  bool is_highmem = pc & (1ULL << 63);
+  return is_highmem ? pc | mask : pc & (~mask);
+}
+
 ValueObjectSP ABI::GetReturnValueObject(Thread &thread, llvm::Type &ast_type,
                                         bool persistent) const {
   ValueObjectSP return_valobj_sp;
@@ -176,7 +210,7 @@ bool ABI::PrepareTrivialCall(Thread &thread, lldb::addr_t sp,
 
 bool ABI::GetFallbackRegisterLocation(
     const RegisterInfo *reg_info,
-    UnwindPlan::Row::RegisterLocation &unwind_regloc) {
+    UnwindPlan::Row::AbstractRegisterLocation &unwind_regloc) {
   // Did the UnwindPlan fail to give us the caller's stack pointer? The stack
   // pointer is defined to be the same as THIS frame's CFA, so return the CFA
   // value as the caller's stack pointer.  This is true on x86-32/x86-64 at
@@ -203,7 +237,7 @@ std::unique_ptr<llvm::MCRegisterInfo> ABI::MakeMCRegisterInfo(const ArchSpec &ar
   const llvm::Target *target =
       llvm::TargetRegistry::lookupTarget(triple, lookup_error);
   if (!target) {
-    LLDB_LOG(GetLogIfAllCategoriesSet(LIBLLDB_LOG_PROCESS),
+    LLDB_LOG(GetLog(LLDBLog::Process),
              "Failed to create an llvm target for {0}: {1}", triple,
              lookup_error);
     return nullptr;

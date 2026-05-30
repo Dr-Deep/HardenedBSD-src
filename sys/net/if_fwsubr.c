@@ -28,8 +28,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include "opt_inet.h"
@@ -46,6 +44,7 @@
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_private.h>
 #include <net/netisr.h>
 #include <net/route.h>
 #include <net/if_llc.h>
@@ -68,7 +67,7 @@
 
 static MALLOC_DEFINE(M_FWCOM, "fw_com", "firewire interface internals");
 
-struct fw_hwaddr firewire_broadcastaddr = {
+static const struct fw_hwaddr firewire_broadcastaddr = {
 	0xffffffff,
 	0xffffffff,
 	0xff,
@@ -778,7 +777,7 @@ firewire_ifattach(struct ifnet *ifp, struct fw_hwaddr *llc)
 	ifp->if_mtu = 1500;	/* XXX */
 	ifp->if_output = firewire_output;
 	ifp->if_resolvemulti = firewire_resolvemulti;
-	ifp->if_broadcastaddr = (u_char *) &firewire_broadcastaddr;
+	ifp->if_broadcastaddr = (const u_char *) &firewire_broadcastaddr;
 
 	ifa = ifp->if_addr;
 	KASSERT(ifa != NULL, ("%s: no lladdr!\n", __func__));
@@ -803,6 +802,7 @@ firewire_ifdetach(struct ifnet *ifp)
 {
 	bpfdetach(ifp);
 	if_detach(ifp);
+	NET_EPOCH_DRAIN_CALLBACKS();
 }
 
 void

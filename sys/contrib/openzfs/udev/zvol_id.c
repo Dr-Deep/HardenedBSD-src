@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -51,11 +52,12 @@ const char *__asan_default_options(void) {
 int
 main(int argc, const char *const *argv)
 {
-	if (argc != 2) {
+	if (argc != 2 || strncmp(argv[1], "/dev/zd", 7) != 0) {
 		fprintf(stderr, "usage: %s /dev/zdX\n", argv[0]);
 		return (1);
 	}
 	const char *dev_name = argv[1];
+	size_t i, len;
 
 	int fd;
 	struct stat sb;
@@ -65,18 +67,21 @@ main(int argc, const char *const *argv)
 		return (1);
 	}
 
-	char zvol_name[MAXNAMELEN + strlen("-part") + 10];
+	char zvol_name[MAXNAMELEN+15];
 	if (ioctl(fd, BLKZNAME, zvol_name) == -1) {
 		fprintf(stderr, "%s: BLKZNAME: %s\n",
 		    dev_name, strerror(errno));
 		return (1);
 	}
 
-	unsigned int dev_part = minor(sb.st_rdev) % ZVOL_MINORS;
-	if (dev_part != 0)
-		sprintf(zvol_name + strlen(zvol_name), "-part%u", dev_part);
+	const char *dev_part = strrchr(dev_name, 'p');
+	len = strlen(zvol_name);
+	if (dev_part != NULL) {
+		sprintf(zvol_name + len, "-part%s", dev_part + 1);
+		len = strlen(zvol_name);
+	}
 
-	for (size_t i = 0; i < strlen(zvol_name); ++i)
+	for (i = 0; i < len; ++i)
 		if (isblank(zvol_name[i]))
 			zvol_name[i] = '+';
 

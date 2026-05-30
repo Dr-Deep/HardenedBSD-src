@@ -28,10 +28,6 @@
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
- *
- *	from: @(#)xdr.h 1.19 87/04/22 SMI
- *	from: @(#)xdr.h	2.2 88/07/29 4.0 RPCSRC
- * $FreeBSD$
  */
 
 /*
@@ -133,14 +129,7 @@ typedef struct XDR {
  * to be decoded.  If this pointer is 0, then the type routines should
  * allocate dynamic storage of the appropriate size and return it.
  */
-#ifdef _KERNEL
-typedef	bool_t (*xdrproc_t)(XDR *, void *, u_int);
-#else
-/*
- * XXX can't actually prototype it, because some take three args!!!
- */
-typedef	bool_t (*xdrproc_t)(XDR *, ...);
-#endif
+typedef	bool_t (*xdrproc_t)(XDR *, void *);
 
 /*
  * Operations defined on a XDR handle
@@ -282,7 +271,7 @@ struct xdr_discrim {
  * These are the "generic" xdr routines.
  */
 __BEGIN_DECLS
-extern bool_t	xdr_void(void);
+extern bool_t	xdr_void(XDR *, void *);
 extern bool_t	xdr_int(XDR *, int *);
 extern bool_t	xdr_u_int(XDR *, u_int *);
 extern bool_t	xdr_long(XDR *, long *);

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2021 Dmitry Chagin <dchagin@FreeBSD.org>
  *
@@ -25,27 +25,25 @@
  * SUCH DAMAGE.
  */
 
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/elf.h>
 #include <sys/errno.h>
-#include <sys/proc.h>
+#include <sys/stdarg.h>
 #include <sys/stddef.h>
+#include <sys/time.h>
 #define	_KERNEL
 #include <sys/vdso.h>
 #undef	_KERNEL
+
+#include <limits.h>
 #include <stdbool.h>
 
 #include <i386/include/atomic.h>
 #include <i386/include/cpufunc.h>
-#include <i386/include/stdarg.h>
 
 #include <amd64/linux32/linux.h>
 #include <amd64/linux32/linux32_syscall.h>
 #include <compat/linux/linux_errno.h>
-#include <compat/linux/linux_timer.h>
+#include <compat/linux/linux_time.h>
 
 /* The kernel fixup this at vDSO install */
 uintptr_t *kern_timekeep_base = NULL;
@@ -64,7 +62,7 @@ write(int fd, const void *buf, size_t size)
 	(
 	    "int $0x80"
 	    : "=a"(res)
-	    : "a"(LINUX32_SYS_write), "b"(fd), "c"(buf), "d"(size)
+	    : "a"(LINUX32_SYS_linux_write), "b"(fd), "c"(buf), "d"(size)
 	    : "cc", "memory"
 	);
 	return (res);

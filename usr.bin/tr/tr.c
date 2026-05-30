@@ -29,20 +29,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-
-__FBSDID("$FreeBSD$");
-
-#ifndef lint
-static const char copyright[] =
-"@(#) Copyright (c) 1988, 1993\n\
-	The Regents of the University of California.  All rights reserved.\n";
-#endif
-
-#ifndef lint
-static const char sccsid[] = "@(#)tr.c	8.2 (Berkeley) 5/4/95";
-#endif
-
 #include <sys/types.h>
 #include <sys/capsicum.h>
 
@@ -67,7 +53,7 @@ static STR s1 = { STRING1, NORMAL, 0, OOBCH, 0, { 0, OOBCH }, NULL, NULL };
 static STR s2 = { STRING2, NORMAL, 0, OOBCH, 0, { 0, OOBCH }, NULL, NULL };
 
 static struct cset *setup(char *, STR *, int, int);
-static void usage(void);
+static void usage(void) __dead2;
 
 int
 main(int argc, char **argv)
@@ -250,6 +236,40 @@ main(int argc, char **argv)
 				if (!next(&s1))
 					goto endloop;
 			} while (s1.state == CCLASS_UPPER && s1.cnt > 1);
+			/* skip lower set */
+			do {
+				if (!next(&s2))
+					break;
+			} while (s2.state == CCLASS_LOWER && s2.cnt > 1);
+			goto again;
+		} else if (s1.state == CCLASS &&
+			   s2.state == CCLASS_UPPER &&
+			   s1.cnt == 1 && s2.cnt == 1) {
+			do {
+				ch = towupper(s1.lastch);
+				cmap_add(map, s1.lastch, ch);
+				if (sflag && iswupper(ch))
+					cset_add(squeeze, ch);
+				if (!next(&s1))
+					goto endloop;
+			} while (s1.state == CCLASS && s1.cnt > 1);
+			/* skip upper set */
+			do {
+				if (!next(&s2))
+					break;
+			} while (s2.state == CCLASS_UPPER && s2.cnt > 1);
+			goto again;
+		} else if (s1.state == CCLASS &&
+			   s2.state == CCLASS_LOWER &&
+			   s1.cnt == 1 && s2.cnt == 1) {
+			do {
+				ch = towlower(s1.lastch);
+				cmap_add(map, s1.lastch, ch);
+				if (sflag && iswlower(ch))
+					cset_add(squeeze, ch);
+				if (!next(&s1))
+					goto endloop;
+			} while (s1.state == CCLASS && s1.cnt > 1);
 			/* skip lower set */
 			do {
 				if (!next(&s2))

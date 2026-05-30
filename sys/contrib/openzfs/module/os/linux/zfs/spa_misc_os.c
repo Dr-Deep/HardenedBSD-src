@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -38,8 +39,10 @@
 #include <sys/dsl_prop.h>
 #include <sys/fm/util.h>
 #include <sys/dsl_scan.h>
+#include <sys/dmu.h>
 #include <sys/fs/zfs.h>
 #include <sys/kstat.h>
+#include <sys/zone.h>
 #include "zfs_prop.h"
 
 
@@ -60,7 +63,7 @@ param_set_deadman_ziotime(const char *val, zfs_kernel_param_t *kp)
 {
 	int error;
 
-	error = param_set_ulong(val, kp);
+	error = spl_param_set_u64(val, kp);
 	if (error < 0)
 		return (SET_ERROR(error));
 
@@ -74,7 +77,7 @@ param_set_deadman_synctime(const char *val, zfs_kernel_param_t *kp)
 {
 	int error;
 
-	error = param_set_ulong(val, kp);
+	error = spl_param_set_u64(val, kp);
 	if (error < 0)
 		return (SET_ERROR(error));
 
@@ -103,22 +106,78 @@ param_set_slop_shift(const char *buf, zfs_kernel_param_t *kp)
 	return (0);
 }
 
+int
+param_set_active_allocator(const char *val, zfs_kernel_param_t *kp)
+{
+	int error;
+
+	error = -param_set_active_allocator_common(val);
+	if (error == 0)
+		error = param_set_charp(val, kp);
+
+	return (error);
+}
+
 const char *
 spa_history_zone(void)
 {
 	return ("linux");
 }
 
+static int
+spa_restore_zoned_uid_cb(const char *dsname, void *arg)
+{
+	(void) arg;
+	uint64_t zoned_uid = 0;
+
+	if (dsl_prop_get(dsname, "zoned_uid", 8, 1, &zoned_uid, NULL) != 0)
+		return (0);
+
+	if (zoned_uid != 0) {
+		int err = zone_dataset_attach_uid(kcred, dsname,
+		    (uid_t)zoned_uid);
+		if (err != 0 && err != EEXIST) {
+			cmn_err(CE_WARN, "failed to restore zoned_uid for "
+			    "'%s' (uid %llu): %d", dsname,
+			    (unsigned long long)zoned_uid, err);
+		}
+	}
+	return (0);
+}
+
 void
 spa_import_os(spa_t *spa)
 {
-	(void) spa;
+	(void) dmu_objset_find(spa_name(spa),
+	    spa_restore_zoned_uid_cb, NULL, DS_FIND_CHILDREN);
+}
+
+static int
+spa_cleanup_zoned_uid_cb(const char *dsname, void *arg)
+{
+	(void) arg;
+	uint64_t zoned_uid = 0;
+
+	if (dsl_prop_get(dsname, "zoned_uid", 8, 1, &zoned_uid, NULL) != 0)
+		return (0);
+
+	if (zoned_uid != 0) {
+		int err = zone_dataset_detach_uid(kcred, dsname,
+		    (uid_t)zoned_uid);
+		if (err != 0 && err != ENOENT) {
+			cmn_err(CE_WARN, "failed to detach zoned_uid for "
+			    "'%s' (uid %llu): %d", dsname,
+			    (unsigned long long)zoned_uid, err);
+		}
+	}
+	return (0);
 }
 
 void
 spa_export_os(spa_t *spa)
 {
-	(void) spa;
+	(void) dmu_objset_find(spa_name(spa),
+	    spa_cleanup_zoned_uid_cb, NULL, DS_FIND_CHILDREN);
 }
 
 void

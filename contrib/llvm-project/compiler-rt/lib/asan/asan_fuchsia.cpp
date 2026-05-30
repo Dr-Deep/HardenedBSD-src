@@ -14,15 +14,21 @@
 #include "sanitizer_common/sanitizer_fuchsia.h"
 #if SANITIZER_FUCHSIA
 
-#include "asan_interceptors.h"
-#include "asan_internal.h"
-#include "asan_stack.h"
-#include "asan_thread.h"
-
 #include <limits.h>
 #include <zircon/sanitizer.h>
 #include <zircon/syscalls.h>
 #include <zircon/threads.h>
+
+#  include "asan_interceptors.h"
+#  include "asan_internal.h"
+#  include "asan_stack.h"
+#  include "asan_thread.h"
+#  include "lsan/lsan_common.h"
+
+namespace __sanitizer {
+// ASan doesn't need to do anything else special in the startup hook.
+void EarlySanitizerInit() {}
+}  // namespace __sanitizer
 
 namespace __asan {
 
@@ -55,8 +61,6 @@ void AsanApplyToGlobals(globals_op_fptr op, const void *needle) {
 void AsanCheckDynamicRTPrereqs() {}
 void AsanCheckIncompatibleRT() {}
 void InitializeAsanInterceptors() {}
-
-void *AsanDoesNotSupportStaticLinkage() { return nullptr; }
 
 void InitializePlatformExceptionHandlers() {}
 void AsanOnDeadlySignal(int signo, void *siginfo, void *context) {
@@ -122,8 +126,7 @@ static AsanThread *CreateAsanThread(StackTrace *stack, u32 parent_tid,
   // In lieu of AsanThread::Create.
   AsanThread *thread = (AsanThread *)MmapOrDie(AsanThreadMmapSize(), __func__);
 
-  AsanThreadContext::CreateThreadContextArgs args = {thread, stack};
-  u32 tid = asanThreadRegistry().CreateThread(0, detached, parent_tid, &args);
+  u32 tid = asanThreadRegistry().CreateThread(0, detached, parent_tid, thread);
   asanThreadRegistry().SetThreadName(tid, name);
 
   return thread;
@@ -235,7 +238,19 @@ void FlushUnneededASanShadowMemory(uptr p, uptr size) {
   __sanitizer_fill_shadow(p, size, 0, 0);
 }
 
+// On Fuchsia, leak detection is done by a special hook after atexit hooks.
+// So this doesn't install any atexit hook like on other platforms.
+void InstallAtExitCheckLeaks() {}
+
+void InstallAtForkHandler() {}
+
 }  // namespace __asan
+
+namespace __lsan {
+
+bool UseExitcodeOnLeak() { return __asan::flags()->halt_on_error; }
+
+}  // namespace __lsan
 
 // These are declared (in extern "C") by <zircon/sanitizer.h>.
 // The system runtime will call our definitions directly.

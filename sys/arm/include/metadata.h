@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2003 Peter Wemm <peter@FreeBSD.org>
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _MACHINE_METADATA_H_
@@ -35,10 +33,15 @@
 #define	MODINFOMD_DTBP		0x1002
 #define	MODINFOMD_EFI_MAP	0x1003
 
+/*
+ * This is not the same as the UEFI standard EFI_MEMORY_ATTRIBUTES_TABLE, though
+ * memory_size / descritpr_size entries of EFI_MEMORY_DESCRIPTORS follow this table
+ * starting at a 16-byte alignment.
+ */
 struct efi_map_header {
-	uint64_t	memory_size;
-	uint64_t	descriptor_size;
-	uint32_t	descriptor_version;
+	uint64_t	memory_size;		/* Numnber of bytes that follow */
+	uint64_t	descriptor_size;	/* Size of each EFI_MEMORY_DESCRIPTOR */
+	uint32_t	descriptor_version;	/* Currently '1' */
 };
 
 /*

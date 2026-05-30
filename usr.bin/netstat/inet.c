@@ -27,18 +27,10 @@
  * SUCH DAMAGE.
  */
 
-#if 0
-#ifndef lint
-static char sccsid[] = "@(#)inet.c	8.5 (Berkeley) 5/24/95";
-#endif /* not lint */
-#endif
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/queue.h>
 #include <sys/domain.h>
+#define	_WANT_PROTOSW
 #include <sys/protosw.h>
 #include <sys/socket.h>
 #define	_WANT_SOCKET
@@ -66,13 +58,11 @@ __FBSDID("$FreeBSD$");
 #include <netinet/tcp_seq.h>
 #define	TCPSTATES
 #include <netinet/tcp_fsm.h>
-#include <netinet/tcp_timer.h>
 #include <netinet/tcp_var.h>
 #include <netinet/udp.h>
 #include <netinet/udp_var.h>
 
 #include <arpa/inet.h>
-#include <err.h>
 #include <errno.h>
 #include <libutil.h>
 #include <netdb.h>
@@ -93,7 +83,7 @@ static void inetprint(const char *, struct in_addr *, int, const char *, int,
     const int);
 #endif
 #ifdef INET6
-static int udp_done, tcp_done, sdp_done;
+static int udp_done, udplite_done, tcp_done, sdp_done;
 #endif /* INET6 */
 
 static int
@@ -109,6 +99,9 @@ pcblist_sysctl(int proto, const char *name, char **bufp)
 		break;
 	case IPPROTO_UDP:
 		mibvar = "net.inet.udp.pcblist";
+		break;
+	case IPPROTO_UDPLITE:
+		mibvar = "net.inet.udplite.pcblist";
 		break;
 	default:
 		mibvar = "net.inet.raw.pcblist";
@@ -232,27 +225,31 @@ protopr(u_long off, const char *name, int af1, int proto)
 			udp_done = 1;
 #endif
 		break;
+	case IPPROTO_UDPLITE:
+#ifdef INET6
+		if (udplite_done != 0)
+			return;
+		else
+			udplite_done = 1;
+#endif
+		break;
 	}
 
 	if (!pcblist_sysctl(proto, name, &buf))
 		return;
-
-	if (cflag || Cflag) {
+	if (istcp && (cflag || Cflag)) {
 		fnamelen = strlen("Stack");
 		cnamelen = strlen("CC");
 		oxig = xig = (struct xinpgen *)buf;
 		for (xig = (struct xinpgen*)((char *)xig + xig->xig_len);
 		    xig->xig_len > sizeof(struct xinpgen);
 		    xig = (struct xinpgen *)((char *)xig + xig->xig_len)) {
-			if (istcp) {
-				tp = (struct xtcpcb *)xig;
-				inp = &tp->xt_inp;
-			} else {
-				continue;
-			}
-			if (so->xso_protocol != proto)
-				continue;
+			tp = (struct xtcpcb *)xig;
+			inp = &tp->xt_inp;
 			if (inp->inp_gencnt > oxig->xig_gen)
+				continue;
+			so = &inp->xi_socket;
+			if (so->xso_protocol != proto)
 				continue;
 			fnamelen = max(fnamelen, (int)strlen(tp->xt_stack));
 			cnamelen = max(cnamelen, (int)strlen(tp->xt_cc));
@@ -331,25 +328,25 @@ protopr(u_long off, const char *name, int af1, int proto)
 				    "Proto", "Listen", "Local Address");
 			else if (Tflag)
 				xo_emit((Aflag && !Wflag) ?
-    "{T:/%-5.5s} {T:/%-6.6s} {T:/%-6.6s} {T:/%-6.6s} {T:/%-18.18s} {T:/%s}" :
+    "{T:/%-9.9s} {T:/%-6.6s} {T:/%-6.6s} {T:/%-6.6s} {T:/%-18.18s} {T:/%s}" :
 				    ((!Wflag || af1 == AF_INET) ?
-    "{T:/%-5.5s} {T:/%-6.6s} {T:/%-6.6s} {T:/%-6.6s} {T:/%-22.22s} {T:/%s}" :
-    "{T:/%-5.5s} {T:/%-6.6s} {T:/%-6.6s} {T:/%-6.6s} {T:/%-45.45s} {T:/%s}"),
+    "{T:/%-9.9s} {T:/%-6.6s} {T:/%-6.6s} {T:/%-6.6s} {T:/%-22.22s} {T:/%s}" :
+    "{T:/%-9.9s} {T:/%-6.6s} {T:/%-6.6s} {T:/%-6.6s} {T:/%-45.45s} {T:/%s}"),
 				    "Proto", "Rexmit", "OOORcv", "0-win",
 				    "Local Address", "Foreign Address");
 			else {
 				xo_emit((Aflag && !Wflag) ?
-    "{T:/%-5.5s} {T:/%-6.6s} {T:/%-6.6s} {T:/%-18.18s} {T:/%-18.18s}" :
+    "{T:/%-9.9s} {T:/%-6.6s} {T:/%-6.6s} {T:/%-18.18s} {T:/%-18.18s}" :
 				    ((!Wflag || af1 == AF_INET) ?
-    "{T:/%-5.5s} {T:/%-6.6s} {T:/%-6.6s} {T:/%-22.22s} {T:/%-22.22s}" :
-    "{T:/%-5.5s} {T:/%-6.6s} {T:/%-6.6s} {T:/%-45.45s} {T:/%-45.45s}"),
+    "{T:/%-9.9s} {T:/%-6.6s} {T:/%-6.6s} {T:/%-22.22s} {T:/%-22.22s}" :
+    "{T:/%-9.9s} {T:/%-6.6s} {T:/%-6.6s} {T:/%-45.45s} {T:/%-45.45s}"),
 				    "Proto", "Recv-Q", "Send-Q",
 				    "Local Address", "Foreign Address");
 				if (!xflag && !Rflag)
 					xo_emit(" {T:/%-11.11s}", "(state)");
 			}
 			if (xflag) {
-				xo_emit("{T:/%-6.6s} {T:/%-6.6s} "
+				xo_emit(" {T:/%-6.6s} {T:/%-6.6s} "
 				    "{T:/%-6.6s} {T:/%-6.6s} {T:/%-6.6s} "
 				    "{T:/%-6.6s} {T:/%-6.6s} {T:/%-6.6s}",
 				    "R-HIWA", "S-HIWA", "R-LOWA", "S-LOWA",
@@ -383,16 +380,9 @@ protopr(u_long off, const char *name, int af1, int proto)
 		if (Lflag && so->so_qlimit == 0)
 			continue;
 		xo_open_instance("socket");
-		if (Aflag) {
-			if (istcp)
-				xo_emit("{q:address/%*lx} ",
-				    2 * (int)sizeof(void *),
-				    (u_long)inp->inp_ppcb);
-			else
-				xo_emit("{q:address/%*lx} ",
-				    2 * (int)sizeof(void *),
-				    (u_long)so->so_pcb);
-		}
+		if (Aflag)
+			xo_emit("{q:address/%*lx} ", 2 * (int)sizeof(void *),
+			    (u_long)so->so_pcb);
 #ifdef INET6
 		if ((inp->inp_vflag & INP_IPV6) != 0)
 			vchar = ((inp->inp_vflag & INP_IPV4) != 0) ?
@@ -402,9 +392,13 @@ protopr(u_long off, const char *name, int af1, int proto)
 		vchar = ((inp->inp_vflag & INP_IPV4) != 0) ?
 		    "4" : "";
 		if (istcp && (tp->t_flags & TF_TOE) != 0)
-			xo_emit("{:protocol/%-3.3s%-2.2s/%s%s} ", "toe", vchar);
-		else
-			xo_emit("{:protocol/%-3.3s%-2.2s/%s%s} ", name, vchar);
+			xo_emit("{:protocol/%-3.3s%-6.6s/%s%s} ", "toe", vchar);
+		else {
+			int l = max (2, 9 - strlen(name));
+
+			xo_emit("{d:protocol/%.7s%-*.*s} ", name, l, l, vchar);
+			xo_emit("{e:protocol/%s%s}", name, vchar);
+		}
 		if (Lflag) {
 			char buf1[33];
 
@@ -528,9 +522,9 @@ protopr(u_long off, const char *name, int af1, int proto)
 		}
 		if (istcp && !Lflag && !xflag && !Tflag && !Rflag) {
 			if (tp->t_state < 0 || tp->t_state >= TCP_NSTATES)
-				xo_emit("{:tcp-state/%-11d}", tp->t_state);
+				xo_emit("{:tcp-state/%-11d/%d}", tp->t_state);
 			else {
-				xo_emit("{:tcp-state/%-11s}",
+				xo_emit("{:tcp-state/%-11s/%s}",
 				    tcpstates[tp->t_state]);
 #if defined(TF_NEEDSYN) && defined(TF_NEEDFIN)
 				/* Show T/TCP `hidden state' */
@@ -547,11 +541,11 @@ protopr(u_long off, const char *name, int af1, int proto)
 		}
 		if (istcp) {
 			if (cflag)
-				xo_emit(" {:stack/%-*.*s}",
+				xo_emit(" {t:stack/%-*.*s}",
 					
 					fnamelen, fnamelen, tp->xt_stack);
 			if (Cflag)
-				xo_emit(" {:cc/%-*.*s}"
+				xo_emit(" {t:cc/%-*.*s}"
 					" {:snd-cwnd/%10lu}"
 					" {:snd-ssthresh/%10lu}"
 					" {:t-maxseg/%5u} {:ecn/%3s}",
@@ -661,8 +655,12 @@ tcp_stats(u_long off, const char *name, int af1 __unused, int proto __unused)
 	    "{N:/UDP tunneled pkt%s}\n");
 	p(tcps_tunneled_errs, "\t\t{:received-bad-udp-tunneled-pkts/%ju} "
 	    "{N:/UDP tunneled pkt cnt with error%s}\n");
-	p(tcps_rcvacktoomuch, "\t\t{:received-acks-for-unsent-data/%ju} "
-	    "{N:/ack%s for unsent data}\n");
+	p(tcps_rcvacktoomuch, "\t\t{:received-acks-for-data-not-yet-sent/%ju} "
+	    "{N:/ack%s for data not yet sent}\n");
+	p(tcps_rcvghostack, "\t\t{:received-acks-for-data-never-been-sent/%ju} "
+	    "{N:/ack%s for data never been sent (ghost acks)}\n");
+	p(tcps_rcvacktooold, "\t\t{:received-acks-for-data-being-too-old/%ju} "
+	    "{N:/ack%s for data being too old}\n");
 	p2(tcps_rcvpack, tcps_rcvbyte, "\t\t"
 	    "{:received-in-sequence-packets/%ju} {N:/packet%s} "
 	    "({:received-in-sequence-bytes/%ju} {N:/byte%s}) "
@@ -757,6 +755,8 @@ tcp_stats(u_long off, const char *name, int af1 __unused, int proto __unused)
 	    "{N:/keepalive probe%s sent}\n");
 	p(tcps_keepdrops, "\t\t{:connections-dropped-by-keepalives/%ju} "
 	    "{N:/connection%s dropped by keepalive}\n");
+	p(tcps_progdrops, "\t{:connections-dropped-due-to-progress-time/%ju} "
+	    "{N:/connection%s dropped due to exceeding progress time}\n");
 	p(tcps_predack, "\t{:ack-header-predictions/%ju} "
 	    "{N:/correct ACK header prediction%s}\n");
 	p(tcps_preddat, "\t{:data-packet-header-predictions/%ju} "
@@ -781,11 +781,20 @@ tcp_stats(u_long off, const char *name, int af1 __unused, int proto __unused)
 	p1a(tcps_sc_badack, "\t\t{:bad-ack/%ju} {N:/badack}\n");
 	p1a(tcps_sc_unreach, "\t\t{:unreachable/%ju} {N:/unreach}\n");
 	p(tcps_sc_zonefail, "\t\t{:zone-failures/%ju} {N:/zone failure%s}\n");
-	p(tcps_sc_sendcookie, "\t{:sent-cookies/%ju} {N:/cookie%s sent}\n");
-	p(tcps_sc_recvcookie, "\t{:receivd-cookies/%ju} "
-	    "{N:/cookie%s received}\n");
 
 	xo_close_container("syncache");
+
+	xo_open_container("syncookies");
+
+	p(tcps_sc_sendcookie, "\t{:sent-cookies/%ju} {N:/cookie%s sent}\n");
+	p(tcps_sc_recvcookie, "\t\t{:received-cookies/%ju} "
+	    "{N:/cookie%s received}\n");
+	p(tcps_sc_spurcookie, "\t\t{:spurious-cookies/%ju} "
+	    "{N:/spurious cookie%s rejected}\n");
+	p(tcps_sc_failcookie, "\t\t{:failed-cookies/%ju} "
+	    "{N:/failed cookie%s rejected}\n");
+
+	xo_close_container("syncookies");
 
 	xo_open_container("hostcache");
 
@@ -800,11 +809,13 @@ tcp_stats(u_long off, const char *name, int af1 __unused, int proto __unused)
 
 	p(tcps_sack_recovery_episode, "\t{:recovery-episodes/%ju} "
 	    "{N:/SACK recovery episode%s}\n");
- 	p(tcps_sack_rexmits, "\t{:segment-retransmits/%ju} "
+	p(tcps_sack_rexmits, "\t{:segment-retransmits/%ju} "
 	    "{N:/segment rexmit%s in SACK recovery episodes}\n");
- 	p(tcps_sack_rexmit_bytes, "\t{:byte-retransmits/%ju} "
+	p(tcps_sack_rexmits_tso, "\t{:tso-chunk-retransmits/%ju} "
+	    "{N:/tso chunk rexmit%s in SACK recovery episodes}\n");
+	p(tcps_sack_rexmit_bytes, "\t{:byte-retransmits/%ju} "
 	    "{N:/byte rexmit%s in SACK recovery episodes}\n");
- 	p(tcps_sack_rcv_blocks, "\t{:received-blocks/%ju} "
+	p(tcps_sack_rcv_blocks, "\t{:received-blocks/%ju} "
 	    "{N:/SACK option%s (SACK blocks) received}\n");
 	p(tcps_sack_send_blocks, "\t{:sent-option-blocks/%ju} "
 	    "{N:/SACK option%s (SACK blocks) sent}\n");
@@ -816,12 +827,16 @@ tcp_stats(u_long off, const char *name, int af1 __unused, int proto __unused)
 	xo_close_container("sack");
 	xo_open_container("ecn");
 
-	p(tcps_ecn_ce, "\t{:ce-packets/%ju} "
-	    "{N:/packet%s with ECN CE bit set}\n");
-	p(tcps_ecn_ect0, "\t{:ect0-packets/%ju} "
-	    "{N:/packet%s with ECN ECT(0) bit set}\n");
-	p(tcps_ecn_ect1, "\t{:ect1-packets/%ju} "
-	    "{N:/packet%s with ECN ECT(1) bit set}\n");
+	p(tcps_ecn_rcvce, "\t{:received-ce-packets/%ju} "
+	    "{N:/packet%s received with ECN CE bit set}\n");
+	p(tcps_ecn_rcvect0, "\t{:received-ect0-packets/%ju} "
+	    "{N:/packet%s received with ECN ECT(0) bit set}\n");
+	p(tcps_ecn_rcvect1, "\t{:received-ect1-packets/%ju} "
+	    "{N:/packet%s received with ECN ECT(1) bit set}\n");
+	p(tcps_ecn_sndect0, "\t{:sent-ect0-packets/%ju} "
+	    "{N:/packet%s sent with ECN ECT(0) bit set}\n");
+	p(tcps_ecn_sndect1, "\t{:sent-ect1-packets/%ju} "
+	    "{N:/packet%s sent with ECN ECT(1) bit set}\n");
 	p(tcps_ecn_shs, "\t{:handshakes/%ju} "
 	    "{N:/successful ECN handshake%s}\n");
 	p(tcps_ecn_rcwnd, "\t{:congestion-reductions/%ju} "
@@ -908,7 +923,7 @@ void
 udp_stats(u_long off, const char *name, int af1 __unused, int proto __unused)
 {
 	struct udpstat udpstat;
-	uint64_t delivered;
+	uint64_t delivered, noportbmcast;
 
 #ifdef INET6
 	if (udp_done != 0)
@@ -941,8 +956,11 @@ udp_stats(u_long off, const char *name, int af1 __unused, int proto __unused)
 	    "{N:/with no checksum}\n");
 	p1a(udps_noport, "{:dropped-no-socket/%ju} "
 	    "{N:/dropped due to no socket}\n");
-	p(udps_noportbcast, "{:dropped-broadcast-multicast/%ju} "
-	    "{N:/broadcast\\/multicast datagram%s undelivered}\n");
+	noportbmcast = udpstat.udps_noportmcast + udpstat.udps_noportbcast;
+	if (noportbmcast || sflag <= 1)
+		xo_emit("\t{:dropped-broadcast-multicast/%ju} "
+		    "{N:/broadcast\\/multicast datagram%s undelivered}\n",
+		    (uintmax_t)noportbmcast, plural(noportbmcast));
 	p1a(udps_fullsock, "{:dropped-full-socket-buffer/%ju} "
 	    "{N:/dropped due to full socket buffers}\n");
 	p1a(udpps_pcbhashmiss, "{:not-for-hashed-pcb/%ju} "
@@ -952,11 +970,10 @@ udp_stats(u_long off, const char *name, int af1 __unused, int proto __unused)
 		    udpstat.udps_badlen -
 		    udpstat.udps_badsum -
 		    udpstat.udps_noport -
-		    udpstat.udps_noportbcast -
 		    udpstat.udps_fullsock;
 	if (delivered || sflag <= 1)
 		xo_emit("\t{:delivered-packets/%ju} {N:/delivered}\n",
-		    (uint64_t)delivered);
+		    (uintmax_t)delivered);
 	p(udps_opackets, "{:output-packets/%ju} {N:/datagram%s output}\n");
 	/* the next statistic is cumulative in udps_noportbcast */
 	p(udps_filtermcast, "{:multicast-source-filter-matches/%ju} "

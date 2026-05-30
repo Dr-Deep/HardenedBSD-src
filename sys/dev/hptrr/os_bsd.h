@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) HighPoint Technologies, Inc.
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #include <dev/hptrr/hptrr_config.h>
 /* $Id: os_bsd.h,v 1.18 2006/04/11 08:19:02 gmm Exp $
@@ -45,6 +43,7 @@
 #include <sys/types.h>
 #include <sys/cons.h>
 #include <sys/time.h>
+#include <sys/stdarg.h>
 #include <sys/systm.h> 
 
 #include <sys/stat.h>
@@ -64,7 +63,6 @@
 
 #include <machine/resource.h>
 #include <machine/bus.h>
-#include <machine/stdarg.h>
 #include <sys/rman.h>
 
 #include <vm/vm.h>

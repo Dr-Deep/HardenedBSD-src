@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -61,7 +62,7 @@ main(int argc, char **argv)
 	offset_t	llseek_ret = 0;
 	int		write_ret = 0;
 	int		err = 0;
-	char		mybuf[5] = "aaaa\0";
+	char		mybuf[5] = "aaaa";
 	char		*testfile;
 	mode_t		mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
 	struct sigaction sa;
@@ -78,6 +79,8 @@ main(int argc, char **argv)
 		return (errno);
 
 	testfile = strdup(argv[1]);
+	if (testfile == NULL)
+		return (errno);
 
 	fd = open(testfile, O_CREAT | O_RDWR, mode);
 	if (fd < 0) {

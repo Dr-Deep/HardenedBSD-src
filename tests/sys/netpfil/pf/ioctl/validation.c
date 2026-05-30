@@ -21,8 +21,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include <sys/param.h>
@@ -34,6 +32,7 @@
 #include <net/if.h>
 #include <net/pfvar.h>
 
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 
@@ -42,8 +41,6 @@
 static int dev;
 
 #define COMMON_HEAD() \
-	if (modfind("pf") == -1) \
-		atf_tc_skip("pf not loaded"); \
 	dev = open("/dev/pf", O_RDWR); \
 	if (dev == -1) \
 		atf_tc_skip("Failed to open /dev/pf");
@@ -65,6 +62,7 @@ ATF_TC_WITH_CLEANUP(addtables);
 ATF_TC_HEAD(addtables, tc)
 {
 	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pf");
 }
 
 ATF_TC_BODY(addtables, tc)
@@ -117,6 +115,7 @@ ATF_TC_WITH_CLEANUP(deltables);
 ATF_TC_HEAD(deltables, tc)
 {
 	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pf");
 }
 
 ATF_TC_BODY(deltables, tc)
@@ -160,6 +159,7 @@ ATF_TC_WITH_CLEANUP(gettables);
 ATF_TC_HEAD(gettables, tc)
 {
 	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pf");
 }
 
 ATF_TC_BODY(gettables, tc)
@@ -194,10 +194,43 @@ ATF_TC_CLEANUP(gettables, tc)
 	COMMON_CLEANUP();
 }
 
+ATF_TC_WITH_CLEANUP(clrtables);
+ATF_TC_HEAD(clrtables, tc)
+{
+	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pf");
+}
+
+ATF_TC_BODY(clrtables, tc)
+{
+	struct pfioc_table io;
+	struct pfr_table tbl;
+	int flags;
+
+	COMMON_HEAD();
+
+	flags = 0;
+
+	memset(&io, '/', sizeof(io));
+	io.pfrio_flags = flags;
+	io.pfrio_buffer = &tbl;
+	io.pfrio_esize = 0;
+	io.pfrio_size = 1;
+
+	if (ioctl(dev, DIOCRCLRTABLES, &io) == 0)
+		atf_tc_fail("Request with unterminated anchor name succeeded");
+}
+
+ATF_TC_CLEANUP(clrtables, tc)
+{
+	COMMON_CLEANUP();
+}
+
 ATF_TC_WITH_CLEANUP(gettstats);
 ATF_TC_HEAD(gettstats, tc)
 {
 	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pf");
 }
 
 ATF_TC_BODY(gettstats, tc)
@@ -236,6 +269,7 @@ ATF_TC_WITH_CLEANUP(clrtstats);
 ATF_TC_HEAD(clrtstats, tc)
 {
 	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pf");
 }
 
 ATF_TC_BODY(clrtstats, tc)
@@ -281,6 +315,7 @@ ATF_TC_WITH_CLEANUP(settflags);
 ATF_TC_HEAD(settflags, tc)
 {
 	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pf");
 }
 
 ATF_TC_BODY(settflags, tc)
@@ -326,6 +361,7 @@ ATF_TC_WITH_CLEANUP(addaddrs);
 ATF_TC_HEAD(addaddrs, tc)
 {
 	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pf");
 }
 
 ATF_TC_BODY(addaddrs, tc)
@@ -361,6 +397,7 @@ ATF_TC_WITH_CLEANUP(deladdrs);
 ATF_TC_HEAD(deladdrs, tc)
 {
 	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pf");
 }
 
 ATF_TC_BODY(deladdrs, tc)
@@ -396,6 +433,7 @@ ATF_TC_WITH_CLEANUP(setaddrs);
 ATF_TC_HEAD(setaddrs, tc)
 {
 	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pf");
 }
 
 ATF_TC_BODY(setaddrs, tc)
@@ -431,6 +469,7 @@ ATF_TC_WITH_CLEANUP(getaddrs);
 ATF_TC_HEAD(getaddrs, tc)
 {
 	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pf");
 }
 
 ATF_TC_BODY(getaddrs, tc)
@@ -468,6 +507,7 @@ ATF_TC_WITH_CLEANUP(getastats);
 ATF_TC_HEAD(getastats, tc)
 {
 	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pf");
 }
 
 ATF_TC_BODY(getastats, tc)
@@ -505,6 +545,7 @@ ATF_TC_WITH_CLEANUP(clrastats);
 ATF_TC_HEAD(clrastats, tc)
 {
 	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pf");
 }
 
 ATF_TC_BODY(clrastats, tc)
@@ -542,6 +583,7 @@ ATF_TC_WITH_CLEANUP(tstaddrs);
 ATF_TC_HEAD(tstaddrs, tc)
 {
 	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pf");
 }
 
 ATF_TC_BODY(tstaddrs, tc)
@@ -579,6 +621,7 @@ ATF_TC_WITH_CLEANUP(inadefine);
 ATF_TC_HEAD(inadefine, tc)
 {
 	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pf");
 }
 
 ATF_TC_BODY(inadefine, tc)
@@ -616,6 +659,7 @@ ATF_TC_WITH_CLEANUP(igetifaces);
 ATF_TC_HEAD(igetifaces, tc)
 {
 	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pf");
 }
 
 ATF_TC_BODY(igetifaces, tc)
@@ -650,6 +694,7 @@ ATF_TC_WITH_CLEANUP(cxbegin);
 ATF_TC_HEAD(cxbegin, tc)
 {
 	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pf");
 }
 
 ATF_TC_BODY(cxbegin, tc)
@@ -689,6 +734,7 @@ ATF_TC_WITH_CLEANUP(cxrollback);
 ATF_TC_HEAD(cxrollback, tc)
 {
 	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pf");
 }
 
 ATF_TC_BODY(cxrollback, tc)
@@ -728,6 +774,7 @@ ATF_TC_WITH_CLEANUP(commit);
 ATF_TC_HEAD(commit, tc)
 {
 	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pf");
 }
 
 ATF_TC_BODY(commit, tc)
@@ -767,6 +814,7 @@ ATF_TC_WITH_CLEANUP(getsrcnodes);
 ATF_TC_HEAD(getsrcnodes, tc)
 {
 	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pf");
 }
 
 ATF_TC_BODY(getsrcnodes, tc)
@@ -799,6 +847,7 @@ ATF_TC_WITH_CLEANUP(tag);
 ATF_TC_HEAD(tag, tc)
 {
 	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pf");
 }
 
 ATF_TC_BODY(tag, tc)
@@ -836,6 +885,7 @@ ATF_TC_WITH_CLEANUP(rpool_mtx);
 ATF_TC_HEAD(rpool_mtx, tc)
 {
 	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pf");
 }
 
 ATF_TC_BODY(rpool_mtx, tc)
@@ -873,6 +923,7 @@ ATF_TC_WITH_CLEANUP(rpool_mtx2);
 ATF_TC_HEAD(rpool_mtx2, tc)
 {
 	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pf");
 }
 
 ATF_TC_BODY(rpool_mtx2, tc)
@@ -895,12 +946,71 @@ ATF_TC_CLEANUP(rpool_mtx2, tc)
 	COMMON_CLEANUP();
 }
 
+ATF_TC_WITH_CLEANUP(natlook);
+ATF_TC_HEAD(natlook, tc)
+{
+	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pf");
+}
+
+ATF_TC_BODY(natlook, tc)
+{
+	struct pfioc_natlook nl = { 0 };
+
+	COMMON_HEAD();
+
+	nl.af = AF_INET;
+	nl.proto = IPPROTO_ICMP;
+	nl.saddr.v4.s_addr = 0x01020304;
+	nl.daddr.v4.s_addr = 0x05060708;
+
+	/* Invalid direction */
+	nl.direction = 42;
+
+	ATF_CHECK_ERRNO(EINVAL, ioctl(dev, DIOCNATLOOK, &nl) == -1);
+
+	/* Invalid af */
+	nl.direction = PF_IN;
+	nl.af = 99;
+
+	ATF_CHECK_ERRNO(EAFNOSUPPORT, ioctl(dev, DIOCNATLOOK, &nl) == -1);
+}
+
+ATF_TC_CLEANUP(natlook, tc)
+{
+	COMMON_CLEANUP();
+}
+
+ATF_TC_WITH_CLEANUP(addstate);
+ATF_TC_HEAD(addstate, tc)
+{
+	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "pfsync");
+}
+
+ATF_TC_BODY(addstate, tc)
+{
+	struct pfioc_state st;
+
+	COMMON_HEAD();
+
+	memset(&st, 'a', sizeof(st));
+	st.state.timeout = PFTM_TCP_FIRST_PACKET;
+
+	ATF_CHECK_ERRNO(EINVAL, ioctl(dev, DIOCADDSTATE, &st) == -1);
+}
+
+ATF_TC_CLEANUP(addstate, tc)
+{
+	COMMON_CLEANUP();
+}
 
 ATF_TP_ADD_TCS(tp)
 {
 	ATF_TP_ADD_TC(tp, addtables);
 	ATF_TP_ADD_TC(tp, deltables);
 	ATF_TP_ADD_TC(tp, gettables);
+	ATF_TP_ADD_TC(tp, clrtables);
 	ATF_TP_ADD_TC(tp, getastats);
 	ATF_TP_ADD_TC(tp, gettstats);
 	ATF_TP_ADD_TC(tp, clrtstats);
@@ -920,6 +1030,8 @@ ATF_TP_ADD_TCS(tp)
 	ATF_TP_ADD_TC(tp, tag);
 	ATF_TP_ADD_TC(tp, rpool_mtx);
 	ATF_TP_ADD_TC(tp, rpool_mtx2);
+	ATF_TP_ADD_TC(tp, natlook);
+	ATF_TP_ADD_TC(tp, addstate);
 
 	return (atf_no_error());
 }

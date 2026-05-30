@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2004-2009 Pawel Jakub Dawidek <pjd@FreeBSD.org>
  * All rights reserved.
@@ -25,9 +25,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -436,7 +433,7 @@ g_mirror_ctl_create(struct gctl_req *req, struct g_class *mp)
 	g_topology_lock();
 	mediasize = OFF_MAX;
 	sectorsize = 0;
-	gp = g_new_geomf(mp, "%s", md.md_name);
+	gp = g_new_geom(mp, md.md_name);
 	gp->orphan = g_mirror_create_orphan;
 	cp = g_new_consumer(gp);
 	for (no = 1; no < *nargs; no++) {

@@ -22,12 +22,9 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 
-PACKAGE=	runtime
-
-LIB=	pam_lastlog
-SRCS=	pam_lastlog.c
-MAN=	pam_lastlog.8
+LIB=		pam_lastlog
+SRCS=		pam_lastlog.c
+MANNODEV=	pam_lastlog.8
 
 .include <bsd.lib.mk>

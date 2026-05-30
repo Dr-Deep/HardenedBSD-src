@@ -1,4 +1,3 @@
-# $FreeBSD$
 
 . $(atf_get_srcdir)/../common/vnet.subr
 
@@ -23,8 +22,12 @@ basic_body()
 	jexec alcatraz ifconfig ${epair_vlan}a up
 	jexec alcatraz ifconfig ${vlan0} 10.0.0.1/24 up
 
-	vlan1=$(jexec singsing ifconfig vlan create vlandev ${epair_vlan}b \
-		vlan 42)
+	vlan1=$(jexec singsing ifconfig vlan create)
+
+	# Test associating the physical interface
+	atf_check -s exit:0 \
+	    jexec singsing ifconfig ${vlan1} vlandev ${epair_vlan}b vlan 42
+
 	jexec singsing ifconfig ${epair_vlan}b up
 	jexec singsing ifconfig ${vlan1} 10.0.0.2/24 up
 
@@ -38,7 +41,7 @@ basic_body()
 	# And change back
 	# Test changing the vlan ID
 	atf_check -s exit:0 \
-	    jexec singsing ifconfig ${vlan1} vlandev ${epair_vlan}b vlan 42
+	    jexec singsing ifconfig ${vlan1} vlan 42 vlandev ${epair_vlan}b
 	atf_check -s exit:0 -o ignore jexec singsing ping -c 1 10.0.0.1
 }
 
@@ -221,12 +224,40 @@ qinq_dot_cleanup()
 	vnet_cleanup
 }
 
+atf_test_case "qinq_setflags" "cleanup"
+qinq_setflags_head()
+{
+	atf_set descr 'Test setting flags on a QinQ device'
+	atf_set require.user root
+}
+
+qinq_setflags_body()
+{
+	vnet_init
+
+	epair=$(vnet_mkepair)
+
+	ifconfig ${epair}a up
+	vlan1=$(ifconfig vlan create)
+	ifconfig $vlan1 vlan 1 vlandev ${epair}a
+	vlan2=$(ifconfig vlan create)
+	ifconfig $vlan2 vlan 2 vlandev $vlan1
+
+	# This panics, incorrect locking
+	ifconfig $vlan2 promisc
+}
+
+qinq_setflags_cleanup()
+{
+	vnet_cleanup
+}
+
 atf_test_case "bpf_pcp" "cleanup"
 bpf_pcp_head()
 {
 	atf_set descr 'Set VLAN PCP through BPF'
 	atf_set require.user root
-	atf_set require.progs scapy
+	atf_set require.progs python3 scapy
 }
 
 bpf_pcp_body()
@@ -266,6 +297,68 @@ bpf_pcp_cleanup()
 	vnet_cleanup
 }
 
+atf_test_case "conflict_id" "cleanup"
+conflict_id_head()
+{
+	atf_set descr 'Test conflicting VLAN IDs, PR #279195'
+	atf_set require.user root
+}
+
+conflict_id_body()
+{
+	vnet_init
+
+	epair=$(vnet_mkepair)
+
+	vnet_mkjail alcatraz ${epair}b
+	vlan_a=$(jexec alcatraz ifconfig vlan create)
+	vlan_b=$(jexec alcatraz ifconfig vlan create)
+
+	jexec alcatraz ifconfig ${vlan_a} vlan 100 vlandev ${epair}b
+	jexec alcatraz ifconfig ${vlan_b} vlan 101 vlandev ${epair}b
+
+	atf_check -s exit:1 -o ignore -e ignore \
+	    jexec alcatraz ifconfig ${vlan_a} vlan 101
+
+	atf_check -s exit:0 -o match:"vlan: 100" \
+	    jexec alcatraz ifconfig ${vlan_a}
+
+	atf_check -s exit:0 -o ignore -e ignore \
+	    jexec alcatraz ifconfig ${vlan_a} vlan 100
+}
+
+conflict_id_cleanup()
+{
+	vnet_cleanup
+
+}
+
+# If a vlan interface is in a bridge, changing the vlandev to refer to
+# a bridge should not be allowed.
+atf_test_case "bridge_vlandev" "cleanup"
+bridge_vlandev_head()
+{
+	atf_set descr 'transforming a bridge member vlan into an SVI is not allowed'
+	atf_set require.user root
+}
+
+bridge_vlandev_body()
+{
+	vnet_init
+	vnet_init_bridge
+
+	bridge=$(vnet_mkbridge)
+	vlan=$(vnet_mkvlan)
+
+	atf_check -s exit:0 ifconfig ${bridge} addm ${vlan}
+	atf_check -s exit:1 -e ignore ifconfig ${vlan} vlan 1 vlandev ${bridge}
+}
+
+bridge_vlandev_cleanup()
+{
+	vnet_cleanup
+}
+
 atf_init_test_cases()
 {
 	atf_add_test_case "basic"
@@ -273,5 +366,8 @@ atf_init_test_cases()
 	atf_add_test_case "qinq_deep"
 	atf_add_test_case "qinq_legacy"
 	atf_add_test_case "qinq_dot"
+	atf_add_test_case "qinq_setflags"
 	atf_add_test_case "bpf_pcp"
+	atf_add_test_case "conflict_id"
+	atf_add_test_case "bridge_vlandev"
 }

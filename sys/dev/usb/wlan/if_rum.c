@@ -1,4 +1,3 @@
-/*	$FreeBSD$	*/
 
 /*-
  * Copyright (c) 2005-2007 Damien Bergamini <damien.bergamini@free.fr>
@@ -18,9 +17,6 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 /*-
  * Ralink Technology RT2501USB/RT2601USB chipset driver
@@ -197,8 +193,8 @@ static uint32_t		rum_read(struct rum_softc *, uint16_t);
 static void		rum_read_multi(struct rum_softc *, uint16_t, void *,
 			    int);
 static usb_error_t	rum_write(struct rum_softc *, uint16_t, uint32_t);
-static usb_error_t	rum_write_multi(struct rum_softc *, uint16_t, void *,
-			    size_t);
+static usb_error_t	rum_write_multi(struct rum_softc *, uint16_t,
+			    const void *, size_t);
 static usb_error_t	rum_setbits(struct rum_softc *, uint16_t, uint32_t);
 static usb_error_t	rum_clrbits(struct rum_softc *, uint16_t, uint32_t);
 static usb_error_t	rum_modbits(struct rum_softc *, uint16_t, uint32_t,
@@ -722,10 +718,12 @@ rum_vap_delete(struct ieee80211vap *vap)
 	struct rum_vap *rvp = RUM_VAP(vap);
 	struct ieee80211com *ic = vap->iv_ic;
 	struct rum_softc *sc = ic->ic_softc;
+	int i;
 
 	/* Put vap into INIT state. */
 	ieee80211_new_state(vap, IEEE80211_S_INIT, -1);
-	ieee80211_draintask(ic, &vap->iv_nstate_task);
+	for (i = 0; i < NET80211_IV_NSTATE_NUM; i++)
+		ieee80211_draintask(ic, &vap->iv_nstate_task[i]);
 
 	RUM_LOCK(sc);
 	/* Cancel any unfinished Tx. */
@@ -1076,7 +1074,7 @@ rum_bulk_write_callback(struct usb_xfer *xfer, usb_error_t error)
 	struct rum_tx_data *data;
 	struct mbuf *m;
 	struct usb_page_cache *pc;
-	unsigned int len;
+	unsigned len;
 	int actlen, sumlen;
 
 	usbd_xfer_status(xfer, &actlen, &sumlen, NULL, NULL);
@@ -1169,7 +1167,6 @@ rum_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct ieee80211_frame_min *wh;
 	struct ieee80211_node *ni;
-	struct epoch_tracker et;
 	struct mbuf *m = NULL;
 	struct usb_page_cache *pc;
 	uint32_t flags;
@@ -1288,7 +1285,6 @@ tr_setup:
 			else
 				ni = NULL;
 
-			NET_EPOCH_ENTER(et);
 			if (ni != NULL) {
 				(void) ieee80211_input(ni, m, rssi,
 				    RT2573_NOISE_FLOOR);
@@ -1296,7 +1292,6 @@ tr_setup:
 			} else
 				(void) ieee80211_input_all(ic, m, rssi,
 				    RT2573_NOISE_FLOOR);
-			NET_EPOCH_EXIT(et);
 		}
 		RUM_LOCK(sc);
 		rum_start(sc);
@@ -1465,15 +1460,15 @@ rum_tx_crypto_flags(struct rum_softc *sc, struct ieee80211_node *ni,
 	if (!(k->wk_flags & IEEE80211_KEY_SWCRYPT)) {
 		cipher = k->wk_cipher->ic_cipher;
 		pos = k->wk_keyix;
-		mode = rum_crypto_mode(sc, cipher, k->wk_keylen);
+		mode = rum_crypto_mode(sc, cipher,
+		    ieee80211_crypto_get_key_len(k));
 		if (mode == 0)
 			return 0;
 
 		flags |= RT2573_TX_CIP_MODE(mode);
 
 		/* Do not trust GROUP flag */
-		if (!(k >= &vap->iv_nw_keys[0] &&
-		      k < &vap->iv_nw_keys[IEEE80211_WEP_NKID]))
+		if (ieee80211_is_key_unicast(vap, k))
 			flags |= RT2573_TX_KEY_PAIR;
 		else
 			pos += 0 * RT2573_SKEY_MAX;	/* vap id */
@@ -1531,9 +1526,7 @@ rum_tx_mgt(struct rum_softc *sc, struct mbuf *m0, struct ieee80211_node *ni)
 		USETW(wh->i_dur, dur);
 
 		/* tell hardware to add timestamp for probe responses */
-		if (type == IEEE80211_FC0_TYPE_MGT &&
-		    (wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK) ==
-		    IEEE80211_FC0_SUBTYPE_PROBE_RESP)
+		if (IEEE80211_IS_MGMT_PROBE_RESP(wh))
 			flags |= RT2573_TX_TIMESTAMP;
 	}
 
@@ -1653,7 +1646,7 @@ rum_tx_data(struct rum_softc *sc, struct mbuf *m0, struct ieee80211_node *ni)
 		rate = tp->ucastrate;
 	else {
 		(void) ieee80211_ratectl_rate(ni, NULL, 0);
-		rate = ni->ni_txrate;
+		rate = ieee80211_node_get_txrate_dot11rate(ni);
 	}
 
 	if (wh->i_fc[1] & IEEE80211_FC1_PROTECTED) {
@@ -1851,7 +1844,8 @@ rum_write(struct rum_softc *sc, uint16_t reg, uint32_t val)
 }
 
 static usb_error_t
-rum_write_multi(struct rum_softc *sc, uint16_t reg, void *buf, size_t len)
+rum_write_multi(struct rum_softc *sc, uint16_t reg, const void *buf,
+    size_t len)
 {
 	struct usb_device_request req;
 	usb_error_t error;
@@ -1866,7 +1860,8 @@ rum_write_multi(struct rum_softc *sc, uint16_t reg, void *buf, size_t len)
 		USETW(req.wIndex, reg + offset);
 		USETW(req.wLength, MIN(len - offset, 64));
 
-		error = rum_do_request(sc, &req, (char *)buf + offset);
+		error = rum_do_request(sc, &req, __DECONST(char *, buf)
+		    + offset);
 		if (error != 0) {
 			device_printf(sc->sc_dev,
 			    "could not multi write MAC register: %s\n",
@@ -2490,7 +2485,7 @@ rum_read_eeprom(struct rum_softc *sc)
 static int
 rum_bbp_wakeup(struct rum_softc *sc)
 {
-	unsigned int ntries;
+	unsigned ntries;
 
 	for (ntries = 0; ntries < 100; ntries++) {
 		if (rum_read(sc, RT2573_MAC_CSR12) & 8)
@@ -2867,15 +2862,16 @@ rum_common_key_set(struct rum_softc *sc, struct ieee80211_key *k,
     uint16_t base)
 {
 
-	if (rum_write_multi(sc, base, k->wk_key, k->wk_keylen))
+	if (rum_write_multi(sc, base, ieee80211_crypto_get_key_data(k),
+	    ieee80211_crypto_get_key_len(k)))
 		return EIO;
 
 	if (k->wk_cipher->ic_cipher == IEEE80211_CIPHER_TKIP) {
 		if (rum_write_multi(sc, base + IEEE80211_KEYBUF_SIZE,
-		    k->wk_txmic, 8))
+		    ieee80211_crypto_get_key_txmic_data(k), 8))
 			return EIO;
 		if (rum_write_multi(sc, base + IEEE80211_KEYBUF_SIZE + 8,
-		    k->wk_rxmic, 8))
+		    ieee80211_crypto_get_key_rxmic_data(k), 8))
 			return EIO;
 	}
 
@@ -2894,7 +2890,8 @@ rum_group_key_set_cb(struct rum_softc *sc, union sec_param *data,
 		sc->sc_clr_shkeys = 1;
 	}
 
-	mode = rum_crypto_mode(sc, k->wk_cipher->ic_cipher, k->wk_keylen);
+	mode = rum_crypto_mode(sc, k->wk_cipher->ic_cipher,
+	    ieee80211_crypto_get_key_len(k));
 	if (mode == 0)
 		goto print_err;
 
@@ -2949,7 +2946,8 @@ rum_pair_key_set_cb(struct rum_softc *sc, union sec_param *data,
 	uint8_t buf[IEEE80211_ADDR_LEN + 1];
 	uint8_t mode;
 
-	mode = rum_crypto_mode(sc, k->wk_cipher->ic_cipher, k->wk_keylen);
+	mode = rum_crypto_mode(sc, k->wk_cipher->ic_cipher,
+	    ieee80211_crypto_get_key_len(k));
 	if (mode == 0)
 		goto print_err;
 
@@ -3010,8 +3008,7 @@ rum_key_alloc(struct ieee80211vap *vap, struct ieee80211_key *k,
 	struct rum_softc *sc = vap->iv_ic->ic_softc;
 	uint8_t i;
 
-	if (!(&vap->iv_nw_keys[0] <= k &&
-	     k < &vap->iv_nw_keys[IEEE80211_WEP_NKID])) {
+	if (ieee80211_is_key_unicast(vap, k)) {
 		if (!(k->wk_flags & IEEE80211_KEY_SWCRYPT)) {
 			RUM_LOCK(sc);
 			for (i = 0; i < RT2573_ADDR_MAX; i++) {
@@ -3048,7 +3045,7 @@ rum_key_set(struct ieee80211vap *vap, const struct ieee80211_key *k)
 		return 1;
 	}
 
-	group = k >= &vap->iv_nw_keys[0] && k < &vap->iv_nw_keys[IEEE80211_WEP_NKID];
+	group = ieee80211_is_key_global(vap, k);
 
 	return !rum_cmd_sleepable(sc, k, sizeof(*k), 0,
 		   group ? rum_group_key_set_cb : rum_pair_key_set_cb);
@@ -3065,7 +3062,7 @@ rum_key_delete(struct ieee80211vap *vap, const struct ieee80211_key *k)
 		return 1;
 	}
 
-	group = k >= &vap->iv_nw_keys[0] && k < &vap->iv_nw_keys[IEEE80211_WEP_NKID];
+	group = ieee80211_is_key_global(vap, k);
 
 	return !rum_cmd_sleepable(sc, k, sizeof(*k), 0,
 		   group ? rum_group_key_del_cb : rum_pair_key_del_cb);

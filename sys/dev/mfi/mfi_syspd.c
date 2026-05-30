@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -32,8 +32,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_mfi.h"
 
 #include <sys/param.h>
@@ -77,7 +75,7 @@ static device_method_t mfi_syspd_methods[] = {
 	DEVMETHOD(device_probe,		mfi_syspd_probe),
 	DEVMETHOD(device_attach,	mfi_syspd_attach),
 	DEVMETHOD(device_detach,	mfi_syspd_detach),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t mfi_syspd_driver = {

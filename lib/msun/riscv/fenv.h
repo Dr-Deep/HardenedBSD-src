@@ -31,13 +31,12 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef	_FENV_H_
 #define	_FENV_H_
 
+#include <sys/cdefs.h>
 #include <sys/_types.h>
 
 #ifndef	__fenv_static
@@ -73,34 +72,39 @@ __BEGIN_DECLS
 extern const fenv_t	__fe_dfl_env;
 #define	FE_DFL_ENV	(&__fe_dfl_env)
 
-#if !defined(__riscv_float_abi_soft) && !defined(__riscv_float_abi_double)
-#if defined(__riscv_float_abi_single)
-#error single precision floating point ABI not supported
-#else
-#error compiler did not set soft/hard float macros
-#endif
+#ifndef __riscv_float_abi_double
+#error only double hard float ABI supported
 #endif
 
-#ifndef __riscv_float_abi_soft
 #define	__rfs(__fcsr)	__asm __volatile("csrr %0, fcsr" : "=r" (__fcsr))
 #define	__wfs(__fcsr)	__asm __volatile("csrw fcsr, %0" :: "r" (__fcsr))
-#endif
 
-#ifdef __riscv_float_abi_soft
-int feclearexcept(int __excepts);
-int fegetexceptflag(fexcept_t *__flagp, int __excepts);
-int fesetexceptflag(const fexcept_t *__flagp, int __excepts);
-int feraiseexcept(int __excepts);
-int fetestexcept(int __excepts);
+int feclearexcept(int);
+int fegetexceptflag(fexcept_t *, int);
+int fesetexceptflag(const fexcept_t *, int);
+int feraiseexcept(int);
+int fetestexcept(int);
 int fegetround(void);
-int fesetround(int __round);
-int fegetenv(fenv_t *__envp);
-int feholdexcept(fenv_t *__envp);
-int fesetenv(const fenv_t *__envp);
-int feupdateenv(const fenv_t *__envp);
-#else
+int fesetround(int);
+int fegetenv(fenv_t *);
+int feholdexcept(fenv_t *);
+int fesetenv(const fenv_t *);
+int feupdateenv(const fenv_t *);
+
+#define	feclearexcept(a)	__feclearexcept_int(a)
+#define	fegetexceptflag(e, a)	__fegetexceptflag_int(e, a)
+#define	fesetexceptflag(e, a)	__fesetexceptflag_int(e, a)
+#define	feraiseexcept(a)	__feraiseexcept_int(a)
+#define	fetestexcept(a)		__fetestexcept_int(a)
+#define	fegetround()		__fegetround_int()
+#define	fesetround(a)		__fesetround_int(a)
+#define	fegetenv(e)		__fegetenv_int(e)
+#define	feholdexcept(e)		__feholdexcept_int(e)
+#define	fesetenv(e)		__fesetenv_int(e)
+#define	feupdateenv(e)		__feupdateenv_int(e)
+
 __fenv_static inline int
-feclearexcept(int __excepts)
+__feclearexcept_int(int __excepts)
 {
 
 	__asm __volatile("csrc fflags, %0" :: "r"(__excepts));
@@ -109,7 +113,7 @@ feclearexcept(int __excepts)
 }
 
 __fenv_static inline int
-fegetexceptflag(fexcept_t *__flagp, int __excepts)
+__fegetexceptflag_int(fexcept_t *__flagp, int __excepts)
 {
 	fexcept_t __fcsr;
 
@@ -120,7 +124,7 @@ fegetexceptflag(fexcept_t *__flagp, int __excepts)
 }
 
 __fenv_static inline int
-fesetexceptflag(const fexcept_t *__flagp, int __excepts)
+__fesetexceptflag_int(const fexcept_t *__flagp, int __excepts)
 {
 	fexcept_t __fcsr;
 
@@ -132,7 +136,7 @@ fesetexceptflag(const fexcept_t *__flagp, int __excepts)
 }
 
 __fenv_static inline int
-feraiseexcept(int __excepts)
+__feraiseexcept_int(int __excepts)
 {
 
 	__asm __volatile("csrs fflags, %0" :: "r"(__excepts));
@@ -141,7 +145,7 @@ feraiseexcept(int __excepts)
 }
 
 __fenv_static inline int
-fetestexcept(int __excepts)
+__fetestexcept_int(int __excepts)
 {
 	fexcept_t __fcsr;
 
@@ -151,7 +155,7 @@ fetestexcept(int __excepts)
 }
 
 __fenv_static inline int
-fegetround(void)
+__fegetround_int(void)
 {
 	fexcept_t __fcsr;
 
@@ -161,7 +165,7 @@ fegetround(void)
 }
 
 __fenv_static inline int
-fesetround(int __round)
+__fesetround_int(int __round)
 {
 	fexcept_t __fcsr;
 
@@ -177,7 +181,7 @@ fesetround(int __round)
 }
 
 __fenv_static inline int
-fegetenv(fenv_t *__envp)
+__fegetenv_int(fenv_t *__envp)
 {
 
 	__rfs(*__envp);
@@ -186,7 +190,7 @@ fegetenv(fenv_t *__envp)
 }
 
 __fenv_static inline int
-feholdexcept(fenv_t *__envp __unused)
+__feholdexcept_int(fenv_t *__envp __unused)
 {
 
 	/* No exception traps. */
@@ -195,7 +199,7 @@ feholdexcept(fenv_t *__envp __unused)
 }
 
 __fenv_static inline int
-fesetenv(const fenv_t *__envp)
+__fesetenv_int(const fenv_t *__envp)
 {
 
 	__wfs(*__envp);
@@ -204,7 +208,7 @@ fesetenv(const fenv_t *__envp)
 }
 
 __fenv_static inline int
-feupdateenv(const fenv_t *__envp)
+__feupdateenv_int(const fenv_t *__envp)
 {
 	fexcept_t __fcsr;
 
@@ -214,19 +218,17 @@ feupdateenv(const fenv_t *__envp)
 
 	return (0);
 }
-#endif /* !__riscv_float_abi_soft */
 
 #if __BSD_VISIBLE
 
-/* We currently provide no external definitions of the functions below. */
+int feenableexcept(int);
+int fedisableexcept(int);
 
-#ifdef __riscv_float_abi_soft
-int feenableexcept(int __mask);
-int fedisableexcept(int __mask);
-int fegetexcept(void);
-#else
-static inline int
-feenableexcept(int __mask __unused)
+#define	feenableexcept(a)	__feenableexcept_int(a)
+#define	fedisableexcept(a)	__fedisableexcept_int(a)
+
+__fenv_static inline int
+__feenableexcept_int(int __mask __unused)
 {
 
 	/* No exception traps. */
@@ -234,8 +236,8 @@ feenableexcept(int __mask __unused)
 	return (0);
 }
 
-static inline int
-fedisableexcept(int __mask __unused)
+__fenv_static inline int
+__fedisableexcept_int(int __mask __unused)
 {
 
 	/* No exception traps. */
@@ -243,6 +245,7 @@ fedisableexcept(int __mask __unused)
 	return (0);
 }
 
+/* We currently provide no external definition of fegetexcept(). */
 static inline int
 fegetexcept(void)
 {
@@ -251,7 +254,6 @@ fegetexcept(void)
 
 	return (0);
 }
-#endif /* !__riscv_float_abi_soft */
 
 #endif /* __BSD_VISIBLE */
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -65,9 +66,11 @@ typedef struct vdev_rebuild_phys {
 typedef struct vdev_rebuild {
 	vdev_t		*vr_top_vdev;		/* top-level vdev to rebuild */
 	metaslab_t	*vr_scan_msp;		/* scanning disabled metaslab */
-	range_tree_t	*vr_scan_tree;		/* scan ranges (in metaslab) */
+	/* scan ranges (in metaslab) */
+	zfs_range_tree_t	*vr_scan_tree;
 	kmutex_t	vr_io_lock;		/* inflight IO lock */
 	kcondvar_t	vr_io_cv;		/* inflight IO cv */
+	uint64_t	vr_last_txg;		/* last used txg */
 
 	/* In-core state and progress */
 	uint64_t	vr_scan_offset[TXG_SIZE];
@@ -79,6 +82,7 @@ typedef struct vdev_rebuild {
 	uint64_t	vr_pass_start_time;
 	uint64_t	vr_pass_bytes_scanned;
 	uint64_t	vr_pass_bytes_issued;
+	uint64_t	vr_pass_bytes_skipped;
 
 	/* On-disk state updated by vdev_rebuild_zap_update_sync() */
 	vdev_rebuild_phys_t vr_rebuild_phys;
@@ -87,7 +91,8 @@ typedef struct vdev_rebuild {
 boolean_t vdev_rebuild_active(vdev_t *);
 
 int vdev_rebuild_load(vdev_t *);
-void vdev_rebuild(vdev_t *);
+void vdev_rebuild(vdev_t *, uint64_t);
+void vdev_rebuild_txgs(vdev_t *, uint64_t *, uint64_t *);
 void vdev_rebuild_stop_wait(vdev_t *);
 void vdev_rebuild_stop_all(spa_t *);
 void vdev_rebuild_restart(spa_t *);

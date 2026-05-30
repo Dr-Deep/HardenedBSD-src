@@ -19,6 +19,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/MC/MCRegister.h" // definition of MCPhysReg.
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/MathExtras.h"
 
 #ifndef NDEBUG
@@ -271,11 +272,11 @@ public:
   // instruction identifier associated with this write. ReadAdvance is the
   // number of cycles to subtract from the latency of this data dependency.
   // Use is in a RAW dependency with this write.
-  void addUser(unsigned IID, ReadState *Use, int ReadAdvance);
+  LLVM_ABI void addUser(unsigned IID, ReadState *Use, int ReadAdvance);
 
   // Use is a younger register write that is in a false dependency with this
   // write. IID is the instruction identifier associated with this write.
-  void addUser(unsigned IID, WriteState *Use);
+  LLVM_ABI void addUser(unsigned IID, WriteState *Use);
 
   unsigned getNumUsers() const {
     unsigned NumUsers = Users.size();
@@ -300,7 +301,7 @@ public:
   }
 
   void setDependentWrite(const WriteState *Other) { DependentWrite = Other; }
-  void writeStartEvent(unsigned IID, MCPhysReg RegID, unsigned Cycles);
+  LLVM_ABI void writeStartEvent(unsigned IID, MCPhysReg RegID, unsigned Cycles);
   void setWriteZero() { WritesZero = true; }
   void setEliminated() {
     assert(Users.empty() && "Write is in an inconsistent state.");
@@ -311,8 +312,8 @@ public:
   void setPRF(unsigned PRF) { PRFID = PRF; }
 
   // On every cycle, update CyclesLeft and notify dependent users.
-  void cycleEvent();
-  void onInstructionIssued(unsigned IID);
+  LLVM_ABI void cycleEvent();
+  LLVM_ABI void onInstructionIssued(unsigned IID);
 
 #ifndef NDEBUG
   void dump() const;
@@ -371,8 +372,8 @@ public:
   bool isIndependentFromDef() const { return IndependentFromDef; }
   void setIndependentFromDef() { IndependentFromDef = true; }
 
-  void cycleEvent();
-  void writeStartEvent(unsigned IID, MCPhysReg RegID, unsigned Cycles);
+  LLVM_ABI void cycleEvent();
+  LLVM_ABI void writeStartEvent(unsigned IID, MCPhysReg RegID, unsigned Cycles);
   void setDependentWrites(unsigned Writes) {
     DependentWrites = Writes;
     IsReady = !Writes;
@@ -458,9 +459,6 @@ struct InstrDesc {
   // A bitmask of used processor resource units.
   uint64_t UsedProcResUnits;
 
-  // A bitmask of implicit uses of processor resource units.
-  uint64_t ImplicitlyUsedProcResUnits;
-
   // A bitmask of used processor resource groups.
   uint64_t UsedProcResGroups;
 
@@ -472,16 +470,17 @@ struct InstrDesc {
   // subtarget when computing the reciprocal throughput.
   unsigned SchedClassID;
 
-  unsigned MayLoad : 1;
-  unsigned MayStore : 1;
-  unsigned HasSideEffects : 1;
-  unsigned BeginGroup : 1;
-  unsigned EndGroup : 1;
-  unsigned RetireOOO : 1;
-
   // True if all buffered resources are in-order, and there is at least one
   // buffer which is a dispatch hazard (BufferSize = 0).
   unsigned MustIssueImmediately : 1;
+
+  // True if the corresponding mca::Instruction can be recycled. Currently only
+  // instructions that are neither variadic nor have any variant can be
+  // recycled.
+  unsigned IsRecyclable : 1;
+
+  // True if some of the consumed group resources are partially overlapping.
+  unsigned HasPartiallyOverlappingGroups : 1;
 
   // A zero latency instruction doesn't consume any scheduler resources.
   bool isZeroLatency() const { return !MaxLatency && Resources.empty(); }
@@ -518,8 +517,16 @@ class InstructionBase {
   unsigned Opcode;
 
   // Flags used by the LSUnit.
-  bool IsALoadBarrier;
-  bool IsAStoreBarrier;
+  bool IsALoadBarrier : 1;
+  bool IsAStoreBarrier : 1;
+  // Flags copied from the InstrDesc and potentially modified by
+  // CustomBehaviour or (more likely) InstrPostProcess.
+  bool MayLoad : 1;
+  bool MayStore : 1;
+  bool HasSideEffects : 1;
+  bool BeginGroup : 1;
+  bool EndGroup : 1;
+  bool RetireOOO : 1;
 
 public:
   InstructionBase(const InstrDesc &D, const unsigned Opcode)
@@ -543,9 +550,9 @@ public:
   /// Return the MCAOperand which corresponds to index Idx within the original
   /// MCInst.
   const MCAOperand *getOperand(const unsigned Idx) const {
-    auto It = std::find_if(
-        Operands.begin(), Operands.end(),
-        [&Idx](const MCAOperand &Op) { return Op.getIndex() == Idx; });
+    auto It = llvm::find_if(Operands, [&Idx](const MCAOperand &Op) {
+      return Op.getIndex() == Idx;
+    });
     if (It == Operands.end())
       return nullptr;
     return &(*It);
@@ -568,7 +575,23 @@ public:
   // Returns true if this instruction is a candidate for move elimination.
   bool isOptimizableMove() const { return IsOptimizableMove; }
   void setOptimizableMove() { IsOptimizableMove = true; }
-  bool isMemOp() const { return Desc.MayLoad || Desc.MayStore; }
+  void clearOptimizableMove() { IsOptimizableMove = false; }
+  bool isMemOp() const { return MayLoad || MayStore; }
+
+  // Getters and setters for general instruction flags.
+  void setMayLoad(bool newVal) { MayLoad = newVal; }
+  void setMayStore(bool newVal) { MayStore = newVal; }
+  void setHasSideEffects(bool newVal) { HasSideEffects = newVal; }
+  void setBeginGroup(bool newVal) { BeginGroup = newVal; }
+  void setEndGroup(bool newVal) { EndGroup = newVal; }
+  void setRetireOOO(bool newVal) { RetireOOO = newVal; }
+
+  bool getMayLoad() const { return MayLoad; }
+  bool getMayStore() const { return MayStore; }
+  bool getHasSideEffects() const { return HasSideEffects; }
+  bool getBeginGroup() const { return BeginGroup; }
+  bool getEndGroup() const { return EndGroup; }
+  bool getRetireOOO() const { return RetireOOO; }
 };
 
 /// An instruction propagated through the simulated instruction pipeline.
@@ -628,6 +651,8 @@ public:
         UsedBuffers(D.UsedBuffers), CriticalRegDep(), CriticalMemDep(),
         CriticalResourceMask(0), IsEliminated(false) {}
 
+  LLVM_ABI void reset();
+
   unsigned getRCUTokenID() const { return RCUTokenID; }
   unsigned getLSUTokenID() const { return LSUTokenID; }
   void setLSUTokenID(unsigned LSUTok) { LSUTokenID = LSUTok; }
@@ -641,11 +666,11 @@ public:
   // Transition to the dispatch stage, and assign a RCUToken to this
   // instruction. The RCUToken is used to track the completion of every
   // register write performed by this instruction.
-  void dispatch(unsigned RCUTokenID);
+  LLVM_ABI void dispatch(unsigned RCUTokenID);
 
   // Instruction issued. Transition to the IS_EXECUTING state, and update
   // all the register definitions.
-  void execute(unsigned IID);
+  LLVM_ABI void execute(unsigned IID);
 
   // Force a transition from the IS_DISPATCHED state to the IS_READY or
   // IS_PENDING state. State transitions normally occur either at the beginning
@@ -653,10 +678,11 @@ public:
   // event. This method is called every time the instruction might have changed
   // in state. It internally delegates to method updateDispatched() and
   // updateWaiting().
-  void update();
-  bool updateDispatched();
-  bool updatePending();
+  LLVM_ABI void update();
+  LLVM_ABI bool updateDispatched();
+  LLVM_ABI bool updatePending();
 
+  bool isInvalid() const { return Stage == IS_INVALID; }
   bool isDispatched() const { return Stage == IS_DISPATCHED; }
   bool isPending() const { return Stage == IS_PENDING; }
   bool isReady() const { return Stage == IS_READY; }
@@ -666,7 +692,7 @@ public:
   bool isEliminated() const { return IsEliminated; }
 
   // Forces a transition from state IS_DISPATCHED to state IS_EXECUTED.
-  void forceExecuted();
+  LLVM_ABI void forceExecuted();
   void setEliminated() { IsEliminated = true; }
 
   void retire() {
@@ -676,7 +702,7 @@ public:
 
   const CriticalDependency &getCriticalRegDep() const { return CriticalRegDep; }
   const CriticalDependency &getCriticalMemDep() const { return CriticalMemDep; }
-  const CriticalDependency &computeCriticalRegDep();
+  LLVM_ABI const CriticalDependency &computeCriticalRegDep();
   void setCriticalMemDep(const CriticalDependency &MemDep) {
     CriticalMemDep = MemDep;
   }
@@ -686,7 +712,7 @@ public:
     CriticalResourceMask = ResourceMask;
   }
 
-  void cycleEvent();
+  LLVM_ABI void cycleEvent();
 };
 
 /// An InstRef contains both a SourceMgr index and Instruction pair.  The index

@@ -33,8 +33,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_inet.h"
 #include "opt_inet6.h"
 
@@ -60,6 +58,7 @@ __FBSDID("$FreeBSD$");
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_private.h>
 #include <net/if_clone.h>
 #include <net/if_types.h>
 #include <net/netisr.h>
@@ -255,27 +254,6 @@ static moduledata_t gif_mod = {
 DECLARE_MODULE(if_gif, gif_mod, SI_SUB_PSEUDO, SI_ORDER_ANY);
 MODULE_VERSION(if_gif, 1);
 
-struct gif_list *
-gif_hashinit(void)
-{
-	struct gif_list *hash;
-	int i;
-
-	hash = malloc(sizeof(struct gif_list) * GIF_HASH_SIZE,
-	    M_GIF, M_WAITOK);
-	for (i = 0; i < GIF_HASH_SIZE; i++)
-		CK_LIST_INIT(&hash[i]);
-
-	return (hash);
-}
-
-void
-gif_hashdestroy(struct gif_list *hash)
-{
-
-	free(hash, M_GIF);
-}
-
 #define	MTAG_GIF	1080679712
 static int
 gif_transmit(struct ifnet *ifp, struct mbuf *m)
@@ -313,10 +291,7 @@ gif_transmit(struct ifnet *ifp, struct mbuf *m)
 		goto err;
 	}
 	/* Now pull back the af that we stashed in the csum_data. */
-	if (ifp->if_bridge)
-		af = AF_LINK;
-	else
-		af = m->m_pkthdr.csum_data;
+	af = m->m_pkthdr.csum_data;
 	m->m_flags &= ~(M_BCAST|M_MCAST);
 	M_SETFIB(m, sc->gif_fibnum);
 	BPF_MTAP2(ifp, &af, sizeof(af), m);
@@ -356,6 +331,8 @@ gif_transmit(struct ifnet *ifp, struct mbuf *m)
 		break;
 #endif
 	case AF_LINK:
+		KASSERT(ifp->if_bridge != NULL,
+		    ("%s: bridge not attached", __func__));
 		proto = IPPROTO_ETHERIP;
 		M_PREPEND(m, sizeof(struct etherip_header), M_NOWAIT);
 		if (m == NULL) {
@@ -406,8 +383,9 @@ gif_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 {
 	uint32_t af;
 
-	if (dst->sa_family == AF_UNSPEC)
-		bcopy(dst->sa_data, &af, sizeof(af));
+	/* BPF writes need to be handled specially. */
+	if (dst->sa_family == AF_UNSPEC || dst->sa_family == pseudo_AF_HDRCMPLT)
+		memcpy(&af, dst->sa_data, sizeof(af));
 	else
 		af = RO_GET_FAMILY(ro, dst);
 	/*

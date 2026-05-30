@@ -7,7 +7,6 @@
 # this stuff is worth it, you can buy me a beer in return Poul-Henning Kamp
 # ----------------------------------------------------------------------------
 #
-# $FreeBSD$
 #
 
 # define our bail out shortcut
@@ -18,7 +17,7 @@ main() {
 unset node device started bdaddresses retry
 
 # Only one command at the moment is scan (+ add)
-[ "$#" -eq 1 -a "$1" = "scan" ] || print_syntax
+[ "$1" = "scan" ] || print_syntax
 shift
 
 # Get command line options
@@ -29,6 +28,12 @@ while getopts :d:n: arg; do
 		?) print_syntax;;
 	esac
 done
+shift "$((OPTIND-1))"
+
+# If there's leftover parameters, print usage
+[ "$#" -eq 0 ] || print_syntax
+shift
+
 
 # No use running without super user rights
 if [ $( id -u ) -ne 0 ]; then

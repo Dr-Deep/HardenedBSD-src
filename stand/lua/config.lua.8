@@ -1,5 +1,5 @@
 .\"
-.\" SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+.\" SPDX-License-Identifier: BSD-2-Clause
 .\"
 .\" Copyright (c) 2018 Kyle Evans <kevans@FreeBSD.org>
 .\"
@@ -24,14 +24,12 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
-.Dd December 17, 2020
+.Dd March 29, 2025
 .Dt CONFIG.LUA 8
 .Os
 .Sh NAME
 .Nm config.lua
-.Nd FreeBSD config module
+.Nd bootloader configuration module
 .Sh DESCRIPTION
 .Nm
 contains configuration and module loading functionality.
@@ -66,9 +64,13 @@ as a configuration file
 .Po e.g., as
 .Pa loader.conf
 .Pc
-and then processing files listed in
+and then process files listed in the
 .Ev loader_conf_files
-variable
+variable. Additionally, the top-level call to readConf will process files listed in the
+.Ev loader_conf_dirs
+and
+.Ev local_loader_conf_files
+variables
 .Po see
 .Xr loader.conf 5
 .Pc .
@@ -217,11 +219,19 @@ as well as a representation of
 The following hooks are defined in
 .Nm :
 .Bl -tag -width "config.reloaded" -offset indent
+.It Fn config.buildenv env
 .It Fn config.loaded
 .It Fn config.reloaded
 .It Fn kernel.loaded
 .It Fn modules.loaded
 .El
+.Pp
+Note that the
+.Fn config.buildenv
+hook is only invoked when an environment needs to be built to execute a lua
+configuration file that has been specified in
+.Ev loader_conf_files .
+It will be invoked for each configuration file encountered.
 .Sh SEE ALSO
 .Xr loader.conf 5 ,
 .Xr loader 8 ,

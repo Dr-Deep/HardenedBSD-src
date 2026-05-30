@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2017 The FreeBSD Foundation
  *
@@ -27,7 +27,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  * 
- * $FreeBSD$
  */
 
 #ifndef _BHND_CORES_CHIPC_CHIPC_GPIOVAR_H_
@@ -120,7 +119,6 @@ struct chipc_gpio_softc {
 	device_t		 dev;
 	device_t		 gpiobus;	/**< attached gpiobus child */
 	struct bhnd_resource	*mem_res;	/**< chipcommon register block */
-	int			 mem_rid;	/**< resource ID of mem_res */
 	uint32_t		 quirks;	/**< device quirks (see CC_GPIO_QUIRK_*) */
 	struct mtx		 mtx;		/**< lock protecting RMW register access */
 };

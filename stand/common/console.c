@@ -24,9 +24,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <stand.h>
 #include <string.h>
@@ -47,6 +44,8 @@ static int	twiddle_set(struct env_var *ev, int flags, const void *value);
 #endif
 int module_verbose = MODULE_VERBOSE;
 
+static uint32_t print_delay_usec = 0;
+
 static int
 module_verbose_set(struct env_var *ev, int flags, const void *value)
 {
@@ -66,6 +65,23 @@ module_verbose_set(struct env_var *ev, int flags, const void *value)
 	env_setenv(ev->ev_name, flags | EV_NOHOOK, value, NULL, NULL);
 
 	return (CMD_OK);
+}
+
+/*
+ * Hook to set the print delay
+ */
+int
+setprint_delay(struct env_var *ev, int flags, const void *value)
+{
+	char *end;
+	int usec = strtol(value, &end, 10);
+
+	if (*(char *)value == '\0' || *end != '\0')
+		return (EINVAL);
+	if (usec < 0)
+		return (EINVAL);
+	print_delay_usec = usec;
+	return (0);
 }
 
 /*
@@ -181,6 +197,10 @@ putchar(int c)
 		    (C_PRESENTOUT | C_ACTIVEOUT))
 			consoles[cons]->c_out(c);
 	}
+
+	/* Pause after printing newline character if a print delay is set */
+	if (print_delay_usec != 0 && c == '\n')
+		delay(print_delay_usec);
 }
 
 /*
@@ -238,7 +258,7 @@ cons_check(const char *string)
 		if (*curpos != '\0') {
 			cons = cons_find(curpos);
 			if (cons == -1) {
-				printf("console %s is invalid!\n", curpos);
+				printf("console %s is unavailable\n", curpos);
 				failed++;
 			} else {
 				found++;
@@ -251,7 +271,7 @@ cons_check(const char *string)
 	if (found == 0)
 		printf("no valid consoles!\n");
 
-	if (found == 0 || failed != 0) {
+	if (found == 0 && failed != 0) {
 		printf("Available consoles:\n");
 		for (cons = 0; consoles[cons] != NULL; cons++)
 			printf("    %s\n", consoles[cons]->c_name);

@@ -22,9 +22,7 @@
 .\" (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 .\" THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
-.Dd June 8, 2020
+.Dd December 30, 2025
 .Dt MKIMG 1
 .Os
 .Sh NAME
@@ -41,8 +39,10 @@
 .Op Fl C Ar max_capacity
 .Op Fl -capacity Ar capacity
 .Op Fl f Ar format
+.Op Fl h
 .Op Fl o Ar outfile
 .Op Fl a Ar active
+.Op Fl t Ar timestamp
 .Op Fl v
 .Op Fl y
 .Op Fl s Ar scheme Op Fl p Ar partition ...
@@ -66,6 +66,7 @@ The image file is a raw disk image by default, but the format of the
 image file can be specified with the
 .Ar format
 argument.
+Most formats require seekable output, except of raw disk image.
 .Pp
 The disk image can be made bootable by specifying the scheme-specific boot
 block contents with the
@@ -137,6 +138,15 @@ The
 .Fl -capacity
 option is a shorthand to specify the minimum and maximum capacity at the
 same time.
+.Pp
+The
+.Fl t
+option causes any timestamps embedded in the output file to be set to the
+given time, specified in seconds since the epoch.
+.Pp
+The
+.Fl h
+option prints a usage message and exits.
 .Pp
 The
 .Fl v
@@ -225,7 +235,7 @@ The preferred file extension is ".qcow" and ".qcow2" for QCOW and QCOW2
 This file format is a sector by sector representation of an actual disk.
 There is no extra information that describes or relates to the format itself.
 The size of the file is the size of the (virtual) disk.
-This file format is suitable for being copyied onto a disk with utilities
+This file format is suitable for being copied onto a disk with utilities
 like
 .Nm dd .
 To write a raw disk file, either omit the
@@ -289,6 +299,51 @@ is moved accordingly.
 This is typically not part of the conversion process.
 If possible, use an output format specifically for the environment in which
 the file is intended to be used.
+.Sh PARTITION SPECIFICATION
+An option
+.Fl p
+may be used multiple times to specify a list of created partition entries.
+A specification that is a single dash indicates an unused partition entry.
+Otherwise, a partition specification has the following format:
+.Bd -literal -offset indent
+<type>[/<label>]::<size>[:[+]<offset>]
+<type>[/<label>]:=<file>[:[+]<offset>]
+<type>[/<label>]:-<cmd>
+-
+.Ed
+.Bl -tag -width indent
+.It Cm type
+the partition type alias (f.e.: freebsd-swap)
+(see the
+.Sx EXAMPLES
+Section below)
+.It Cm label
+an optional label for partitioning schemes that support labels
+.It Cm size
+the size of an empty partition, a number that may be suffixed with one of
+K, M, G, T, P or E (either upper or lower case) following the SI power of
+two convention (see also
+.Xr expand_number 3 )
+.It Cm file
+the name of a file to read; the partition size is determined by the file
+.It Cm cmd
+a command to run; the output of which is the contents of the partition.
+Multi-word strings should be quoted according to the shell rules.
+.It Cm offset
+an optional byte offset for the
+.Cm size
+and
+.Cm file
+forms.
+If prefixed with
+.Ql + ,
+it is relative to the end of the previous partition; otherwise it is an
+absolute offset from the start of the image.
+The value follows the same numeric conventions as
+.Cm size .
+.It Cm -
+an unused partition entry.
+.El
 .Sh ENVIRONMENT
 .Bl -tag -width "TMPDIR" -compact
 .It Ev TMPDIR
@@ -360,6 +415,7 @@ In the following example the file system partition is labeled as 'backup':
 .Dl % mkimg -s gpt -p freebsd-ufs/backup:=file-system.ufs -o gpt.img
 .Sh SEE ALSO
 .Xr dd 1 ,
+.Xr expand_number 3 ,
 .Xr gpart 8 ,
 .Xr makefs 8 ,
 .Xr mdconfig 8 ,

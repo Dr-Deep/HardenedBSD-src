@@ -9,6 +9,7 @@
 #include "HexagonInstrInfo.h"
 #include "HexagonRegisterInfo.h"
 #include "HexagonSubtarget.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
@@ -28,17 +29,13 @@
 
 using namespace llvm;
 
-static cl::opt<unsigned> CountThreshold("hexagon-cext-threshold",
-  cl::init(3), cl::Hidden, cl::ZeroOrMore,
-  cl::desc("Minimum number of extenders to trigger replacement"));
+static cl::opt<unsigned> CountThreshold(
+    "hexagon-cext-threshold", cl::init(3), cl::Hidden,
+    cl::desc("Minimum number of extenders to trigger replacement"));
 
-static cl::opt<unsigned> ReplaceLimit("hexagon-cext-limit", cl::init(0),
-  cl::Hidden, cl::ZeroOrMore, cl::desc("Maximum number of replacements"));
-
-namespace llvm {
-  void initializeHexagonConstExtendersPass(PassRegistry&);
-  FunctionPass *createHexagonConstExtenders();
-}
+static cl::opt<unsigned>
+    ReplaceLimit("hexagon-cext-limit", cl::init(0), cl::Hidden,
+                 cl::desc("Maximum number of replacements"));
 
 static int32_t adjustUp(int32_t V, uint8_t A, uint8_t O) {
   assert(isPowerOf2_32(A));
@@ -110,11 +107,7 @@ namespace {
       return !operator==(R);
     }
     bool operator<(const OffsetRange &R) const {
-      if (Min != R.Min)
-        return Min < R.Min;
-      if (Max != R.Max)
-        return Max < R.Max;
-      return Align < R.Align;
+      return std::tie(Min, Max, Align) < std::tie(R.Min, R.Max, R.Align);
     }
     static OffsetRange zero() { return {0, 0, 1}; }
   };
@@ -216,8 +209,8 @@ namespace {
     HexagonConstExtenders() : MachineFunctionPass(ID) {}
 
     void getAnalysisUsage(AnalysisUsage &AU) const override {
-      AU.addRequired<MachineDominatorTree>();
-      AU.addPreserved<MachineDominatorTree>();
+      AU.addRequired<MachineDominatorTreeWrapperPass>();
+      AU.addPreserved<MachineDominatorTreeWrapperPass>();
       MachineFunctionPass::getAnalysisUsage(AU);
     }
 
@@ -251,7 +244,7 @@ namespace {
                           /*Kill*/false, /*Dead*/false, /*Undef*/false,
                           /*EarlyClobber*/false, Sub);
         if (Reg.isStack()) {
-          int FI = llvm::Register::stackSlot2Index(Reg);
+          int FI = Reg.stackSlotIndex();
           return MachineOperand::CreateFI(FI);
         }
         llvm_unreachable("Cannot create MachineOperand");
@@ -260,7 +253,7 @@ namespace {
       bool operator!=(Register R) const { return !operator==(R); }
       bool operator<(Register R) const {
         // For std::map.
-        return Reg < R.Reg || (Reg == R.Reg && Sub < R.Sub);
+        return std::tie(Reg, Sub) < std::tie(R.Reg, R.Sub);
       }
       llvm::Register Reg;
       unsigned Sub = 0;
@@ -305,11 +298,7 @@ namespace {
         return !operator==(Ex);
       }
       bool operator<(const ExtExpr &Ex) const {
-        if (Rs != Ex.Rs)
-          return Rs < Ex.Rs;
-        if (S != Ex.S)
-          return S < Ex.S;
-        return !Neg && Ex.Neg;
+        return std::tie(Rs, S, Neg) < std::tie(Ex.Rs, Ex.S, Ex.Neg);
       }
     };
 
@@ -567,7 +556,7 @@ namespace {
 
 INITIALIZE_PASS_BEGIN(HexagonConstExtenders, "hexagon-cext-opt",
       "Hexagon constant-extender optimization", false, false)
-INITIALIZE_PASS_DEPENDENCY(MachineDominatorTree)
+INITIALIZE_PASS_DEPENDENCY(MachineDominatorTreeWrapperPass)
 INITIALIZE_PASS_END(HexagonConstExtenders, "hexagon-cext-opt",
       "Hexagon constant-extender optimization", false, false)
 
@@ -1038,7 +1027,7 @@ unsigned HCE::getDirectRegReplacement(unsigned ExtOpc) const {
 // extender. It may be possible for MI to be tweaked to work for a register
 // defined with a slightly different value. For example
 //   ... = L2_loadrub_io Rb, 1
-// can be modifed to be
+// can be modified to be
 //   ... = L2_loadrub_io Rb', 0
 // if Rb' = Rb+1.
 // The range for Rb would be [Min+1, Max+1], where [Min, Max] is a range
@@ -1146,8 +1135,8 @@ void HCE::recordExtender(MachineInstr &MI, unsigned OpNum) {
   bool IsStore = MI.mayStore();
 
   // Fixed stack slots have negative indexes, and they cannot be used
-  // with TRI::stackSlot2Index and TRI::index2StackSlot. This is somewhat
-  // unfortunate, but should not be a frequent thing.
+  // with Register::stackSlotIndex and Register::index2StackSlot. This is
+  // somewhat unfortunate, but should not be a frequent thing.
   for (MachineOperand &Op : MI.operands())
     if (Op.isFI() && Op.getIndex() < 0)
       return;
@@ -1220,6 +1209,10 @@ void HCE::recordExtender(MachineInstr &MI, unsigned OpNum) {
   ExtRoot ER(ED.getOp());
   if (ER.Kind == MachineOperand::MO_GlobalAddress)
     if (ER.V.GV->getName().empty())
+      return;
+  // Ignore block address that points to block in another function
+  if (ER.Kind == MachineOperand::MO_BlockAddress)
+    if (ER.V.BA->getFunction() != &(MI.getMF()->getFunction()))
       return;
   Extenders.push_back(ED);
 }
@@ -1322,12 +1315,6 @@ void HCE::assignInits(const ExtRoot &ER, unsigned Begin, unsigned End,
   // Select the definition points, and generate the assignment between
   // these points and the uses.
 
-  // For each candidate offset, keep a pair CandData consisting of
-  // the total number of ranges containing that candidate, and the
-  // vector of corresponding RangeTree nodes.
-  using CandData = std::pair<unsigned, SmallVector<RangeTree::Node*,8>>;
-  std::map<int32_t, CandData> CandMap;
-
   RangeTree Tree;
   for (const OffsetRange &R : Ranges)
     Tree.add(R);
@@ -1386,11 +1373,10 @@ void HCE::assignInits(const ExtRoot &ER, unsigned Begin, unsigned End,
       break;
 
     // Find the best candidate with respect to the number of extenders covered.
-    auto BestIt = std::max_element(Counts.begin(), Counts.end(),
-                    [](const CMap::value_type &A, const CMap::value_type &B) {
-                      return A.second < B.second ||
-                             (A.second == B.second && A < B);
-                    });
+    auto BestIt = llvm::max_element(
+        Counts, [](const CMap::value_type &A, const CMap::value_type &B) {
+          return A.second < B.second || (A.second == B.second && A < B);
+        });
     int32_t Best = BestIt->first;
     ExtValue BestV(ER, Best);
     for (RangeTree::Node *N : Tree.nodesWith(Best)) {
@@ -1465,7 +1451,7 @@ void HCE::assignInits(const ExtRoot &ER, unsigned Begin, unsigned End,
              ExtValue(ED).Offset == EV.Offset;
     };
     if (all_of(P.second, SameValue)) {
-      F->second.insert(P.second.begin(), P.second.end());
+      F->second.insert_range(P.second);
       P.second.clear();
     }
   }
@@ -1743,7 +1729,7 @@ bool HCE::replaceInstrExpr(const ExtDesc &ED, const ExtenderInit &ExtI,
       // "alignment" as Diff.
       uint32_t UD = Diff;
       OffsetRange R = getOffsetRange(MI.getOperand(0));
-      uint32_t A = std::min<uint32_t>(R.Align, 1u << countTrailingZeros(UD));
+      uint32_t A = std::min<uint32_t>(R.Align, 1u << llvm::countr_zero(UD));
       D &= ~(A-1);
     }
     BuildMI(MBB, At, dl, HII->get(IdxOpc))
@@ -1972,7 +1958,7 @@ bool HCE::runOnMachineFunction(MachineFunction &MF) {
   HST = &MF.getSubtarget<HexagonSubtarget>();
   HII = HST->getInstrInfo();
   HRI = HST->getRegisterInfo();
-  MDT = &getAnalysis<MachineDominatorTree>();
+  MDT = &getAnalysis<MachineDominatorTreeWrapperPass>().getDomTree();
   MRI = &MF.getRegInfo();
   AssignmentMap IMap;
 

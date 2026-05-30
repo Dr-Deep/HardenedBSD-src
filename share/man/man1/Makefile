@@ -1,19 +1,17 @@
-#	@(#)Makefile	8.1 (Berkeley) 6/5/93
-# $FreeBSD$
-
 .include <src.opts.mk>
 
-MAN=	builtin.1 intro.1
+MANGROUPS=	MAN
 
-.if ${MK_TESTS} != "no"
-ATF=	${SRCTOP}/contrib/atf
-.PATH:	${ATF}/doc
-MAN+=	atf-test-program.1
-.endif
+MANLINKS=	intro.1 introduction.1
+
+MANGROUPS+=	RUNTIME
+RUNTIME=	builtin.1 intro.1
+RUNTIMEPACKAGE=	runtime
 
 # Create MLINKS for Shell built in commands for which there are no userland
 # utilities of the same name:
-MLINKS=	builtin.1 alias.1 \
+RUNTIMELINKS=\
+	builtin.1 alias.1 \
 	builtin.1 alloc.1 \
 	builtin.1 bg.1 \
 	builtin.1 bind.1 \
@@ -58,6 +56,7 @@ MLINKS=	builtin.1 alias.1 \
 	builtin.1 if.1 \
 	builtin.1 jobid.1 \
 	builtin.1 jobs.1 \
+	builtin.1 keybinds.1 \
 	builtin.1 limit.1 \
 	builtin.1 log.1 \
 	builtin.1 logout.1 \
@@ -70,6 +69,7 @@ MLINKS=	builtin.1 alias.1 \
 	builtin.1 readonly.1 \
 	builtin.1 rehash.1 \
 	builtin.1 repeat.1 \
+	builtin.1 return.1 \
 	builtin.1 sched.1 \
 	builtin.1 set.1 \
 	builtin.1 setenv.1 \
@@ -98,6 +98,13 @@ MLINKS=	builtin.1 alias.1 \
 	builtin.1 wait.1 \
 	builtin.1 where.1 \
 	builtin.1 while.1
-MLINKS+=intro.1 introduction.1
+
+.if ${MK_TESTS} != "no"
+MANGROUPS+=	ATF
+ATFTOP=		${SRCTOP}/contrib/atf
+.PATH:		${ATFTOP}/doc
+ATF=		atf-test-program.1
+ATFPACKAGE=	atf
+.endif
 
 .include <bsd.prog.mk>

@@ -1,7 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-4-Clause
  *
- * Copyright (c) 2000 Dag-Erling Coïdan Smørgrav
+ * Copyright (c) 2000 Dag-Erling Smørgrav
  * Copyright (c) 1999 Pierre Beyssac
  * Copyright (c) 1993 Jan-Simon Pendry
  * Copyright (c) 1993
@@ -37,15 +37,12 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)procfs_status.c	8.4 (Berkeley) 6/15/94
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
+#include "opt_inet.h"
 
 #include <sys/param.h>
-#include <sys/queue.h>
+#include <sys/systm.h>
 #include <sys/blist.h>
 #include <sys/conf.h>
 #include <sys/exec.h>
@@ -62,6 +59,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/namei.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
+#include <sys/queue.h>
 #include <sys/resourcevar.h>
 #include <sys/resource.h>
 #include <sys/sbuf.h>
@@ -72,7 +70,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/syscallsubr.h>
 #include <sys/sysctl.h>
 #include <sys/sysent.h>
-#include <sys/systm.h>
 #include <sys/time.h>
 #include <sys/tty.h>
 #include <sys/user.h>
@@ -85,6 +82,10 @@ __FBSDID("$FreeBSD$");
 #include <net/if.h>
 #include <net/if_var.h>
 #include <net/if_types.h>
+
+#include <net/route.h>
+#include <net/route/nhop.h>
+#include <net/route/route_ctl.h>
 
 #include <vm/vm.h>
 #include <vm/vm_extern.h>
@@ -105,6 +106,7 @@ __FBSDID("$FreeBSD$");
 #endif /* __i386__ || __amd64__ */
 
 #include <compat/linux/linux.h>
+#include <compat/linux/linux_common.h>
 #include <compat/linux/linux_emul.h>
 #include <compat/linux/linux_mib.h>
 #include <compat/linux/linux_misc.h>
@@ -197,10 +199,7 @@ linprocfs_domeminfo(PFS_FILL_ARGS)
 static int
 linprocfs_docpuinfo(PFS_FILL_ARGS)
 {
-	int hw_model[2];
-	char model[128];
 	uint64_t freq;
-	size_t size;
 	u_int cache_size[4];
 	u_int regs[4] = { 0 };
 	int fqmhz, fqkhz;
@@ -300,12 +299,6 @@ linprocfs_docpuinfo(PFS_FILL_ARGS)
 		"acc_power",
 	};
 
-	hw_model[0] = CTL_HW;
-	hw_model[1] = HW_MODEL;
-	model[0] = '\0';
-	size = sizeof(model);
-	if (kernel_sysctl(td, hw_model, 2, &model, &size, 0, 0, 0, 0) != 0)
-		strcpy(model, "unknown");
 #ifdef __i386__
 	switch (cpu_vendor_id) {
 	case CPU_VENDOR_AMD:
@@ -349,7 +342,7 @@ linprocfs_docpuinfo(PFS_FILL_ARGS)
 		    "cpuid level\t: %d\n"
 		    "wp\t\t: %s\n",
 		    i, cpu_vendor, CPUID_TO_FAMILY(cpu_id),
-		    CPUID_TO_MODEL(cpu_id), model, cpu_id & CPUID_STEPPING,
+		    CPUID_TO_MODEL(cpu_id), cpu_model, cpu_id & CPUID_STEPPING,
 		    fqmhz, fqkhz,
 		    (cache_size[2] >> 16), 0, mp_ncpus, i, mp_ncpus,
 		    i, i, /*cpu_id & CPUID_LOCAL_APIC_ID ??*/
@@ -453,9 +446,6 @@ linprocfs_docpuinfo(PFS_FILL_ARGS)
 }
 #endif /* __i386__ || __amd64__ */
 
-static const char *path_slash_sys = "/sys";
-static const char *fstype_sysfs = "sysfs";
-
 static int
 _mtab_helper(const struct pfs_node *pn, const struct statfs *sp,
     const char **mntfrom, const char **mntto, const char **fstype)
@@ -483,8 +473,7 @@ _mtab_helper(const struct pfs_node *pn, const struct statfs *sp,
 	}
 
 	if (strcmp(*fstype, "linsysfs") == 0) {
-		*mntfrom = path_slash_sys;
-		*fstype = fstype_sysfs;
+		*mntfrom = *fstype = "sysfs";
 	} else {
 		/* For Linux msdosfs is called vfat */
 		if (strcmp(*fstype, "msdosfs") == 0)
@@ -519,37 +508,32 @@ _sbuf_mntoptions_helper(struct sbuf *sb, uint64_t f_flags)
 static int
 linprocfs_domtab(PFS_FILL_ARGS)
 {
-	struct nameidata nd;
-	const char *lep, *mntto, *mntfrom, *fstype;
+	const char *mntto, *mntfrom, *fstype;
 	char *dlep, *flep;
+	struct vnode *vp;
+	struct pwd *pwd;
 	size_t lep_len;
 	int error;
 	struct statfs *buf, *sp;
 	size_t count;
 
-	/* resolve symlinks etc. in the emulation tree prefix */
 	/*
-	 * Ideally, this would use the current chroot rather than some
-	 * hardcoded path.
+	 * Resolve emulation tree prefix
 	 */
-	NDINIT(&nd, LOOKUP, FOLLOW, UIO_SYSSPACE, linux_emul_path);
 	flep = NULL;
-	error = namei(&nd);
-	lep = linux_emul_path;
-	if (error == 0) {
-		if (vn_fullpath(nd.ni_vp, &dlep, &flep) == 0)
-			lep = dlep;
-		vrele(nd.ni_vp);
-	}
-	lep_len = strlen(lep);
+	pwd = pwd_hold(td);
+	vp = pwd->pwd_adir;
+	error = vn_fullpath_global(vp, &dlep, &flep);
+	pwd_drop(pwd);
+	if (error != 0)
+		return (error);
+	lep_len = strlen(dlep);
 
 	buf = NULL;
 	error = kern_getfsstat(td, &buf, SIZE_T_MAX, &count,
 	    UIO_SYSSPACE, MNT_WAIT);
 	if (error != 0) {
-		free(buf, M_TEMP);
-		free(flep, M_TEMP);
-		return (error);
+		goto out;
 	}
 
 	for (sp = buf; count > 0; sp++, count--) {
@@ -560,7 +544,7 @@ linprocfs_domtab(PFS_FILL_ARGS)
 		}
 
 		/* determine mount point */
-		if (strncmp(mntto, lep, lep_len) == 0 && mntto[lep_len] == '/')
+		if (strncmp(mntto, dlep, lep_len) == 0 && mntto[lep_len] == '/')
 			mntto += lep_len;
 
 		sbuf_printf(sb, "%s %s %s ", mntfrom, mntto, fstype);
@@ -569,6 +553,8 @@ linprocfs_domtab(PFS_FILL_ARGS)
 		sbuf_printf(sb, " 0 0\n");
 	}
 
+	error = 0;
+out:
 	free(buf, M_TEMP);
 	free(flep, M_TEMP);
 	return (error);
@@ -577,28 +563,25 @@ linprocfs_domtab(PFS_FILL_ARGS)
 static int
 linprocfs_doprocmountinfo(PFS_FILL_ARGS)
 {
-	struct nameidata nd;
 	const char *mntfrom, *mntto, *fstype;
-	const char *lep;
 	char *dlep, *flep;
 	struct statfs *buf, *sp;
 	size_t count, lep_len;
+	struct vnode *vp;
+	struct pwd *pwd;
 	int error;
 
 	/*
-	 * Ideally, this would use the current chroot rather than some
-	 * hardcoded path.
+	 * Resolve emulation tree prefix
 	 */
-	NDINIT(&nd, LOOKUP, FOLLOW, UIO_SYSSPACE, linux_emul_path);
 	flep = NULL;
-	error = namei(&nd);
-	lep = linux_emul_path;
-	if (error == 0) {
-		if (vn_fullpath(nd.ni_vp, &dlep, &flep) == 0)
-			lep = dlep;
-		vrele(nd.ni_vp);
-	}
-	lep_len = strlen(lep);
+	pwd = pwd_hold(td);
+	vp = pwd->pwd_adir;
+	error = vn_fullpath_global(vp, &dlep, &flep);
+	pwd_drop(pwd);
+	if (error != 0)
+		return (error);
+	lep_len = strlen(dlep);
 
 	buf = NULL;
 	error = kern_getfsstat(td, &buf, SIZE_T_MAX, &count,
@@ -613,7 +596,7 @@ linprocfs_doprocmountinfo(PFS_FILL_ARGS)
 			continue;
 		}
 
-		if (strncmp(mntto, lep, lep_len) == 0 && mntto[lep_len] == '/')
+		if (strncmp(mntto, dlep, lep_len) == 0 && mntto[lep_len] == '/')
 			mntto += lep_len;
 #if 0
 		/*
@@ -676,8 +659,7 @@ linprocfs_dopartitions(PFS_FILL_ARGS)
 	int major, minor;
 
 	g_topology_lock();
-	sbuf_printf(sb, "major minor  #blocks  name rio rmerge rsect "
-	    "ruse wio wmerge wsect wuse running use aveq\n");
+	sbuf_printf(sb, "major minor  #blocks  name\n\n");
 
 	LIST_FOREACH(cp, &g_classes, class) {
 		if (strcmp(cp->name, "DISK") == 0 ||
@@ -689,13 +671,10 @@ linprocfs_dopartitions(PFS_FILL_ARGS)
 						major = 0;
 						minor = 0;
 					}
-					sbuf_printf(sb, "%d %d %lld %s "
-					    "%d %d %d %d %d "
-					     "%d %d %d %d %d %d\n",
-					     major, minor,
-					     (long long)pp->mediasize, pp->name,
-					     0, 0, 0, 0, 0,
-					     0, 0, 0, 0, 0, 0);
+					sbuf_printf(sb, "%4d  %7d %10lld %s\n",
+					    major, minor,
+					    B2K((long long)pp->mediasize),
+					    pp->name);
 				}
 			}
 	}
@@ -1016,7 +995,7 @@ linprocfs_doprocstat(PFS_FILL_ARGS)
 	PS_ADD("0",		"%d",	0); /* removed field */
 	PS_ADD("itrealvalue",	"%d",	0); /* XXX */
 	PS_ADD("starttime",	"%lu",	TV2J(&kp.ki_start) - TV2J(&boottime));
-	PS_ADD("vsize",		"%ju",	P2K((uintmax_t)kp.ki_size));
+	PS_ADD("vsize",		"%ju",	(uintmax_t)kp.ki_size);
 	PS_ADD("rss",		"%ju",	(uintmax_t)kp.ki_rssize);
 	PS_ADD("rlim",		"%lu",	kp.ki_rusage.ru_maxrss);
 	PS_ADD("startcode",	"%ju",	(uintmax_t)startcode);
@@ -1468,38 +1447,52 @@ linprocfs_doprocmem(PFS_FILL_ARGS)
 	return (error);
 }
 
-static int
-linux_ifname(struct ifnet *ifp, char *buffer, size_t buflen)
-{
-	struct ifnet *ifscan;
-	int ethno;
-
-	IFNET_RLOCK_ASSERT();
-
-	/* Short-circuit non ethernet interfaces */
-	if (linux_use_real_ifname(ifp))
-		return (strlcpy(buffer, ifp->if_xname, buflen));
-
-	/* Determine the (relative) unit number for ethernet interfaces */
-	ethno = 0;
-	CK_STAILQ_FOREACH(ifscan, &V_ifnet, if_link) {
-		if (ifscan == ifp)
-			return (snprintf(buffer, buflen, "eth%d", ethno));
-		if (!linux_use_real_ifname(ifscan))
-			ethno++;
-	}
-
-	return (0);
-}
-
 /*
  * Filler function for proc/net/dev
  */
 static int
+linprocfs_donetdev_cb(if_t ifp, void *arg)
+{
+	char ifname[LINUX_IFNAMSIZ];
+	struct sbuf *sb = arg;
+
+	if (ifname_bsd_to_linux_ifp(ifp, ifname, sizeof(ifname)) <= 0)
+		return (ENODEV);
+
+	sbuf_printf(sb, "%6.6s: ", ifname);
+	sbuf_printf(sb, "%7ju %7ju %4ju %4ju %4lu %5lu %10lu %9ju ",
+	    (uintmax_t)if_getcounter(ifp, IFCOUNTER_IBYTES),
+	    (uintmax_t)if_getcounter(ifp, IFCOUNTER_IPACKETS),
+	    (uintmax_t)if_getcounter(ifp, IFCOUNTER_IERRORS),
+	    (uintmax_t)if_getcounter(ifp, IFCOUNTER_IQDROPS),
+						/* rx_missed_errors */
+	    0UL,				/* rx_fifo_errors */
+	    0UL,				/* rx_length_errors +
+						 * rx_over_errors +
+						 * rx_crc_errors +
+						 * rx_frame_errors */
+	    0UL,				/* rx_compressed */
+	    (uintmax_t)if_getcounter(ifp, IFCOUNTER_IMCASTS));
+						/* XXX-BZ rx only? */
+	sbuf_printf(sb, "%8ju %7ju %4ju %4ju %4lu %5ju %7lu %10lu\n",
+	    (uintmax_t)if_getcounter(ifp, IFCOUNTER_OBYTES),
+	    (uintmax_t)if_getcounter(ifp, IFCOUNTER_OPACKETS),
+	    (uintmax_t)if_getcounter(ifp, IFCOUNTER_OERRORS),
+	    (uintmax_t)if_getcounter(ifp, IFCOUNTER_OQDROPS),
+	    0UL,				/* tx_fifo_errors */
+	    (uintmax_t)if_getcounter(ifp, IFCOUNTER_COLLISIONS),
+	    0UL,				/* tx_carrier_errors +
+						 * tx_aborted_errors +
+						 * tx_window_errors +
+						 * tx_heartbeat_errors*/
+	    0UL);				/* tx_compressed */
+	return (0);
+}
+
+static int
 linprocfs_donetdev(PFS_FILL_ARGS)
 {
-	char ifname[16]; /* XXX LINUX_IFNAMSIZ */
-	struct ifnet *ifp;
+	struct epoch_tracker et;
 
 	sbuf_printf(sb, "%6s|%58s|%s\n"
 	    "%6s|%58s|%58s\n",
@@ -1509,38 +1502,82 @@ linprocfs_donetdev(PFS_FILL_ARGS)
 	    "bytes    packets errs drop fifo colls carrier compressed");
 
 	CURVNET_SET(TD_TO_VNET(curthread));
-	IFNET_RLOCK();
-	CK_STAILQ_FOREACH(ifp, &V_ifnet, if_link) {
-		linux_ifname(ifp, ifname, sizeof ifname);
-		sbuf_printf(sb, "%6.6s: ", ifname);
-		sbuf_printf(sb, "%7ju %7ju %4ju %4ju %4lu %5lu %10lu %9ju ",
-		    (uintmax_t )ifp->if_get_counter(ifp, IFCOUNTER_IBYTES),
-		    (uintmax_t )ifp->if_get_counter(ifp, IFCOUNTER_IPACKETS),
-		    (uintmax_t )ifp->if_get_counter(ifp, IFCOUNTER_IERRORS),
-		    (uintmax_t )ifp->if_get_counter(ifp, IFCOUNTER_IQDROPS),
-							/* rx_missed_errors */
-		    0UL,				/* rx_fifo_errors */
-		    0UL,				/* rx_length_errors +
-							 * rx_over_errors +
-							 * rx_crc_errors +
-							 * rx_frame_errors */
-		    0UL,				/* rx_compressed */
-		    (uintmax_t )ifp->if_get_counter(ifp, IFCOUNTER_IMCASTS));
-							/* XXX-BZ rx only? */
-		sbuf_printf(sb, "%8ju %7ju %4ju %4ju %4lu %5ju %7lu %10lu\n",
-		    (uintmax_t )ifp->if_get_counter(ifp, IFCOUNTER_OBYTES),
-		    (uintmax_t )ifp->if_get_counter(ifp, IFCOUNTER_OPACKETS),
-		    (uintmax_t )ifp->if_get_counter(ifp, IFCOUNTER_OERRORS),
-		    (uintmax_t )ifp->if_get_counter(ifp, IFCOUNTER_OQDROPS),
-		    0UL,				/* tx_fifo_errors */
-		    (uintmax_t )ifp->if_get_counter(ifp, IFCOUNTER_COLLISIONS),
-		    0UL,				/* tx_carrier_errors +
-							 * tx_aborted_errors +
-							 * tx_window_errors +
-							 * tx_heartbeat_errors*/
-		    0UL);				/* tx_compressed */
-	}
-	IFNET_RUNLOCK();
+	NET_EPOCH_ENTER(et);
+	if_foreach(linprocfs_donetdev_cb, sb);
+	NET_EPOCH_EXIT(et);
+	CURVNET_RESTORE();
+
+	return (0);
+}
+
+struct walkarg {
+	struct sbuf *sb;
+};
+
+static int
+linux_route_print(struct rtentry *rt, void *vw)
+{
+#ifdef INET
+	struct walkarg *w = vw;
+	struct route_nhop_data rnd;
+	struct in_addr dst, mask;
+	struct nhop_object *nh;
+	char ifname[16];
+	uint32_t scopeid = 0;
+	uint32_t gw = 0;
+	uint32_t linux_flags = 0;
+
+	rt_get_inet_prefix_pmask(rt, &dst, &mask, &scopeid);
+
+	rt_get_rnd(rt, &rnd);
+
+	/* select only first route in case of multipath */
+	nh = nhop_select_func(rnd.rnd_nhop, 0);
+
+	if (ifname_bsd_to_linux_ifp(nh->nh_ifp, ifname, sizeof(ifname)) <= 0)
+		return (ENODEV);
+
+	gw = (nh->nh_flags & NHF_GATEWAY)
+		? nh->gw4_sa.sin_addr.s_addr : 0;
+
+	linux_flags = RTF_UP |
+		(nhop_get_rtflags(nh) & (RTF_GATEWAY | RTF_HOST));
+
+	sbuf_printf(w->sb,
+		"%s\t"
+		"%08X\t%08X\t%04X\t"
+		"%d\t%u\t%d\t"
+		"%08X\t%d\t%u\t%u",
+		ifname,
+		dst.s_addr, gw, linux_flags,
+		0, 0, rnd.rnd_weight,
+		mask.s_addr, nh->nh_mtu, 0, 0);
+
+	sbuf_printf(w->sb, "\n\n");
+#endif
+	return (0);
+}
+
+/*
+ * Filler function for proc/net/route
+ */
+static int
+linprocfs_donetroute(PFS_FILL_ARGS)
+{
+	struct epoch_tracker et;
+	struct walkarg w = {
+		.sb = sb
+	};
+	uint32_t fibnum = curthread->td_proc->p_fibnum;
+
+	sbuf_printf(w.sb, "%-127s\n", "Iface\tDestination\tGateway "
+               "\tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU"
+               "\tWindow\tIRTT");
+
+	CURVNET_SET(TD_TO_VNET(curthread));
+	NET_EPOCH_ENTER(et);
+	rib_walk(fibnum, AF_INET, false, linux_route_print, &w);
+	NET_EPOCH_EXIT(et);
 	CURVNET_RESTORE();
 
 	return (0);
@@ -1696,6 +1733,23 @@ linprocfs_dotainted(PFS_FILL_ARGS)
 {
 
 	sbuf_printf(sb, "0\n");
+	return (0);
+}
+
+/*
+ * Filler function for proc/sys/kernel/threads-max
+ */
+static int
+linprocfs_dothreads_max(PFS_FILL_ARGS)
+{
+	int res, error;
+	size_t size = sizeof(res);
+
+	error = kernel_sysctlbyname(curthread, "kern.maxproc",
+	    &res, &size, NULL, 0, 0, 0);
+	if (error != 0)
+		return (error);
+	sbuf_printf(sb, "%d\n", res);
 	return (0);
 }
 
@@ -1870,7 +1924,7 @@ linprocfs_doproclimits(PFS_FILL_ARGS)
 			    "kern.sigqueue.max_pending_per_proc",
 			    &res, &size, 0, 0, 0, 0);
 			if (error != 0)
-				goto out;
+				continue;
 			rl.rlim_cur = res;
 			rl.rlim_max = res;
 			break;
@@ -1878,7 +1932,7 @@ linprocfs_doproclimits(PFS_FILL_ARGS)
 			error = kernel_sysctlbyname(td,
 			    "kern.ipc.msgmnb", &res, &size, 0, 0, 0, 0);
 			if (error != 0)
-				goto out;
+				continue;
 			rl.rlim_cur = res;
 			rl.rlim_max = res;
 			break;
@@ -1900,9 +1954,9 @@ linprocfs_doproclimits(PFS_FILL_ARGS)
 			    li->desc, (unsigned long long)rl.rlim_cur,
 			    (unsigned long long)rl.rlim_max, li->unit);
 	}
-out:
+
 	lim_free(limp);
-	return (error);
+	return (0);
 }
 
 /*
@@ -1985,23 +2039,26 @@ linprocfs_doauxv(PFS_FILL_ARGS)
 	if (asb == NULL)
 		return (ENOMEM);
 	error = proc_getauxv(td, p, asb);
-	if (error == 0)
-		error = sbuf_finish(asb);
+	if (error != 0)
+		goto out;
+	error = sbuf_finish(asb);
+	if (error != 0)
+		goto out;
 
 	resid = sbuf_len(asb) - uio->uio_offset;
 	if (resid > uio->uio_resid)
 		buflen = uio->uio_resid;
 	else
 		buflen = resid;
-	if (buflen > IOSIZE_MAX)
-		return (EINVAL);
+	if (buflen > IOSIZE_MAX) {
+		error = EINVAL;
+		goto out;
+	}
 	if (buflen > maxphys)
 		buflen = maxphys;
-	if (resid <= 0)
-		return (0);
-
-	if (error == 0)
+	if (resid > 0)
 		error = uiomove(sbuf_data(asb) + uio->uio_offset, buflen, uio);
+out:
 	sbuf_delete(asb);
 	return (error);
 }
@@ -2048,150 +2105,596 @@ linprocfs_domax_map_cnt(PFS_FILL_ARGS)
 }
 
 /*
+ * Filler function for proc/sysvipc/msg
+ */
+static int
+linprocfs_dosysvipc_msg(PFS_FILL_ARGS)
+{
+	struct msqid_kernel *msqids;
+	size_t id, size;
+	int error;
+
+	sbuf_printf(sb,
+	    "%10s %10s %4s  %10s %10s %5s %5s %5s %5s %5s %5s %10s %10s %10s\n",
+	    "key", "msqid", "perms", "cbytes", "qnum", "lspid", "lrpid",
+	    "uid", "gid", "cuid", "cgid", "stime", "rtime", "ctime");
+
+	error = kern_get_msqids(curthread, &msqids, &size);
+	if (error != 0)
+		return (error);
+
+	for (id = 0; id < size; id++) {
+		if (msqids[id].u.msg_qbytes == 0)
+			continue;
+		sbuf_printf(sb,
+		    "%10d %10zu  %4o  %10lu %10lu %5u %5u %5u %5u %5u %5u %jd %jd %jd\n",
+		    (int)msqids[id].u.msg_perm.key,
+		    IXSEQ_TO_IPCID(id, msqids[id].u.msg_perm),
+		    msqids[id].u.msg_perm.mode,
+		    msqids[id].u.msg_cbytes,
+		    msqids[id].u.msg_qnum,
+		    msqids[id].u.msg_lspid,
+		    msqids[id].u.msg_lrpid,
+		    msqids[id].u.msg_perm.uid,
+		    msqids[id].u.msg_perm.gid,
+		    msqids[id].u.msg_perm.cuid,
+		    msqids[id].u.msg_perm.cgid,
+		    (intmax_t)msqids[id].u.msg_stime,
+		    (intmax_t)msqids[id].u.msg_rtime,
+		    (intmax_t)msqids[id].u.msg_ctime);
+	}
+
+	free(msqids, M_TEMP);
+	return (0);
+}
+
+/*
+ * Filler function for proc/sysvipc/sem
+ */
+static int
+linprocfs_dosysvipc_sem(PFS_FILL_ARGS)
+{
+	struct semid_kernel *semids;
+	size_t id, size;
+	int error;
+
+	sbuf_printf(sb, "%10s %10s %4s %10s %5s %5s %5s %5s %10s %10s\n",
+	    "key", "semid", "perms", "nsems", "uid", "gid", "cuid", "cgid",
+	    "otime", "ctime");
+
+	error = kern_get_sema(curthread, &semids, &size);
+	if (error != 0)
+		return (error);
+
+	for (id = 0; id < size; id++) {
+		if ((semids[id].u.sem_perm.mode & SEM_ALLOC) == 0)
+			continue;
+		sbuf_printf(sb,
+		    "%10d %10zu  %4o %10u %5u %5u %5u %5u %jd %jd\n",
+		    (int)semids[id].u.sem_perm.key,
+		    IXSEQ_TO_IPCID(id, semids[id].u.sem_perm),
+		    semids[id].u.sem_perm.mode,
+		    semids[id].u.sem_nsems,
+		    semids[id].u.sem_perm.uid,
+		    semids[id].u.sem_perm.gid,
+		    semids[id].u.sem_perm.cuid,
+		    semids[id].u.sem_perm.cgid,
+		    (intmax_t)semids[id].u.sem_otime,
+		    (intmax_t)semids[id].u.sem_ctime);
+	}
+
+	free(semids, M_TEMP);
+	return (0);
+}
+
+/*
+ * Filler function for proc/sysvipc/shm
+ */
+static int
+linprocfs_dosysvipc_shm(PFS_FILL_ARGS)
+{
+	struct shmid_kernel *shmids;
+	size_t id, size;
+	int error;
+
+	sbuf_printf(sb,
+	    "%10s %10s %s %21s %5s %5s %5s %5s %5s %5s %5s %10s %10s %10s %21s %21s\n",
+	    "key", "shmid", "perms", "size", "cpid", "lpid", "nattch", "uid",
+	    "gid", "cuid", "cgid", "atime", "dtime", "ctime", "rss", "swap");
+
+	error = kern_get_shmsegs(curthread, &shmids, &size);
+	if (error != 0)
+		return (error);
+
+	for (id = 0; id < size; id++) {
+		if ((shmids[id].u.shm_perm.mode & SHMSEG_ALLOCATED) == 0)
+			continue;
+		sbuf_printf(sb,
+		    "%10d %10zu  %4o %21zu %5u %5u  %5u %5u %5u %5u %5u %jd %jd %jd %21d %21d\n",
+		    (int)shmids[id].u.shm_perm.key,
+		    IXSEQ_TO_IPCID(id, shmids[id].u.shm_perm),
+		    shmids[id].u.shm_perm.mode,
+		    shmids[id].u.shm_segsz,
+		    shmids[id].u.shm_cpid,
+		    shmids[id].u.shm_lpid,
+		    shmids[id].u.shm_nattch,
+		    shmids[id].u.shm_perm.uid,
+		    shmids[id].u.shm_perm.gid,
+		    shmids[id].u.shm_perm.cuid,
+		    shmids[id].u.shm_perm.cgid,
+		    (intmax_t)shmids[id].u.shm_atime,
+		    (intmax_t)shmids[id].u.shm_dtime,
+		    (intmax_t)shmids[id].u.shm_ctime,
+		    0, 0);	/* XXX rss & swp are not supported */
+	}
+
+	free(shmids, M_TEMP);
+	return (0);
+}
+
+/*
+ * Filler function for proc/sys/fs/file-max
+ */
+static int
+linprocfs_dofile_max(PFS_FILL_ARGS)
+{
+	int res, error;
+	size_t size = sizeof(res);
+
+	error = kernel_sysctlbyname(curthread, "kern.maxfiles",
+	    &res, &size, NULL, 0, 0, 0);
+	if (error != 0)
+		return (error);
+	sbuf_printf(sb, "%d\n", res);
+	return (0);
+}
+
+/*
+ * Filler function for proc/sys/fs/file-nr
+ */
+static int
+linprocfs_dofile_nr(PFS_FILL_ARGS)
+{
+	int openfiles, maxfiles, error;
+	size_t size;
+
+	size = sizeof(openfiles);
+	error = kernel_sysctlbyname(curthread, "kern.openfiles",
+	    &openfiles, &size, NULL, 0, 0, 0);
+	if (error != 0)
+		return (error);
+	size = sizeof(maxfiles);
+	error = kernel_sysctlbyname(curthread, "kern.maxfiles",
+	    &maxfiles, &size, NULL, 0, 0, 0);
+	if (error != 0)
+		return (error);
+	/*
+	 * From Linux's proc_sys_fs(5):
+	 * the "free file handles" value is always zero.
+	 */
+	sbuf_printf(sb, "%d\t0\t%d\n", openfiles, maxfiles);
+	return (0);
+}
+
+/*
+ * Filler function for proc/sys/fs/nr_open
+ */
+static int
+linprocfs_donr_open(PFS_FILL_ARGS)
+{
+	int res, error;
+	size_t size = sizeof(res);
+
+	error = kernel_sysctlbyname(curthread, "kern.maxfilesperproc",
+	    &res, &size, NULL, 0, 0, 0);
+	if (error != 0)
+		return (error);
+	sbuf_printf(sb, "%d\n", res);
+	return (0);
+}
+
+/*
+ * Filler function for proc/sys/fs/overflowuid
+ */
+static int
+linprocfs_dooverflowuid(PFS_FILL_ARGS)
+{
+	sbuf_printf(sb, "%u\n", UID_NOBODY);
+	return (0);
+}
+
+/*
+ * Filler function for proc/sys/fs/overflowgid
+ */
+static int
+linprocfs_dooverflowgid(PFS_FILL_ARGS)
+{
+	sbuf_printf(sb, "%u\n", GID_NOGROUP);
+	return (0);
+}
+
+/*
+ * Filler function for proc/sys/fs/suid_dumpable
+ */
+static int
+linprocfs_dosuid_dumpable(PFS_FILL_ARGS)
+{
+	int res, error;
+	size_t size = sizeof(res);
+
+	error = kernel_sysctlbyname(curthread, "kern.sugid_coredump",
+	    &res, &size, NULL, 0, 0, 0);
+	if (error != 0)
+		return (error);
+	sbuf_printf(sb, "%d\n", res ? 1 : 0);
+	return (0);
+}
+
+/*
+ * Filler function for proc/sys/fs/protected_hardlinks
+ */
+static int
+linprocfs_doprotected_hardlinks(PFS_FILL_ARGS)
+{
+	int res, error;
+	size_t size = sizeof(res);
+
+	error = kernel_sysctlbyname(curthread,
+	    "security.bsd.hardlink_check_uid",
+	    &res, &size, NULL, 0, 0, 0);
+	if (error != 0)
+		return (error);
+	sbuf_printf(sb, "%d\n", res ? 1 : 0);
+	return (0);
+}
+
+static int
+linprocfs_doinotify(const char *sysctl, PFS_FILL_ARGS)
+{
+	size_t size;
+	int error, val;
+
+	if (uio->uio_rw == UIO_READ) {
+		size = sizeof(val);
+		error = kernel_sysctlbyname(curthread,
+		    __DECONST(void *, sysctl), &val, &size, NULL, 0, 0, 0);
+		if (error == 0)
+			sbuf_printf(sb, "%d\n", val);
+	} else {
+		char *endp, *newval;
+		long vall;
+
+		sbuf_trim(sb);
+		sbuf_finish(sb);
+		newval = sbuf_data(sb);
+		vall = strtol(newval, &endp, 10);
+		if (vall < 0 || vall > INT_MAX || endp == newval ||
+		    *endp != '\0')
+			return (EINVAL);
+		val = (int)vall;
+		error = kernel_sysctlbyname(curthread,
+		    __DECONST(void *, sysctl), NULL, NULL,
+		    &val, sizeof(val), 0, 0);
+	}
+	return (error);
+}
+
+/*
+ * Filler function for proc/sys/fs/inotify/max_queued_events
+ */
+static int
+linprocfs_doinotify_max_queued_events(PFS_FILL_ARGS)
+{
+	return (linprocfs_doinotify("vfs.inotify.max_queued_events",
+	    PFS_FILL_ARGNAMES));
+}
+
+/*
+ * Filler function for proc/sys/fs/inotify/max_user_instances
+ */
+static int
+linprocfs_doinotify_max_user_instances(PFS_FILL_ARGS)
+{
+	return (linprocfs_doinotify("vfs.inotify.max_user_instances",
+	    PFS_FILL_ARGNAMES));
+}
+
+/*
+ * Filler function for proc/sys/fs/inotify/max_user_watches
+ */
+static int
+linprocfs_doinotify_max_user_watches(PFS_FILL_ARGS)
+{
+	return (linprocfs_doinotify("vfs.inotify.max_user_watches",
+	    PFS_FILL_ARGNAMES));
+}
+
+/*
+ * Filler function for proc/sys/fs/mqueue/msg_default
+ */
+static int
+linprocfs_domqueue_msg_default(PFS_FILL_ARGS)
+{
+	int res, error;
+	size_t size = sizeof(res);
+
+	error = kernel_sysctlbyname(curthread, "kern.mqueue.default_maxmsg",
+	    &res, &size, NULL, 0, 0, 0);
+	if (error != 0)
+		return (error);
+
+	sbuf_printf(sb, "%d\n", res);
+	return (0);
+}
+
+/*
+ * Filler function for proc/sys/fs/mqueue/msgsize_default
+ */
+static int
+linprocfs_domqueue_msgsize_default(PFS_FILL_ARGS)
+{
+	int res, error;
+	size_t size = sizeof(res);
+
+	error = kernel_sysctlbyname(curthread, "kern.mqueue.default_msgsize",
+	    &res, &size, NULL, 0, 0, 0);
+	if (error != 0)
+		return (error);
+
+	sbuf_printf(sb, "%d\n", res);
+	return (0);
+
+}
+
+/*
+ * Filler function for proc/sys/fs/mqueue/msg_max
+ */
+static int
+linprocfs_domqueue_msg_max(PFS_FILL_ARGS)
+{
+	int res, error;
+	size_t size = sizeof(res);
+
+	error = kernel_sysctlbyname(curthread, "kern.mqueue.maxmsg",
+	    &res, &size, NULL, 0, 0, 0);
+	if (error != 0)
+		return (error);
+
+	sbuf_printf(sb, "%d\n", res);
+	return (0);
+}
+
+/*
+ * Filler function for proc/sys/fs/mqueue/msgsize_max
+ */
+static int
+linprocfs_domqueue_msgsize_max(PFS_FILL_ARGS)
+{
+	int res, error;
+	size_t size = sizeof(res);
+
+	error = kernel_sysctlbyname(curthread, "kern.mqueue.maxmsgsize",
+	    &res, &size, NULL, 0, 0, 0);
+	if (error != 0)
+		return (error);
+
+	sbuf_printf(sb, "%d\n", res);
+	return (0);
+}
+
+/*
+ * Filler function for proc/sys/fs/mqueue/queues_max
+ */
+static int
+linprocfs_domqueue_queues_max(PFS_FILL_ARGS)
+{
+	int res, error;
+	size_t size = sizeof(res);
+
+	error = kernel_sysctlbyname(curthread, "kern.mqueue.maxmq",
+	    &res, &size, NULL, 0, 0, 0);
+	if (error != 0)
+		return (error);
+
+	sbuf_printf(sb, "%d\n", res);
+	return (0);
+}
+
+/*
  * Constructor
  */
 static int
 linprocfs_init(PFS_INIT_ARGS)
 {
-	struct pfs_node *root;
-	struct pfs_node *dir;
-	struct pfs_node *sys;
+	struct pfs_node *dir, *fs, *root, *sys;
 
 	root = pi->pi_root;
 
 	/* /proc/... */
-	pfs_create_file(root, "cmdline", &linprocfs_docmdline,
+	pfs_create_file(root, NULL, "cmdline", &linprocfs_docmdline, NULL, NULL,
+	    NULL, PFS_RD);
+	pfs_create_file(root, NULL, "cpuinfo", &linprocfs_docpuinfo, NULL, NULL,
+	    NULL, PFS_RD);
+	pfs_create_file(root, NULL, "devices", &linprocfs_dodevices, NULL, NULL,
+	    NULL, PFS_RD);
+	pfs_create_file(root, NULL, "filesystems", &linprocfs_dofilesystems,
 	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(root, "cpuinfo", &linprocfs_docpuinfo,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(root, "devices", &linprocfs_dodevices,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(root, "filesystems", &linprocfs_dofilesystems,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(root, "loadavg", &linprocfs_doloadavg,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(root, "meminfo", &linprocfs_domeminfo,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(root, "modules", &linprocfs_domodules,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(root, "mounts", &linprocfs_domtab,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(root, "mtab", &linprocfs_domtab,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(root, "partitions", &linprocfs_dopartitions,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_link(root, "self", &procfs_docurproc,
-	    NULL, NULL, NULL, 0);
-	pfs_create_file(root, "stat", &linprocfs_dostat,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(root, "swaps", &linprocfs_doswaps,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(root, "uptime", &linprocfs_douptime,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(root, "version", &linprocfs_doversion,
-	    NULL, NULL, NULL, PFS_RD);
+	pfs_create_file(root, NULL, "loadavg", &linprocfs_doloadavg, NULL, NULL,
+	    NULL, PFS_RD);
+	pfs_create_file(root, NULL, "meminfo", &linprocfs_domeminfo, NULL, NULL,
+	    NULL, PFS_RD);
+	pfs_create_file(root, NULL, "modules", &linprocfs_domodules, NULL, NULL,
+	    NULL, PFS_RD);
+	pfs_create_file(root, NULL, "mounts", &linprocfs_domtab, NULL, NULL,
+	    NULL, PFS_RD);
+	pfs_create_file(root, NULL, "mtab", &linprocfs_domtab, NULL, NULL, NULL,
+	    PFS_RD);
+	pfs_create_file(root, NULL, "partitions", &linprocfs_dopartitions, NULL,
+	    NULL, NULL, PFS_RD);
+	pfs_create_link(root, NULL, "self", &procfs_docurproc, NULL, NULL, NULL,
+	    0);
+	pfs_create_file(root, NULL, "stat", &linprocfs_dostat, NULL, NULL, NULL,
+	    PFS_RD);
+	pfs_create_file(root, NULL, "swaps", &linprocfs_doswaps, NULL, NULL,
+	    NULL, PFS_RD);
+	pfs_create_file(root, NULL, "uptime", &linprocfs_douptime, NULL, NULL,
+	    NULL, PFS_RD);
+	pfs_create_file(root, NULL, "version", &linprocfs_doversion, NULL, NULL,
+	    NULL, PFS_RD);
 
 	/* /proc/bus/... */
-	dir = pfs_create_dir(root, "bus", NULL, NULL, NULL, 0);
-	dir = pfs_create_dir(dir, "pci", NULL, NULL, NULL, 0);
-	dir = pfs_create_dir(dir, "devices", NULL, NULL, NULL, 0);
+	pfs_create_dir(root, &dir, "bus", NULL, NULL, NULL, 0);
+	pfs_create_dir(dir, &dir, "pci", NULL, NULL, NULL, 0);
+	pfs_create_dir(dir, &dir, "devices", NULL, NULL, NULL, 0);
 
 	/* /proc/net/... */
-	dir = pfs_create_dir(root, "net", NULL, NULL, NULL, 0);
-	pfs_create_file(dir, "dev", &linprocfs_donetdev,
-	    NULL, NULL, NULL, PFS_RD);
+	pfs_create_dir(root, &dir, "net", NULL, NULL, NULL, 0);
+	pfs_create_file(dir, NULL, "dev", &linprocfs_donetdev, NULL, NULL, NULL,
+	    PFS_RD);
+	pfs_create_file(dir, NULL, "route", &linprocfs_donetroute, NULL, NULL,
+	    NULL, PFS_RD);
 
 	/* /proc/<pid>/... */
-	dir = pfs_create_dir(root, "pid", NULL, NULL, NULL, PFS_PROCDEP);
-	pfs_create_file(dir, "cmdline", &linprocfs_doproccmdline,
+	pfs_create_dir(root, &dir, "pid", NULL, NULL, NULL, PFS_PROCDEP);
+	pfs_create_file(dir, NULL, "cmdline", &linprocfs_doproccmdline, NULL,
+	    NULL, NULL, PFS_RD);
+	pfs_create_link(dir, NULL, "cwd", &linprocfs_doproccwd, NULL, NULL,
+	    NULL, 0);
+	pfs_create_file(dir, NULL, "environ", &linprocfs_doprocenviron, NULL,
+	    &procfs_candebug, NULL, PFS_RD);
+	pfs_create_link(dir, NULL, "exe", &procfs_doprocfile, NULL,
+	    &procfs_notsystem, NULL, 0);
+	pfs_create_file(dir, NULL, "maps", &linprocfs_doprocmaps, NULL, NULL,
+	    NULL, PFS_RD | PFS_AUTODRAIN);
+	pfs_create_file(dir, NULL, "mem", &linprocfs_doprocmem, procfs_attr_rw,
+	    &procfs_candebug, NULL, PFS_RDWR | PFS_RAW);
+	pfs_create_file(dir, NULL, "mountinfo", &linprocfs_doprocmountinfo,
 	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_link(dir, "cwd", &linprocfs_doproccwd,
-	    NULL, NULL, NULL, 0);
-	pfs_create_file(dir, "environ", &linprocfs_doprocenviron,
-	    NULL, &procfs_candebug, NULL, PFS_RD);
-	pfs_create_link(dir, "exe", &procfs_doprocfile,
-	    NULL, &procfs_notsystem, NULL, 0);
-	pfs_create_file(dir, "maps", &linprocfs_doprocmaps,
-	    NULL, NULL, NULL, PFS_RD | PFS_AUTODRAIN);
-	pfs_create_file(dir, "mem", &linprocfs_doprocmem,
-	    procfs_attr_rw, &procfs_candebug, NULL, PFS_RDWR | PFS_RAW);
-	pfs_create_file(dir, "mountinfo", &linprocfs_doprocmountinfo,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(dir, "mounts", &linprocfs_domtab,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_link(dir, "root", &linprocfs_doprocroot,
-	    NULL, NULL, NULL, 0);
-	pfs_create_file(dir, "stat", &linprocfs_doprocstat,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(dir, "statm", &linprocfs_doprocstatm,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(dir, "status", &linprocfs_doprocstatus,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_link(dir, "fd", &linprocfs_dofdescfs,
-	    NULL, NULL, NULL, 0);
-	pfs_create_file(dir, "auxv", &linprocfs_doauxv,
-	    NULL, &procfs_candebug, NULL, PFS_RD|PFS_RAWRD);
-	pfs_create_file(dir, "limits", &linprocfs_doproclimits,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(dir, "oom_score_adj", &linprocfs_do_oom_score_adj,
+	pfs_create_file(dir, NULL, "mounts", &linprocfs_domtab, NULL, NULL,
+	    NULL, PFS_RD);
+	pfs_create_link(dir, NULL, "root", &linprocfs_doprocroot, NULL, NULL,
+	    NULL, 0);
+	pfs_create_file(dir, NULL, "stat", &linprocfs_doprocstat, NULL, NULL,
+	    NULL, PFS_RD);
+	pfs_create_file(dir, NULL, "statm", &linprocfs_doprocstatm, NULL, NULL,
+	    NULL, PFS_RD);
+	pfs_create_file(dir, NULL, "status", &linprocfs_doprocstatus, NULL,
+	    NULL, NULL, PFS_RD);
+	pfs_create_link(dir, NULL, "fd", &linprocfs_dofdescfs, NULL, NULL, NULL,
+	    0);
+	pfs_create_file(dir, NULL, "auxv", &linprocfs_doauxv, NULL,
+	    &procfs_candebug, NULL, PFS_RD | PFS_RAWRD);
+	pfs_create_file(dir, NULL, "limits", &linprocfs_doproclimits, NULL,
+	    NULL, NULL, PFS_RD);
+	pfs_create_file(dir, NULL, "oom_score_adj", &linprocfs_do_oom_score_adj,
 	    procfs_attr_rw, &procfs_candebug, NULL, PFS_RDWR);
 
 	/* /proc/<pid>/task/... */
-	dir = pfs_create_dir(dir, "task", linprocfs_dotaskattr, NULL, NULL, 0);
-	pfs_create_file(dir, ".dummy", &linprocfs_dotaskdummy,
-	    NULL, NULL, NULL, PFS_RD);
+	pfs_create_dir(dir, &dir, "task", linprocfs_dotaskattr, NULL, NULL, 0);
+	pfs_create_file(dir, NULL, ".dummy", &linprocfs_dotaskdummy, NULL, NULL,
+	    NULL, PFS_RD);
 
 	/* /proc/scsi/... */
-	dir = pfs_create_dir(root, "scsi", NULL, NULL, NULL, 0);
-	pfs_create_file(dir, "device_info", &linprocfs_doscsidevinfo,
+	pfs_create_dir(root, &dir, "scsi", NULL, NULL, NULL, 0);
+	pfs_create_file(dir, NULL, "device_info", &linprocfs_doscsidevinfo,
 	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(dir, "scsi", &linprocfs_doscsiscsi,
-	    NULL, NULL, NULL, PFS_RD);
+	pfs_create_file(dir, NULL, "scsi", &linprocfs_doscsiscsi, NULL, NULL,
+	    NULL, PFS_RD);
 
 	/* /proc/sys/... */
-	sys = pfs_create_dir(root, "sys", NULL, NULL, NULL, 0);
+	pfs_create_dir(root, &sys, "sys", NULL, NULL, NULL, 0);
 
 	/* /proc/sys/kernel/... */
-	dir = pfs_create_dir(sys, "kernel", NULL, NULL, NULL, 0);
-	pfs_create_file(dir, "osrelease", &linprocfs_doosrelease,
+	pfs_create_dir(sys, &dir, "kernel", NULL, NULL, NULL, 0);
+	pfs_create_file(dir, NULL, "osrelease", &linprocfs_doosrelease, NULL,
+	    NULL, NULL, PFS_RD);
+	pfs_create_file(dir, NULL, "ostype", &linprocfs_doostype, NULL, NULL,
+	    NULL, PFS_RD);
+	pfs_create_file(dir, NULL, "version", &linprocfs_doosbuild, NULL, NULL,
+	    NULL, PFS_RD);
+	pfs_create_file(dir, NULL, "msgmax", &linprocfs_domsgmax, NULL, NULL,
+	    NULL, PFS_RD);
+	pfs_create_file(dir, NULL, "msgmni", &linprocfs_domsgmni, NULL, NULL,
+	    NULL, PFS_RD);
+	pfs_create_file(dir, NULL, "msgmnb", &linprocfs_domsgmnb, NULL, NULL,
+	    NULL, PFS_RD);
+	pfs_create_file(dir, NULL, "ngroups_max", &linprocfs_dongroups_max,
 	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(dir, "ostype", &linprocfs_doostype,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(dir, "version", &linprocfs_doosbuild,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(dir, "msgmax", &linprocfs_domsgmax,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(dir, "msgmni", &linprocfs_domsgmni,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(dir, "msgmnb", &linprocfs_domsgmnb,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(dir, "ngroups_max", &linprocfs_dongroups_max,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(dir, "pid_max", &linprocfs_dopid_max,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(dir, "sem", &linprocfs_dosem,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(dir, "shmall", &linprocfs_doshmall,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(dir, "shmmax", &linprocfs_doshmmax,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(dir, "shmmni", &linprocfs_doshmmni,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(dir, "tainted", &linprocfs_dotainted,
+	pfs_create_file(dir, NULL, "pid_max", &linprocfs_dopid_max, NULL, NULL,
+	    NULL, PFS_RD);
+	pfs_create_file(dir, NULL, "sem", &linprocfs_dosem, NULL, NULL, NULL,
+	    PFS_RD);
+	pfs_create_file(dir, NULL, "shmall", &linprocfs_doshmall, NULL, NULL,
+	    NULL, PFS_RD);
+	pfs_create_file(dir, NULL, "shmmax", &linprocfs_doshmmax, NULL, NULL,
+	    NULL, PFS_RD);
+	pfs_create_file(dir, NULL, "shmmni", &linprocfs_doshmmni, NULL, NULL,
+	    NULL, PFS_RD);
+	pfs_create_file(dir, NULL, "tainted", &linprocfs_dotainted, NULL, NULL,
+	    NULL, PFS_RD);
+	pfs_create_file(dir, NULL, "threads-max", &linprocfs_dothreads_max,
 	    NULL, NULL, NULL, PFS_RD);
 
 	/* /proc/sys/kernel/random/... */
-	dir = pfs_create_dir(dir, "random", NULL, NULL, NULL, 0);
-	pfs_create_file(dir, "uuid", &linprocfs_douuid,
-	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(dir, "boot_id", &linprocfs_doboot_id,
-	    NULL, NULL, NULL, PFS_RD);
+	pfs_create_dir(dir, &dir, "random", NULL, NULL, NULL, 0);
+	pfs_create_file(dir, NULL, "uuid", &linprocfs_douuid, NULL, NULL, NULL,
+	    PFS_RD);
+	pfs_create_file(dir, NULL, "boot_id", &linprocfs_doboot_id, NULL, NULL,
+	    NULL, PFS_RD);
 
 	/* /proc/sys/vm/.... */
-	dir = pfs_create_dir(sys, "vm", NULL, NULL, NULL, 0);
-	pfs_create_file(dir, "min_free_kbytes", &linprocfs_dominfree,
+	pfs_create_dir(sys, &dir, "vm", NULL, NULL, NULL, 0);
+	pfs_create_file(dir, NULL, "min_free_kbytes", &linprocfs_dominfree,
 	    NULL, NULL, NULL, PFS_RD);
-	pfs_create_file(dir, "max_map_count", &linprocfs_domax_map_cnt,
+	pfs_create_file(dir, NULL, "max_map_count", &linprocfs_domax_map_cnt,
+	    NULL, NULL, NULL, PFS_RD);
+
+	/* /proc/sysvipc/... */
+	pfs_create_dir(root, &dir, "sysvipc", NULL, NULL, NULL, 0);
+	pfs_create_file(dir, NULL, "msg", &linprocfs_dosysvipc_msg, NULL, NULL,
+	    NULL, PFS_RD);
+	pfs_create_file(dir, NULL, "sem", &linprocfs_dosysvipc_sem, NULL, NULL,
+	    NULL, PFS_RD);
+	pfs_create_file(dir, NULL, "shm", &linprocfs_dosysvipc_shm, NULL, NULL,
+	    NULL, PFS_RD);
+
+	/* /proc/sys/fs/... */
+	pfs_create_dir(sys, &fs, "fs", NULL, NULL, NULL, 0);
+
+	pfs_create_file(fs, NULL, "file-nr", &linprocfs_dofile_nr,
+	    NULL, NULL, NULL, PFS_RD);
+	pfs_create_file(fs, NULL, "file-max", &linprocfs_dofile_max,
+	    NULL, NULL, NULL, PFS_RD);
+	pfs_create_file(fs, NULL, "nr_open", &linprocfs_donr_open,
+	    NULL, NULL, NULL, PFS_RD);
+	pfs_create_file(fs, NULL, "overflowgid", &linprocfs_dooverflowgid,
+	    NULL, NULL, NULL, PFS_RD);
+	pfs_create_file(fs, NULL, "overflowuid", &linprocfs_dooverflowuid,
+	    NULL, NULL, NULL, PFS_RD);
+	pfs_create_file(fs, NULL, "protected_hardlinks",
+	    &linprocfs_doprotected_hardlinks, NULL, NULL, NULL, PFS_RD);
+	pfs_create_file(fs, NULL, "suid_dumpable", &linprocfs_dosuid_dumpable,
+	    NULL, NULL, NULL, PFS_RD);
+
+	pfs_create_dir(fs, &dir, "inotify", NULL, NULL, NULL, 0);
+	pfs_create_file(dir, NULL, "max_queued_events",
+	    &linprocfs_doinotify_max_queued_events, NULL, NULL, NULL, PFS_RDWR);
+	pfs_create_file(dir, NULL, "max_user_instances",
+	    &linprocfs_doinotify_max_user_instances, NULL, NULL, NULL, PFS_RDWR);
+	pfs_create_file(dir, NULL, "max_user_watches",
+	    &linprocfs_doinotify_max_user_watches, NULL, NULL, NULL, PFS_RDWR);
+
+	/* /proc/sys/fs/mqueue/... */
+	pfs_create_dir(fs, &dir, "mqueue", NULL, NULL, NULL, 0);
+	pfs_create_file(dir, NULL, "msg_default",
+	    &linprocfs_domqueue_msg_default, NULL, NULL, NULL, PFS_RD);
+	pfs_create_file(dir, NULL, "msgsize_default",
+	    &linprocfs_domqueue_msgsize_default, NULL, NULL, NULL, PFS_RD);
+	pfs_create_file(dir, NULL, "msg_max", &linprocfs_domqueue_msg_max, NULL,
+	    NULL, NULL, PFS_RD);
+	pfs_create_file(dir, NULL, "msgsize_max",
+	    &linprocfs_domqueue_msgsize_max, NULL, NULL, NULL, PFS_RD);
+	pfs_create_file(dir, NULL, "queues_max", &linprocfs_domqueue_queues_max,
 	    NULL, NULL, NULL, PFS_RD);
 
 	return (0);

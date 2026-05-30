@@ -23,12 +23,11 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
+#include <sys/stdarg.h>
+
 #include <machine/elf.h>
-#include <machine/stdarg.h>
+
 #include <stand.h>
 
 #include <efi.h>
@@ -70,7 +69,7 @@ drvread(struct dsk *dskp, void *buf, daddr_t lba, unsigned nblk)
 		DPRINTF("dskread: failed dev: %p, id: %u, lba: %ju, size: %d, "
 		    "status: %lu\n", devinfo->dev,
 		    dev->Media->MediaId, (uintmax_t)lba, size,
-		    EFI_ERROR_CODE(status));
+		    DECODE_ERROR(status));
 		return (-1);
 	}
 
@@ -100,7 +99,7 @@ drvwrite(struct dsk *dskp, void *buf, daddr_t lba, unsigned nblk)
 		DPRINTF("dskread: failed dev: %p, id: %u, lba: %ju, size: %d, "
 		    "status: %lu\n", devinfo->dev,
 		    dev->Media->MediaId, (uintmax_t)lba, size,
-		    EFI_ERROR_CODE(status));
+		    DECODE_ERROR(status));
 		return (-1);
 	}
 

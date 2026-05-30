@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2004-2006
  *      Damien Bergamini <damien.bergamini@free.fr>. All rights reserved.
@@ -30,8 +30,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*-
  * Intel(R) PRO/Wireless 2100 MiniPCI driver
  * http://www.intel.com/network/connectivity/products/wireless/prowireless_mobile.htm
@@ -115,7 +113,7 @@ static struct ieee80211vap *ipw_vap_create(struct ieee80211com *,
 static void	ipw_vap_delete(struct ieee80211vap *);
 static int	ipw_dma_alloc(struct ipw_softc *);
 static void	ipw_release(struct ipw_softc *);
-static void	ipw_media_status(struct ifnet *, struct ifmediareq *);
+static void	ipw_media_status(if_t, struct ifmediareq *);
 static int	ipw_newstate(struct ieee80211vap *, enum ieee80211_state, int);
 static uint16_t	ipw_read_prom_word(struct ipw_softc *, uint8_t);
 static uint16_t	ipw_read_chanmask(struct ipw_softc *);
@@ -284,6 +282,8 @@ ipw_attach(device_t dev)
 		| IEEE80211_C_SHPREAMBLE	/* short preamble supported */
 		| IEEE80211_C_WPA		/* 802.11i supported */
 		;
+
+	ic->ic_flags_ext |= IEEE80211_FEXT_SEQNO_OFFLOAD;
 
 	/* read MAC address from EEPROM */
 	val = ipw_read_prom_word(sc, IPW_EEPROM_MAC + 0);
@@ -833,15 +833,15 @@ ipw_cvtrate(int ipwrate)
  * value here.
  */
 static void
-ipw_media_status(struct ifnet *ifp, struct ifmediareq *imr)
+ipw_media_status(if_t ifp, struct ifmediareq *imr)
 {
-	struct ieee80211vap *vap = ifp->if_softc;
+	struct ieee80211vap *vap = if_getsoftc(ifp);
 	struct ieee80211com *ic = vap->iv_ic;
 	struct ipw_softc *sc = ic->ic_softc;
 
 	/* read current transmission rate from adapter */
-	vap->iv_bss->ni_txrate = ipw_cvtrate(
-	    ipw_read_table1(sc, IPW_INFO_CURRENT_TX_RATE) & 0xf);
+	ieee80211_node_set_txrate_dot11rate(vap->iv_bss,
+	    ipw_cvtrate(ipw_read_table1(sc, IPW_INFO_CURRENT_TX_RATE) & 0xf));
 	ieee80211_media_status(ifp, imr);
 }
 
@@ -1121,7 +1121,7 @@ ipw_fix_channel(struct ipw_softc *sc, struct mbuf *m)
 
 	wh = mtod(m, struct ieee80211_frame *);
 
-	if ((wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) != IEEE80211_FC0_TYPE_MGT)
+	if (!IEEE80211_IS_MGMT(wh))
 		return;
 
 	subtype = wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK;
@@ -1158,7 +1158,6 @@ static void
 ipw_rx_data_intr(struct ipw_softc *sc, struct ipw_status *status,
     struct ipw_soft_bd *sbd, struct ipw_soft_buf *sbuf)
 {
-	struct epoch_tracker et;
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct mbuf *mnew, *m;
 	struct ieee80211_node *ni;
@@ -1230,13 +1229,11 @@ ipw_rx_data_intr(struct ipw_softc *sc, struct ipw_status *status,
 
 	IPW_UNLOCK(sc);
 	ni = ieee80211_find_rxnode(ic, mtod(m, struct ieee80211_frame_min *));
-	NET_EPOCH_ENTER(et);
 	if (ni != NULL) {
 		(void) ieee80211_input(ni, m, rssi - nf, nf);
 		ieee80211_free_node(ni);
 	} else
 		(void) ieee80211_input_all(ic, m, rssi - nf, nf);
-	NET_EPOCH_EXIT(et);
 	IPW_LOCK(sc);
 
 	bus_dmamap_sync(sc->rbd_dmat, sc->rbd_map, BUS_DMASYNC_PREWRITE);
@@ -1562,6 +1559,7 @@ ipw_tx_start(struct ipw_softc *sc, struct mbuf *m0, struct ieee80211_node *ni)
 
 	wh = mtod(m0, struct ieee80211_frame *);
 
+	ieee80211_output_seqno_assign(ni, -1, m0);
 	if (wh->i_fc[1] & IEEE80211_FC1_PROTECTED) {
 		k = ieee80211_crypto_encap(ni, m0);
 		if (k == NULL) {
@@ -2022,9 +2020,10 @@ ipw_setwepkeys(struct ipw_softc *sc)
 			continue;
 
 		wepkey.idx = i;
-		wepkey.len = wk->wk_keylen;
+		wepkey.len = ieee80211_crypto_get_key_len(wk);
 		memset(wepkey.key, 0, sizeof wepkey.key);
-		memcpy(wepkey.key, wk->wk_key, wk->wk_keylen);
+		memcpy(wepkey.key, ieee80211_crypto_get_key_data(wk),
+		    ieee80211_crypto_get_key_len(wk));
 		DPRINTF(("Setting wep key index %u len %u\n", wepkey.idx,
 		    wepkey.len));
 		error = ipw_cmd(sc, IPW_CMD_SET_WEP_KEY, &wepkey,

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2009, 2013 The FreeBSD Foundation
  *
@@ -29,8 +29,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _SYS_FONT_H_
@@ -110,7 +108,7 @@ typedef STAILQ_HEAD(font_list, fontlist) font_list_t;
 
 #define	FONT_HEADER_MAGIC	"VFNT0002"
 struct font_header {
-	uint8_t		fh_magic[8];
+	uint8_t		fh_magic[8] __nonstring;
 	uint8_t		fh_width;
 	uint8_t		fh_height;
 	uint16_t	fh_pad;

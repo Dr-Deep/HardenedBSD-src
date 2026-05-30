@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2009, 2013 The FreeBSD Foundation
  *
@@ -30,9 +30,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -204,6 +201,36 @@ vtbuf_in_this_range(int begin, int test, int end, int sz)
 		return (test >= begin || test < end);
 	else
 		return (test >= begin && test < end);
+}
+
+void
+vtbuf_unmark(struct vt_buf *vb)
+{
+
+	vtbuf_set_mark(vb, VTB_MARK_START, 0, 0);
+}
+
+void
+vtbuf_unmark_on_cross(struct vt_buf *vb, int target_begin, int target_end)
+{
+	int hsz, mb, me, tb, te;
+
+	tb = vtbuf_wth(vb, target_begin);
+	te = vtbuf_wth(vb, target_end);
+	mb = vb->vb_mark_start.tp_row;
+	me = vb->vb_mark_end.tp_row;
+	hsz = vb->vb_history_size;
+
+	/*
+	 * Test intersection with vtbuf_in_this_range due to use of
+	 * the circular buffer.
+	 */
+	if (vtbuf_in_this_range(tb, mb, te, hsz) ||
+	    vtbuf_in_this_range(tb, me, te, hsz) ||
+	    vtbuf_in_this_range(mb, tb, me, hsz) ||
+	    vtbuf_in_this_range(mb, te, me, hsz)) {
+		vtbuf_unmark(vb);
+	}
 }
 #endif
 
@@ -742,7 +769,7 @@ vtbuf_get_marked_len(struct vt_buf *vb)
 	ei = e.tp_row * vb->vb_scr_size.tp_col + e.tp_col;
 
 	/* Number symbols and number of rows to inject \r */
-	sz = ei - si + (e.tp_row - s.tp_row);
+	sz = ei - si + (1 + e.tp_row - s.tp_row);
 
 	return (sz * sizeof(term_char_t));
 }
@@ -771,7 +798,7 @@ tchar_is_word_separator(term_char_t ch)
 }
 
 void
-vtbuf_extract_marked(struct vt_buf *vb, term_char_t *buf, int sz)
+vtbuf_extract_marked(struct vt_buf *vb, term_char_t *buf, int sz, int mark)
 {
 	int i, j, r, c, cs, ce;
 	term_pos_t s, e;
@@ -799,7 +826,7 @@ vtbuf_extract_marked(struct vt_buf *vb, term_char_t *buf, int sz)
 			buf[i++] = vb->vb_rows[r][c];
 
 		/* For all rows, but the last one. */
-		if (r != e.tp_row) {
+		if (r != e.tp_row || mark == VTB_MARK_ROW) {
 			/* Trim trailing word separators, if any. */
 			for (; i != j; i--) {
 				if (!tchar_is_word_separator(buf[i - 1]))

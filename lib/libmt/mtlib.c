@@ -30,9 +30,6 @@
  * Authors: Ken Merry           (Spectra Logic Corporation)
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <sys/mtio.h>
@@ -644,11 +641,14 @@ static struct densities {
 	{ 0x56, 20670,  525018, "3592B5 (unencrypted)" },
 	{ 0x57, 21850,  554990, "3592A6 (unencrypted)" },
 	{ 0x58, 15142,  384607, "LTO-5" },
+	{ 0x59, 21850,  554990, "3592A7 (unencrypted)" },
 	{ 0x5A, 15142,  384607, "LTO-6" },
 	{ 0x5C, 19107,  485318, "LTO-7" },
 	{ 0x5D, 19107,  485318, "LTO-M8" },
 	{ 0x5E, 20669,  524993, "LTO-8" },
 	{ 0x60, 23031,  584987, "LTO-9" },
+	{ 0x62, 21657,  550088, "LTO-10" },
+	{ 0x63, 22441,  570001, "LTO-10P" },
 	{ 0x71, 11800,  299720, "3592A1 (encrypted)" },
 	{ 0x72, 11800,  299720, "3592A2 (encrypted)" },
 	{ 0x73, 13452,  341681, "3592A3 (encrypted)" },
@@ -656,6 +656,7 @@ static struct densities {
 	{ 0x75, 20670,  525018, "3592A5 (encrypted)" },
 	{ 0x76, 20670,  525018, "3592B5 (encrypted)" },
 	{ 0x77, 21850,  554990, "3592A6 (encrypted)" },
+	{ 0x79, 21850,  554990, "3592A7 (encrypted)" },
 	{ 0x8c,  1789,   45434, "EXB-8500c" },
 	{ 0x90,  1703,   43245, "EXB-8200c" },
 	{ 0, 0, 0, NULL }

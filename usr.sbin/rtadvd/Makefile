@@ -12,7 +12,6 @@
 # LIMITATION, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
 # A PARTICULAR PURPOSE.
 #
-# $FreeBSD$
 
 .include <src.opts.mk>
 
@@ -20,11 +19,6 @@ PROG=	rtadvd
 MAN=	rtadvd.conf.5 rtadvd.8
 SRCS=	rtadvd.c rrenum.c advcap.c if.c config.c timer.c timer_subr.c	\
 	control.c control_server.c
-
-.if ${MK_EXPERIMENTAL} != "no"
-CFLAGS+=	-DEXPERIMENTAL
-CFLAGS+=	-DDRAFT_IETF_6MAN_IPV6ONLY_FLAG
-.endif
 
 LIBADD=	util
 

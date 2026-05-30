@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -53,7 +54,7 @@ extern int zfs_nocacheflush;
 typedef boolean_t vdev_open_children_func_t(vdev_t *vd);
 
 extern void vdev_dbgmsg(vdev_t *vd, const char *fmt, ...)
-    __attribute__((format(printf, 2, 3)));
+    __attribute__((format(__printf__, 2, 3)));
 extern void vdev_dbgmsg_print_tree(vdev_t *, int);
 extern int vdev_open(vdev_t *);
 extern void vdev_open_children(vdev_t *);
@@ -99,6 +100,7 @@ extern boolean_t vdev_replace_in_progress(vdev_t *vdev);
 extern void vdev_hold(vdev_t *);
 extern void vdev_rele(vdev_t *);
 
+void vdev_update_nonallocating_space(vdev_t *vd, boolean_t add);
 extern int vdev_metaslab_init(vdev_t *vd, uint64_t txg);
 extern void vdev_metaslab_fini(vdev_t *vd);
 extern void vdev_metaslab_set_size(vdev_t *);
@@ -106,12 +108,12 @@ extern void vdev_expand(vdev_t *vd, uint64_t txg);
 extern void vdev_split(vdev_t *vd);
 extern void vdev_deadman(vdev_t *vd, const char *tag);
 
-typedef void vdev_xlate_func_t(void *arg, range_seg64_t *physical_rs);
+typedef void vdev_xlate_func_t(void *arg, zfs_range_seg64_t *physical_rs);
 
-extern boolean_t vdev_xlate_is_empty(range_seg64_t *rs);
-extern void vdev_xlate(vdev_t *vd, const range_seg64_t *logical_rs,
-    range_seg64_t *physical_rs, range_seg64_t *remain_rs);
-extern void vdev_xlate_walk(vdev_t *vd, const range_seg64_t *logical_rs,
+extern boolean_t vdev_xlate_is_empty(zfs_range_seg64_t *rs);
+extern void vdev_xlate(vdev_t *vd, const zfs_range_seg64_t *logical_rs,
+    zfs_range_seg64_t *physical_rs, zfs_range_seg64_t *remain_rs);
+extern void vdev_xlate_walk(vdev_t *vd, const zfs_range_seg64_t *logical_rs,
     vdev_xlate_func_t *func, void *arg);
 
 extern void vdev_get_stats_ex(vdev_t *vd, vdev_stat_t *vs, vdev_stat_ex_t *vsx);
@@ -132,15 +134,35 @@ extern void vdev_space_update(vdev_t *vd,
 
 extern int64_t vdev_deflated_space(vdev_t *vd, int64_t space);
 
+extern uint64_t vdev_asize_to_psize_txg(vdev_t *vd, uint64_t asize,
+    uint64_t txg);
+extern uint64_t vdev_psize_to_asize_txg(vdev_t *vd, uint64_t psize,
+    uint64_t txg);
 extern uint64_t vdev_psize_to_asize(vdev_t *vd, uint64_t psize);
+extern uint64_t vdev_get_min_alloc(vdev_t *vd);
 
 /*
- * Return the amount of space allocated for a gang block header.
+ * Return the amount of space allocated for a gang block header.  Note that
+ * since the physical birth txg is not provided, this must be constant for
+ * a given vdev.  (e.g. raidz expansion can't change this)
  */
 static inline uint64_t
 vdev_gang_header_asize(vdev_t *vd)
 {
-	return (vdev_psize_to_asize(vd, SPA_GANGBLOCKSIZE));
+	return (vdev_psize_to_asize_txg(vd, SPA_OLD_GANGBLOCKSIZE, 0));
+}
+
+/*
+ * Return the amount of data that can be stored in a gang header. Because we
+ * need to ensure gang headers can always be allocated (as long as there is
+ * space available), this is the minimum allocatable size on the vdev. Note that
+ * since the physical birth txg is not provided, this must be constant for
+ * a given vdev.  (e.g. raidz expansion can't change this)
+ */
+static inline uint64_t
+vdev_gang_header_psize(vdev_t *vd)
+{
+	return (vdev_get_min_alloc(vd));
 }
 
 extern int vdev_fault(spa_t *spa, uint64_t guid, vdev_aux_t aux);
@@ -148,6 +170,7 @@ extern int vdev_degrade(spa_t *spa, uint64_t guid, vdev_aux_t aux);
 extern int vdev_online(spa_t *spa, uint64_t guid, uint64_t flags,
     vdev_state_t *);
 extern int vdev_offline(spa_t *spa, uint64_t guid, uint64_t flags);
+extern int vdev_remove_wanted(spa_t *spa, uint64_t guid);
 extern void vdev_clear(spa_t *spa, vdev_t *vd);
 
 extern boolean_t vdev_is_dead(vdev_t *vd);
@@ -157,20 +180,16 @@ extern boolean_t vdev_allocatable(vdev_t *vd);
 extern boolean_t vdev_accessible(vdev_t *vd, zio_t *zio);
 extern boolean_t vdev_is_spacemap_addressable(vdev_t *vd);
 
-extern void vdev_cache_init(vdev_t *vd);
-extern void vdev_cache_fini(vdev_t *vd);
-extern boolean_t vdev_cache_read(zio_t *zio);
-extern void vdev_cache_write(zio_t *zio);
-extern void vdev_cache_purge(vdev_t *vd);
-
 extern void vdev_queue_init(vdev_t *vd);
 extern void vdev_queue_fini(vdev_t *vd);
 extern zio_t *vdev_queue_io(zio_t *zio);
 extern void vdev_queue_io_done(zio_t *zio);
 extern void vdev_queue_change_io_priority(zio_t *zio, zio_priority_t priority);
 
-extern int vdev_queue_length(vdev_t *vd);
+extern uint32_t vdev_queue_length(vdev_t *vd);
 extern uint64_t vdev_queue_last_offset(vdev_t *vd);
+extern uint64_t vdev_queue_class_length(vdev_t *vq, zio_priority_t p);
+extern boolean_t vdev_queue_pool_busy(spa_t *spa);
 
 extern void vdev_config_dirty(vdev_t *vd);
 extern void vdev_config_clean(vdev_t *vd);
@@ -185,11 +204,12 @@ extern boolean_t vdev_clear_resilver_deferred(vdev_t *vd, dmu_tx_t *tx);
 typedef enum vdev_config_flag {
 	VDEV_CONFIG_SPARE = 1 << 0,
 	VDEV_CONFIG_L2CACHE = 1 << 1,
-	VDEV_CONFIG_REMOVING = 1 << 2,
-	VDEV_CONFIG_MOS = 1 << 3,
-	VDEV_CONFIG_MISSING = 1 << 4
+	VDEV_CONFIG_MOS = 1 << 2,
+	VDEV_CONFIG_MISSING = 1 << 3
 } vdev_config_flag_t;
 
+extern void vdev_post_kobj_evt(vdev_t *vd);
+extern void vdev_clear_kobj_evt(vdev_t *vd);
 extern void vdev_top_config_generate(spa_t *spa, nvlist_t *config);
 extern nvlist_t *vdev_config_generate(spa_t *spa, vdev_t *vd,
     boolean_t getstats, vdev_config_flag_t flags);
@@ -207,6 +227,10 @@ extern void vdev_label_write(zio_t *zio, vdev_t *vd, int l, abd_t *buf, uint64_t
     offset, uint64_t size, zio_done_func_t *done, void *priv, int flags);
 extern int vdev_label_read_bootenv(vdev_t *, nvlist_t *);
 extern int vdev_label_write_bootenv(vdev_t *, nvlist_t *);
+extern int vdev_uberblock_sync_list(vdev_t **, int, struct uberblock *, int);
+extern int vdev_uberblock_compare(const struct uberblock *,
+    const struct uberblock *);
+extern int vdev_check_boot_reserve(spa_t *, vdev_t *);
 
 typedef enum {
 	VDEV_LABEL_CREATE,	/* create/add a new device */

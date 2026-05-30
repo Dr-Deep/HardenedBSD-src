@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2004-2006 Pawel Jakub Dawidek <pjd@FreeBSD.org>
  * Copyright (c) 2019 Mariusz Zaborski <oshogbo@FreeBSD.org>
@@ -26,9 +26,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/ctype.h>
@@ -419,7 +416,7 @@ g_nop_create(struct gctl_req *req, struct g_class *mp, struct g_provider *pp,
 			return (EEXIST);
 		}
 	}
-	gp = g_new_geomf(mp, "%s", name);
+	gp = g_new_geom(mp, name);
 	sc = g_malloc(sizeof(*sc), M_WAITOK | M_ZERO);
 	sc->sc_offset = offset;
 	sc->sc_explicitsize = explicitsize;

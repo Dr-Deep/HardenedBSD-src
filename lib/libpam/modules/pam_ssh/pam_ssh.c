@@ -35,9 +35,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/wait.h>
 
@@ -65,7 +62,7 @@ __FBSDID("$FreeBSD$");
 #include "sshkey.h"
 
 #define ssh_add_identity(auth, key, comment) \
-	ssh_add_identity_constrained(auth, key, comment, 0, 0, 0, NULL, NULL, 0)
+	ssh_add_identity_constrained(auth, key, comment, 0, 0, NULL, NULL, 0)
 
 extern char **environ;
 

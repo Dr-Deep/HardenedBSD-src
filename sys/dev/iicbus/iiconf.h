@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1998, 2001 Nicolas Souchu
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #ifndef __IICONF_H
 #define __IICONF_H
@@ -34,7 +32,7 @@
 #include <dev/iicbus/iic.h>
 
 
-#define IICPRI (PZERO+8)		/* XXX sleep/wakeup queue priority */
+#define IICPRI (PWAIT)		/* XXX sleep/wakeup queue priority */
 
 #define LSB 0x1
 

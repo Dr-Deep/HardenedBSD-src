@@ -22,17 +22,13 @@
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/IR/CFG.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils.h"
-#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
-#include "llvm/Transforms/Utils/ValueMapper.h"
 
 #define DEBUG_TYPE "loop-data-prefetch"
 
@@ -216,10 +212,12 @@ bool LoopDataPrefetchLegacyPass::runOnFunction(Function &F) {
 bool LoopDataPrefetch::run() {
   // If PrefetchDistance is not set, don't run the pass.  This gives an
   // opportunity for targets to run this pass for selected subtargets only
-  // (whose TTI sets PrefetchDistance).
-  if (getPrefetchDistance() == 0)
+  // (whose TTI sets PrefetchDistance and CacheLineSize).
+  if (getPrefetchDistance() == 0 || TTI->getCacheLineSize() == 0) {
+    LLVM_DEBUG(dbgs() << "Please set both PrefetchDistance and CacheLineSize "
+                         "for loop data prefetch.\n");
     return false;
-  assert(TTI->getCacheLineSize() && "Cache line size is not set for target");
+  }
 
   bool MadeChange = false;
 
@@ -236,15 +234,14 @@ struct Prefetch {
   /// The address formula for this prefetch as returned by ScalarEvolution.
   const SCEVAddRecExpr *LSCEVAddRec;
   /// The point of insertion for the prefetch instruction.
-  Instruction *InsertPt;
+  Instruction *InsertPt = nullptr;
   /// True if targeting a write memory access.
-  bool Writes;
+  bool Writes = false;
   /// The (first seen) prefetched instruction.
-  Instruction *MemI;
+  Instruction *MemI = nullptr;
 
   /// Constructor to create a new Prefetch for \p I.
-  Prefetch(const SCEVAddRecExpr *L, Instruction *I)
-      : LSCEVAddRec(L), InsertPt(nullptr), Writes(false), MemI(nullptr) {
+  Prefetch(const SCEVAddRecExpr *L, Instruction *I) : LSCEVAddRec(L) {
     addInstruction(I);
   };
 
@@ -303,7 +300,11 @@ bool LoopDataPrefetch::runOnLoop(Loop *L) {
     }
     Metrics.analyzeBasicBlock(BB, *TTI, EphValues);
   }
-  unsigned LoopSize = Metrics.NumInsts;
+
+  if (!Metrics.NumInsts.isValid())
+    return MadeChange;
+
+  unsigned LoopSize = Metrics.NumInsts.getValue();
   if (!LoopSize)
     LoopSize = 1;
 
@@ -336,7 +337,7 @@ bool LoopDataPrefetch::runOnLoop(Loop *L) {
       } else continue;
 
       unsigned PtrAddrSpace = PtrValue->getType()->getPointerAddressSpace();
-      if (PtrAddrSpace)
+      if (!TTI->shouldPrefetchAddressSpace(PtrAddrSpace))
         continue;
       NumMemAccesses++;
       if (L->isLoopInvariant(PtrValue))
@@ -388,27 +389,24 @@ bool LoopDataPrefetch::runOnLoop(Loop *L) {
     if (!isStrideLargeEnough(P.LSCEVAddRec, TargetMinStride))
       continue;
 
+    BasicBlock *BB = P.InsertPt->getParent();
+    SCEVExpander SCEVE(*SE, BB->getDataLayout(), "prefaddr");
     const SCEV *NextLSCEV = SE->getAddExpr(P.LSCEVAddRec, SE->getMulExpr(
       SE->getConstant(P.LSCEVAddRec->getType(), ItersAhead),
       P.LSCEVAddRec->getStepRecurrence(*SE)));
-    if (!isSafeToExpand(NextLSCEV, *SE))
+    if (!SCEVE.isSafeToExpand(NextLSCEV))
       continue;
 
-    BasicBlock *BB = P.InsertPt->getParent();
-    Type *I8Ptr = Type::getInt8PtrTy(BB->getContext(), 0/*PtrAddrSpace*/);
-    SCEVExpander SCEVE(*SE, BB->getModule()->getDataLayout(), "prefaddr");
+    unsigned PtrAddrSpace = NextLSCEV->getType()->getPointerAddressSpace();
+    Type *I8Ptr = PointerType::get(BB->getContext(), PtrAddrSpace);
     Value *PrefPtrValue = SCEVE.expandCodeFor(NextLSCEV, I8Ptr, P.InsertPt);
 
     IRBuilder<> Builder(P.InsertPt);
-    Module *M = BB->getParent()->getParent();
     Type *I32 = Type::getInt32Ty(BB->getContext());
-    Function *PrefetchFunc = Intrinsic::getDeclaration(
-        M, Intrinsic::prefetch, PrefPtrValue->getType());
-    Builder.CreateCall(
-        PrefetchFunc,
-        {PrefPtrValue,
-         ConstantInt::get(I32, P.Writes),
-         ConstantInt::get(I32, 3), ConstantInt::get(I32, 1)});
+    Builder.CreateIntrinsic(Intrinsic::prefetch, PrefPtrValue->getType(),
+                            {PrefPtrValue, ConstantInt::get(I32, P.Writes),
+                             ConstantInt::get(I32, 3),
+                             ConstantInt::get(I32, 1)});
     ++NumPrefetches;
     LLVM_DEBUG(dbgs() << "  Access: "
                << *P.MemI->getOperand(isa<LoadInst>(P.MemI) ? 0 : 1)

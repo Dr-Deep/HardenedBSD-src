@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008 Joseph Koshy
  * All rights reserved.
@@ -29,9 +29,6 @@
 /*
  * Common code for handling Intel CPUs.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/pmc.h>
@@ -99,7 +96,7 @@ pmc_intel_initialize(void)
 	    family, model, stepping);
 
 	switch (cpu_id & 0xF00) {
-	case 0x600:		/* Pentium Pro, Celeron, Pentium II & III */
+	case 0x600:
 		switch (model) {
 		case 0xE:
 			cputype = PMC_CPU_INTEL_CORE;
@@ -214,6 +211,9 @@ pmc_intel_initialize(void)
 			break;
 		case 0x97:
 		case 0x9A:
+		case 0xB7:
+		case 0xBA:
+		case 0xBF:
 			cputype = PMC_CPU_INTEL_ALDERLAKE;
 			nclasses = 3;
 			break;
@@ -245,6 +245,25 @@ pmc_intel_initialize(void)
 		case 0x86:
 		case 0x96:
 			cputype = PMC_CPU_INTEL_ATOM_TREMONT;
+			nclasses = 3;
+			break;
+		case 0xAA:
+		case 0xAC:
+		case 0xB5:
+			cputype = PMC_CPU_INTEL_METEOR_LAKE;
+			nclasses = 3;
+			break;
+		case 0xAD:
+		case 0xAE:
+			cputype = PMC_CPU_INTEL_GRANITE_RAPIDS;
+			nclasses = 3;
+			break;
+		case 0xBE:
+			cputype = PMC_CPU_INTEL_ALDERLAKEN;
+			nclasses = 3;
+			break;
+		case 0xCF:
+			cputype = PMC_CPU_INTEL_EMERALD_RAPIDS;
 			nclasses = 3;
 			break;
 		}

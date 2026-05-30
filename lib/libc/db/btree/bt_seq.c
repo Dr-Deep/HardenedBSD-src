@@ -32,12 +32,6 @@
  * SUCH DAMAGE.
  */
 
-#if defined(LIBC_SCCS) && !defined(lint)
-static char sccsid[] = "@(#)bt_seq.c	8.7 (Berkeley) 7/20/94";
-#endif /* LIBC_SCCS and not lint */
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/types.h>
 
 #include <errno.h>
@@ -89,7 +83,7 @@ __bt_seq(const DB *dbp, DBT *key, DBT *data, u_int flags)
 	}
 
 	/*
-	 * If scan unitialized as yet, or starting at a specific record, set
+	 * If scan uninitialized as yet, or starting at a specific record, set
 	 * the scan to a specific key.  Both __bt_seqset and __bt_seqadv pin
 	 * the page the cursor references if they're successful.
 	 */
@@ -331,7 +325,7 @@ usecurrent:		F_CLR(c, CURS_AFTER | CURS_BEFORE);
 static int
 __bt_first(BTREE *t, const DBT *key, EPG *erval, int *exactp)
 {
-	PAGE *h;
+	PAGE *h, *hprev;
 	EPG *ep, save;
 	pgno_t pg;
 
@@ -344,7 +338,7 @@ __bt_first(BTREE *t, const DBT *key, EPG *erval, int *exactp)
 	 * page) and return it.
 	 */
 	if ((ep = __bt_search(t, key, exactp)) == NULL)
-		return (0);
+		return (RET_SPECIAL);
 	if (*exactp) {
 		if (F_ISSET(t, B_NODUPS)) {
 			*erval = *ep;
@@ -375,14 +369,14 @@ __bt_first(BTREE *t, const DBT *key, EPG *erval, int *exactp)
 					break;
 				if (h->pgno != save.page->pgno)
 					mpool_put(t->bt_mp, h, 0);
-				if ((h = mpool_get(t->bt_mp,
+				if ((hprev = mpool_get(t->bt_mp,
 				    h->prevpg, 0)) == NULL) {
 					if (h->pgno == save.page->pgno)
 						mpool_put(t->bt_mp,
 						    save.page, 0);
 					return (RET_ERROR);
 				}
-				ep->page = h;
+				ep->page = h = hprev;
 				ep->index = NEXTINDEX(h);
 			}
 			--ep->index;

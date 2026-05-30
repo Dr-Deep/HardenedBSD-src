@@ -21,8 +21,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _IPFW2_TABLE_H
@@ -34,7 +32,39 @@
  */
 #ifdef _KERNEL
 
-struct table_algo;
+/*
+ * Table has the following `type` concepts:
+ *
+ * `no.type` represents lookup key type (addr, ifp, uid, etc..)
+ * vmask represents bitmask of table values which are present at the moment.
+ * Special IPFW_VTYPE_LEGACY ( (uint32_t)-1 ) represents old
+ * single-value-for-all approach.
+ */
+struct table_config {
+	struct named_object	no;
+	uint8_t		tflags;		/* type flags */
+	uint8_t		locked;		/* 1 if locked from changes */
+	uint8_t		linked;		/* 1 if already linked */
+	uint8_t		ochanged;	/* used by set swapping */
+	uint8_t		vshared;	/* 1 if using shared value array */
+	uint8_t		spare[3];
+	uint32_t	count;		/* Number of records */
+	uint32_t	limit;		/* Max number of records */
+	uint32_t	vmask;		/* bitmask with supported values */
+	uint32_t	ocount;		/* used by set swapping */
+	uint64_t	gencnt;		/* generation count */
+	char		tablename[64];	/* table name */
+	struct table_algo	*ta;	/* Callbacks for given algo */
+	void		*astate;	/* algorithm state */
+	struct table_info {
+		table_lookup_t	*lookup;/* Lookup function */
+		void		*state;	/* Lookup radix/other structure */
+		void		*xstate;/* eXtended state */
+		u_long		data;	/* Hints for given func */
+	} ti_copy;	/* data to put to table_info */
+	struct namedobj_instance	*vi;
+};
+
 struct tables_config {
 	struct namedobj_instance	*namehash;
 	struct namedobj_instance	*valhash;
@@ -42,18 +72,9 @@ struct tables_config {
 	uint32_t			algo_count;
 	struct table_algo 		*algo[256];
 	struct table_algo		*def_algo[IPFW_TABLE_MAXTYPE + 1];
-	TAILQ_HEAD(op_state_l,op_state)	state_list;
 };
 #define	CHAIN_TO_TCFG(chain)	((struct tables_config *)(chain)->tblcfg)
 
-struct table_info {
-	table_lookup_t	*lookup;	/* Lookup function */
-	void		*state;		/* Lookup radix/other structure */
-	void		*xstate;	/* eXtended state */
-	u_long		data;		/* Hints for given func */
-};
-
-struct table_value;
 struct tentry_info {
 	void		*paddr;
 	struct table_value	*pvalue;
@@ -158,31 +179,25 @@ int add_table_entry(struct ip_fw_chain *ch, struct tid_info *ti,
 int del_table_entry(struct ip_fw_chain *ch, struct tid_info *ti,
     struct tentry_info *tei, uint8_t flags, uint32_t count);
 int flush_table(struct ip_fw_chain *ch, struct tid_info *ti);
-void ipfw_import_table_value_legacy(uint32_t value, struct table_value *v);
-uint32_t ipfw_export_table_value_legacy(struct table_value *v);
-int ipfw_get_table_size(struct ip_fw_chain *ch, ip_fw3_opheader *op3,
-    struct sockopt_data *sd);
 
 /* ipfw_table_value.c functions */
 struct table_config;
-struct tableop_state;
 void ipfw_table_value_init(struct ip_fw_chain *ch, int first);
 void ipfw_table_value_destroy(struct ip_fw_chain *ch, int last);
-int ipfw_link_table_values(struct ip_fw_chain *ch, struct tableop_state *ts,
-    uint8_t flags);
+int ipfw_link_table_values(struct ip_fw_chain *ch, struct table_config *tc,
+    struct tentry_info *tei, uint32_t count, uint8_t flags);
 void ipfw_garbage_table_values(struct ip_fw_chain *ch, struct table_config *tc,
     struct tentry_info *tei, uint32_t count, int rollback);
 void ipfw_import_table_value_v1(ipfw_table_value *iv);
 void ipfw_export_table_value_v1(struct table_value *v, ipfw_table_value *iv);
 void ipfw_unref_table_values(struct ip_fw_chain *ch, struct table_config *tc,
     struct table_algo *ta, void *astate, struct table_info *ti);
-void rollback_table_values(struct tableop_state *ts);
 
 int ipfw_rewrite_table_uidx(struct ip_fw_chain *chain,
     struct rule_check_info *ci);
 int ipfw_mark_table_kidx(struct ip_fw_chain *chain, struct ip_fw *rule,
     uint32_t *bmask);
-int ipfw_export_table_ntlv(struct ip_fw_chain *ch, uint16_t kidx,
+int ipfw_export_table_ntlv(struct ip_fw_chain *ch, uint32_t kidx,
     struct sockopt_data *sd);
 void ipfw_unref_rule_tables(struct ip_fw_chain *chain, struct ip_fw *rule);
 struct namedobj_instance *ipfw_get_table_objhash(struct ip_fw_chain *ch);
@@ -192,43 +207,8 @@ int ipfw_move_tables_sets(struct ip_fw_chain *ch, ipfw_range_tlv *rt,
     uint32_t new_set);
 void ipfw_swap_tables_sets(struct ip_fw_chain *ch, uint32_t old_set,
     uint32_t new_set, int mv);
-int ipfw_foreach_table_tentry(struct ip_fw_chain *ch, uint16_t kidx,
+int ipfw_foreach_table_tentry(struct ip_fw_chain *ch, uint32_t kidx,
     ta_foreach_f f, void *arg);
-
-/* internal functions */
-void tc_ref(struct table_config *tc);
-void tc_unref(struct table_config *tc);
-
-struct op_state;
-typedef void (op_rollback_f)(void *object, struct op_state *state);
-struct op_state {
-	TAILQ_ENTRY(op_state)	next;	/* chain link */
-	op_rollback_f		*func;
-};
-
-struct tableop_state {
-	struct op_state	opstate;
-	struct ip_fw_chain *ch;
-	struct table_config *tc;
-	struct table_algo *ta;
-	struct tentry_info *tei;
-	uint32_t count;
-	uint32_t vmask;
-	int vshared;
-	int modified;
-};
-
-void add_toperation_state(struct ip_fw_chain *ch, struct tableop_state *ts);
-void del_toperation_state(struct ip_fw_chain *ch, struct tableop_state *ts);
-void rollback_toperation_state(struct ip_fw_chain *ch, void *object);
-
-/* Legacy interfaces */
-int ipfw_count_table(struct ip_fw_chain *ch, struct tid_info *ti,
-    uint32_t *cnt);
-int ipfw_count_xtable(struct ip_fw_chain *ch, struct tid_info *ti,
-    uint32_t *cnt);
-int ipfw_dump_table_legacy(struct ip_fw_chain *ch, struct tid_info *ti,
-    ipfw_table *tbl);
 
 #endif /* _KERNEL */
 #endif /* _IPFW2_TABLE_H */

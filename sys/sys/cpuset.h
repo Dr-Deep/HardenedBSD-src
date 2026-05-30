@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008,	Jeffrey Roberson <jeff@freebsd.org>
  * All rights reserved.
@@ -27,8 +27,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _SYS_CPUSET_H_
@@ -58,12 +56,15 @@
 #define	CPU_OVERLAP(p, c)		__BIT_OVERLAP(CPU_SETSIZE, p, c)
 #define	CPU_CMP(p, c)			__BIT_CMP(CPU_SETSIZE, p, c)
 #define	CPU_OR(d, s1, s2)		__BIT_OR2(CPU_SETSIZE, d, s1, s2)
+#define	CPU_ORNOT(d, s1, s2)		__BIT_ORNOT2(CPU_SETSIZE, d, s1, s2)
 #define	CPU_AND(d, s1, s2)		__BIT_AND2(CPU_SETSIZE, d, s1, s2)
 #define	CPU_ANDNOT(d, s1, s2)		__BIT_ANDNOT2(CPU_SETSIZE, d, s1, s2)
 #define	CPU_XOR(d, s1, s2)		__BIT_XOR2(CPU_SETSIZE, d, s1, s2)
 #define	CPU_CLR_ATOMIC(n, p)		__BIT_CLR_ATOMIC(CPU_SETSIZE, n, p)
+#define	CPU_TEST_CLR_ATOMIC(n, p)	__BIT_TEST_CLR_ATOMIC(CPU_SETSIZE, n, p)
 #define	CPU_SET_ATOMIC(n, p)		__BIT_SET_ATOMIC(CPU_SETSIZE, n, p)
 #define	CPU_SET_ATOMIC_ACQ(n, p)	__BIT_SET_ATOMIC_ACQ(CPU_SETSIZE, n, p)
+#define	CPU_TEST_SET_ATOMIC(n, p)	__BIT_TEST_SET_ATOMIC(CPU_SETSIZE, n, p)
 #define	CPU_AND_ATOMIC(n, p)		__BIT_AND_ATOMIC(CPU_SETSIZE, n, p)
 #define	CPU_OR_ATOMIC(d, s)		__BIT_OR_ATOMIC(CPU_SETSIZE, d, s)
 #define	CPU_COPY_STORE_REL(f, t)	__BIT_COPY_STORE_REL(CPU_SETSIZE, f, t)
@@ -75,23 +76,21 @@
 #define	CPUSET_FSET			__BITSET_FSET(_NCPUWORDS)
 #define	CPUSET_T_INITIALIZER(x)		__BITSET_T_INITIALIZER(x)
 
-#if !defined(_KERNEL)
 #define CPU_ALLOC_SIZE(_s)		__BITSET_SIZE(_s)
 #define CPU_ALLOC(_s)			__cpuset_alloc(_s)
 #define CPU_FREE(p)			__cpuset_free(p)
 
-#define CPU_ISSET_S(n, _s, p)		__BIT_ISSET(_s, n, p)
-#define CPU_SET_S(n, _s, p)		__BIT_SET(_s, n, p)
-#define CPU_CLR_S(n, _s, p)		__BIT_CLR(_s, n, p)
-#define CPU_ZERO_S(_s, p)		__BIT_ZERO(_s, p)
+#define CPU_ISSET_S(n, _s, p)		__BIT_ISSET((_s) * 8, n, p)
+#define CPU_SET_S(n, _s, p)		__BIT_SET((_s) * 8, n, p)
+#define CPU_CLR_S(n, _s, p)		__BIT_CLR((_s) * 8, n, p)
+#define CPU_ZERO_S(_s, p)		__BIT_ZERO((_s) * 8, p)
 
-#define	CPU_OR_S(_s, d, s1, s2)		__BIT_OR2(_s, d, s1, s2)
-#define	CPU_AND_S(_s, d, s1, s2)	__BIT_AND2(_s, d, s1, s2)
-#define	CPU_XOR_S(_s, d, s1, s2)	__BIT_XOR2(_s, d, s1, s2)
+#define	CPU_OR_S(_s, d, s1, s2)		__BIT_OR2((_s) * 8, d, s1, s2)
+#define	CPU_AND_S(_s, d, s1, s2)	__BIT_AND2((_s) * 8, d, s1, s2)
+#define	CPU_XOR_S(_s, d, s1, s2)	__BIT_XOR2((_s) * 8, d, s1, s2)
 
-#define	CPU_COUNT_S(_s, p)		((int)__BIT_COUNT(_s, p))
-#define	CPU_EQUAL_S(_s, p, c)		(__BIT_CMP(_s, p, c) == 0)
-#endif
+#define	CPU_COUNT_S(_s, p)		((int)__BIT_COUNT((_s) * 8, p))
+#define	CPU_EQUAL_S(_s, p, c)		(__BIT_CMP((_s) * 8, p, c) == 0)
 
 /*
  * Valid cpulevel_t values.
@@ -111,6 +110,7 @@
 #define	CPU_WHICH_DOMAIN	6	/* Specifies a NUMA domain id. */
 #define	CPU_WHICH_INTRHANDLER	7	/* Specifies an irq # (not ithread). */
 #define	CPU_WHICH_ITHREAD	8	/* Specifies an irq's ithread. */
+#define	CPU_WHICH_TIDPID	9	/* Specifies a process or thread id. */
 
 /*
  * Reserved cpuset identifiers.
@@ -122,6 +122,7 @@
 #include <sys/queue.h>
 
 LIST_HEAD(setlist, cpuset);
+extern u_int cpusetsizemin;
 
 /*
  * cpusets encapsulate cpu binding information for one or more threads.
@@ -180,8 +181,13 @@ int	cpusetobj_strscan(cpuset_t *, const char *);
 void	ddb_display_cpuset(const cpuset_t *);
 #endif
 
-#else
+#else /* !_KERNEL */
+#include <sys/cdefs.h>
+
 __BEGIN_DECLS
+cpuset_t *__cpuset_alloc(size_t set_size);
+void	__cpuset_free(cpuset_t *ptr);
+
 int	cpuset(cpusetid_t *);
 int	cpuset_setid(cpuwhich_t, id_t, cpusetid_t);
 int	cpuset_getid(cpulevel_t, cpuwhich_t, id_t, cpusetid_t *);

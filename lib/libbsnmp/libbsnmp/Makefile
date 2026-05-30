@@ -1,4 +1,3 @@
-# $FreeBSD$
 #
 # Author: Harti Brandt <harti@freebsd.org>
 
@@ -8,7 +7,7 @@ CONTRIB= ${SRCTOP}/contrib/bsnmp/lib
 .PATH: ${CONTRIB}
 
 LIB=	bsnmp
-SHLIB_MAJOR=	6
+SHLIB_MAJOR=	7
 LD_FATAL_WARNINGS=	no
 
 CFLAGS+= -I${CONTRIB} -DHAVE_ERR_H -DHAVE_GETADDRINFO -DHAVE_STRLCPY

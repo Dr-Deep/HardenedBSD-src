@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 SUBDIR = \
 	hid \
 	hidbus \
@@ -8,6 +6,7 @@ SUBDIR = \
 	hidraw
 
 SUBDIR += \
+	appleir \
 	bcm5974 \
 	hconf \
 	hcons \
@@ -19,6 +18,7 @@ SUBDIR += \
 	hsctrl \
 	ietp \
 	ps4dshock \
+	u2f \
 	xb360gp
 
 .include <bsd.subdir.mk>

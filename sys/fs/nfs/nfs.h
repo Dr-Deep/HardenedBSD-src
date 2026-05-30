@@ -30,8 +30,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _NFS_NFS_H_
@@ -237,18 +235,6 @@ struct nfscbd_args {
 	u_short	port;		/* Port# for callbacks */
 };
 
-struct nfsd_idargs {
-	int		nid_flag;	/* Flags (see below) */
-	uid_t		nid_uid;	/* user/group id */
-	gid_t		nid_gid;
-	int		nid_usermax;	/* Upper bound on user name cache */
-	int		nid_usertimeout;/* User name timeout (minutes) */
-	u_char		*nid_name;	/* Name */
-	int		nid_namelen;	/* and its length */
-	gid_t		*nid_grps;	/* and the list */
-	int		nid_ngroup;	/* Size of groups list */
-};
-
 struct nfsd_oidargs {
 	int		nid_flag;	/* Flags (see below) */
 	uid_t		nid_uid;	/* user/group id */
@@ -344,6 +330,7 @@ struct nfsreferral {
 #define	LCL_RECLAIMONEFS	0x00080000
 #define	LCL_NFSV42		0x00100000
 #define	LCL_TLSCB		0x00200000
+#define	LCL_MACHCRED		0x00400000
 
 #define	LCL_GSS		LCL_KERBV	/* Or of all mechs */
 
@@ -391,17 +378,6 @@ struct nfsreferral {
 #define	NFSLCK_WANTNODELEG	0x40000000
 #define	NFSLCK_WANTBITS							\
     (NFSLCK_WANTWDELEG | NFSLCK_WANTRDELEG | NFSLCK_WANTNODELEG)
-
-/* And bits for nid_flag */
-#define	NFSID_INITIALIZE	0x0001
-#define	NFSID_ADDUID		0x0002
-#define	NFSID_DELUID		0x0004
-#define	NFSID_ADDUSERNAME	0x0008
-#define	NFSID_DELUSERNAME	0x0010
-#define	NFSID_ADDGID		0x0020
-#define	NFSID_DELGID		0x0040
-#define	NFSID_ADDGROUPNAME	0x0080
-#define	NFSID_DELGROUPNAME	0x0100
 
 /*
  * fs.nfs sysctl(3) identifiers
@@ -522,6 +498,13 @@ typedef struct {
 	(b)->bits[2] = NFSGETATTRBIT_STATFS2;				\
 } while (0)
 
+#define	NFSROOTFS_GETATTRBIT(b)	do { 					\
+	(b)->bits[0] = NFSGETATTRBIT_STATFS0 | NFSATTRBIT_GETATTR0 |	\
+	    NFSATTRBM_LEASETIME;					\
+	(b)->bits[1] = NFSGETATTRBIT_STATFS1 | NFSATTRBIT_GETATTR1;	\
+	(b)->bits[2] = NFSGETATTRBIT_STATFS2 | NFSATTRBIT_GETATTR2;	\
+} while (0)
+
 #define	NFSISSETSTATFS_ATTRBIT(b) 					\
 		(((b)->bits[0] & NFSATTRBIT_STATFS0) || 		\
 		 ((b)->bits[1] & NFSATTRBIT_STATFS1) ||			\
@@ -544,6 +527,34 @@ typedef struct {
 	(b)->bits[1] = NFSATTRBIT_REFERRAL1;				\
 	(b)->bits[2] = NFSATTRBIT_REFERRAL2;				\
 } while (0)
+
+/*
+ * Here is the definition of the operation bits array and macros that
+ * manipulate it.
+ * THE MACROS MUST BE MANUALLY MODIFIED IF NFSOPBIT_MAXWORDS CHANGES!!
+ * It is (NFSV42_NOPS + 31) / 32.
+ */
+#define	NFSOPBIT_MAXWORDS	3
+
+typedef struct {
+	uint32_t bits[NFSOPBIT_MAXWORDS];
+} nfsopbit_t;
+
+#define	NFSZERO_OPBIT(b) do {						\
+	(b)->bits[0] = 0;						\
+	(b)->bits[1] = 0;						\
+	(b)->bits[2] = 0;						\
+} while (0)
+
+#define	NFSSET_OPBIT(t, f) do {						\
+	(t)->bits[0] = (f)->bits[0];			 		\
+	(t)->bits[1] = (f)->bits[1];					\
+	(t)->bits[2] = (f)->bits[2];					\
+} while (0)
+
+#define	NFSISSET_OPBIT(b, p)	((b)->bits[(p) / 32] & (1 << ((p) % 32)))
+#define	NFSSETBIT_OPBIT(b, p)	((b)->bits[(p) / 32] |= (1 << ((p) % 32)))
+#define	NFSCLRBIT_OPBIT(b, p)	((b)->bits[(p) / 32] &= ~(1 << ((p) % 32)))
 
 /*
  * Store uid, gid creds that were used when the stateid was acquired.
@@ -602,6 +613,7 @@ struct nfssockreq {
 	u_int32_t	nr_vers;
 	struct __rpc_client *nr_client;
 	AUTH		*nr_auth;
+	char		nr_srvprinc[1];
 };
 
 /*
@@ -680,6 +692,7 @@ struct nfsrv_descript {
 	int			nd_bextpg;	/* Current ext_pgs page */
 	int			nd_bextpgsiz;	/* Bytes left in page */
 	int			nd_maxextsiz;	/* Max ext_pgs mbuf size */
+	nfsopbit_t		nd_allowops;	/* Allowed ops ND_MACHCRED */
 };
 
 #define	nd_princlen	nd_gssnamelen
@@ -729,6 +742,7 @@ struct nfsrv_descript {
 #define	ND_EXTLSCERT		0x10000000000
 #define	ND_EXTLSCERTUSER	0x20000000000
 #define	ND_ERELOOKUP		0x40000000000
+#define	ND_MACHCRED		0x80000000000
 
 /*
  * ND_GSS should be the "or" of all GSS type authentications.
@@ -827,6 +841,18 @@ struct nfsslot {
 
 /* Enumerated type for nfsuserd state. */
 typedef enum { NOTRUNNING=0, STARTSTOP=1, RUNNING=2 } nfsuserd_state;
+
+typedef enum { UNKNOWN=0, DELETED=1, NLINK_ZERO=2, VALID=3 } nfsremove_status;
+
+/* Values for supports_nfsv4acls. */
+#define	SUPPACL_NONE	0
+#define	SUPPACL_NFSV4	1
+#define	SUPPACL_POSIX	2
+
+/* Values NFSv4 uses for exclusive_flag. */
+#define	NFSV4_EXCLUSIVE_NONE	0
+#define	NFSV4_EXCLUSIVE		1
+#define	NFSV4_EXCLUSIVE_41	2
 
 #endif	/* _KERNEL */
 

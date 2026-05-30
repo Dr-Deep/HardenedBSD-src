@@ -21,8 +21,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include "opt_rss.h"
@@ -242,6 +240,12 @@ int mlx5_query_hca_caps(struct mlx5_core_dev *dev)
 			return err;
 	}
 
+	if (MLX5_CAP_GEN(dev, ipsec_offload)) {
+		err = mlx5_core_get_caps(dev, MLX5_CAP_IPSEC);
+		if (err)
+			return err;
+	}
+
 	err = mlx5_core_query_special_contexts(dev);
 	if (err)
 		return err;
@@ -302,7 +306,7 @@ int mlx5_cmd_force_teardown_hca(struct mlx5_core_dev *dev)
 #define	MLX5_FAST_TEARDOWN_WAIT_MS 3000
 int mlx5_cmd_fast_teardown_hca(struct mlx5_core_dev *dev)
 {
-	int end, delay_ms = MLX5_FAST_TEARDOWN_WAIT_MS;
+	unsigned long end, delay_ms = MLX5_FAST_TEARDOWN_WAIT_MS;
 	u32 out[MLX5_ST_SZ_DW(teardown_hca_out)] = {};
 	u32 in[MLX5_ST_SZ_DW(teardown_hca_in)] = {};
 	int state;
@@ -339,7 +343,7 @@ int mlx5_cmd_fast_teardown_hca(struct mlx5_core_dev *dev)
 	} while (!time_after(jiffies, end));
 
 	if (mlx5_get_nic_state(dev) != MLX5_NIC_IFC_DISABLED) {
-		mlx5_core_err(dev, "NIC IFC still %d after %ums.\n",
+		mlx5_core_err(dev, "NIC IFC still %d after %lums.\n",
 			mlx5_get_nic_state(dev), delay_ms);
 		return -EIO;
 	}

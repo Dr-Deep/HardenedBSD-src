@@ -8,7 +8,7 @@ Network Associates, Inc.  under DARPA/SPAWAR contract N66001-01-C-8035
 
 Principal design and development by:
 
-	 Dag-Erling Smørgrav <des@des.no>
+	 Dag-Erling Smørgrav <des@des.dev>
 
 The following persons (in alphabetical order) have contributed,
 directly or indirectly, with patches, criticism, suggestions, or
@@ -30,6 +30,7 @@ ideas:
 	Espen Grøndahl <espegro@usit.uio.no>
 	Gary Winiger <gary.winiger@sun.com>
 	Gavin Atkinson <gavin@freebsd.org>
+	Gleb Popov <arrowd@freebsd.org>
 	Gleb Smirnoff <glebius@freebsd.org>
 	Hubert Feyrer <hubert@feyrer.de>
 	Jason Evans <jasone@freebsd.org>
@@ -45,6 +46,7 @@ ideas:
 	Mikko Työläjärvi <mbsd@pacbell.net>
 	Nick Hibma <nick@van-laarhoven.org>
 	Patrick Bihan-Faou <patrick-fbsd@mindstep.com>
+	Robert Morris <rtm@lcs.mit.edu>
 	Robert Watson <rwatson@freebsd.org>
 	Ruslan Ermilov <ru@freebsd.org>
 	Sebastian Krahmer <sebastian.krahmer@gmail.com>

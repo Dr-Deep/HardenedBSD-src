@@ -1,4 +1,4 @@
-/*	$NetBSD: el.c,v 1.100 2021/08/15 10:08:41 christos Exp $	*/
+/*	$NetBSD: el.c,v 1.104 2025/12/16 02:40:48 kre Exp $	*/
 
 /*-
  * Copyright (c) 1992, 1993
@@ -37,7 +37,7 @@
 #if 0
 static char sccsid[] = "@(#)el.c	8.2 (Berkeley) 1/3/94";
 #else
-__RCSID("$NetBSD: el.c,v 1.100 2021/08/15 10:08:41 christos Exp $");
+__RCSID("$NetBSD: el.c,v 1.104 2025/12/16 02:40:48 kre Exp $");
 #endif
 #endif /* not lint && not SCCSID */
 
@@ -56,6 +56,8 @@ __RCSID("$NetBSD: el.c,v 1.100 2021/08/15 10:08:41 christos Exp $");
 #include "el.h"
 #include "parse.h"
 #include "read.h"
+
+typedef char * (*func_t)(const char *);
 
 /* el_init():
  *	Initialize editline and set default parameters.
@@ -83,6 +85,8 @@ el_init_internal(const char *prog, FILE *fin, FILE *fout, FILE *ferr,
 	el->el_infd = fdin;
 	el->el_outfd = fdout;
 	el->el_errfd = fderr;
+
+	el->el_getenv = getenv;
 
 	el->el_prog = wcsdup(ct_decode_string(prog, &el->el_scratch));
 	if (el->el_prog == NULL) {
@@ -142,7 +146,7 @@ el_end(EditLine *el)
 	if (!(el->el_flags & NO_TTY))
 		tty_end(el, TCSAFLUSH);
 	ch_end(el);
-	read_end(el->el_read);
+	read_end(el);
 	search_end(el);
 	hist_end(el);
 	prompt_end(el);
@@ -274,7 +278,6 @@ el_wset(EditLine *el, int op, ...)
 		default:
 			rv = -1;
 			EL_ABORT((el->el_errfile, "Bad op %d\n", op));
-			break;
 		}
 		break;
 	}
@@ -381,6 +384,14 @@ el_wset(EditLine *el, int op, ...)
 		re_clear_display(el);
 		re_refresh(el);
 		terminal__flush(el);
+		break;
+
+	case EL_WORDCHARS:
+		rv = map_set_wordchars(el, va_arg(ap, wchar_t *));
+		break;
+
+	case EL_GETENV:
+		el->el_getenv = va_arg(ap, func_t);
 		break;
 
 	default:
@@ -497,6 +508,16 @@ el_wget(EditLine *el, int op, ...)
 		}
 		break;
 	}
+
+	case EL_WORDCHARS:
+		rv = map_get_wordchars(el, va_arg(ap, const wchar_t **));
+		break;
+
+	case EL_GETENV:
+		*va_arg(ap, func_t *) = el->el_getenv;
+		rv = 0;
+		break;
+
 	default:
 		rv = -1;
 		break;
@@ -538,11 +559,11 @@ el_source(EditLine *el, const char *fname)
 		if (issetugid())
 			return -1;
 
-		if ((fname = getenv("EDITRC")) == NULL) {
+		if ((fname = (el->el_getenv)("EDITRC")) == NULL) {
 			static const char elpath[] = "/.editrc";
 			size_t plen = sizeof(elpath);
 
-			if ((ptr = getenv("HOME")) == NULL)
+			if ((ptr = (el->el_getenv)("HOME")) == NULL)
 				return -1;
 			plen += strlen(ptr);
 			if ((path = el_calloc(plen, sizeof(*path))) == NULL)

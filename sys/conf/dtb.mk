@@ -1,4 +1,3 @@
-# $FreeBSD$
 #
 # The include file <dtb.mk> handles building and installing dtb files.
 #
@@ -31,6 +30,8 @@
 #
 
 .include "dtb.build.mk"
+
+PACKAGE?=	dtb
 
 .if !target(install) && !target(realinstall)
 all: ${DTB} ${DTBO}

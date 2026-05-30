@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2019 Conrad Meyer <cem@FreeBSD.org>
  *
@@ -25,9 +25,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/fail.h>
 #include <sys/limits.h>
@@ -37,11 +34,11 @@ __FBSDID("$FreeBSD$");
 #include <sys/mutex.h>
 #include <sys/random.h>
 #include <sys/sdt.h>
+#include <sys/stdarg.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
 
 #include <machine/cpu.h>
-#include <machine/stdarg.h>
 
 #define CHACHA_EMBED
 #define KEYSTREAM_ONLY

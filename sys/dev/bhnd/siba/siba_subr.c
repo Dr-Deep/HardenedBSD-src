@@ -31,9 +31,6 @@
  * THE POSSIBILITY OF SUCH DAMAGES.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/bus.h>
 #include <sys/kernel.h>
@@ -96,7 +93,6 @@ siba_alloc_dinfo(device_t bus)
 			.cb_rid = -1,
 		});
 		dinfo->cfg_res[i] = NULL;
-		dinfo->cfg_rid[i] = -1;
 	}
 
 	resource_list_init(&dinfo->resources);
@@ -572,11 +568,9 @@ siba_free_dinfo(device_t dev, device_t child, struct siba_devinfo *dinfo)
 		if (dinfo->cfg_res[i] == NULL)
 			continue;
 
-		bhnd_release_resource(dev, SYS_RES_MEMORY, dinfo->cfg_rid[i],
-		    dinfo->cfg_res[i]);
+		bhnd_release_resource(dev, dinfo->cfg_res[i]);
 
 		dinfo->cfg_res[i] = NULL;
-		dinfo->cfg_rid[i] = -1;
 	}
 
 	/* Unmap the core's interrupt */

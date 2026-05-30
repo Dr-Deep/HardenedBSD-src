@@ -157,7 +157,6 @@ public:
 protected:
   void addDeadBlock(const BasicBlock *BB) {
     SmallVector<const BasicBlock *, 4> NewDead;
-    SmallSetVector<const BasicBlock *, 4> DF;
 
     NewDead.push_back(BB);
     while (!NewDead.empty()) {
@@ -171,7 +170,7 @@ protected:
       // Do not need to mark all in and out edges dead
       // because BB is marked dead and this is enough
       // to run further.
-      DeadBlocks.insert(Dom.begin(), Dom.end());
+      DeadBlocks.insert_range(Dom);
 
       // Figure out the dominance-frontier(D).
       for (BasicBlock *B : Dom)
@@ -289,6 +288,7 @@ static void PrintValueSet(raw_ostream &OS, IteratorTy Begin, IteratorTy End) {
 
 using AvailableValueSet = DenseSet<const Value *>;
 
+namespace {
 /// State we compute and track per basic block.
 struct BasicBlockState {
   // Set of values available coming in, before the phi nodes
@@ -305,6 +305,7 @@ struct BasicBlockState {
   // contribute to AvailableOut.
   bool Cleared = false;
 };
+} // namespace
 
 /// A given derived pointer can have multiple base pointers through phi/selects.
 /// This type indicates when the base pointer is exclusively constant
@@ -355,6 +356,17 @@ static enum BaseType getBaseType(const Value *Val) {
       // Push in the true and false values
       Worklist.push_back(SI->getTrueValue());
       Worklist.push_back(SI->getFalseValue());
+      continue;
+    }
+    if (const auto *GCRelocate = dyn_cast<GCRelocateInst>(V)) {
+      // GCRelocates do not change null-ness or constant-ness of the value.
+      // So we can continue with derived pointer this instruction relocates.
+      Worklist.push_back(GCRelocate->getDerivedPtr());
+      continue;
+    }
+    if (const auto *FI = dyn_cast<FreezeInst>(V)) {
+      // Freeze does not change null-ness or constant-ness of the value.
+      Worklist.push_back(FI->getOperand(0));
       continue;
     }
     if (isa<Constant>(V)) {
@@ -474,9 +486,7 @@ public:
                              InstructionVerifier &Verifier);
 
   /// Returns true for reachable and live blocks.
-  bool isMapped(const BasicBlock *BB) const {
-    return BlockMap.find(BB) != BlockMap.end();
-  }
+  bool isMapped(const BasicBlock *BB) const { return BlockMap.contains(BB); }
 
 private:
   /// Returns true if the instruction may be safely skipped during verification.
@@ -601,11 +611,10 @@ void GCPtrTracker::verifyFunction(GCPtrTracker &&Tracker,
 }
 
 void GCPtrTracker::recalculateBBsStates() {
-  SetVector<const BasicBlock *> Worklist;
   // TODO: This order is suboptimal, it's better to replace it with priority
   // queue where priority is RPO number of BB.
-  for (auto &BBI : BlockMap)
-    Worklist.insert(BBI.first);
+  SetVector<const BasicBlock *> Worklist(llvm::from_range,
+                                         llvm::make_first_range(BlockMap));
 
   // This loop iterates the AvailableIn/Out sets until it converges.
   // The AvailableIn and AvailableOut sets decrease as we iterate.
@@ -635,7 +644,7 @@ void GCPtrTracker::recalculateBBsStates() {
     transferBlock(BB, *BBS, ContributionChanged);
     if (OldOutCount != BBS->AvailableOut.size()) {
       assert(OldOutCount > BBS->AvailableOut.size() && "invariant!");
-      Worklist.insert(succ_begin(BB), succ_end(BB));
+      Worklist.insert_range(successors(BB));
     }
   }
 }
@@ -739,7 +748,7 @@ void GCPtrTracker::gatherDominatingDefs(const BasicBlock *BB,
     auto BBS = getBasicBlockState(DTN->getBlock());
     assert(BBS && "immediate dominator cannot be dead for a live block");
     const auto &Defs = BBS->Contribution;
-    Result.insert(Defs.begin(), Defs.end());
+    Result.insert_range(Defs);
     // If this block is 'Cleared', then nothing LiveIn to this block can be
     // available after this block completes.  Note: This turns out to be
     // really important for reducing memory consuption of the initial available

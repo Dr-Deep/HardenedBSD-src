@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -34,9 +35,8 @@ extern "C" {
 
 typedef struct zrlock {
 	kmutex_t zr_mtx;
-	volatile int32_t zr_refcount;
 	kcondvar_t zr_cv;
-	uint16_t zr_pad;
+	volatile int32_t zr_refcount;
 #ifdef	ZFS_DEBUG
 	kthread_t *zr_owner;
 	const char *zr_caller;

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2016 Marcel Moolenaar
  * All rights reserved.
  *
@@ -25,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <stdint.h>
 #include <string.h>
 
@@ -47,20 +47,9 @@ osdep_uuidgen(mkimg_uuid_t *uuid)
 }
 #endif	/* __APPLE__ */
 
-#ifdef __FreeBSD__
-#include <sys/uuid.h>
-
-static void
-osdep_uuidgen(mkimg_uuid_t *uuid)
-{
-
-	uuidgen((void *)uuid, 1);
-}
-#endif	/* __FreeBSD__ */
-
-#ifdef __linux__
+#if defined(__linux__) || defined(__FreeBSD__)
+#include <sys/time.h>
 #include <stdlib.h>
-#include <time.h>
 
 static void
 osdep_uuidgen(mkimg_uuid_t *uuid)
@@ -70,7 +59,10 @@ osdep_uuidgen(mkimg_uuid_t *uuid)
 	u_int i;
 	uint16_t seq;
 
-	if (gettimeofday(&tv, NULL) == -1)
+	if (timestamp != (time_t)-1) {
+		tv.tv_sec = timestamp;
+		tv.tv_usec = 0;
+	} else if (gettimeofday(&tv, NULL) == -1)
 		abort();
 
 	time += (uint64_t)tv.tv_sec * 10000000LL;

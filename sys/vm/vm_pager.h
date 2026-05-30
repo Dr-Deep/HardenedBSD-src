@@ -32,9 +32,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)vm_pager.h	8.4 (Berkeley) 1/12/94
- * $FreeBSD$
  */
 
 /*
@@ -69,6 +66,9 @@ typedef void pgo_getvp_t(vm_object_t object, struct vnode **vpp,
     bool *vp_heldp);
 typedef void pgo_freespace_t(vm_object_t object, vm_pindex_t start,
     vm_size_t size);
+typedef void pgo_page_inserted_t(vm_object_t object, vm_page_t m);
+typedef void pgo_page_removed_t(vm_object_t object, vm_page_t m);
+typedef boolean_t pgo_can_alloc_page_t(vm_object_t object, vm_pindex_t pindex);
 
 struct pagerops {
 	int			pgo_kvme_type;
@@ -87,6 +87,9 @@ struct pagerops {
 	pgo_mightbedirty_t	*pgo_mightbedirty;
 	pgo_getvp_t		*pgo_getvp;
 	pgo_freespace_t		*pgo_freespace;
+	pgo_page_inserted_t	*pgo_page_inserted;
+	pgo_page_removed_t	*pgo_page_removed;
+	pgo_can_alloc_page_t	*pgo_can_alloc_page;
 };
 
 extern const struct pagerops defaultpagerops;
@@ -249,6 +252,35 @@ vm_pager_freespace(vm_object_t object, vm_pindex_t start,
 		method(object, start, size);
 }
 
+static __inline void
+vm_pager_page_inserted(vm_object_t object, vm_page_t m)
+{
+	pgo_page_inserted_t *method;
+
+	method = pagertab[object->type]->pgo_page_inserted;
+	if (method != NULL)
+		method(object, m);
+}
+
+static __inline void
+vm_pager_page_removed(vm_object_t object, vm_page_t m)
+{
+	pgo_page_removed_t *method;
+
+	method = pagertab[object->type]->pgo_page_removed;
+	if (method != NULL)
+		method(object, m);
+}
+
+static __inline bool
+vm_pager_can_alloc_page(vm_object_t object, vm_pindex_t pindex)
+{
+	pgo_can_alloc_page_t *method;
+
+	method = pagertab[object->type]->pgo_can_alloc_page;
+	return (method != NULL ? method(object, pindex) : true);
+}
+
 int vm_pager_alloc_dyn_type(struct pagerops *ops, int base_type);
 void vm_pager_free_dyn_type(objtype_t type);
 
@@ -261,6 +293,7 @@ struct cdev_pager_ops {
 	int (*cdev_pg_ctor)(void *handle, vm_ooffset_t size, vm_prot_t prot,
 	    vm_ooffset_t foff, struct ucred *cred, u_short *color);
 	void (*cdev_pg_dtor)(void *handle);
+	void (*cdev_pg_path)(void *handle, char *path, size_t len);
 };
 
 vm_object_t cdev_pager_allocate(void *handle, enum obj_type tp,
@@ -268,6 +301,9 @@ vm_object_t cdev_pager_allocate(void *handle, enum obj_type tp,
     vm_ooffset_t foff, struct ucred *cred);
 vm_object_t cdev_pager_lookup(void *handle);
 void cdev_pager_free_page(vm_object_t object, vm_page_t m);
+void cdev_mgtdev_pager_free_page(struct pctrie_iter *pages, vm_page_t m);
+void cdev_mgtdev_pager_free_pages(vm_object_t object);
+void cdev_pager_get_path(vm_object_t object, char *path, size_t sz);
 
 struct phys_pager_ops {
 	int (*phys_pg_getpages)(vm_object_t vm_obj, vm_page_t *m, int count,

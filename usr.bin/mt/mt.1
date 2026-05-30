@@ -26,10 +26,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\"	@(#)mt.1	8.1 (Berkeley) 6/6/93
-.\" $FreeBSD$
-.\"
-.Dd December 10, 2020
+.Dd March 2, 2026
 .Dt MT 1
 .Os
 .Sh NAME
@@ -342,7 +339,7 @@ For example, specifying
 .Fl w Ar 0
 will enable all settings except for LBP_W.
 .It Fl l
-List available protection parmeters and their current settings.
+List available protection parameters and their current settings.
 .It Fl L Ar len
 Set the length of the protection information in bytes.
 For Reed-Solomon CRC, the protection information length should be 4 bytes.
@@ -521,11 +518,14 @@ Value  Width        Tracks    Density         Code Type Reference   Note
 0x56   12.7  (0.5) 7680      20,670 (525,018)       C   3592B5 (unencrypted)
 0x57   12.7  (0.5) 8704      21,850 (554,990)       C   3592A6 (unencrypted)
 0x58   12.7  (0.5) 1280      15,142 (384,607)       C   LTO-5
+0x59   12.7  (0.5)18944      21,850 (554,990)       C   3592A7 (unencrypted)
 0x5A   12.7  (0.5) 2176      15,142 (384,607)       C   LTO-6
 0x5C   12.7  (0.5) 3584      19,107 (485,318)       C   LTO-7
 0x5D   12.7  (0.5) 5376      19,107 (485,318)       C   LTO-M8       14
 0x5E   12.7  (0.5) 6656      20,669 (524,993)       C   LTO-8
 0x60   12.7  (0.5) 8960      23,031 (584,987)       C   LTO-9
+0x62   12.7  (0.5)15104      21,657 (550,088)       C   LTO-10       15
+0x63   12.7  (0.5)15104      22,441 (570,001)       C   LTO-10P      15
 0x71   12.7  (0.5)  512      11,800 (299,720)       C   3592A1 (encrypted)
 0x72   12.7  (0.5)  896      11,800 (299,720)       C   3592A2 (encrypted)
 0x73   12.7  (0.5) 1152      13,452 (341,681)       C   3592A3 (encrypted)
@@ -533,6 +533,7 @@ Value  Width        Tracks    Density         Code Type Reference   Note
 0x75   12.7  (0.5) 5120      20,670 (525,018)       C   3592A5 (encrypted)
 0x76   12.7  (0.5) 7680      20,670 (525,018)       C   3592B5 (encrypted)
 0x77   12.7  (0.5) 8704      21,850 (554,990)       C   3592A6 (encrypted)
+0x79   12.7  (0.5)18944      21,850 (554,990)       C   3592A7 (encrypted)
 0x8c    8.0  (0.315)  1      1,789  (45,434)  RLL   CS  EXB-8500c    5,9
 0x90    8.0  (0.315)  1      1,703  (43,245)  RLL   CS  EXB-8200c    5,9
 .Ed
@@ -573,6 +574,11 @@ NOTES
     LTO-7 cartridge initialized with a higher density format by an LTO-8
     drive.  It cannot be read by an LTO-7 drive.  Uncompressed capacity
     is 9TB, compared to 6TB for LTO-7 and 12TB for LTO-8.
+15. LTO-10 Premium cartridges hold 40TB uncompressed vs. 30TB
+    uncompressed for standard LTO-10 cartridges due to slightly higher
+    density and stronger, thinner, longer tape.  LTO-10 tape drives
+    are not backward compatible with previous generation LTO tape
+    cartridges.
 .Ed
 .Bd -literal -offset 2n
 NOTE ON QIC STREAMERS

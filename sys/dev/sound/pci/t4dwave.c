@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1999 Cameron Grant <cg@freebsd.org>
  * All rights reserved.
@@ -36,8 +36,6 @@
 
 #include <dev/pci/pcireg.h>
 #include <dev/pci/pcivar.h>
-
-SND_DECLARE_FILE("$FreeBSD$");
 
 /* -------------------------------------------------------------------- */
 
@@ -101,7 +99,7 @@ struct tr_info {
 	int regtype, regid, irqid;
 	void *ih;
 
-	struct mtx *lock;
+	struct mtx lock;
 
 	u_int32_t hwchns;
 	u_int32_t playchns;
@@ -211,7 +209,7 @@ tr_rdcd(kobj_t obj, void *devinfo, int regno)
 	i = j = 0;
 
 	regno &= 0x7f;
-	snd_mtxlock(tr->lock);
+	mtx_lock(&tr->lock);
 	if (tr->type == ALI_PCI_ID) {
 		u_int32_t chk1, chk2;
 		j = trw;
@@ -231,7 +229,7 @@ tr_rdcd(kobj_t obj, void *devinfo, int regno)
 		for (i=TR_TIMEOUT_CDC; (i > 0) && (j & trw); i--)
 		       	j=tr_rd(tr, treg, 4);
 	}
-	snd_mtxunlock(tr->lock);
+	mtx_unlock(&tr->lock);
 	if (i == 0) printf("codec timeout during read of register %x\n", regno);
 	return (j >> TR_CDC_DATA) & 0xffff;
 }
@@ -268,7 +266,7 @@ tr_wrcd(kobj_t obj, void *devinfo, int regno, u_int32_t data)
 	printf("tr_wrcd: reg %x was %x", regno, tr_rdcd(devinfo, regno));
 #endif
 	j=trw;
-	snd_mtxlock(tr->lock);
+	mtx_lock(&tr->lock);
 	if (tr->type == ALI_PCI_ID) {
 		j = trw;
 		for (i = TR_TIMEOUT_CDC; (i > 0) && (j & trw); i--)
@@ -292,7 +290,7 @@ tr_wrcd(kobj_t obj, void *devinfo, int regno, u_int32_t data)
 #if 0
 	printf(" - wrote %x, now %x\n", data, tr_rdcd(devinfo, regno));
 #endif
-	snd_mtxunlock(tr->lock);
+	mtx_unlock(&tr->lock);
 	if (i==0) printf("codec timeout writing %x, data %x\n", regno, data);
 	return (i > 0)? 0 : -1;
 }
@@ -338,7 +336,7 @@ tr_enaint(struct tr_chinfo *ch, int enable)
        	u_int32_t i, reg;
 	int bank, chan;
 
-	snd_mtxlock(tr->lock);
+	mtx_lock(&tr->lock);
 	bank = (ch->index & 0x20) ? 1 : 0;
 	chan = ch->index & 0x1f;
 	reg = bank? TR_REG_INTENB : TR_REG_INTENA;
@@ -349,7 +347,7 @@ tr_enaint(struct tr_chinfo *ch, int enable)
 
 	tr_clrint(ch);
 	tr_wr(tr, reg, i, 4);
-	snd_mtxunlock(tr->lock);
+	mtx_unlock(&tr->lock);
 }
 
 /* playback channels */
@@ -431,11 +429,11 @@ tr_wrch(struct tr_chinfo *ch)
 		cr[3]|=(ch->alpha<<20) | (ch->fms<<16) | (ch->fmc<<14);
 		break;
 	}
-	snd_mtxlock(tr->lock);
+	mtx_lock(&tr->lock);
 	tr_selch(ch);
 	for (i=0; i<TR_CHN_REGS; i++)
 		tr_wr(tr, TR_REG_CHNBASE+(i<<2), cr[i], 4);
-	snd_mtxunlock(tr->lock);
+	mtx_unlock(&tr->lock);
 }
 
 static void
@@ -444,11 +442,11 @@ tr_rdch(struct tr_chinfo *ch)
 	struct tr_info *tr = ch->parent;
 	u_int32_t cr[5], i;
 
-	snd_mtxlock(tr->lock);
+	mtx_lock(&tr->lock);
 	tr_selch(ch);
 	for (i=0; i<5; i++)
 		cr[i]=tr_rd(tr, TR_REG_CHNBASE+(i<<2), 4);
-	snd_mtxunlock(tr->lock);
+	mtx_unlock(&tr->lock);
 
 	if (tr->type == ALI_PCI_ID)
 		ch->lba=(cr[1] & ALI_MAXADDR);
@@ -557,9 +555,9 @@ trpchan_trigger(kobj_t obj, void *data, int go)
 		ch->fms = 0;
 		ch->ec = 0;
 		ch->alpha = 0;
-		ch->lba = sndbuf_getbufaddr(ch->buffer);
+		ch->lba = ch->buffer->buf_addr;
 		ch->cso = 0;
-		ch->eso = (sndbuf_getsize(ch->buffer) / sndbuf_getalign(ch->buffer)) - 1;
+		ch->eso = (ch->buffer->bufsize / ch->buffer->align) - 1;
 		ch->rvol = ch->cvol = 0x7f;
 		ch->gvsel = 0;
 		ch->pan = 0;
@@ -583,7 +581,7 @@ trpchan_getptr(kobj_t obj, void *data)
 	struct tr_chinfo *ch = data;
 
 	tr_rdch(ch);
-	return ch->cso * sndbuf_getalign(ch->buffer);
+	return ch->cso * ch->buffer->align;
 }
 
 static struct pcmchan_caps *
@@ -682,7 +680,7 @@ trrchan_trigger(kobj_t obj, void *data, int go)
 		i = tr_rd(tr, TR_REG_DMAR11, 1) & 0x03;
 		tr_wr(tr, TR_REG_DMAR11, i | 0x54, 1);
 		/* set up base address */
-	   	tr_wr(tr, TR_REG_DMAR0, sndbuf_getbufaddr(ch->buffer), 4);
+		tr_wr(tr, TR_REG_DMAR0, ch->buffer->buf_addr, 4);
 		/* set up buffer size */
 		i = tr_rd(tr, TR_REG_DMAR4, 4) & ~0x00ffffff;
 		tr_wr(tr, TR_REG_DMAR4, i | (sndbuf_runsz(ch->buffer) - 1), 4);
@@ -705,7 +703,7 @@ trrchan_getptr(kobj_t obj, void *data)
 	struct tr_info *tr = ch->parent;
 
 	/* return current byte offset of channel */
-	return tr_rd(tr, TR_REG_DMAR0, 4) - sndbuf_getbufaddr(ch->buffer);
+	return tr_rd(tr, TR_REG_DMAR0, 4) - ch->buffer->buf_addr;
 }
 
 static struct pcmchan_caps *
@@ -832,7 +830,8 @@ tr_pci_attach(device_t dev)
 	tr = malloc(sizeof(*tr), M_DEVBUF, M_WAITOK | M_ZERO);
 	tr->type = pci_get_devid(dev);
 	tr->rev = pci_get_revid(dev);
-	tr->lock = snd_mtxcreate(device_get_nameunit(dev), "snd_t4dwave softc");
+	mtx_init(&tr->lock, device_get_nameunit(dev), "snd_t4dwave softc",
+	    MTX_DEF);
 
 	if (resource_int_value(device_get_name(dev), device_get_unit(dev),
 	    "dac", &i) == 0) {
@@ -919,15 +918,16 @@ tr_pci_attach(device_t dev)
 		goto bad;
 	}
 
-	snprintf(status, 64, "at io 0x%jx irq %jd %s",
-		 rman_get_start(tr->reg), rman_get_start(tr->irq),PCM_KLDSTRING(snd_t4dwave));
+	snprintf(status, SND_STATUSLEN, "port 0x%jx irq %jd on %s",
+		 rman_get_start(tr->reg), rman_get_start(tr->irq),
+		 device_get_nameunit(device_get_parent(dev)));
 
-	if (pcm_register(dev, tr, dacn, 1))
-		goto bad;
+	pcm_init(dev, tr);
 	pcm_addchan(dev, PCMDIR_REC, &trrchan_class, tr);
 	for (i = 0; i < dacn; i++)
 		pcm_addchan(dev, PCMDIR_PLAY, &trpchan_class, tr);
-	pcm_setstatus(dev, status);
+	if (pcm_register(dev, status))
+		goto bad;
 
 	return 0;
 
@@ -937,7 +937,7 @@ bad:
 	if (tr->ih) bus_teardown_intr(dev, tr->irq, tr->ih);
 	if (tr->irq) bus_release_resource(dev, SYS_RES_IRQ, tr->irqid, tr->irq);
 	if (tr->parent_dmat) bus_dma_tag_destroy(tr->parent_dmat);
-	if (tr->lock) snd_mtxfree(tr->lock);
+	mtx_destroy(&tr->lock);
 	free(tr, M_DEVBUF);
 	return ENXIO;
 }
@@ -957,7 +957,7 @@ tr_pci_detach(device_t dev)
 	bus_teardown_intr(dev, tr->irq, tr->ih);
 	bus_release_resource(dev, SYS_RES_IRQ, tr->irqid, tr->irq);
 	bus_dma_tag_destroy(tr->parent_dmat);
-	snd_mtxfree(tr->lock);
+	mtx_destroy(&tr->lock);
 	free(tr, M_DEVBUF);
 
 	return 0;
@@ -1024,7 +1024,7 @@ static device_method_t tr_methods[] = {
 	DEVMETHOD(device_detach,	tr_pci_detach),
 	DEVMETHOD(device_suspend,	tr_pci_suspend),
 	DEVMETHOD(device_resume,	tr_pci_resume),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t tr_driver = {

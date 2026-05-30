@@ -27,7 +27,6 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 #
 
 # We will use the RFC5180 (and Errata) benchmarking working group prefix
@@ -898,7 +897,7 @@ testrx_run_test()
 	*)	_opts="-d" ;;
 	esac
 
-	# Convert netcat options to reflect aguments.
+	# Convert netcat options to reflect arguments.
 	case "${_o}" in
 	-i)	_opts="${_opts} -T TCP6" ;;	# Use TCP for START/DONE.
 	-u)	_opts="${_opts} -T UDP6" ;;

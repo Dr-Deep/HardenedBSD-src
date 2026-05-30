@@ -1,4 +1,3 @@
-# $FreeBSD$
 
 # Setup variables for the compiler
 #
@@ -25,6 +24,8 @@
 # - retpoline: supports the retpoline speculative execution vulnerability
 #              mitigation.
 # - init-all:  supports stack variable initialization.
+# - stackclash:supports stack clash protection
+# - zeroregs:  supports zeroing used registers on return
 # - aarch64-sha512: supports the AArch64 sha512 intrinsic functions.
 #
 # When bootstrapping on macOS, 'apple-clang' will be set in COMPILER_FEATURES
@@ -39,7 +40,7 @@
 #
 
 .if !target(__<bsd.compiler.mk>__)
-__<bsd.compiler.mk>__:
+__<bsd.compiler.mk>__:	.NOTMAIN
 
 .include <bsd.opts.mk>
 
@@ -65,9 +66,10 @@ CCACHE_BUILD_TYPE?=	command
 # PATH since it is more clear that ccache is used and avoids wasting time
 # for mkdep/linking/asm builds.
 LOCALBASE?=		/usr/local
+CCACHE_NAME?=		ccache
 CCACHE_PKG_PREFIX?=	${LOCALBASE}
 CCACHE_WRAPPER_PATH?=	${CCACHE_PKG_PREFIX}/libexec/ccache
-CCACHE_BIN?=		${CCACHE_PKG_PREFIX}/bin/ccache
+CCACHE_BIN?=		${CCACHE_PKG_PREFIX}/bin/${CCACHE_NAME}
 .if exists(${CCACHE_BIN})
 # Export to ensure sub-makes can filter it out for mkdep/linking and
 # to chain down into kernel build which won't include this file.
@@ -121,7 +123,12 @@ CCACHE_NOCPP2=	1
 .endif
 # Canonicalize CCACHE_DIR for meta mode usage.
 .if !defined(CCACHE_DIR)
+.if !empty(CCACHE_BIN:M*sccache)
+# Get the temp directory and remove beginning and trailing \"
+CCACHE_DIR!=	${CCACHE_BIN} -s | awk '$$2 == "location" && $$3 == "Local" {print substr($$5, 2, length($$5) - 2)}'
+.else
 CCACHE_DIR!=	${CCACHE_BIN} -p | awk '$$2 == "cache_dir" {print $$4}'
+.endif
 .export CCACHE_DIR
 .endif
 .if !empty(CCACHE_DIR) && empty(.MAKE.META.IGNORE_PATHS:M${CCACHE_DIR})
@@ -133,7 +140,11 @@ CCACHE_DIR:=	${CCACHE_DIR:tA}
 # comparisons.
 .MAKE.META.IGNORE_PATHS+= ${CCACHE_BIN}
 ccache-print-options: .PHONY
+.if !empty(CCACHE_BIN:M*sccache)
+	@${CCACHE_BIN} -s
+.else
 	@${CCACHE_BIN} -p
+.endif	# !empty(CCACHE_BIN:M*sccache)
 .endif	# exists(${CCACHE_BIN})
 .endif	# ${MK_CCACHE_BUILD} == "yes"
 
@@ -235,8 +246,17 @@ ${X_}COMPILER_FEATURES+=		c++11 c++14
 	(${${X_}COMPILER_TYPE} == "gcc" && ${${X_}COMPILER_VERSION} >= 70000)
 ${X_}COMPILER_FEATURES+=	c++17
 .endif
+.if (${${X_}COMPILER_TYPE} == "clang" && ${${X_}COMPILER_VERSION} >= 100000) || \
+	(${${X_}COMPILER_TYPE} == "gcc" && ${${X_}COMPILER_VERSION} >= 100100)
+${X_}COMPILER_FEATURES+=	c++20
+.endif
+.if ${${X_}COMPILER_TYPE} == "clang" || \
+	(${${X_}COMPILER_TYPE} == "gcc" && ${${X_}COMPILER_VERSION} >= 120000)
+${X_}COMPILER_FEATURES+=	init-all
+.endif
 .if ${${X_}COMPILER_TYPE} == "clang"
-${X_}COMPILER_FEATURES+=	retpoline init-all
+${X_}COMPILER_FEATURES+=	blocks
+${X_}COMPILER_FEATURES+=	retpoline
 # PR257638 lld fails with BE compressed debug.  Fixed in main but external tool
 # chains will initially not have the fix.  For now limit the feature to LE
 # targets.
@@ -254,6 +274,21 @@ ${X_}COMPILER_FEATURES+=	compressed-debug
 .if ${${X_}COMPILER_TYPE} == "clang" && ${${X_}COMPILER_VERSION} >= 100000 || \
 	(${${X_}COMPILER_TYPE} == "gcc" && ${${X_}COMPILER_VERSION} >= 80100)
 ${X_}COMPILER_FEATURES+=	fileprefixmap
+.endif
+
+.if (${${X_}COMPILER_TYPE} == "clang" && ${${X_}COMPILER_VERSION} >= 70000 \
+	&& ${MACHINE_ARCH:Mriscv*} != "" && ${MACHINE_ARCH:Mpower*} != "") || \
+	(${${X_}COMPILER_TYPE} == "gcc" && ${${X_}COMPILER_VERSION} >= 81000 \
+	&& ${MACHINE_ARCH:Mriscv*} != "")
+${X_}COMPILER_FEATURES+=	stackclash
+.endif
+
+
+.if (${${X_}COMPILER_TYPE} == "clang" && ${${X_}COMPILER_VERSION} >= 150000) || \
+	(${${X_}COMPILER_TYPE} == "gcc" && ${${X_}COMPILER_VERSION} >= 110000) && \
+	${MACHINE_ARCH:Mriscv*} != "" && ${MACHINE_ARCH:Mpower*} != "" && \
+	${MACHINE_ARCH:Marmv7*} != "" 
+${X_}COMPILER_FEATURES+=	zeroregs
 .endif
 
 .if (${${X_}COMPILER_TYPE} == "clang" && ${${X_}COMPILER_VERSION} >= 130000) || \

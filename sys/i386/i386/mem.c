@@ -35,12 +35,9 @@
  * SUCH DAMAGE.
  *
  *	from: Utah $Hdr: mem.c 1.13 89/10/08$
- *	from: @(#)mem.c	7.2 (Berkeley) 5/9/91
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Memory special file
  */
@@ -145,7 +142,7 @@ memrw(struct cdev *dev, struct uio *uio, int flags)
 		c = PAGE_SIZE - o;
 		c = min(c, (u_int)iov->iov_len);
 		error = uiomove((caddr_t)&ptvmmap[o], (int)c, uio);
-		pmap_qremove((vm_offset_t)ptvmmap, 1);
+		pmap_qremove(ptvmmap, 1);
 		sx_xunlock(&memsxlock);
 	}
 

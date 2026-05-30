@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2007-2008 Sam Leffler, Errno Consulting
  * All rights reserved.
@@ -23,8 +23,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _NET80211_IEEE80211_PHY_H_
@@ -222,6 +220,15 @@ uint8_t		ieee80211_rate2plcp(int, enum ieee80211_phytype);
 uint32_t	ieee80211_compute_duration_ht(uint32_t frameLen,
 			uint16_t rate, int streams, int isht40,
 			int isShortGI);
+
+enum net80211_sta_rx_bw;
+
+uint16_t	ieee80211_phy_vht_get_mcs_mask(enum net80211_sta_rx_bw,
+		    uint8_t);
+bool		ieee80211_phy_vht_validate_mcs(enum net80211_sta_rx_bw,
+		    uint8_t, uint8_t);
+uint32_t	ieee80211_phy_vht_get_mcs_kbit(enum net80211_sta_rx_bw,
+		    uint8_t, uint8_t, bool);
 
 #endif	/* _KERNEL */
 #endif	/* !_NET80211_IEEE80211_PHY_H_ */

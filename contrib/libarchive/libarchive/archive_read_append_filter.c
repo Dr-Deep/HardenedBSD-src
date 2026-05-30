@@ -24,7 +24,6 @@
  */
 
 #include "archive_platform.h"
-__FBSDID("$FreeBSD$");
 
 #ifdef HAVE_ERRNO_H
 #include <errno.h>
@@ -97,9 +96,17 @@ archive_read_append_filter(struct archive *_a, int code)
       strcpy(str, "lzip");
       r1 = archive_read_support_filter_lzip(_a);
       break;
+    case ARCHIVE_FILTER_LZOP:
+      strcpy(str, "lzop");
+      r1 = archive_read_support_filter_lzop(_a);
+      break;
     case ARCHIVE_FILTER_LRZIP:
       strcpy(str, "lrzip");
       r1 = archive_read_support_filter_lrzip(_a);
+      break;
+    case ARCHIVE_FILTER_GRZIP:
+      strcpy(str, "grzip");
+      r1 = archive_read_support_filter_grzip(_a);
       break;
     default:
       archive_set_error(&a->archive, ARCHIVE_ERRNO_PROGRAMMER,
@@ -112,7 +119,7 @@ archive_read_append_filter(struct archive *_a, int code)
     number_bidders = sizeof(a->bidders) / sizeof(a->bidders[0]);
 
     bidder = a->bidders;
-    for (i = 0; i < number_bidders; i++, bidder++)
+    for (i = 1; i < number_bidders; i++, bidder++)
     {
       if (!bidder->name || !strcmp(bidder->name, str))
         break;
@@ -124,8 +131,7 @@ archive_read_append_filter(struct archive *_a, int code)
       return (ARCHIVE_FATAL);
     }
 
-    filter
-        = (struct archive_read_filter *)calloc(1, sizeof(*filter));
+    filter = calloc(1, sizeof(*filter));
     if (filter == NULL)
     {
       archive_set_error(&a->archive, ENOMEM, "Out of memory");
@@ -181,8 +187,7 @@ archive_read_append_filter_program_signature(struct archive *_a,
     return (ARCHIVE_FATAL);
   }
 
-  filter
-      = (struct archive_read_filter *)calloc(1, sizeof(*filter));
+  filter = calloc(1, sizeof(*filter));
   if (filter == NULL)
   {
     archive_set_error(&a->archive, ENOMEM, "Out of memory");

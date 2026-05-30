@@ -27,12 +27,8 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)rtsock.c	8.7 (Berkeley) 10/12/95
- * $FreeBSD$
  */
 #include "opt_ddb.h"
-#include "opt_route.h"
 #include "opt_inet.h"
 #include "opt_inet6.h"
 
@@ -57,6 +53,7 @@
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_private.h>
 #include <net/if_dl.h>
 #include <net/if_llatbl.h>
 #include <net/if_types.h>
@@ -138,7 +135,9 @@ struct linear_buffer {
 };
 #define	SCRATCH_BUFFER_SIZE	1024
 
-#define	RTS_PID_LOG(_l, _fmt, ...)	RT_LOG_##_l(_l, "PID %d: " _fmt, curproc ? curproc->p_pid : 0, ## __VA_ARGS__)
+#define	RTS_PID_LOG(_l, _fmt, ...)					\
+	RT_LOG_##_l(_l, "PID %d: " _fmt, curproc ? curproc->p_pid : 0,	\
+	    ## __VA_ARGS__)
 
 MALLOC_DEFINE(M_RTABLE, "routetbl", "routing tables");
 
@@ -208,7 +207,7 @@ static int	sysctl_ifmalist(int af, struct walkarg *w);
 static void	rt_getmetrics(const struct rtentry *rt,
 			const struct nhop_object *nh, struct rt_metrics *out);
 static void	rt_dispatch(struct mbuf *, sa_family_t);
-static void	rt_ifannouncemsg(struct ifnet *ifp, int what);
+static void	rt_ifannouncemsg(struct ifnet *, int, const char *);
 static int	handle_rtm_get(struct rt_addrinfo *info, u_int fibnum,
 			struct rt_msghdr *rtm, struct rib_cmd_info *rc);
 static int	update_rtm_from_rc(struct rt_addrinfo *info,
@@ -217,8 +216,8 @@ static int	update_rtm_from_rc(struct rt_addrinfo *info,
 static void	send_rtm_reply(struct socket *so, struct rt_msghdr *rtm,
 			struct mbuf *m, sa_family_t saf, u_int fibnum,
 			int rtm_errno);
-static bool	can_export_rte(struct ucred *td_ucred, bool rt_is_host,
-			const struct sockaddr *rt_dst);
+static void	rtsock_notify_event(uint32_t fibnum, const struct rib_cmd_info *rc);
+static void	rtsock_ifmsg(struct ifnet *ifp, int if_flags_mask);
 
 static struct netisr_handler rtsock_nh = {
 	.nh_name = "rtsock",
@@ -241,7 +240,7 @@ sysctl_route_netisr_maxqlen(SYSCTL_HANDLER_ARGS)
 	return (netisr_setqlimit(&rtsock_nh, qlimit));
 }
 SYSCTL_PROC(_net_route, OID_AUTO, netisr_maxqlen,
-    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+    CTLTYPE_INT | CTLFLAG_RWTUN | CTLFLAG_NOFETCH | CTLFLAG_MPSAFE,
     0, 0, sysctl_route_netisr_maxqlen, "I",
     "maximum routing socket dispatch queue length");
 
@@ -261,7 +260,7 @@ vnet_rts_init(void)
 #endif
 }
 VNET_SYSINIT(vnet_rtsock, SI_SUB_PROTO_DOMAIN, SI_ORDER_THIRD,
-    vnet_rts_init, 0);
+    vnet_rts_init, NULL);
 
 #ifdef VIMAGE
 static void
@@ -271,22 +270,72 @@ vnet_rts_uninit(void)
 	netisr_unregister_vnet(&rtsock_nh);
 }
 VNET_SYSUNINIT(vnet_rts_uninit, SI_SUB_PROTO_DOMAIN, SI_ORDER_THIRD,
-    vnet_rts_uninit, 0);
+    vnet_rts_uninit, NULL);
 #endif
 
 static void
-rts_handle_ifnet_arrival(void *arg __unused, struct ifnet *ifp)
+report_route_event(const struct rib_cmd_info *rc, void *_cbdata)
 {
-	rt_ifannouncemsg(ifp, IFAN_ARRIVAL);
+	uint32_t fibnum = (uint32_t)(uintptr_t)_cbdata;
+	struct nhop_object *nh;
+
+	nh = rc->rc_cmd == RTM_DELETE ? rc->rc_nh_old : rc->rc_nh_new;
+	rt_routemsg(rc->rc_cmd, rc->rc_rt, nh, fibnum);
 }
-EVENTHANDLER_DEFINE(ifnet_arrival_event, rts_handle_ifnet_arrival, NULL, 0);
+
+static void
+rts_handle_route_event(uint32_t fibnum, const struct rib_cmd_info *rc)
+{
+
+	if ((rc->rc_nh_new && NH_IS_NHGRP(rc->rc_nh_new)) ||
+	    (rc->rc_nh_old && NH_IS_NHGRP(rc->rc_nh_old))) {
+		rib_decompose_notification(rc, report_route_event,
+		    (void *)(uintptr_t)fibnum);
+	} else
+		report_route_event(rc, (void *)(uintptr_t)fibnum);
+}
+static struct rtbridge rtsbridge = {
+	.route_f = rts_handle_route_event,
+	.ifmsg_f = rtsock_ifmsg,
+};
+static struct rtbridge *rtsbridge_orig_p;
+
+static void
+rtsock_notify_event(uint32_t fibnum, const struct rib_cmd_info *rc)
+{
+	netlink_callback_p->route_f(fibnum, rc);
+}
+
+static void
+rtsock_init(void *dummy __unused)
+{
+	rtsbridge_orig_p = rtsock_callback_p;
+	rtsock_callback_p = &rtsbridge;
+}
+SYSINIT(rtsock_init, SI_SUB_PROTO_DOMAIN, SI_ORDER_THIRD, rtsock_init, NULL);
+
+static void
+rts_ifnet_attached(void *arg __unused, struct ifnet *ifp)
+{
+	rt_ifannouncemsg(ifp, IFAN_ARRIVAL, NULL);
+}
+EVENTHANDLER_DEFINE(ifnet_attached_event, rts_ifnet_attached, NULL, 0);
 
 static void
 rts_handle_ifnet_departure(void *arg __unused, struct ifnet *ifp)
 {
-	rt_ifannouncemsg(ifp, IFAN_DEPARTURE);
+	rt_ifannouncemsg(ifp, IFAN_DEPARTURE, NULL);
 }
 EVENTHANDLER_DEFINE(ifnet_departure_event, rts_handle_ifnet_departure, NULL, 0);
+
+static void
+rts_handle_ifnet_rename(void *arg __unused, struct ifnet *ifp,
+    const char *old_name)
+{
+	rt_ifannouncemsg(ifp, IFAN_DEPARTURE, old_name);
+	rt_ifannouncemsg(ifp, IFAN_ARRIVAL, NULL);
+}
+EVENTHANDLER_DEFINE(ifnet_rename_event, rts_handle_ifnet_rename, NULL, 0);
 
 static void
 rts_append_data(struct socket *so, struct mbuf *m)
@@ -381,6 +430,30 @@ rts_attach(struct socket *so, int proto, struct thread *td)
 	return (0);
 }
 
+static int
+rts_ctloutput(struct socket *so, struct sockopt *sopt)
+{
+	int error, optval;
+
+	error = ENOPROTOOPT;
+	if (sopt->sopt_dir == SOPT_SET) {
+		switch (sopt->sopt_level) {
+		case SOL_SOCKET:
+			switch (sopt->sopt_name) {
+			case SO_SETFIB:
+				error = sooptcopyin(sopt, &optval,
+				    sizeof(optval), sizeof(optval));
+				if (error != 0)
+					break;
+				error = sosetfib(so, optval);
+				break;
+			}
+			break;
+		}
+	}
+	return (error);
+}
+
 static void
 rts_detach(struct socket *so)
 {
@@ -403,10 +476,29 @@ rts_detach(struct socket *so)
 }
 
 static int
-rts_shutdown(struct socket *so)
+rts_disconnect(struct socket *so)
 {
 
-	socantsendmore(so);
+	return (ENOTCONN);
+}
+
+static int
+rts_shutdown(struct socket *so, enum shutdown_how how)
+{
+	/*
+	 * Note: route socket marks itself as connected through its lifetime.
+	 */
+	switch (how) {
+	case SHUT_RD:
+		sorflush(so);
+		break;
+	case SHUT_RDWR:
+		sorflush(so);
+		/* FALLTHROUGH */
+	case SHUT_WR:
+		socantsendmore(so);
+	}
+
 	return (0);
 }
 
@@ -634,7 +726,7 @@ fill_addrinfo(struct rt_msghdr *rtm, int len, struct linear_buffer *lb, u_int fi
 
 		/* 
 		 * A host route through the loopback interface is 
-		 * installed for each interface adddress. In pre 8.0
+		 * installed for each interface address. In pre 8.0
 		 * releases the interface address of a PPP link type
 		 * is not reachable locally. This behavior is fixed as 
 		 * part of the new L2/L3 redesign and rewrite work. The
@@ -656,11 +748,12 @@ fill_addrinfo(struct rt_msghdr *rtm, int len, struct linear_buffer *lb, u_int fi
 static struct nhop_object *
 select_nhop(struct nhop_object *nh, const struct sockaddr *gw)
 {
-	if (!NH_IS_NHGRP(nh))
-		return (nh);
-#ifdef ROUTE_MPATH
 	const struct weightened_nhop *wn;
 	uint32_t num_nhops;
+
+	if (!NH_IS_NHGRP(nh))
+		return (nh);
+
 	wn = nhgrp_get_nhops((struct nhgrp_object *)nh, &num_nhops);
 	if (gw == NULL)
 		return (wn[0].nh);
@@ -668,7 +761,7 @@ select_nhop(struct nhop_object *nh, const struct sockaddr *gw)
 		if (match_nhop_gw(wn[i].nh, gw))
 			return (wn[i].nh);
 	}
-#endif
+
 	return (NULL);
 }
 
@@ -860,8 +953,10 @@ update_rtm_from_info(struct rt_addrinfo *info, struct rt_msghdr **prtm,
 		 */
 	}
 
-	w.w_tmem = (caddr_t)rtm;
-	w.w_tmemsize = alloc_len;
+	w = (struct walkarg ){
+		.w_tmem = (caddr_t)rtm,
+		.w_tmemsize = alloc_len,
+	};
 	rtsock_msg_buffer(rtm->rtm_type, info, &w, &len);
 	rtm->rtm_addrs = info->rti_addrs;
 
@@ -933,7 +1028,6 @@ update_rtm_from_rc(struct rt_addrinfo *info, struct rt_msghdr **prtm,
 	return (0);
 }
 
-#ifdef ROUTE_MPATH
 static void
 save_del_notification(const struct rib_cmd_info *rc, void *_cbdata)
 {
@@ -951,7 +1045,6 @@ save_add_notification(const struct rib_cmd_info *rc, void *_cbdata)
 	if (rc->rc_cmd == RTM_ADD)
 		*rc_new = *rc;
 }
-#endif
 
 #if defined(INET6) || defined(INET)
 static struct sockaddr *
@@ -1074,7 +1167,7 @@ rts_send(struct socket *so, int flags, struct mbuf *m,
 		}
 		error = rib_action(fibnum, rtm->rtm_type, &info, &rc);
 		if (error == 0) {
-#ifdef ROUTE_MPATH
+			rtsock_notify_event(fibnum, &rc);
 			if (NH_IS_NHGRP(rc.rc_nh_new) ||
 			    (rc.rc_nh_old && NH_IS_NHGRP(rc.rc_nh_old))) {
 				struct rib_cmd_info rc_simple = {};
@@ -1082,7 +1175,7 @@ rts_send(struct socket *so, int flags, struct mbuf *m,
 				    save_add_notification, (void *)&rc_simple);
 				rc = rc_simple;
 			}
-#endif
+
 			/* nh MAY be empty if RTM_CHANGE request is no-op */
 			nh = rc.rc_nh_new;
 			if (nh != NULL) {
@@ -1095,7 +1188,7 @@ rts_send(struct socket *so, int flags, struct mbuf *m,
 	case RTM_DELETE:
 		error = rib_action(fibnum, RTM_DELETE, &info, &rc);
 		if (error == 0) {
-#ifdef ROUTE_MPATH
+			rtsock_notify_event(fibnum, &rc);
 			if (NH_IS_NHGRP(rc.rc_nh_old) ||
 			    (rc.rc_nh_new && NH_IS_NHGRP(rc.rc_nh_new))) {
 				struct rib_cmd_info rc_simple = {};
@@ -1103,7 +1196,6 @@ rts_send(struct socket *so, int flags, struct mbuf *m,
 				    save_del_notification, (void *)&rc_simple);
 				rc = rc_simple;
 			}
-#endif
 			nh = rc.rc_nh_old;
 		}
 		break;
@@ -1114,11 +1206,8 @@ rts_send(struct socket *so, int flags, struct mbuf *m,
 			senderr(error);
 		nh = rc.rc_nh_new;
 
-		if (!can_export_rte(curthread->td_ucred,
-		    info.rti_info[RTAX_NETMASK] == NULL,
-		    info.rti_info[RTAX_DST])) {
+		if (!rt_is_exportable(rc.rc_rt, curthread->td_ucred))
 			senderr(ESRCH);
-		}
 		break;
 
 	default:
@@ -1239,6 +1328,7 @@ rt_getmetrics(const struct rtentry *rt, const struct nhop_object *nh,
 	bzero(out, sizeof(*out));
 	out->rmx_mtu = nh->nh_mtu;
 	out->rmx_weight = rt->rt_weight;
+	out->rmx_metric = nhop_get_metric(nh);
 	out->rmx_nhidx = nhop_get_idx(nh);
 	/* Kernel -> userland timebase conversion. */
 	out->rmx_expire = nhop_get_expire(nh) ?
@@ -1714,7 +1804,10 @@ rtsock_msg_buffer(int type, struct rt_addrinfo *rtinfo, struct walkarg *w, int *
 	struct sockaddr_in6 *sin6;
 #endif
 #ifdef COMPAT_FREEBSD32
-	bool compat32 = false;
+	bool compat32;
+
+	compat32 = w != NULL && w->w_req != NULL &&
+	    (w->w_req->flags & SCTL_MASK32);
 #endif
 
 	switch (type) {
@@ -1722,10 +1815,9 @@ rtsock_msg_buffer(int type, struct rt_addrinfo *rtinfo, struct walkarg *w, int *
 	case RTM_NEWADDR:
 		if (w != NULL && w->w_op == NET_RT_IFLISTL) {
 #ifdef COMPAT_FREEBSD32
-			if (w->w_req->flags & SCTL_MASK32) {
+			if (compat32)
 				len = sizeof(struct ifa_msghdrl32);
-				compat32 = true;
-			} else
+			else
 #endif
 				len = sizeof(struct ifa_msghdrl);
 		} else
@@ -1733,20 +1825,21 @@ rtsock_msg_buffer(int type, struct rt_addrinfo *rtinfo, struct walkarg *w, int *
 		break;
 
 	case RTM_IFINFO:
+		if (w != NULL && w->w_op == NET_RT_IFLISTL) {
 #ifdef COMPAT_FREEBSD32
-		if (w != NULL && w->w_req->flags & SCTL_MASK32) {
-			if (w->w_op == NET_RT_IFLISTL)
+			if (compat32)
 				len = sizeof(struct if_msghdrl32);
 			else
-				len = sizeof(struct if_msghdr32);
-			compat32 = true;
-			break;
-		}
 #endif
-		if (w != NULL && w->w_op == NET_RT_IFLISTL)
-			len = sizeof(struct if_msghdrl);
-		else
-			len = sizeof(struct if_msghdr);
+				len = sizeof(struct if_msghdrl);
+		} else {
+#ifdef COMPAT_FREEBSD32
+			if (compat32)
+				len = sizeof(struct if_msghdr32);
+			else
+#endif
+				len = sizeof(struct if_msghdr);
+		}
 		break;
 
 	case RTM_NEWMADDR:
@@ -1777,8 +1870,8 @@ rtsock_msg_buffer(int type, struct rt_addrinfo *rtinfo, struct walkarg *w, int *
 #endif
 			dlen = SA_SIZE(sa);
 		if (cp != NULL && buflen >= dlen) {
-			KASSERT(dlen <= sizeof(ss),
-			    ("%s: sockaddr size overflow", __func__));
+			if (sa->sa_len > sizeof(ss))
+				return (EINVAL);
 			bzero(&ss, sizeof(ss));
 			bcopy(sa, &ss, sa->sa_len);
 			sa = (struct sockaddr *)&ss;
@@ -1874,8 +1967,8 @@ rt_missmsg(int type, struct rt_addrinfo *rtinfo, int flags, int error)
  * This routine is called to generate a message from the routing
  * socket indicating that the status of a network interface has changed.
  */
-void
-rt_ifmsg(struct ifnet *ifp)
+static void
+rtsock_ifmsg(struct ifnet *ifp, int if_flags_mask __unused)
 {
 	struct if_msghdr *ifm;
 	struct mbuf *m;
@@ -2054,7 +2147,7 @@ rt_newmaddrmsg(int cmd, struct ifmultiaddr *ifma)
 
 static struct mbuf *
 rt_makeifannouncemsg(struct ifnet *ifp, int type, int what,
-	struct rt_addrinfo *info)
+    struct rt_addrinfo *info, const char *ifname)
 {
 	struct if_announcemsghdr *ifan;
 	struct mbuf *m;
@@ -2066,8 +2159,9 @@ rt_makeifannouncemsg(struct ifnet *ifp, int type, int what,
 	if (m != NULL) {
 		ifan = mtod(m, struct if_announcemsghdr *);
 		ifan->ifan_index = ifp->if_index;
-		strlcpy(ifan->ifan_name, ifp->if_xname,
-			sizeof(ifan->ifan_name));
+		strlcpy(ifan->ifan_name,
+		    ifname != NULL ? ifname : ifp->if_xname,
+		    sizeof(ifan->ifan_name));
 		ifan->ifan_what = what;
 	}
 	return m;
@@ -2084,7 +2178,7 @@ rt_ieee80211msg(struct ifnet *ifp, int what, void *data, size_t data_len)
 	struct mbuf *m;
 	struct rt_addrinfo info;
 
-	m = rt_makeifannouncemsg(ifp, RTM_IEEE80211, what, &info);
+	m = rt_makeifannouncemsg(ifp, RTM_IEEE80211, what, &info, NULL);
 	if (m != NULL) {
 		/*
 		 * Append the ieee80211 data.  Try to stick it in the
@@ -2118,12 +2212,12 @@ rt_ieee80211msg(struct ifnet *ifp, int what, void *data, size_t data_len)
  * network interface arrival and departure.
  */
 static void
-rt_ifannouncemsg(struct ifnet *ifp, int what)
+rt_ifannouncemsg(struct ifnet *ifp, int what, const char *ifname)
 {
 	struct mbuf *m;
 	struct rt_addrinfo info;
 
-	m = rt_makeifannouncemsg(ifp, RTM_IFANNOUNCE, what, &info);
+	m = rt_makeifannouncemsg(ifp, RTM_IFANNOUNCE, what, &info, ifname);
 	if (m != NULL)
 		rt_dispatch(m, AF_UNSPEC);
 }
@@ -2145,42 +2239,25 @@ rt_dispatch(struct mbuf *m, sa_family_t saf)
 }
 
 /*
- * Checks if rte can be exported w.r.t jails/vnets.
- *
- * Returns true if it can, false otherwise.
- */
-static bool
-can_export_rte(struct ucred *td_ucred, bool rt_is_host,
-    const struct sockaddr *rt_dst)
-{
-
-	if ((!rt_is_host) ? jailed_without_vnet(td_ucred)
-	    : prison_if(td_ucred, rt_dst) != 0)
-		return (false);
-	return (true);
-}
-
-
-/*
  * This is used in dumping the kernel table via sysctl().
  */
 static int
 sysctl_dumpentry(struct rtentry *rt, void *vw)
 {
+	const struct weightened_nhop *wn;
 	struct walkarg *w = vw;
 	struct nhop_object *nh;
+	int error;
+	uint32_t num_nhops;
 
 	NET_EPOCH_ASSERT();
 
-	export_rtaddrs(rt, w->dst, w->mask);
-	if (!can_export_rte(w->w_req->td->td_ucred, rt_is_host(rt), w->dst))
+	if (!rt_is_exportable(rt, w->w_req->td->td_ucred))
 		return (0);
+
+	export_rtaddrs(rt, w->dst, w->mask);
 	nh = rt_get_raw_nhop(rt);
-#ifdef ROUTE_MPATH
 	if (NH_IS_NHGRP(nh)) {
-		const struct weightened_nhop *wn;
-		uint32_t num_nhops;
-		int error;
 		wn = nhgrp_get_nhops((struct nhgrp_object *)nh, &num_nhops);
 		for (int i = 0; i < num_nhops; i++) {
 			error = sysctl_dumpnhop(rt, wn[i].nh, wn[i].weight, w);
@@ -2188,7 +2265,6 @@ sysctl_dumpentry(struct rtentry *rt, void *vw)
 				return (error);
 		}
 	} else
-#endif
 		sysctl_dumpnhop(rt, nh, rt->rt_weight, w);
 
 	return (0);
@@ -2618,11 +2694,7 @@ sysctl_rtsock(SYSCTL_HANDLER_ARGS)
 		if (w.w_op == NET_RT_NHOP)
 			error = nhops_dump_sysctl(rnh, w.w_req);
 		else
-#ifdef ROUTE_MPATH
 			error = nhgrp_dump_sysctl(rnh, w.w_req);
-#else
-			error = ENOTSUP;
-#endif
 		break;
 	case NET_RT_IFLIST:
 	case NET_RT_IFLISTL:
@@ -2653,9 +2725,11 @@ static struct protosw routesw = {
 	.pr_flags =		PR_ATOMIC|PR_ADDR,
 	.pr_abort =		rts_close,
 	.pr_attach =		rts_attach,
+	.pr_ctloutput =		rts_ctloutput,
 	.pr_detach =		rts_detach,
 	.pr_send =		rts_send,
 	.pr_shutdown =		rts_shutdown,
+	.pr_disconnect =	rts_disconnect,
 	.pr_close =		rts_close,
 };
 

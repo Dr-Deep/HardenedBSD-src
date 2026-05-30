@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -34,13 +35,14 @@
 #include <sys/dsl_bookmark.h>
 #include <zfs_namecheck.h>
 #include <sys/dmu_send.h>
+#include <sys/dbuf.h>
 
 static int
 dsl_bookmark_hold_ds(dsl_pool_t *dp, const char *fullname,
-    dsl_dataset_t **dsp, const void *tag, char **shortnamep)
+    dsl_dataset_t **dsp, const void *tag, const char **shortnamep)
 {
 	char buf[ZFS_MAX_DATASET_NAME_LEN];
-	char *hashp;
+	const char *hashp;
 
 	if (strlen(fullname) >= ZFS_MAX_DATASET_NAME_LEN)
 		return (SET_ERROR(ENAMETOOLONG));
@@ -103,7 +105,7 @@ int
 dsl_bookmark_lookup(dsl_pool_t *dp, const char *fullname,
     dsl_dataset_t *later_ds, zfs_bookmark_phys_t *bmp)
 {
-	char *shortname;
+	const char *shortname;
 	dsl_dataset_t *ds;
 	int error;
 
@@ -160,14 +162,14 @@ dsl_bookmark_create_nvl_validate_pair(const char *bmark, const char *source)
 int
 dsl_bookmark_create_nvl_validate(nvlist_t *bmarks)
 {
-	char *first = NULL;
+	const char *first = NULL;
 	size_t first_len = 0;
 
 	for (nvpair_t *pair = nvlist_next_nvpair(bmarks, NULL);
 	    pair != NULL; pair = nvlist_next_nvpair(bmarks, pair)) {
 
-		char *bmark = nvpair_name(pair);
-		char *source;
+		const char *bmark = nvpair_name(pair);
+		const char *source;
 
 		/* list structure: values must be snapshots XOR bookmarks */
 		if (nvpair_value_string(pair, &source) != 0)
@@ -177,7 +179,7 @@ dsl_bookmark_create_nvl_validate(nvlist_t *bmarks)
 
 		/* same pool check */
 		if (first == NULL) {
-			char *cp = strpbrk(bmark, "/#");
+			const char *cp = strpbrk(bmark, "/#");
 			if (cp == NULL)
 				return (-1);
 			first = bmark;
@@ -217,7 +219,7 @@ dsl_bookmark_create_check_impl(dsl_pool_t *dp,
 
 	int error;
 	dsl_dataset_t *newbm_ds;
-	char *newbm_short;
+	const char *newbm_short;
 	zfs_bookmark_phys_t bmark_phys;
 
 	error = dsl_bookmark_hold_ds(dp, newbm, &newbm_ds, FTAG, &newbm_short);
@@ -229,7 +231,6 @@ dsl_bookmark_create_check_impl(dsl_pool_t *dp,
 	switch (error) {
 	case ESRCH:
 		/* happy path: new bmark doesn't exist, proceed after switch */
-		error = 0;
 		break;
 	case 0:
 		error = SET_ERROR(EEXIST);
@@ -242,7 +243,7 @@ dsl_bookmark_create_check_impl(dsl_pool_t *dp,
 	/* error is retval of the following if-cascade */
 	if (strchr(source, '@') != NULL) {
 		dsl_dataset_t *source_snap_ds;
-		ASSERT3S(snapshot_namecheck(source, NULL, NULL), ==, 0);
+		ASSERT0(snapshot_namecheck(source, NULL, NULL));
 		error = dsl_dataset_hold(dp, source, FTAG, &source_snap_ds);
 		if (error == 0) {
 			VERIFY(source_snap_ds->ds_is_snapshot);
@@ -257,7 +258,7 @@ dsl_bookmark_create_check_impl(dsl_pool_t *dp,
 		}
 	} else if (strchr(source, '#') != NULL) {
 		zfs_bookmark_phys_t source_phys;
-		ASSERT3S(bookmark_namecheck(source, NULL, NULL), ==, 0);
+		ASSERT0(bookmark_namecheck(source, NULL, NULL));
 		/*
 		 * Source must exists and be an earlier point in newbm_ds's
 		 * timeline (newbm_ds's origin may be a snap of source's ds)
@@ -306,11 +307,11 @@ dsl_bookmark_create_check(void *arg, dmu_tx_t *tx)
 
 	for (nvpair_t *pair = nvlist_next_nvpair(dbca->dbca_bmarks, NULL);
 	    pair != NULL; pair = nvlist_next_nvpair(dbca->dbca_bmarks, pair)) {
-		char *new = nvpair_name(pair);
+		const char *new = nvpair_name(pair);
 
 		int error = schema_err;
 		if (error == 0) {
-			char *source = fnvpair_value_string(pair);
+			const char *source = fnvpair_value_string(pair);
 			error = dsl_bookmark_create_check_impl(dp, new, source);
 			if (error != 0)
 				error = SET_ERROR(error);
@@ -328,7 +329,7 @@ dsl_bookmark_create_check(void *arg, dmu_tx_t *tx)
 }
 
 static dsl_bookmark_node_t *
-dsl_bookmark_node_alloc(char *shortname)
+dsl_bookmark_node_alloc(const char *shortname)
 {
 	dsl_bookmark_node_t *dbn = kmem_alloc(sizeof (*dbn), KM_SLEEP);
 	dbn->dbn_name = spa_strdup(shortname);
@@ -444,7 +445,7 @@ dsl_bookmark_create_sync_impl_snap(const char *bookmark, const char *snapshot,
 	dsl_pool_t *dp = dmu_tx_pool(tx);
 	objset_t *mos = dp->dp_meta_objset;
 	dsl_dataset_t *snapds, *bmark_fs;
-	char *shortname;
+	const char *shortname;
 	boolean_t bookmark_redacted;
 	uint64_t *dsredactsnaps;
 	uint64_t dsnumsnaps;
@@ -460,30 +461,47 @@ dsl_bookmark_create_sync_impl_snap(const char *bookmark, const char *snapshot,
 	    SPA_FEATURE_REDACTED_DATASETS, &dsnumsnaps, &dsredactsnaps);
 	if (redaction_list != NULL || bookmark_redacted) {
 		redaction_list_t *local_rl;
+		boolean_t spill = B_FALSE;
 		if (bookmark_redacted) {
 			redact_snaps = dsredactsnaps;
 			num_redact_snaps = dsnumsnaps;
 		}
+		int bonuslen = sizeof (redaction_list_phys_t) +
+		    num_redact_snaps * sizeof (uint64_t);
+		if (bonuslen > dmu_bonus_max())
+			spill = B_TRUE;
 		dbn->dbn_phys.zbm_redaction_obj = dmu_object_alloc(mos,
 		    DMU_OTN_UINT64_METADATA, SPA_OLD_MAXBLOCKSIZE,
-		    DMU_OTN_UINT64_METADATA, sizeof (redaction_list_phys_t) +
-		    num_redact_snaps * sizeof (uint64_t), tx);
+		    DMU_OTN_UINT64_METADATA, spill ? 0 : bonuslen, tx);
 		spa_feature_incr(dp->dp_spa,
 		    SPA_FEATURE_REDACTION_BOOKMARKS, tx);
+		if (spill) {
+			spa_feature_incr(dp->dp_spa,
+			    SPA_FEATURE_REDACTION_LIST_SPILL, tx);
+		}
 
 		VERIFY0(dsl_redaction_list_hold_obj(dp,
 		    dbn->dbn_phys.zbm_redaction_obj, tag, &local_rl));
 		dsl_redaction_list_long_hold(dp, local_rl, tag);
 
-		ASSERT3U((local_rl)->rl_dbuf->db_size, >=,
-		    sizeof (redaction_list_phys_t) + num_redact_snaps *
-		    sizeof (uint64_t));
-		dmu_buf_will_dirty(local_rl->rl_dbuf, tx);
+		if (!spill) {
+			ASSERT3U(local_rl->rl_bonus->db_size, >=, bonuslen);
+			dmu_buf_will_dirty(local_rl->rl_bonus, tx);
+		} else {
+			dmu_buf_t *db;
+			VERIFY0(dmu_spill_hold_by_bonus(local_rl->rl_bonus,
+			    DB_RF_MUST_SUCCEED, FTAG, &db));
+			dmu_buf_will_fill(db, tx, B_FALSE);
+			VERIFY0(dbuf_spill_set_blksz(db, P2ROUNDUP(bonuslen,
+			    SPA_MINBLOCKSIZE), tx));
+			local_rl->rl_phys = db->db_data;
+			local_rl->rl_dbuf = db;
+		}
 		memcpy(local_rl->rl_phys->rlp_snaps, redact_snaps,
 		    sizeof (uint64_t) * num_redact_snaps);
 		local_rl->rl_phys->rlp_num_snaps = num_redact_snaps;
 		if (bookmark_redacted) {
-			ASSERT3P(redaction_list, ==, NULL);
+			ASSERT0P(redaction_list);
 			local_rl->rl_phys->rlp_last_blkid = UINT64_MAX;
 			local_rl->rl_phys->rlp_last_object = UINT64_MAX;
 			dsl_redaction_list_long_rele(local_rl, tag);
@@ -517,7 +535,7 @@ dsl_bookmark_create_sync_impl_book(
 {
 	dsl_pool_t *dp = dmu_tx_pool(tx);
 	dsl_dataset_t *bmark_fs_source, *bmark_fs_new;
-	char *source_shortname, *new_shortname;
+	const char *source_shortname, *new_shortname;
 	zfs_bookmark_phys_t source_phys;
 
 	VERIFY0(dsl_bookmark_hold_ds(dp, source_name, &bmark_fs_source, FTAG,
@@ -590,8 +608,8 @@ dsl_bookmark_create_sync(void *arg, dmu_tx_t *tx)
 	for (nvpair_t *pair = nvlist_next_nvpair(dbca->dbca_bmarks, NULL);
 	    pair != NULL; pair = nvlist_next_nvpair(dbca->dbca_bmarks, pair)) {
 
-		char *new = nvpair_name(pair);
-		char *source = fnvpair_value_string(pair);
+		const char *new = nvpair_name(pair);
+		const char *source = fnvpair_value_string(pair);
 
 		if (strchr(source, '@') != NULL) {
 			dsl_bookmark_create_sync_impl_snap(new, source, tx,
@@ -637,11 +655,15 @@ dsl_bookmark_create_redacted_check(void *arg, dmu_tx_t *tx)
 	    SPA_FEATURE_REDACTION_BOOKMARKS))
 		return (SET_ERROR(ENOTSUP));
 	/*
-	 * If the list of redact snaps will not fit in the bonus buffer with
-	 * the furthest reached object and offset, fail.
+	 * If the list of redact snaps will not fit in the bonus buffer (or
+	 * spill block, with the REDACTION_LIST_SPILL feature) with the
+	 * furthest reached object and offset, fail.
 	 */
-	if (dbcra->dbcra_numsnaps > (dmu_bonus_max() -
-	    sizeof (redaction_list_phys_t)) / sizeof (uint64_t))
+	uint64_t snaplimit = ((spa_feature_is_enabled(dp->dp_spa,
+	    SPA_FEATURE_REDACTION_LIST_SPILL) ? spa_maxblocksize(dp->dp_spa) :
+	    dmu_bonus_max()) -
+	    sizeof (redaction_list_phys_t)) / sizeof (uint64_t);
+	if (dbcra->dbcra_numsnaps > snaplimit)
 		return (SET_ERROR(E2BIG));
 
 	if (dsl_bookmark_create_nvl_validate_pair(
@@ -815,8 +837,7 @@ dsl_bookmark_compare(const void *l, const void *r)
 	    (rdbn->dbn_phys.zbm_flags & ZBM_FLAG_HAS_FBN));
 	if (likely(cmp))
 		return (cmp);
-	cmp = strcmp(ldbn->dbn_name, rdbn->dbn_name);
-	return (TREE_ISIGN(cmp));
+	return (TREE_ISIGN(strcmp(ldbn->dbn_name, rdbn->dbn_name)));
 }
 
 /*
@@ -849,13 +870,14 @@ dsl_bookmark_init_ds(dsl_dataset_t *ds)
 
 	int err = 0;
 	zap_cursor_t zc;
-	zap_attribute_t attr;
+	zap_attribute_t *attr;
 
+	attr = zap_attribute_alloc();
 	for (zap_cursor_init(&zc, mos, ds->ds_bookmarks_obj);
-	    (err = zap_cursor_retrieve(&zc, &attr)) == 0;
+	    (err = zap_cursor_retrieve(&zc, attr)) == 0;
 	    zap_cursor_advance(&zc)) {
 		dsl_bookmark_node_t *dbn =
-		    dsl_bookmark_node_alloc(attr.za_name);
+		    dsl_bookmark_node_alloc(attr->za_name);
 
 		err = dsl_bookmark_lookup_impl(ds,
 		    dbn->dbn_name, &dbn->dbn_phys);
@@ -867,6 +889,7 @@ dsl_bookmark_init_ds(dsl_dataset_t *ds)
 		avl_add(&ds->ds_bookmarks, dbn);
 	}
 	zap_cursor_fini(&zc);
+	zap_attribute_free(attr);
 	if (err == ENOENT)
 		err = 0;
 	return (err);
@@ -1041,6 +1064,14 @@ dsl_bookmark_destroy_sync_impl(dsl_dataset_t *ds, const char *name,
 	}
 
 	if (dbn->dbn_phys.zbm_redaction_obj != 0) {
+		dnode_t *rl;
+		VERIFY0(dnode_hold(mos,
+		    dbn->dbn_phys.zbm_redaction_obj, FTAG, &rl));
+		if (rl->dn_have_spill) {
+			spa_feature_decr(dmu_objset_spa(mos),
+			    SPA_FEATURE_REDACTION_LIST_SPILL, tx);
+		}
+		dnode_rele(rl, FTAG);
 		VERIFY0(dmu_object_free(mos,
 		    dbn->dbn_phys.zbm_redaction_obj, tx));
 		spa_feature_decr(dmu_objset_spa(mos),
@@ -1074,7 +1105,7 @@ dsl_bookmark_destroy_check(void *arg, dmu_tx_t *tx)
 		dsl_dataset_t *ds;
 		zfs_bookmark_phys_t bm;
 		int error;
-		char *shortname;
+		const char *shortname;
 
 		error = dsl_bookmark_hold_ds(dp, fullname, &ds,
 		    FTAG, &shortname);
@@ -1130,7 +1161,7 @@ dsl_bookmark_destroy_sync(void *arg, dmu_tx_t *tx)
 	for (nvpair_t *pair = nvlist_next_nvpair(dbda->dbda_success, NULL);
 	    pair != NULL; pair = nvlist_next_nvpair(dbda->dbda_success, pair)) {
 		dsl_dataset_t *ds;
-		char *shortname;
+		const char *shortname;
 		uint64_t zap_cnt;
 
 		VERIFY0(dsl_bookmark_hold_ds(dp, nvpair_name(pair),
@@ -1214,7 +1245,9 @@ redaction_list_evict_sync(void *rlu)
 void
 dsl_redaction_list_rele(redaction_list_t *rl, const void *tag)
 {
-	dmu_buf_rele(rl->rl_dbuf, tag);
+	if (rl->rl_bonus != rl->rl_dbuf)
+		dmu_buf_rele(rl->rl_dbuf, tag);
+	dmu_buf_rele(rl->rl_bonus, tag);
 }
 
 int
@@ -1222,7 +1255,7 @@ dsl_redaction_list_hold_obj(dsl_pool_t *dp, uint64_t rlobj, const void *tag,
     redaction_list_t **rlp)
 {
 	objset_t *mos = dp->dp_meta_objset;
-	dmu_buf_t *dbuf;
+	dmu_buf_t *dbuf, *spill_dbuf;
 	redaction_list_t *rl;
 	int err;
 
@@ -1237,13 +1270,18 @@ dsl_redaction_list_hold_obj(dsl_pool_t *dp, uint64_t rlobj, const void *tag,
 		redaction_list_t *winner = NULL;
 
 		rl = kmem_zalloc(sizeof (redaction_list_t), KM_SLEEP);
-		rl->rl_dbuf = dbuf;
+		rl->rl_bonus = dbuf;
+		if (dmu_spill_hold_existing(dbuf, tag, &spill_dbuf) == 0) {
+			rl->rl_dbuf = spill_dbuf;
+		} else {
+			rl->rl_dbuf = dbuf;
+		}
 		rl->rl_object = rlobj;
-		rl->rl_phys = dbuf->db_data;
+		rl->rl_phys = rl->rl_dbuf->db_data;
 		rl->rl_mos = dp->dp_meta_objset;
 		zfs_refcount_create(&rl->rl_longholds);
 		dmu_buf_init_user(&rl->rl_dbu, redaction_list_evict_sync, NULL,
-		    &rl->rl_dbuf);
+		    &rl->rl_bonus);
 		if ((winner = dmu_buf_set_user_ie(dbuf, &rl->rl_dbu)) != NULL) {
 			kmem_free(rl, sizeof (*rl));
 			rl = winner;
@@ -1484,7 +1522,8 @@ dsl_bookmark_block_killed(dsl_dataset_t *ds, const blkptr_t *bp, dmu_tx_t *tx)
 		 * If the block was live (referenced) at the time of this
 		 * bookmark, add its space to the bookmark's FBN.
 		 */
-		if (bp->blk_birth <= dbn->dbn_phys.zbm_creation_txg &&
+		if (BP_GET_BIRTH(bp) <=
+		    dbn->dbn_phys.zbm_creation_txg &&
 		    (dbn->dbn_phys.zbm_flags & ZBM_FLAG_HAS_FBN)) {
 			mutex_enter(&dbn->dbn_lock);
 			dbn->dbn_phys.zbm_referenced_freed_before_next_snap +=

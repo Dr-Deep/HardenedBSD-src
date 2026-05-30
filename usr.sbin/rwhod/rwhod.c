@@ -30,21 +30,6 @@
  * SUCH DAMAGE.
  */
 
-#ifndef lint
-static const char copyright[] =
-"@(#) Copyright (c) 1983, 1993\n\
-	The Regents of the University of California.  All rights reserved.\n";
-#endif /* not lint */
-
-#if 0
-#ifndef lint
-static char sccsid[] = "@(#)rwhod.c	8.1 (Berkeley) 6/6/93";
-#endif /* not lint */
-#endif
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/capsicum.h>
 #include <sys/ioctl.h>
@@ -137,7 +122,7 @@ void	run_as(uid_t *uid, gid_t *gid);
 void	quit(const char *msg);
 void	sender_process(void);
 int	verify(char *name, int maxlen);
-static void usage(void);
+static void usage(void) __dead2;
 
 #ifdef DEBUG
 char	*interval(int time, char *updown);
@@ -261,12 +246,12 @@ main(int argc, char *argv[])
 		syslog(LOG_ERR, "bind: %m");
 		exit(1);
 	}
-	if (setgid(unpriv_gid) != 0) {
-		syslog(LOG_ERR, "setgid: %m");
+	if (setgroups(0, NULL) != 0) {
+		syslog(LOG_ERR, "setgroups: %m");
 		exit(1);
 	}
-	if (setgroups(1, &unpriv_gid) != 0) {	/* XXX BOGUS groups[0] = egid */
-		syslog(LOG_ERR, "setgroups: %m");
+	if (setgid(unpriv_gid) != 0) {
+		syslog(LOG_ERR, "setgid: %m");
 		exit(1);
 	}
 	if (setuid(unpriv_uid) != 0) {
@@ -493,7 +478,7 @@ sender_process(void)
 				we->we_idle = htonl(now - stb.st_atime);
 		}
 		(void) getloadavg(avenrun,
-		    sizeof(avenrun) / sizeof(avenrun[0]));
+		    nitems(avenrun));
 		for (i = 0; i < 3; i++)
 			mywd.wd_loadav[i] = htonl((u_long)(avenrun[i] * 100));
 		cc = (char *)wend - (char *)&mywd;

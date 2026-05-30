@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -144,6 +145,15 @@
  * Additionally, the duration is then extended by a random 25% to attempt to to
  * detect simultaneous imports.  For example, if both partner hosts are rebooted
  * at the same time and automatically attempt to import the pool.
+ *
+ * Once the read-only activity check completes and the pool is determined to
+ * be inactive a second check is performed to claim the pool.  During this
+ * phase the host writes out MMP uberblocks to each of the devices which are
+ * identical to the best uberblock but with a randomly selected sequence id.
+ * The "best" uberblock is then read back and it must contain this new sequence
+ * number.  This check is performed multiple times to ensure that there is
+ * no window where a concurrently importing system can incorrectly determine
+ * the pool to be inactive.
  */
 
 /*
@@ -156,7 +166,7 @@
  * vary with the I/O load and this observed value is the ub_mmp_delay which is
  * stored in the uberblock.  The minimum allowed value is 100 ms.
  */
-ulong_t zfs_multihost_interval = MMP_DEFAULT_INTERVAL;
+uint64_t zfs_multihost_interval = MMP_DEFAULT_INTERVAL;
 
 /*
  * Used to control the duration of the activity test on import.  Smaller values
@@ -236,8 +246,8 @@ mmp_thread_start(spa_t *spa)
 		if (!mmp->mmp_thread) {
 			mmp->mmp_thread = thread_create(NULL, 0, mmp_thread,
 			    spa, 0, &p0, TS_RUN, defclsyspri);
-			zfs_dbgmsg("MMP thread started pool '%s' "
-			    "gethrtime %llu", spa_name(spa), gethrtime());
+			zfs_dbgmsg("mmp: mmp thread started spa=%s "
+			    "gethrtime=%llu", spa_name(spa), gethrtime());
 		}
 		mutex_exit(&mmp->mmp_thread_lock);
 	}
@@ -256,10 +266,10 @@ mmp_thread_stop(spa_t *spa)
 		cv_wait(&mmp->mmp_thread_cv, &mmp->mmp_thread_lock);
 	}
 	mutex_exit(&mmp->mmp_thread_lock);
-	zfs_dbgmsg("MMP thread stopped pool '%s' gethrtime %llu",
+	zfs_dbgmsg("mmp: mmp thread stopped spa=%s gethrtime=%llu",
 	    spa_name(spa), gethrtime());
 
-	ASSERT(mmp->mmp_thread == NULL);
+	ASSERT0P(mmp->mmp_thread);
 	mmp->mmp_thread_exiting = 0;
 }
 
@@ -303,8 +313,10 @@ mmp_next_leaf(spa_t *spa)
 
 	do {
 		leaf = list_next(&spa->spa_leaf_list, leaf);
-		if (leaf == NULL)
+		if (leaf == NULL) {
 			leaf = list_head(&spa->spa_leaf_list);
+			ASSERT3P(leaf, !=, NULL);
+		}
 
 		/*
 		 * We skip unwritable, offline, detached, and dRAID spare
@@ -443,12 +455,12 @@ mmp_write_uberblock(spa_t *spa)
 	uint64_t offset;
 
 	hrtime_t lock_acquire_time = gethrtime();
-	spa_config_enter(spa, SCL_STATE, mmp_tag, RW_READER);
+	spa_config_enter_priority(spa, SCL_STATE, mmp_tag, RW_READER);
 	lock_acquire_time = gethrtime() - lock_acquire_time;
 	if (lock_acquire_time > (MSEC2NSEC(MMP_MIN_INTERVAL) / 10))
-		zfs_dbgmsg("MMP SCL_STATE acquisition pool '%s' took %llu ns "
-		    "gethrtime %llu", spa_name(spa), lock_acquire_time,
-		    gethrtime());
+		zfs_dbgmsg("mmp: long SCL_STATE acquisition, spa=%s "
+		    "acquire_time=%llu gethrtime=%llu", spa_name(spa),
+		    lock_acquire_time, gethrtime());
 
 	mutex_enter(&mmp->mmp_io_lock);
 
@@ -471,8 +483,8 @@ mmp_write_uberblock(spa_t *spa)
 			spa_mmp_history_add(spa, mmp->mmp_ub.ub_txg,
 			    gethrestime_sec(), mmp->mmp_delay, NULL, 0,
 			    mmp->mmp_kstat_id++, error);
-			zfs_dbgmsg("MMP error choosing leaf pool '%s' "
-			    "gethrtime %llu fail_mask %#x", spa_name(spa),
+			zfs_dbgmsg("mmp: error choosing leaf, spa=%s "
+			    "gethrtime=%llu fail_mask=%#x", spa_name(spa),
 			    gethrtime(), error);
 		}
 		mutex_exit(&mmp->mmp_io_lock);
@@ -482,11 +494,11 @@ mmp_write_uberblock(spa_t *spa)
 
 	vd = spa->spa_mmp.mmp_last_leaf;
 	if (mmp->mmp_skip_error != 0) {
-		mmp->mmp_skip_error = 0;
-		zfs_dbgmsg("MMP write after skipping due to unavailable "
-		    "leaves, pool '%s' gethrtime %llu leaf %llu",
+		zfs_dbgmsg("mmp: write after skipping due to unavailable "
+		    "leaves, spa=%s gethrtime=%llu vdev=%llu error=%d",
 		    spa_name(spa), (u_longlong_t)gethrtime(),
-		    (u_longlong_t)vd->vdev_guid);
+		    (u_longlong_t)vd->vdev_guid, mmp->mmp_skip_error);
+		mmp->mmp_skip_error = 0;
 	}
 
 	if (mmp->mmp_zio_root == NULL)
@@ -515,8 +527,9 @@ mmp_write_uberblock(spa_t *spa)
 
 	zio_t *zio  = zio_null(mmp->mmp_zio_root, spa, NULL, NULL, NULL, flags);
 	abd_t *ub_abd = abd_alloc_for_io(VDEV_UBERBLOCK_SIZE(vd), B_TRUE);
-	abd_zero(ub_abd, VDEV_UBERBLOCK_SIZE(vd));
 	abd_copy_from_buf(ub_abd, ub, sizeof (uberblock_t));
+	abd_zero_off(ub_abd, sizeof (uberblock_t),
+	    VDEV_UBERBLOCK_SIZE(vd) - sizeof (uberblock_t));
 
 	mmp->mmp_seq++;
 	mmp->mmp_kstat_id++;
@@ -536,6 +549,108 @@ mmp_write_uberblock(spa_t *spa)
 	zio_nowait(zio);
 }
 
+static void
+mmp_claim_uberblock_sync_done(zio_t *zio)
+{
+	uint64_t *good_writes = zio->io_private;
+
+	if (zio->io_error == 0 && zio->io_vd->vdev_top->vdev_ms_array != 0)
+		atomic_inc_64(good_writes);
+}
+
+/*
+ * Write the uberblock to the first label of all leaves of the specified vdev.
+ * Two writes required for each mirror, one for a singleton, and parity+1 for
+ * raidz or draid vdevs.
+ */
+static void
+mmp_claim_uberblock_sync(zio_t *zio, uint64_t *good_writes,
+    uint64_t *req_writes, uberblock_t *ub, vdev_t *vd, int flags)
+{
+	for (uint64_t c = 0; c < vd->vdev_children; c++) {
+		vdev_t *cvd = vd->vdev_child[c];
+
+		if (cvd->vdev_islog || cvd->vdev_isspare || cvd->vdev_isl2cache)
+			continue;
+
+		if (cvd->vdev_top == cvd) {
+			uint64_t nparity = vdev_get_nparity(cvd);
+			if (nparity) {
+				*req_writes += nparity + 1;
+			} else {
+				*req_writes +=
+				    MIN(MAX(cvd->vdev_children, 1), 2);
+			}
+		}
+
+		mmp_claim_uberblock_sync(zio, good_writes, req_writes,
+		    ub, cvd, flags);
+	}
+
+	if (!vd->vdev_ops->vdev_op_leaf)
+		return;
+
+	if (!vdev_writeable(vd))
+		return;
+
+	if (vd->vdev_ops == &vdev_draid_spare_ops)
+		return;
+
+	abd_t *ub_abd = abd_alloc_for_io(VDEV_UBERBLOCK_SIZE(vd), B_TRUE);
+	abd_copy_from_buf(ub_abd, ub, sizeof (uberblock_t));
+	abd_zero_off(ub_abd, sizeof (uberblock_t),
+	    VDEV_UBERBLOCK_SIZE(vd) - sizeof (uberblock_t));
+
+	vdev_label_write(zio, vd, 0, ub_abd,
+	    VDEV_UBERBLOCK_OFFSET(vd, VDEV_UBERBLOCK_COUNT(vd) -
+	    MMP_BLOCKS_PER_LABEL), VDEV_UBERBLOCK_SIZE(vd),
+	    mmp_claim_uberblock_sync_done, good_writes,
+	    flags | ZIO_FLAG_DONT_PROPAGATE);
+
+	abd_free(ub_abd);
+}
+
+int
+mmp_claim_uberblock(spa_t *spa, vdev_t *vd, uberblock_t *ub)
+{
+	int flags = ZIO_FLAG_CONFIG_WRITER | ZIO_FLAG_CANFAIL;
+	uint64_t good_writes = 0;
+	uint64_t req_writes = 0;
+	zio_t *zio;
+
+	ASSERT(MMP_VALID(ub));
+	ASSERT(MMP_SEQ_VALID(ub));
+
+	spa_config_enter(spa, SCL_ALL, mmp_tag, RW_WRITER);
+
+	/* Sync the uberblock to all writeable leaves */
+	zio = zio_root(spa, NULL, NULL, flags);
+	mmp_claim_uberblock_sync(zio, &good_writes, &req_writes, ub, vd, flags);
+	(void) zio_wait(zio);
+
+	/* Flush the new uberblocks so they're immediately visible */
+	zio = zio_root(spa, NULL, NULL, flags);
+	zio_flush(zio, vd);
+	(void) zio_wait(zio);
+
+	spa_config_exit(spa, SCL_ALL, mmp_tag);
+
+	zfs_dbgmsg("mmp: claiming uberblock, spa=%s txg=%llu seq=%llu "
+	    "req_writes=%llu good_writes=%llu", spa_load_name(spa),
+	    (u_longlong_t)ub->ub_txg, (u_longlong_t)MMP_SEQ(ub),
+	    (u_longlong_t)req_writes, (u_longlong_t)good_writes);
+
+	/*
+	 * To guarantee visibility from a remote host we require a minimum
+	 * number of good writes. For raidz/draid vdevs parity+1 writes, for
+	 * mirrors 2 writes, and for singletons 1 write.
+	 */
+	if (req_writes == 0 || good_writes < req_writes)
+		return (SET_ERROR(EIO));
+
+	return (0);
+}
+
 static __attribute__((noreturn)) void
 mmp_thread(void *arg)
 {
@@ -548,11 +663,11 @@ mmp_thread(void *arg)
 	uint32_t mmp_fail_intervals = MMP_FAIL_INTVS_OK(
 	    zfs_multihost_fail_intervals);
 	hrtime_t mmp_fail_ns = mmp_fail_intervals * mmp_interval;
-	boolean_t last_spa_suspended = suspended;
-	boolean_t last_spa_multihost = multihost;
-	uint64_t last_mmp_interval = mmp_interval;
-	uint32_t last_mmp_fail_intervals = mmp_fail_intervals;
-	hrtime_t last_mmp_fail_ns = mmp_fail_ns;
+	boolean_t last_spa_suspended;
+	boolean_t last_spa_multihost;
+	uint64_t last_mmp_interval;
+	uint32_t last_mmp_fail_intervals;
+	hrtime_t last_mmp_fail_ns;
 	callb_cpr_t cpr;
 	int skip_wait = 0;
 
@@ -612,11 +727,11 @@ mmp_thread(void *arg)
 			next_time = gethrtime() + mmp_interval / leaves;
 
 		if (mmp_fail_ns != last_mmp_fail_ns) {
-			zfs_dbgmsg("MMP interval change pool '%s' "
-			    "gethrtime %llu last_mmp_interval %llu "
-			    "mmp_interval %llu last_mmp_fail_intervals %u "
-			    "mmp_fail_intervals %u mmp_fail_ns %llu "
-			    "skip_wait %d leaves %d next_time %llu",
+			zfs_dbgmsg("mmp: interval change, spa=%s "
+			    "gethrtime=%llu last_mmp_interval=%llu "
+			    "mmp_interval=%llu last_mmp_fail_intervals=%u "
+			    "mmp_fail_intervals=%u mmp_fail_ns=%llu "
+			    "skip_wait=%d leaves=%d next_time=%llu",
 			    spa_name(spa), (u_longlong_t)gethrtime(),
 			    (u_longlong_t)last_mmp_interval,
 			    (u_longlong_t)mmp_interval, last_mmp_fail_intervals,
@@ -631,9 +746,9 @@ mmp_thread(void *arg)
 		 */
 		if ((!last_spa_multihost && multihost) ||
 		    (last_spa_suspended && !suspended)) {
-			zfs_dbgmsg("MMP state change pool '%s': gethrtime %llu "
-			    "last_spa_multihost %u multihost %u "
-			    "last_spa_suspended %u suspended %u",
+			zfs_dbgmsg("mmp: state change spa=%s: gethrtime=%llu "
+			    "last_spa_multihost=%u multihost=%u "
+			    "last_spa_suspended=%u suspended=%u",
 			    spa_name(spa), (u_longlong_t)gethrtime(),
 			    last_spa_multihost, multihost, last_spa_suspended,
 			    suspended);
@@ -659,14 +774,16 @@ mmp_thread(void *arg)
 		 */
 		if (multihost && !suspended && mmp_fail_intervals &&
 		    (gethrtime() - mmp->mmp_last_write) > mmp_fail_ns) {
-			zfs_dbgmsg("MMP suspending pool '%s': gethrtime %llu "
-			    "mmp_last_write %llu mmp_interval %llu "
-			    "mmp_fail_intervals %llu mmp_fail_ns %llu",
+			zfs_dbgmsg("mmp: suspending pool, spa=%s "
+			    "gethrtime=%llu mmp_last_write=%llu "
+			    "mmp_interval=%llu mmp_fail_intervals=%llu "
+			    "mmp_fail_ns=%llu txg=%llu",
 			    spa_name(spa), (u_longlong_t)gethrtime(),
 			    (u_longlong_t)mmp->mmp_last_write,
 			    (u_longlong_t)mmp_interval,
 			    (u_longlong_t)mmp_fail_intervals,
-			    (u_longlong_t)mmp_fail_ns);
+			    (u_longlong_t)mmp_fail_ns,
+			    (u_longlong_t)spa->spa_uberblock.ub_txg);
 			cmn_err(CE_WARN, "MMP writes to pool '%s' have not "
 			    "succeeded in over %llu ms; suspending pool. "
 			    "Hrtime %llu",
@@ -724,19 +841,17 @@ mmp_signal_all_threads(void)
 {
 	spa_t *spa = NULL;
 
-	mutex_enter(&spa_namespace_lock);
+	spa_namespace_enter(FTAG);
 	while ((spa = spa_next(spa))) {
 		if (spa->spa_state == POOL_STATE_ACTIVE)
 			mmp_signal_thread(spa);
 	}
-	mutex_exit(&spa_namespace_lock);
+	spa_namespace_exit(FTAG);
 }
 
-/* BEGIN CSTYLED */
 ZFS_MODULE_PARAM_CALL(zfs_multihost, zfs_multihost_, interval,
-	param_set_multihost_interval, param_get_ulong, ZMOD_RW,
+	param_set_multihost_interval, spl_param_get_u64, ZMOD_RW,
 	"Milliseconds between mmp writes to each leaf");
-/* END CSTYLED */
 
 ZFS_MODULE_PARAM(zfs_multihost, zfs_multihost_, fail_intervals, UINT, ZMOD_RW,
 	"Max allowed period without a successful mmp write");

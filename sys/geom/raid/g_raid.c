@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2010 Alexander Motin <mav@FreeBSD.org>
  * All rights reserved.
@@ -26,27 +26,27 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/bio.h>
+#include <sys/eventhandler.h>
 #include <sys/kernel.h>
-#include <sys/module.h>
+#include <sys/kthread.h>
 #include <sys/limits.h>
 #include <sys/lock.h>
-#include <sys/mutex.h>
-#include <sys/bio.h>
-#include <sys/sbuf.h>
-#include <sys/sysctl.h>
 #include <sys/malloc.h>
-#include <sys/eventhandler.h>
+#include <sys/module.h>
+#include <sys/mutex.h>
+#include <sys/proc.h>
+#include <sys/reboot.h>
+#include <sys/sbuf.h>
+#include <sys/sched.h>
+#include <sys/sysctl.h>
+
 #include <vm/uma.h>
+
 #include <geom/geom.h>
 #include <geom/geom_dbg.h>
-#include <sys/proc.h>
-#include <sys/kthread.h>
-#include <sys/sched.h>
 #include <geom/raid/g_raid.h>
 #include "g_raid_md_if.h"
 #include "g_raid_tr_if.h"
@@ -775,8 +775,6 @@ g_raid_open_consumer(struct g_raid_softc *sc, const char *name)
 
 	g_topology_assert();
 
-	if (strncmp(name, _PATH_DEV, 5) == 0)
-		name += 5;
 	pp = g_provider_by_name(name);
 	if (pp == NULL)
 		return (NULL);
@@ -1876,7 +1874,7 @@ g_raid_create_node(struct g_class *mp,
 	g_topology_assert();
 	G_RAID_DEBUG(1, "Creating array %s.", name);
 
-	gp = g_new_geomf(mp, "%s", name);
+	gp = g_new_geom(mp, name);
 	sc = malloc(sizeof(*sc), M_RAID, M_WAITOK | M_ZERO);
 	gp->start = g_raid_start;
 	gp->orphan = g_raid_orphan;
@@ -2217,7 +2215,7 @@ g_raid_taste(struct g_class *mp, struct g_provider *pp, int flags __unused)
 
 	geom = NULL;
 	status = G_RAID_MD_TASTE_FAIL;
-	gp = g_new_geomf(mp, "raid:taste");
+	gp = g_new_geom(mp, "raid:taste");
 	/*
 	 * This orphan function should be never called.
 	 */
@@ -2458,6 +2456,9 @@ g_raid_shutdown_post_sync(void *arg, int howto)
 	struct g_raid_softc *sc;
 	struct g_raid_volume *vol;
 
+	if ((howto & RB_NOSYNC) != 0)
+		return;
+
 	mp = arg;
 	g_topology_lock();
 	g_raid_shutdown = 1;
@@ -2568,5 +2569,5 @@ static moduledata_t g_raid_mod = {
 	g_modevent,
 	&g_raid_class
 };
-DECLARE_MODULE(g_raid, g_raid_mod, SI_SUB_DRIVERS, SI_ORDER_THIRD);
+DECLARE_MODULE(g_raid, g_raid_mod, SI_SUB_DRIVERS, SI_ORDER_FOURTH);
 MODULE_VERSION(geom_raid, 0);

@@ -1,4 +1,3 @@
-/*	$FreeBSD$	*/
 /*	$KAME: setkey.c,v 1.28 2003/06/27 07:15:45 itojun Exp $	*/
 
 /*-
@@ -87,6 +86,7 @@ static int f_policy = 0;
 static int f_hexdump = 0;
 static int f_tflag = 0;
 static int f_scope = 0;
+static int f_notimeout = 0;
 static time_t thiszone;
 
 extern int lineno;
@@ -99,6 +99,7 @@ usage(void)
 
 	printf("usage: setkey [-v] -c\n");
 	printf("       setkey [-v] -f filename\n");
+	printf("       setkey [-v] -e \"<script>\"\n");
 	printf("       setkey [-Pagltv] -D\n");
 	printf("       setkey [-Pv] -F\n");
 	printf("       setkey [-h] -x\n");
@@ -129,13 +130,27 @@ main(int ac, char **av)
 
 	thiszone = gmt2local(0);
 
-	while ((c = getopt(ac, av, "acdf:ghltvxDFP")) != -1) {
+	while ((c = getopt(ac, av, "abcde:f:ghltvxDFPZ")) != -1) {
 		switch (c) {
 		case 'c':
 			f_mode = MODE_SCRIPT;
 			fp = stdin;
 			break;
+		case 'e':
+			if (fp != stdin) {
+				err(-1, "only one -f/-e option is accepted");
+			}
+			f_mode = MODE_SCRIPT;
+			fp = fmemopen(optarg, strlen(optarg), "r");
+			if (fp == NULL) {
+				err(-1, "fmemopen");
+				/*NOTREACHED*/
+			}
+			break;
 		case 'f':
+			if (fp != stdin) {
+				err(-1, "only one -f/-e option is accepted");
+			}
 			f_mode = MODE_SCRIPT;
 			if ((fp = fopen(optarg, "r")) == NULL) {
 				err(-1, "fopen");
@@ -172,6 +187,9 @@ main(int ac, char **av)
 			break;
 		case 'v':
 			f_verbose = 1;
+			break;
+		case 'Z':
+			f_notimeout = 1;
 			break;
 		default:
 			usage();
@@ -318,16 +336,18 @@ sendkeymsg(char *buf, size_t len)
 	u_char rbuf[1024 * 32];	/* XXX: Enough ? Should I do MSG_PEEK ? */
 	ssize_t l;
 	struct sadb_msg *msg;
-
-    {
 	struct timeval tv;
-	tv.tv_sec = 1;
-	tv.tv_usec = 0;
-	if (setsockopt(so, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
-		perror("setsockopt");
-		goto end;
+
+
+	if (!f_notimeout) {
+		tv.tv_sec = 1;
+		tv.tv_usec = 0;
+		if (setsockopt(so, SOL_SOCKET, SO_RCVTIMEO, &tv,
+		    sizeof(tv)) < 0) {
+			perror("setsockopt");
+			goto end;
+		}
 	}
-    }
 
 	if (f_forever)
 		shortdump_hdr();
@@ -488,7 +508,7 @@ static const char *ipproto[] = {
 };
 
 #define STR_OR_ID(x, tab) \
-	(((x) < sizeof(tab)/sizeof(tab[0]) && tab[(x)])	? tab[(x)] : numstr(x))
+	(((x) < nitems(tab) && tab[(x)]) ? tab[(x)] : numstr(x))
 
 const char *
 numstr(int x)

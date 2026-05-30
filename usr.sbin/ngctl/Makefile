@@ -1,4 +1,3 @@
-# $FreeBSD$
 # $Whistle: Makefile,v 1.3 1999/01/16 00:10:11 archie Exp $
 
 .include <src.opts.mk>
@@ -13,5 +12,10 @@ LIBADD=	netgraph
 
 CFLAGS+= -DEDITLINE
 LIBADD+=	edit pthread
+
+.if ${MK_JAIL} != "no"
+CFLAGS+= -DJAIL
+LIBADD+=	jail
+.endif
 
 .include <bsd.prog.mk>

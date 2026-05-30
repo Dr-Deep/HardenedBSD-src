@@ -345,6 +345,9 @@ ldns_rdf_new_frm_str(ldns_rdf_type type, const char *str)
 	case LDNS_RDF_TYPE_EUI64:
 		status = ldns_str2rdf_eui64(&rdf, str);
 		break;
+	case LDNS_RDF_TYPE_UNQUOTED:
+		status = ldns_str2rdf_str(&rdf, str);
+		break;
 	case LDNS_RDF_TYPE_TAG:
 		status = ldns_str2rdf_tag(&rdf, str);
 		break;
@@ -359,6 +362,15 @@ ldns_rdf_new_frm_str(ldns_rdf_type type, const char *str)
 		break;
 	case LDNS_RDF_TYPE_MATCHING_TYPE:
 		status = ldns_str2rdf_matching_type(&rdf, str);
+		break;
+	case LDNS_RDF_TYPE_AMTRELAY:
+		status = ldns_str2rdf_amtrelay(&rdf, str);
+		break;
+	case LDNS_RDF_TYPE_SVCPARAMS:
+		status = ldns_str2rdf_svcparams(&rdf, str);
+		break;
+	case LDNS_RDF_TYPE_IPN:
+		status = ldns_str2rdf_ipn(&rdf, str);
 		break;
 	case LDNS_RDF_TYPE_NONE:
 	default:
@@ -618,7 +630,7 @@ ldns_octet(char *word, size_t *length)
                         return LDNS_STATUS_DDD_OVERFLOW;
                     }
                 } else {
-                    /* an espaced character, like \<space> ? 
+                    /* an escaped character, like \<space> ? 
                     * remove the '\' keep the rest */
                     *p = *++s;
                     (*length)++;

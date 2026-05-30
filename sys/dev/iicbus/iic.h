@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1998 Nicolas Souchu
  * All rights reserved.
@@ -25,13 +25,19 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * $FreeBSD$
- *
  */
 #ifndef __IIC_H
 #define __IIC_H
 
 #include <sys/ioccom.h>
+
+#ifdef _KERNEL
+struct file;
+struct iic_rdwr_data;
+struct thread;
+typedef int iic_linux_rdwr_t(struct file *fp, struct iic_rdwr_data *d,
+    int flags, struct thread *td);
+#endif
 
 /* Designed to be compatible with linux's struct i2c_msg */
 struct iic_msg

@@ -1,5 +1,5 @@
 .\"-
-.\" Copyright (c) 1999 Dag-Erling Coïdan Smørgrav
+.\" Copyright (c) 1999 Dag-Erling Smørgrav
 .\" All rights reserved.
 .\"
 .\" Redistribution and use in source and binary forms, with or without
@@ -25,9 +25,7 @@
 .\" (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 .\" THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
-.Dd June 6, 2022
+.Dd April 15, 2026
 .Dt SOCKSTAT 1
 .Os
 .Sh NAME
@@ -35,7 +33,9 @@
 .Nd list open sockets
 .Sh SYNOPSIS
 .Nm
-.Op Fl 46CciLlnqSsUuvw
+.Op Fl -libxo
+.Op Fl 46AbCcfIiLlnqSsUuvw
+.Op Fl F Ar user
 .Op Fl j Ar jail
 .Op Fl p Ar ports
 .Op Fl P Ar protocols
@@ -48,6 +48,13 @@ domain sockets.
 .Pp
 The following options are available:
 .Bl -tag -width Fl
+.It Fl -libxo
+Generate output via
+.Xr libxo 3
+in a selection of different human and machine readable formats.
+See
+.Xr xo_options 7
+for details on command line arguments.
 .It Fl 4
 Show
 .Dv AF_INET
@@ -56,11 +63,30 @@ Show
 Show
 .Dv AF_INET6
 (IPv6) sockets.
+.It Fl A
+Show the address of a protocol control block (PCB) associated with a socket;
+used for debugging.
+.It Fl b
+Show the BBLog state of the socket.
+This is currently only implemented for TCP.
 .It Fl C
 Display the congestion control module, if applicable.
 This is currently only implemented for TCP.
 .It Fl c
 Show connected sockets.
+.It Fl F Ar user
+Show sockets for specified
+.Ar user
+(user name or UID) only.
+.It Fl f
+Show the FIB number of each socket.
+.It Fl I
+Show the local address of the socket to which the current socket is spliced, if
+any.
+See the
+.Xr setsockopt 2
+.Dv SO_SPLICE
+option for more information.
 .It Fl i
 Display the
 .Dv inp_gencnt .
@@ -110,7 +136,7 @@ sockets.
 .It Fl v
 Verbose mode.
 .It Fl w
-Use wider field size for displaying addresses.
+Automatically size the columns.
 .El
 .Pp
 If neither
@@ -184,10 +210,16 @@ is specified (only for SCTP or TCP).
 The path state if
 .Fl s
 is specified (only for SCTP).
+When using traditional text output, this column is only shown when there is at
+least one path state to show.
 .It Li CONN STATE
 The connection state if
 .Fl s
 is specified (only for SCTP or TCP).
+.It Li BBLOG STATE
+The BBLog state if
+.Fl b
+is specified (only for TCP).
 .It Li STACK
 The protocol stack if
 .Fl S
@@ -219,13 +251,21 @@ Show TCP IPv6 sockets which are listening and connected (default):
 .Bd -literal -offset indent
 $ sockstat -6 -P tcp
 .Ed
+.Pp
+Show all sockets in JSON format with neat alignment:
+.Bd -literal -offset indent
+$ sockstat --libxo json,pretty
+.Ed
 .Sh SEE ALSO
 .Xr fstat 1 ,
 .Xr netstat 1 ,
 .Xr procstat 1 ,
+.Xr setfib 1 ,
+.Xr libxo 3 ,
 .Xr inet 4 ,
 .Xr inet6 4 ,
-.Xr protocols 5
+.Xr protocols 5 ,
+.Xr xo_options 7
 .Sh HISTORY
 The
 .Nm

@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2022, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2026, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -305,19 +305,19 @@ AcpiDmWalkParseTree (
             }
         }
 
-        /* Terminate walk at start op */
-
-        if (Op == StartOp)
-        {
-            break;
-        }
-
         /* No more children, re-visit this node */
 
         if (!NodePreviouslyVisited)
         {
             NodePreviouslyVisited = TRUE;
             continue;
+        }
+
+        /* Terminate walk at start op */
+
+        if (Op == StartOp)
+        {
+            break;
         }
 
         /* No more children, visit peers */
@@ -968,8 +968,6 @@ AcpiDmDescendingOp (
                      */
                      AcpiDmPredefinedDescription (Op->Asl.Parent);
                 }
-
-                AcpiDmPredefinedDescription (Op->Asl.Parent);
 
                 AcpiOsPrintf ("\n");
                 AcpiDmIndent (Info->Level);

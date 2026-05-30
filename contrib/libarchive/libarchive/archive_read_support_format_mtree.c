@@ -26,7 +26,6 @@
  */
 
 #include "archive_platform.h"
-__FBSDID("$FreeBSD$");
 
 #ifdef HAVE_SYS_STAT_H
 #include <sys/stat.h>
@@ -52,6 +51,7 @@ __FBSDID("$FreeBSD$");
 #include "archive.h"
 #include "archive_entry.h"
 #include "archive_entry_private.h"
+#include "archive_platform_stat.h"
 #include "archive_private.h"
 #include "archive_rb.h"
 #include "archive_read_private.h"
@@ -274,7 +274,7 @@ archive_read_support_format_mtree(struct archive *_a)
 	archive_check_magic(_a, ARCHIVE_READ_MAGIC,
 	    ARCHIVE_STATE_NEW, "archive_read_support_format_mtree");
 
-	mtree = (struct mtree *)calloc(1, sizeof(*mtree));
+	mtree = calloc(1, sizeof(*mtree));
 	if (mtree == NULL) {
 		archive_set_error(&a->archive, ENOMEM,
 		    "Can't allocate mtree data");
@@ -300,7 +300,12 @@ cleanup(struct archive_read *a)
 	struct mtree_entry *p, *q;
 
 	mtree = (struct mtree *)(a->format->data);
-
+	
+	/* Close any dangling file descriptor before freeing */
+    if (mtree->fd >= 0) {
+        close(mtree->fd);
+        mtree->fd = -1;
+    }
 	p = mtree->entries;
 	while (p != NULL) {
 		q = p->next;
@@ -392,8 +397,8 @@ next_line(struct archive_read *a,
 		if (len >= MAX_LINE_LEN)
 			return (-1);
 
-		/* Increase reading bytes if it is not enough to at least
-		 * new two lines. */
+		/* Increase reading bytes if it is not enough for at least
+		 * two new lines. */
 		if (nbytes_req < (size_t)*ravail + 160)
 			nbytes_req <<= 1;
 
@@ -417,8 +422,8 @@ next_line(struct archive_read *a,
 }
 
 /*
- * Compare characters with a mtree keyword.
- * Returns the length of a mtree keyword if matched.
+ * Compare characters with an mtree keyword.
+ * Returns the length of an mtree keyword if matched.
  * Returns 0 if not matched.
  */
 static int
@@ -516,7 +521,7 @@ bid_keyword(const char *p,  ssize_t len)
 
 /*
  * Test whether there is a set of mtree keywords.
- * Returns the number of keyword.
+ * Returns the number of keywords.
  * Returns -1 if we got incorrect sequence.
  * This function expects a set of "<space characters>keyword=value".
  * When "unset" is specified, expects a set of "<space characters>keyword".
@@ -568,8 +573,8 @@ bid_keyword_list(const char *p,  ssize_t len, int unset, int last_is_path)
 				--len;
 				value = 1;
 			}
-			/* A keyword should have a its value unless
-			 * "/unset" operation. */ 
+			/* A keyword should have a value unless this is
+			 * an "/unset" operation. */ 
 			if (!unset && value == 0)
 				return (-1);
 		}
@@ -752,7 +757,7 @@ detect_form(struct archive_read *a, int *is_form_d)
 				} else if (form_D == 1) {
 					if (!last_is_path && keywords > 0)
 						/* This this is not `form D'
-						 * and We cannot accept mixed
+						 * and we cannot accept mixed
 						 * format. */
 						break;
 				}
@@ -761,7 +766,7 @@ detect_form(struct archive_read *a, int *is_form_d)
 					multiline = 1;
 				else {
 					/* We've got plenty of correct lines
-					 * to assume that this file is a mtree
+					 * to assume that this file is an mtree
 					 * format. */
 					if (++entry_cnt >= MAX_BID_ENTRY)
 						break;
@@ -805,7 +810,7 @@ detect_form(struct archive_read *a, int *is_form_d)
  * to read the entire mtree file into memory up front.
  *
  * The parsing is done in two steps.  First, it is decided if a line
- * changes the global defaults and if it is, processed accordingly.
+ * changes the global defaults and if it does, it is processed accordingly.
  * Otherwise, the options of the line are merged with the current
  * global options.
  */
@@ -994,9 +999,11 @@ process_add_entry(struct archive_read *a, struct mtree *mtree,
 			struct mtree_entry *alt;
 			alt = (struct mtree_entry *)__archive_rb_tree_find_node(
 			    &mtree->rbtree, entry->name);
-			while (alt->next_dup)
-				alt = alt->next_dup;
-			alt->next_dup = entry;
+			if (alt != NULL) {
+				while (alt->next_dup)
+					alt = alt->next_dup;
+				alt->next_dup = entry;
+			}
 		}
 	}
 
@@ -1071,7 +1078,9 @@ read_mtree(struct archive_read *a, struct mtree *mtree)
 			continue;
 		/* Non-printable characters are not allowed */
 		for (s = p;s < p + len - 1; s++) {
-			if (!isprint((unsigned char)*s)) {
+			if (!isprint((unsigned char)*s) && *s != '\t') {
+				archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
+					"Non-printable character 0x%02X", (unsigned char)(*s));
 				r = ARCHIVE_FATAL;
 				break;
 			}
@@ -1174,7 +1183,7 @@ parse_file(struct archive_read *a, struct archive_entry *entry,
     struct mtree *mtree, struct mtree_entry *mentry, int *use_next)
 {
 	const char *path;
-	struct stat st_storage, *st;
+	la_seek_stat_t st_storage, *st;
 	struct mtree_entry *mp;
 	struct archive_entry *sparse_entry;
 	int r = ARCHIVE_OK, r1, parsed_kws;
@@ -1250,9 +1259,17 @@ parse_file(struct archive_read *a, struct archive_entry *entry,
 				archive_entry_filetype(entry) == AE_IFDIR) {
 			mtree->fd = open(path, O_RDONLY | O_BINARY | O_CLOEXEC);
 			__archive_ensure_cloexec_flag(mtree->fd);
-			if (mtree->fd == -1 &&
-				(errno != ENOENT ||
-				 archive_strlen(&mtree->contents_name) > 0)) {
+			if (mtree->fd == -1 && (
+#if defined(_WIN32) && !defined(__CYGWIN__)
+        /*
+         * On Windows, attempting to open a file with an
+         * invalid name result in EINVAL (Error 22)
+         */
+				(errno != ENOENT && errno != EINVAL)
+#else
+				errno != ENOENT
+#endif
+        || archive_strlen(&mtree->contents_name) > 0)) {
 				archive_set_error(&a->archive, errno,
 						"Can't open %s", path);
 				r = ARCHIVE_WARN;
@@ -1261,7 +1278,7 @@ parse_file(struct archive_read *a, struct archive_entry *entry,
 
 		st = &st_storage;
 		if (mtree->fd >= 0) {
-			if (fstat(mtree->fd, st) == -1) {
+			if (la_seek_fstat(mtree->fd, st) == -1) {
 				archive_set_error(&a->archive, errno,
 						"Could not fstat %s", path);
 				r = ARCHIVE_WARN;
@@ -1270,7 +1287,13 @@ parse_file(struct archive_read *a, struct archive_entry *entry,
 				mtree->fd = -1;
 				st = NULL;
 			}
-		} else if (lstat(path, st) == -1) {
+		}
+#ifdef HAVE_LSTAT
+		else if (lstat(path, st) == -1)
+#else
+		else if (la_seek_stat(path, st) == -1)
+#endif
+		{
 			st = NULL;
 		}
 
@@ -2115,6 +2138,13 @@ readline(struct archive_read *a, struct mtree *mtree, char **start,
 		for (u = mtree->line.s + find_off; *u; ++u) {
 			if (u[0] == '\n') {
 				/* Ends with unescaped newline. */
+				/* Check if preceded by '\r' for CRLF handling */
+				if (u > mtree->line.s && u[-1] == '\r') {
+					/* CRLF ending - remove the '\r' */
+					u[-1] = '\n';
+					u[0] = '\0';
+					total_size--;
+				}
 				*start = mtree->line.s;
 				return total_size;
 			} else if (u[0] == '#') {
@@ -2127,6 +2157,11 @@ readline(struct archive_read *a, struct mtree *mtree, char **start,
 				if (u[1] == '\n') {
 					/* Trim escaped newline. */
 					total_size -= 2;
+					mtree->line.s[total_size] = '\0';
+					break;
+				} else if (u[1] == '\r' && u[2] == '\n') {
+					/* Trim escaped CRLF. */
+					total_size -= 3;
 					mtree->line.s[total_size] = '\0';
 					break;
 				} else if (u[1] != '\0') {

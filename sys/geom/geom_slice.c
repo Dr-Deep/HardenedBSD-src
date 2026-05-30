@@ -35,23 +35,19 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/bio.h>
-#include <sys/sysctl.h>
 #include <sys/proc.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
 #include <sys/errno.h>
 #include <sys/sbuf.h>
+#include <sys/stdarg.h>
 #include <geom/geom.h>
 #include <geom/geom_slice.h>
-#include <machine/stdarg.h>
 
 static g_access_t g_slice_access;
 static g_start_t g_slice_start;
@@ -61,7 +57,7 @@ g_slice_alloc(unsigned nslice, unsigned scsize)
 {
 	struct g_slicer *gsp;
 
-	gsp = g_malloc(sizeof *gsp, M_WAITOK | M_ZERO);
+	gsp = g_malloc(sizeof(*gsp), M_WAITOK | M_ZERO);
 	if (scsize > 0)
 		gsp->softc = g_malloc(scsize, M_WAITOK | M_ZERO);
 	else
@@ -88,10 +84,8 @@ g_slice_free(struct g_geom *gp)
 	if (gsp == NULL)
 		return;
 	g_free(gsp->slices);
-	if (gsp->hotspot != NULL)
-		g_free(gsp->hotspot);
-	if (gsp->softc != NULL)
-		g_free(gsp->softc);
+	g_free(gsp->hotspot);
+	g_free(gsp->softc);
 	g_free(gsp);
 }
 
@@ -469,9 +463,9 @@ g_slice_conf_hot(struct g_geom *gp, u_int idx, off_t offset, off_t length, int r
 	}
 	gsl = gsp->hotspot;
 	if(idx >= gsp->nhotspot) {
-		gsl2 = g_malloc((idx + 1) * sizeof *gsl2, M_WAITOK | M_ZERO);
+		gsl2 = g_malloc((idx + 1) * sizeof(*gsl2), M_WAITOK | M_ZERO);
 		if (gsp->hotspot != NULL)
-			bcopy(gsp->hotspot, gsl2, gsp->nhotspot * sizeof *gsl2);
+			bcopy(gsp->hotspot, gsl2, gsp->nhotspot * sizeof(*gsl2));
 		gsp->hotspot = gsl2;
 		if (gsp->hotspot != NULL)
 			g_free(gsl);
@@ -535,7 +529,7 @@ g_slice_new(struct g_class *mp, u_int slices, struct g_provider *pp, struct g_co
 
 	g_topology_assert();
 	vp = (void **)extrap;
-	gp = g_new_geomf(mp, "%s", pp->name);
+	gp = g_new_geom(mp, pp->name);
 	gsp = g_slice_alloc(slices, extra);
 	gsp->start = start;
 	gp->softc = gsp;

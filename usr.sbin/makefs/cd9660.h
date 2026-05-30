@@ -1,7 +1,7 @@
-/*	$NetBSD: cd9660.h,v 1.17 2011/06/23 02:35:56 enami Exp $	*/
+/*	$NetBSD: cd9660.h,v 1.21 2015/12/24 15:52:37 christos Exp $	*/
 
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2005 Daniel Watt, Walter Deignan, Ryan Gabrys, Alan
  * Perez-Rathke and Ram Vedam.  All rights reserved.
@@ -32,8 +32,6 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
  * OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _MAKEFS_CD9660_H
@@ -53,6 +51,7 @@
 #include <sys/queue.h>
 #include <sys/param.h>
 #include <sys/endian.h>
+#include <sys/tree.h>
 
 #include "makefs.h"
 #include "iso.h"
@@ -65,32 +64,7 @@
 #define	INODE_WARNX(__x)
 #endif /* DEBUG */
 
-#define CD9660MAXPATH 4096
-
-#define ISO_STRING_FILTER_NONE = 0x00
-#define ISO_STRING_FILTER_DCHARS = 0x01
-#define ISO_STRING_FILTER_ACHARS = 0x02
-
-/*
-Extended preferences type, in the spirit of what makefs gives us (only ints)
-*/
-typedef struct {
-	const char  *shortName;		/* Short option */
-	const char	*name;		/* option name */
-	char		*value;		/* where to stuff the value */
-	int		minLength;	/* minimum for value */
-	int		maxLength;	/* maximum for value */
-	const char	*desc;		/* option description */
-	int		filterFlags;
-} string_option_t;
-
 /******** STRUCTURES **********/
-
-/*Defaults*/
-#define ISO_DEFAULT_VOLUMEID "MAKEFS_CD9660_IMAGE"
-#define ISO_DEFAULT_APPID "MAKEFS"
-#define ISO_DEFAULT_PUBLISHER "MAKEFS"
-#define ISO_DEFAULT_PREPARER "MAKEFS"
 
 #define ISO_VOLUME_DESCRIPTOR_STANDARD_ID "CD001"
 #define ISO_VOLUME_DESCRIPTOR_BOOT 0
@@ -99,8 +73,7 @@ typedef struct {
 
 /*30 for name and extension, as well as version number and padding bit*/
 #define ISO_FILENAME_MAXLENGTH_BEFORE_VERSION 30
-#define ISO_FILENAME_MAXLENGTH	36
-#define ISO_FILENAME_MAXLENGTH_WITH_PADDING 37
+#define ISO_FILENAME_MAXLENGTH	38
 
 #define ISO_FLAG_CLEAR 0x00
 #define ISO_FLAG_HIDDEN 0x01
@@ -145,7 +118,7 @@ typedef struct _iso_directory_record_cd9660 {
 	u_char interleave		[ISODCL (28, 28)];	/* 711 */
 	u_char volume_sequence_number	[ISODCL (29, 32)];	/* 723 */
 	u_char name_len			[ISODCL (33, 33)];	/* 711 */
-	char name			[ISO_FILENAME_MAXLENGTH_WITH_PADDING];
+	char name			[ISO_FILENAME_MAXLENGTH];
 } iso_directory_record_cd9660;
 
 /* TODO: Lots of optimization of this structure */
@@ -181,7 +154,7 @@ typedef struct _cd9660node {
 	int fileRecordSize;/*copy of a variable, int for quicker calculations*/
 
 	/* Old name, used for renaming - needs to be optimized but low priority */
-	char o_name [ISO_FILENAME_MAXLENGTH_WITH_PADDING];
+	char o_name [ISO_FILENAME_MAXLENGTH];
 
 	/***** SPACE RESERVED FOR EXTENSIONS *****/
 	/* For memory efficiency's sake - we should move this to a separate struct
@@ -221,7 +194,7 @@ typedef struct _path_table_entry
 	u_char extended_attribute_length[ISODCL (2, 2)];
 	u_char first_sector[ISODCL (3, 6)];
 	u_char parent_number[ISODCL (7, 8)];
-	char name[ISO_FILENAME_MAXLENGTH_WITH_PADDING];
+	char name[ISO_FILENAME_MAXLENGTH];
 } path_table_entry;
 
 typedef struct _volume_descriptor
@@ -230,6 +203,12 @@ typedef struct _volume_descriptor
 	int64_t sector;
 	struct _volume_descriptor *next;
 } volume_descriptor;
+
+struct inode_map_node {
+	RB_ENTRY(inode_map_node) entry;
+	uint64_t key;
+	uint64_t value;
+};
 
 typedef struct _iso9660_disk {
 	int sectorSize;
@@ -263,9 +242,7 @@ typedef struct _iso9660_disk {
 
 	int include_padding_areas;
 
-	int follow_sym_links;
 	int verbose_level;
-	int displayHelp;
 	int keep_bad_images;
 
 	/* SUSP options and variables */
@@ -276,10 +253,12 @@ typedef struct _iso9660_disk {
 	int rock_ridge_enabled;
 	/* Other Rock Ridge Variables */
 	char *rock_ridge_renamed_dir_name;
-	int rock_ridge_move_count;
+	unsigned rock_ridge_move_count;
 	cd9660node *rr_moved_dir;
 
-	int archimedes_enabled;
+	uint64_t rr_inode_next;
+	RB_HEAD(inode_map_tree, inode_map_node) rr_inode_map;
+
 	int chrp_boot;
 
 	/* Spec breaking options */
@@ -306,18 +285,20 @@ typedef struct _iso9660_disk {
 
 } iso9660_disk;
 
+RB_PROTOTYPE(inode_map_tree, inode_map_node, entry, inode_map_node_cmp);
+
 /************ FUNCTIONS **************/
 int			cd9660_valid_a_chars(const char *);
 int			cd9660_valid_d_chars(const char *);
-void			cd9660_uppercase_characters(char *, int);
+void			cd9660_uppercase_characters(char *, size_t);
 
 /* ISO Data Types */
 void			cd9660_721(uint16_t, unsigned char *);
 void			cd9660_731(uint32_t, unsigned char *);
 void			cd9660_722(uint16_t, unsigned char *);
 void			cd9660_732(uint32_t, unsigned char *);
-void 			cd9660_bothendian_dword(uint32_t dw, unsigned char *);
-void 			cd9660_bothendian_word(uint16_t dw, unsigned char *);
+void			cd9660_bothendian_dword(uint32_t dw, unsigned char *);
+void			cd9660_bothendian_word(uint16_t dw, unsigned char *);
 void			cd9660_set_date(char *, time_t);
 void			cd9660_time_8426(unsigned char *, time_t);
 void			cd9660_time_915(unsigned char *, time_t);

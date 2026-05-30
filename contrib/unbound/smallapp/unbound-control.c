@@ -4,22 +4,22 @@
  * Copyright (c) 2008, NLnet Labs. All rights reserved.
  *
  * This software is open source.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
- * 
+ *
  * Redistributions of source code must retain the above copyright notice,
  * this list of conditions and the following disclaimer.
- * 
+ *
  * Redistributions in binary form must reproduce the above copyright notice,
  * this list of conditions and the following disclaimer in the documentation
  * and/or other materials provided with the distribution.
- * 
+ *
  * Neither the name of the NLNET LABS nor the names of its contributors may
  * be used to endorse or promote products derived from this software without
  * specific prior written permission.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
  * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
@@ -59,6 +59,7 @@
 #include "util/locks.h"
 #include "util/net_help.h"
 #include "util/shm_side/shm_main.h"
+#include "util/timeval_func.h"
 #include "daemon/stats.h"
 #include "sldns/wire2str.h"
 #include "sldns/pkthdr.h"
@@ -102,6 +103,22 @@ usage(void)
 	printf("  stop				stops the server\n");
 	printf("  reload			reloads the server\n");
 	printf("  				(this flushes data, stats, requestlist)\n");
+	printf("  reload_keep_cache		reloads the server but tries to\n");
+	printf("  				keep the RRset and message cache\n");
+	printf("  				if (re)configuration allows for it.\n");
+	printf("  				That means the caches sizes and\n");
+	printf("  				the number of threads must not\n");
+	printf("  				change between reloads.\n");
+	printf("  fast_reload [+dpv]		reloads the server but only briefly stops\n");
+	printf("  				server processing, keeps cache, and changes\n");
+	printf("  				most options; check unbound-control(8).\n");
+	printf("  		+d		drops running queries to keep consistency\n");
+	printf("  				on changed options while reloading.\n");
+	printf("  		+p		does not pause threads for even faster\n");
+	printf("  				reload but less options are supported\n");
+	printf("  				; check unbound-control(8).\n");
+	printf("  		+v		verbose output, it will include duration needed.\n");
+	printf("  		+vv		more verbose output, it will include memory needed.\n");
 	printf("  stats				print statistics\n");
 	printf("  stats_noreset			peek at statistics\n");
 #ifdef HAVE_SHMGET
@@ -115,20 +132,29 @@ usage(void)
 	printf("  local_data <RR data...>	add local data, for example\n");
 	printf("				local_data www.example.com A 192.0.2.1\n");
 	printf("  local_data_remove <name>	remove local RR data from name\n");
-	printf("  local_zones, local_zones_remove, local_datas, local_datas_remove\n");
-	printf("  				same, but read list from stdin\n");
+	printf("  local_zones,\n");
+	printf("  local_zones_remove,\n");
+	printf("  local_datas,\n");
+	printf("  local_datas_remove		same, but read list from stdin\n");
 	printf("  				(one entry per line).\n");
 	printf("  dump_cache			print cache to stdout\n");
+	printf("				(not supported in remote unbounds in\n");
+	printf("				multi-process operation)\n");
 	printf("  load_cache			load cache from stdin\n");
+	printf("				(not supported in remote unbounds in\n");
+	printf("				multi-process operation)\n");
+	printf("  cache_lookup [+t] <names>	print rrsets and msgs at or under the names\n");
+	printf("		+t		allow tld and root names.\n");
 	printf("  lookup <name>			print nameservers for name\n");
-	printf("  flush <name>			flushes common types for name from cache\n");
+	printf("  flush [+c] <name>			flushes common types for name from cache\n");
 	printf("  				types:  A, AAAA, MX, PTR, NS,\n");
 	printf("					SOA, CNAME, DNAME, SRV, NAPTR\n");
-	printf("  flush_type <name> <type>	flush name, type from cache\n");
-	printf("  flush_zone <name>		flush everything at or under name\n");
+	printf("  flush_type [+c] <name> <type>	flush name, type from cache\n");
+	printf("		+c		remove from cachedb too\n");
+	printf("  flush_zone [+c] <name>	flush everything at or under name\n");
 	printf("  				from rr and dnssec caches\n");
-	printf("  flush_bogus			flush all bogus data\n");
-	printf("  flush_negative		flush all negative data\n");
+	printf("  flush_bogus [+c]		flush all bogus data\n");
+	printf("  flush_negative [+c]		flush all negative data\n");
 	printf("  flush_stats 			flush statistics, make zero\n");
 	printf("  flush_requestlist 		drop queries that are worked on\n");
 	printf("  dump_requestlist		show what is worked on by first thread\n");
@@ -143,12 +169,13 @@ usage(void)
 	printf("  list_local_data		list local-data RRs in use\n");
 	printf("  insecure_add zone 		add domain-insecure zone\n");
 	printf("  insecure_remove zone		remove domain-insecure zone\n");
-	printf("  forward_add [+i] zone addr..	add forward-zone with servers\n");
+	printf("  forward_add [+it] zone addr..	add forward-zone with servers\n");
 	printf("  forward_remove [+i] zone	remove forward zone\n");
-	printf("  stub_add [+ip] zone addr..	add stub-zone with servers\n");
+	printf("  stub_add [+ipt] zone addr..	add stub-zone with servers\n");
 	printf("  stub_remove [+i] zone		remove stub zone\n");
 	printf("		+i		also do dnssec insecure point\n");
 	printf("		+p		set stub to use priming\n");
+	printf("		+t		set to use tls upstream\n");
 	printf("  forward [off | addr ...]	without arg show forward setup\n");
 	printf("				or off to turn off root forwarding\n");
 	printf("				or give list of ip addresses\n");
@@ -171,6 +198,10 @@ usage(void)
 	printf("  rpz_enable zone		Enable the RPZ zone if it had previously\n");
 	printf("  				been disabled\n");
 	printf("  rpz_disable zone		Disable the RPZ zone\n");
+	printf("  add_cookie_secret <secret>	add (or replace) a new cookie secret <secret>\n");
+	printf("  drop_cookie_secret		drop a staging cookie secret\n");
+	printf("  activate_cookie_secret	make a staging cookie secret active\n");
+	printf("  print_cookie_secrets		show all cookie secrets with their status\n");
 	printf("Version %s\n", PACKAGE_VERSION);
 	printf("BSD licensed, see LICENSE in source package for details.\n");
 	printf("Report bugs to %s\n", PACKAGE_BUGREPORT);
@@ -180,33 +211,6 @@ usage(void)
 #ifdef HAVE_SHMGET
 /** what to put on statistics lines between var and value, ": " or "=" */
 #define SQ "="
-/** if true, inhibits a lot of =0 lines from the stats output */
-static const int inhibit_zero = 1;
-/** divide sum of timers to get average */
-static void
-timeval_divide(struct timeval* avg, const struct timeval* sum, long long d)
-{
-#ifndef S_SPLINT_S
-	size_t leftover;
-	if(d <= 0) {
-		avg->tv_sec = 0;
-		avg->tv_usec = 0;
-		return;
-	}
-	avg->tv_sec = sum->tv_sec / d;
-	avg->tv_usec = sum->tv_usec / d;
-	/* handle fraction from seconds divide */
-	leftover = sum->tv_sec - avg->tv_sec*d;
-	if(leftover <= 0)
-		leftover = 0;
-	avg->tv_usec += (((long long)leftover)*((long long)1000000))/d;
-	if(avg->tv_sec < 0)
-		avg->tv_sec = 0;
-	if(avg->tv_usec < 0)
-		avg->tv_usec = 0;
-#endif
-}
-
 /** print unsigned long stats value */
 #define PR_UL_NM(str, var) printf("%s."str SQ"%lu\n", nm, (unsigned long)(var));
 #define PR_UL(str, var) printf(str SQ"%lu\n", (unsigned long)(var));
@@ -222,21 +226,35 @@ static void pr_stats(const char* nm, struct ub_stats_info* s)
 {
 	struct timeval sumwait, avg;
 	PR_UL_NM("num.queries", s->svr.num_queries);
-	PR_UL_NM("num.queries_ip_ratelimited", 
+	PR_UL_NM("num.queries_ip_ratelimited",
 		s->svr.num_queries_ip_ratelimited);
+	PR_UL_NM("num.queries_cookie_valid",
+		s->svr.num_queries_cookie_valid);
+	PR_UL_NM("num.queries_cookie_client",
+		s->svr.num_queries_cookie_client);
+	PR_UL_NM("num.queries_cookie_invalid",
+		s->svr.num_queries_cookie_invalid);
+	PR_UL_NM("num.queries_discard_timeout",
+		s->svr.num_queries_discard_timeout);
+	PR_UL_NM("num.queries_replyaddr_limit",
+		s->svr.num_queries_replyaddr_limit);
+	PR_UL_NM("num.queries_wait_limit", s->svr.num_queries_wait_limit);
 	PR_UL_NM("num.cachehits",
 		s->svr.num_queries - s->svr.num_queries_missed_cache);
 	PR_UL_NM("num.cachemiss", s->svr.num_queries_missed_cache);
 	PR_UL_NM("num.prefetch", s->svr.num_queries_prefetch);
+	PR_UL_NM("num.queries_timed_out", s->svr.num_queries_timed_out);
+	PR_UL_NM("query.queue_time_us.max", s->svr.max_query_time_us);
 	PR_UL_NM("num.expired", s->svr.ans_expired);
 	PR_UL_NM("num.recursivereplies", s->mesh_replies_sent);
 #ifdef USE_DNSCRYPT
-    PR_UL_NM("num.dnscrypt.crypted", s->svr.num_query_dnscrypt_crypted);
-    PR_UL_NM("num.dnscrypt.cert", s->svr.num_query_dnscrypt_cert);
-    PR_UL_NM("num.dnscrypt.cleartext", s->svr.num_query_dnscrypt_cleartext);
-    PR_UL_NM("num.dnscrypt.malformed",
-             s->svr.num_query_dnscrypt_crypted_malformed);
+	PR_UL_NM("num.dnscrypt.crypted", s->svr.num_query_dnscrypt_crypted);
+	PR_UL_NM("num.dnscrypt.cert", s->svr.num_query_dnscrypt_cert);
+	PR_UL_NM("num.dnscrypt.cleartext", s->svr.num_query_dnscrypt_cleartext);
+	PR_UL_NM("num.dnscrypt.malformed",
+		s->svr.num_query_dnscrypt_crypted_malformed);
 #endif /* USE_DNSCRYPT */
+	PR_UL_NM("num.dns_error_reports", s->svr.num_dns_error_reports);
 	printf("%s.requestlist.avg"SQ"%g\n", nm,
 		(s->svr.num_queries_missed_cache+s->svr.num_queries_prefetch)?
 			(double)s->svr.sum_query_list_size/
@@ -247,6 +265,7 @@ static void pr_stats(const char* nm, struct ub_stats_info* s)
 	PR_UL_NM("requestlist.exceeded", s->mesh_dropped);
 	PR_UL_NM("requestlist.current.all", s->mesh_num_states);
 	PR_UL_NM("requestlist.current.user", s->mesh_num_reply_states);
+	PR_UL_NM("requestlist.current.replies", s->mesh_num_reply_addrs);
 #ifndef S_SPLINT_S
 	sumwait.tv_sec = s->mesh_replies_sum_wait_sec;
 	sumwait.tv_usec = s->mesh_replies_sum_wait_usec;
@@ -293,6 +312,9 @@ static void print_mem(struct ub_shm_stat_info* shm_stat,
 	PR_LL("mem.streamwait", s->svr.mem_stream_wait);
 	PR_LL("mem.http.query_buffer", s->svr.mem_http2_query_buffer);
 	PR_LL("mem.http.response_buffer", s->svr.mem_http2_response_buffer);
+#ifdef HAVE_NGTCP2
+	PR_LL("mem.quic", s->svr.mem_quic);
+#endif
 }
 
 /** print histogram */
@@ -316,7 +338,7 @@ static void print_hist(struct ub_stats_info* s)
 }
 
 /** print extended */
-static void print_extended(struct ub_stats_info* s)
+static void print_extended(struct ub_stats_info* s, int inhibit_zero)
 {
 	int i;
 	char nm[16];
@@ -359,6 +381,9 @@ static void print_extended(struct ub_stats_info* s)
 	PR_UL("num.query.tls_resume", s->svr.qtls_resume);
 	PR_UL("num.query.ipv6", s->svr.qipv6);
 	PR_UL("num.query.https", s->svr.qhttps);
+#ifdef HAVE_NGTCP2
+	PR_UL("num.query.quic", s->svr.qquic);
+#endif
 
 	/* flags */
 	PR_UL("num.query.flags.QR", s->svr.qbit_QR);
@@ -389,6 +414,7 @@ static void print_extended(struct ub_stats_info* s)
 	PR_UL("num.answer.secure", s->svr.ans_secure);
 	PR_UL("num.answer.bogus", s->svr.ans_bogus);
 	PR_UL("num.rrset.bogus", s->svr.rrset_bogus);
+	PR_UL("num.valops", s->svr.val_ops);
 	PR_UL("num.query.aggressive.NOERROR", s->svr.num_neg_cache_noerror);
 	PR_UL("num.query.aggressive.NXDOMAIN", s->svr.num_neg_cache_nxdomain);
 	/* threat detection */
@@ -399,6 +425,9 @@ static void print_extended(struct ub_stats_info* s)
 	PR_UL("rrset.cache.count", s->svr.rrset_cache_count);
 	PR_UL("infra.cache.count", s->svr.infra_cache_count);
 	PR_UL("key.cache.count", s->svr.key_cache_count);
+	/* max collisions */
+	PR_UL("msg.cache.max_collisions", s->svr.msg_cache_max_collisions);
+	PR_UL("rrset.cache.max_collisions", s->svr.rrset_cache_max_collisions);
 	/* applied RPZ actions */
 	for(i=0; i<UB_STATS_RPZ_ACTION_NUM; i++) {
 		if(i == RPZ_NO_OVERRIDE_ACTION)
@@ -422,6 +451,9 @@ static void print_extended(struct ub_stats_info* s)
 	PR_UL("num.query.subnet", s->svr.num_query_subnet);
 	PR_UL("num.query.subnet_cache", s->svr.num_query_subnet_cache);
 #endif
+#ifdef USE_CACHEDB
+	PR_UL("num.query.cachedb", s->svr.num_query_cachedb);
+#endif
 }
 
 /** print statistics out of memory structures */
@@ -439,7 +471,7 @@ static void do_stats_shm(struct config_file* cfg, struct ub_stats_info* stats,
 	if(cfg->stat_extended) {
 		print_mem(shm_stat, &stats[0]);
 		print_hist(stats);
-		print_extended(stats);
+		print_extended(stats, cfg->stat_inhibit_zero);
 	}
 }
 #endif /* HAVE_SHMGET */
@@ -601,7 +633,7 @@ contact_server(const char* svr, struct config_file* cfg, int statuscmd)
 			struct sockaddr_storage addr2;
 			socklen_t addrlen2;
 			if(extstrtoaddr(cfg->control_ifs.first->str, &addr2,
-				&addrlen2)) {
+				&addrlen2, UNBOUND_DNS_PORT)) {
 				svr = cfg->control_ifs.first->str;
 			} else {
 				if(!resolve_interface_names(NULL, 0,
@@ -629,7 +661,7 @@ contact_server(const char* svr, struct config_file* cfg, int statuscmd)
 			svr = "::1";
 	}
 	if(strchr(svr, '@')) {
-		if(!extstrtoaddr(svr, &addr, &addrlen))
+		if(!extstrtoaddr(svr, &addr, &addrlen, UNBOUND_DNS_PORT))
 			fatal_exit("could not parse IP@port: %s", svr);
 #ifdef HAVE_SYS_UN_H
 	} else if(svr[0] == '/') {
@@ -757,7 +789,11 @@ setup_ssl(SSL_CTX* ctx, int fd)
 	/* check authenticity of server */
 	if(SSL_get_verify_result(ssl) != X509_V_OK)
 		ssl_err("SSL verification failed");
+#ifdef HAVE_SSL_GET1_PEER_CERTIFICATE
+	x = SSL_get1_peer_certificate(ssl);
+#else
 	x = SSL_get_peer_certificate(ssl);
+#endif
 	if(!x)
 		ssl_err("Server presented no peer certificate");
 	X509_free(x);
@@ -985,7 +1021,7 @@ int main(int argc, char* argv[])
 		fatal_exit("could not exec unbound: %s",
 			strerror(ENOSYS));
 #else
-		if(execlp("unbound", "unbound", "-c", cfgfile, 
+		if(execlp("unbound", "unbound", "-c", cfgfile,
 			(char*)NULL) < 0) {
 			fatal_exit("could not exec unbound: %s",
 				strerror(errno));
@@ -1016,12 +1052,20 @@ int main(int argc, char* argv[])
 #else
 	OPENSSL_init_crypto(OPENSSL_INIT_ADD_ALL_CIPHERS
 		| OPENSSL_INIT_ADD_ALL_DIGESTS
-		| OPENSSL_INIT_LOAD_CRYPTO_STRINGS, NULL);
+		| OPENSSL_INIT_LOAD_CRYPTO_STRINGS
+#  if defined(OPENSSL_INIT_NO_LOAD_CONFIG) && defined(UB_ON_WINDOWS)
+		| OPENSSL_INIT_NO_LOAD_CONFIG
+#  endif
+		, NULL);
 #endif
 #if OPENSSL_VERSION_NUMBER < 0x10100000 || !defined(HAVE_OPENSSL_INIT_SSL)
 	(void)SSL_library_init();
 #else
-	(void)OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS, NULL);
+	(void)OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS
+#  if defined(OPENSSL_INIT_NO_LOAD_CONFIG) && defined(UB_ON_WINDOWS)
+		| OPENSSL_INIT_NO_LOAD_CONFIG
+#  endif
+		, NULL);
 #endif
 
 	if(!RAND_status()) {

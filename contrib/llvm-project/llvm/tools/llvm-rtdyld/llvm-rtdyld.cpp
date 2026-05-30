@@ -46,7 +46,7 @@ using namespace llvm::object;
 
 static cl::OptionCategory RTDyldCategory("RTDyld Options");
 
-static cl::list<std::string> InputFileList(cl::Positional, cl::ZeroOrMore,
+static cl::list<std::string> InputFileList(cl::Positional,
                                            cl::desc("<input files>"),
                                            cl::cat(RTDyldCategory));
 
@@ -79,11 +79,11 @@ static cl::opt<std::string>
                cl::init("_main"), cl::cat(RTDyldCategory));
 
 static cl::list<std::string> Dylibs("dylib", cl::desc("Add library."),
-                                    cl::ZeroOrMore, cl::cat(RTDyldCategory));
+                                    cl::cat(RTDyldCategory));
 
 static cl::list<std::string> InputArgv("args", cl::Positional,
                                        cl::desc("<program arguments>..."),
-                                       cl::ZeroOrMore, cl::PositionalEatsArgs,
+                                       cl::PositionalEatsArgs,
                                        cl::cat(RTDyldCategory));
 
 static cl::opt<std::string>
@@ -98,7 +98,7 @@ static cl::opt<std::string>
 static cl::list<std::string>
     CheckFiles("check",
                cl::desc("File containing RuntimeDyld verifier checks."),
-               cl::ZeroOrMore, cl::cat(RTDyldCategory));
+               cl::cat(RTDyldCategory));
 
 static cl::opt<uint64_t>
     PreallocMemory("preallocate",
@@ -127,14 +127,13 @@ static cl::list<std::string>
     SpecificSectionMappings("map-section",
                             cl::desc("For -verify only: Map a section to a "
                                      "specific address."),
-                            cl::ZeroOrMore, cl::Hidden,
-                            cl::cat(RTDyldCategory));
+                            cl::Hidden, cl::cat(RTDyldCategory));
 
 static cl::list<std::string> DummySymbolMappings(
     "dummy-extern",
     cl::desc("For -verify only: Inject a symbol into the extern "
              "symbol table."),
-    cl::ZeroOrMore, cl::Hidden, cl::cat(RTDyldCategory));
+    cl::Hidden, cl::cat(RTDyldCategory));
 
 static cl::opt<bool> PrintAllocationRequests(
     "print-alloc-requests",
@@ -650,9 +649,9 @@ void applySpecificSectionMappings(RuntimeDyld &Dyld,
                                   const FileToSectionIDMap &FileToSecIDMap) {
 
   for (StringRef Mapping : SpecificSectionMappings) {
-    size_t EqualsIdx = Mapping.find_first_of("=");
+    size_t EqualsIdx = Mapping.find_first_of('=');
     std::string SectionIDStr = std::string(Mapping.substr(0, EqualsIdx));
-    size_t ComaIdx = Mapping.find_first_of(",");
+    size_t ComaIdx = Mapping.find_first_of(',');
 
     if (ComaIdx == StringRef::npos)
       report_fatal_error("Invalid section specification '" + Mapping +
@@ -893,6 +892,8 @@ static int linkAndVerify() {
         StringRef SecContent = Dyld.getSectionContent(SectionID);
         uint64_t SymSize = SecContent.size() - (CSymAddr - SecContent.data());
         SymInfo.setContent(ArrayRef<char>(CSymAddr, SymSize));
+        SymInfo.setTargetFlags(
+            Dyld.getSymbol(Symbol).getFlags().getTargetFlags());
       }
     }
     return SymInfo;
@@ -920,30 +921,37 @@ static int linkAndVerify() {
     RuntimeDyldChecker::MemoryRegionInfo SecInfo;
     SecInfo.setTargetAddress(Dyld.getSectionLoadAddress(*SectionID));
     StringRef SecContent = Dyld.getSectionContent(*SectionID);
-    SecInfo.setContent(ArrayRef<char>(SecContent.data(), SecContent.size()));
+    SecInfo.setContent(ArrayRef<char>(SecContent));
     return SecInfo;
   };
 
   auto GetStubInfo = [&Dyld, &StubMap](StringRef StubContainer,
-                                       StringRef SymbolName)
+                                       StringRef SymbolName,
+                                       StringRef KindNameFilter)
       -> Expected<RuntimeDyldChecker::MemoryRegionInfo> {
-    if (!StubMap.count(StubContainer))
+    auto SMIt = StubMap.find(StubContainer);
+    if (SMIt == StubMap.end())
       return make_error<StringError>("Stub container not found: " +
                                          StubContainer,
                                      inconvertibleErrorCode());
-    if (!StubMap[StubContainer].count(SymbolName))
+    auto It = SMIt->second.find(SymbolName);
+    if (It == SMIt->second.end())
       return make_error<StringError>("Symbol name " + SymbolName +
                                          " in stub container " + StubContainer,
                                      inconvertibleErrorCode());
-    auto &SI = StubMap[StubContainer][SymbolName];
+    auto &SI = It->second;
     RuntimeDyldChecker::MemoryRegionInfo StubMemInfo;
     StubMemInfo.setTargetAddress(Dyld.getSectionLoadAddress(SI.SectionID) +
                                  SI.Offset);
     StringRef SecContent =
         Dyld.getSectionContent(SI.SectionID).substr(SI.Offset);
-    StubMemInfo.setContent(
-        ArrayRef<char>(SecContent.data(), SecContent.size()));
+    StubMemInfo.setContent(ArrayRef<char>(SecContent));
     return StubMemInfo;
+  };
+
+  auto GetGOTInfo = [&GetStubInfo](StringRef StubContainer,
+                                   StringRef SymbolName) {
+    return GetStubInfo(StubContainer, SymbolName, "");
   };
 
   // We will initialize this below once we have the first object file and can
@@ -976,9 +984,10 @@ static int linkAndVerify() {
 
     if (!Checker)
       Checker = std::make_unique<RuntimeDyldChecker>(
-          IsSymbolValid, GetSymbolInfo, GetSectionInfo, GetStubInfo,
-          GetStubInfo, Obj.isLittleEndian() ? support::little : support::big,
-          Disassembler.get(), InstPrinter.get(), dbgs());
+          IsSymbolValid, GetSymbolInfo, GetSectionInfo, GetStubInfo, GetGOTInfo,
+          Obj.isLittleEndian() ? llvm::endianness::little
+                               : llvm::endianness::big,
+          TheTriple, MCPU, SubtargetFeatures(), dbgs());
 
     auto FileName = sys::path::filename(InputFile);
     MemMgr.setSectionIDsMap(&FileToSecIDMap[FileName]);

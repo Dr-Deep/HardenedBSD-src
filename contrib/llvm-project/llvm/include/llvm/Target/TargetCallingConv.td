@@ -113,6 +113,13 @@ class CCAssignToReg<list<Register> regList> : CCAction {
   list<Register> RegList = regList;
 }
 
+/// CCAssignToRegTuple - Same as CCAssignToReg, but with a list of registers as
+/// strings. This is needed because records synthesized during tuple expansion
+/// are not visible outside of the register info emitter.
+class CCAssignToRegTuple<list<string> regList> : CCAction {
+  list<string> RegList = regList;
+}
+
 /// CCAssignToRegWithShadow - Same as CCAssignToReg, but with list of registers
 /// which became shadowed, when some register is used.
 class CCAssignToRegWithShadow<list<Register> regList,
@@ -139,6 +146,15 @@ class CCAssignToStackWithShadow<int size,
   int Size = size;
   int Align = align;
   list<Register> ShadowRegList = shadowList;
+}
+
+/// CCAssignToRegAndStack - Same as CCAssignToReg, but also allocates a stack
+/// slot, when some register is used. Basically, it works like:
+/// CCIf<CCAssignToReg<regList>, CCAssignToStack<size, align>>.
+class CCAssignToRegAndStack<list<Register> regList, int size, int align>
+    : CCAssignToReg<regList> {
+  int Size = size;
+  int Align = align;
 }
 
 /// CCPassByVal - This action always matches: it assigns the value to a stack

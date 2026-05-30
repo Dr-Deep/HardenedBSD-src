@@ -41,12 +41,11 @@
  * by: oz
  */
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <assert.h>
 #include <signal.h>
 #include <err.h>
 #include <errno.h>
+#include <getopt.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <ctype.h>
@@ -60,6 +59,22 @@ __FBSDID("$FreeBSD$");
 #include "extern.h"
 #include "pathnames.h"
 
+static const char *shortopts = "+D:d::EGgI:o:Pst:U:";
+static const struct option longopts[] = {
+	{ "define",		required_argument,	NULL,	'D' },
+	{ "debug",		optional_argument,	NULL,	'd' },
+	{ "fatal-warnings",	no_argument,		NULL,	'E' },
+	{ "traditional",	no_argument,		NULL,	'G' },
+	{ "gnu",		no_argument,		NULL,	'g' },
+	{ "include",		required_argument,	NULL,	'I' },
+	{ "error-output",	required_argument,	NULL,	'o' },
+	{ "prefix-builtins",	no_argument,		NULL,	'P' },
+	{ "synclines",		no_argument,		NULL,	's' },
+	{ "trace",		required_argument,	NULL,	't' },
+	{ "undefine",		required_argument,	NULL,	'U' },
+	{ NULL, 0, NULL, 0 },
+};
+
 stae *mstack;			/* stack of m4 machine         */
 char *sstack;			/* shadow stack, for string space extension */
 static size_t STACKMAX;		/* current maximum size of stack */
@@ -71,7 +86,7 @@ int maxout;
 FILE *active;			/* active output file pointer  */
 int ilevel = 0;			/* input file stack pointer    */
 int oindex = 0;			/* diversion index..	       */
-const char *null = "";                /* as it says.. just a null..  */
+const char *null = "";		/* as it says.. just a null..  */
 char **m4wraps = NULL;		/* m4wraps array.	       */
 int maxwraps = 0;		/* size of m4wraps array       */
 int wrapindex = 0;		/* current offset in m4wraps   */
@@ -90,53 +105,54 @@ struct keyblk {
 };
 
 static struct keyblk keywrds[] = {	/* m4 keywords to be installed */
-	{ "include",      INCLTYPE },
-	{ "sinclude",     SINCTYPE },
-	{ "define",       DEFITYPE },
+	{ "include",      INCLUDETYPE },
+	{ "sinclude",     SINCLUDETYPE },
+	{ "define",       DEFINETYPE },
 	{ "defn",         DEFNTYPE },
-	{ "divert",       DIVRTYPE | NOARGS },
-	{ "expr",         EXPRTYPE },
-	{ "eval",         EXPRTYPE },
-	{ "substr",       SUBSTYPE },
-	{ "ifelse",       IFELTYPE },
-	{ "ifdef",        IFDFTYPE },
-	{ "len",          LENGTYPE },
+	{ "divert",       DIVERTTYPE | NOARGS },
+	{ "eval",         EVALTYPE },
+	{ "expr",         EVALTYPE },
+	{ "substr",       SUBSTRTYPE },
+	{ "ifelse",       IFELSETYPE },
+	{ "ifdef",        IFDEFTYPE },
+	{ "len",          LENTYPE },
 	{ "incr",         INCRTYPE },
 	{ "decr",         DECRTYPE },
-	{ "dnl",          DNLNTYPE | NOARGS },
-	{ "changequote",  CHNQTYPE | NOARGS },
-	{ "changecom",    CHNCTYPE | NOARGS },
-	{ "index",        INDXTYPE },
+	{ "dnl",          DNLTYPE | NOARGS },
+	{ "changequote",  CHANGEQUOTETYPE | NOARGS },
+	{ "changecom",    CHANGECOMTYPE | NOARGS },
+	{ "index",        INDEXTYPE },
 #ifdef EXTENDED
-	{ "paste",        PASTTYPE },
-	{ "spaste",       SPASTYPE },
+	{ "paste",        PASTETYPE },
+	{ "spaste",       SPASTETYPE },
 	/* Newer extensions, needed to handle gnu-m4 scripts */
 	{ "indir",        INDIRTYPE},
 	{ "builtin",      BUILTINTYPE},
-	{ "patsubst",	  PATSTYPE},
+	{ "patsubst",	  PATSUBSTTYPE},
 	{ "regexp",	  REGEXPTYPE},
 	{ "esyscmd",	  ESYSCMDTYPE},
 	{ "__file__",	  FILENAMETYPE | NOARGS},
 	{ "__line__",	  LINETYPE | NOARGS},
 #endif
-	{ "popdef",       POPDTYPE },
-	{ "pushdef",      PUSDTYPE },
-	{ "dumpdef",      DUMPTYPE | NOARGS },
-	{ "shift",        SHIFTYPE | NOARGS },
-	{ "translit",     TRNLTYPE },
-	{ "undefine",     UNDFTYPE },
-	{ "undivert",     UNDVTYPE | NOARGS },
-	{ "divnum",       DIVNTYPE | NOARGS },
-	{ "maketemp",     MKTMTYPE },
-	{ "mkstemp",      MKTMTYPE },
-	{ "errprint",     ERRPTYPE | NOARGS },
-	{ "m4wrap",       M4WRTYPE | NOARGS },
-	{ "m4exit",       EXITTYPE | NOARGS },
-	{ "syscmd",       SYSCTYPE },
-	{ "sysval",       SYSVTYPE | NOARGS },
+	{ "popdef",       POPDEFTYPE },
+	{ "pushdef",      PUSHDEFTYPE },
+	{ "dumpdef",      DUMPDEFTYPE | NOARGS },
+	{ "shift",        SHIFTTYPE | NOARGS },
+	{ "translit",     TRANSLITTYPE },
+	{ "undefine",     UNDEFINETYPE },
+	{ "undivert",     UNDIVERTTYPE | NOARGS },
+	{ "divnum",       DIVNUMTYPE | NOARGS },
+	{ "maketemp",     MKSTEMPTYPE },
+	{ "mkstemp",      MKSTEMPTYPE },
+	{ "errprint",     ERRPRINTTYPE | NOARGS },
+	{ "m4wrap",       M4WRAPTYPE | NOARGS },
+	{ "m4exit",       M4EXITTYPE | NOARGS },
+	{ "syscmd",       SYSCMDTYPE },
+	{ "sysval",       SYSVALTYPE | NOARGS },
 	{ "traceon",	  TRACEONTYPE | NOARGS },
 	{ "traceoff",	  TRACEOFFTYPE | NOARGS },
 
+/* Macro that expands to itself, signature of the current OS */
 	{ "unix",         SELFTYPE | NOARGS },
 };
 
@@ -188,7 +204,7 @@ main(int argc, char *argv[])
 	outfile = NULL;
 	resizedivs(MAXOUT);
 
-	while ((c = getopt(argc, argv, "gst:d:D:EU:o:I:P")) != -1)
+	while ((c = getopt_long(argc, argv, shortopts, longopts, NULL)) != -1)
 		switch(c) {
 
 		case 'D':               /* define something..*/
@@ -214,11 +230,14 @@ main(int argc, char *argv[])
 		case 'U':               /* undefine...       */
 			macro_popdef(optarg);
 			break;
+		case 'G':
+			mimic_gnu = 0;
+			break;
 		case 'g':
 			mimic_gnu = 1;
 			break;
 		case 'd':
-			set_trace_flags(optarg);
+			set_trace_flags(optarg ? optarg : "aeq");
 			break;
 		case 's':
 			synch_lines = 1;
@@ -369,8 +388,7 @@ macro(void)
 							CHRSAVE(l);
 					}
 				}
-			}
-			while (nlpar != 0);
+			} while (nlpar != 0);
 		} else if (sp < 0 && LOOK_AHEAD(t, scommt)) {
 			reallyoutputstr(scommt);
 

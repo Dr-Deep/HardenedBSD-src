@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2000 Doug Rabson
  * All rights reserved.
@@ -27,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_agp.h"
 
 #include <sys/param.h>
@@ -58,6 +56,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
 #include <vm/vm_pageout.h>
+#include <vm/vm_radix.h>
 #include <vm/pmap.h>
 
 #include <machine/bus.h>
@@ -153,9 +152,8 @@ agp_alloc_gatt(device_t dev)
 		return 0;
 
 	gatt->ag_entries = entries;
-	gatt->ag_virtual = (void *)kmem_alloc_contig(entries *
-	    sizeof(u_int32_t), M_NOWAIT | M_ZERO, 0, ~0, PAGE_SIZE, 0,
-	    VM_MEMATTR_WRITE_COMBINING);
+	gatt->ag_virtual = kmem_alloc_contig(entries * sizeof(uint32_t),
+	    M_NOWAIT | M_ZERO, 0, ~0, PAGE_SIZE, 0, VM_MEMATTR_WRITE_COMBINING);
 	if (!gatt->ag_virtual) {
 		if (bootverbose)
 			device_printf(dev, "contiguous allocation failed\n");
@@ -170,8 +168,7 @@ agp_alloc_gatt(device_t dev)
 void
 agp_free_gatt(struct agp_gatt *gatt)
 {
-	kmem_free((vm_offset_t)gatt->ag_virtual, gatt->ag_entries *
-	    sizeof(u_int32_t));
+	kmem_free(gatt->ag_virtual, gatt->ag_entries * sizeof(uint32_t));
 	free(gatt, M_AGP);
 }
 
@@ -258,7 +255,7 @@ agp_generic_attach(device_t dev)
 	mdargs.mda_uid = UID_ROOT;
 	mdargs.mda_gid = GID_WHEEL;
 	mdargs.mda_mode = 0600;
-	mdargs.mda_si_drv1 = sc;
+	mdargs.mda_si_drv1 = dev;
 	mdargs.mda_si_drv2 = NULL;
 
 	unit = device_get_unit(dev);
@@ -543,6 +540,7 @@ int
 agp_generic_bind_memory(device_t dev, struct agp_memory *mem,
 			vm_offset_t offset)
 {
+	struct pctrie_iter pages;
 	struct agp_softc *sc = device_get_softc(dev);
 	vm_offset_t i, j, k;
 	vm_page_t m;
@@ -575,7 +573,7 @@ agp_generic_bind_memory(device_t dev, struct agp_memory *mem,
 		AGP_DPF("found page pa=%#jx\n", (uintmax_t)VM_PAGE_TO_PHYS(m));
 	}
 	VM_OBJECT_WUNLOCK(mem->am_obj);
-
+	vm_page_iter_init(&pages, mem->am_obj);
 	mtx_lock(&sc->as_lock);
 
 	if (mem->am_is_bound) {
@@ -592,7 +590,7 @@ agp_generic_bind_memory(device_t dev, struct agp_memory *mem,
 	 */
 	VM_OBJECT_WLOCK(mem->am_obj);
 	for (i = 0; i < mem->am_size; i += PAGE_SIZE) {
-		m = vm_page_lookup(mem->am_obj, OFF_TO_IDX(i));
+		m = vm_radix_iter_lookup(&pages, OFF_TO_IDX(i));
 
 		/*
 		 * Install entries in the GATT, making sure that if
@@ -635,7 +633,7 @@ bad:
 	mtx_unlock(&sc->as_lock);
 	VM_OBJECT_ASSERT_WLOCKED(mem->am_obj);
 	for (k = 0; k < mem->am_size; k += PAGE_SIZE) {
-		m = vm_page_lookup(mem->am_obj, OFF_TO_IDX(k));
+		m = vm_radix_iter_lookup(&pages, OFF_TO_IDX(k));
 		if (k >= i)
 			vm_page_xunbusy(m);
 		vm_page_unwire(m, PQ_INACTIVE);
@@ -648,6 +646,7 @@ bad:
 int
 agp_generic_unbind_memory(device_t dev, struct agp_memory *mem)
 {
+	struct pctrie_iter pages;
 	struct agp_softc *sc = device_get_softc(dev);
 	vm_page_t m;
 	int i;
@@ -669,9 +668,10 @@ agp_generic_unbind_memory(device_t dev, struct agp_memory *mem)
 
 	AGP_FLUSH_TLB(dev);
 
+	vm_page_iter_init(&pages, mem->am_obj);
 	VM_OBJECT_WLOCK(mem->am_obj);
 	for (i = 0; i < mem->am_size; i += PAGE_SIZE) {
-		m = vm_page_lookup(mem->am_obj, atop(i));
+		m = vm_radix_iter_lookup(&pages, atop(i));
 		vm_page_unwire(m, PQ_INACTIVE);
 	}
 	VM_OBJECT_WUNLOCK(mem->am_obj);

@@ -27,12 +27,7 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)uipc_domain.c	8.2 (Berkeley) 10/18/93
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/socket.h>
@@ -58,13 +53,7 @@ static struct mtx dom_mtx;		/* domain list lock */
 MTX_SYSINIT(domain, &dom_mtx, "domain list", MTX_DEF);
 
 static int
-pr_accept_notsupp(struct socket *so, struct sockaddr **nam)
-{
-	return (EOPNOTSUPP);
-}
-
-static int
-pr_aio_queue_notsupp(struct socket *so, struct kaiocb *job)
+pr_accept_notsupp(struct socket *so, struct sockaddr *sa)
 {
 	return (EOPNOTSUPP);
 }
@@ -109,19 +98,25 @@ pr_control_notsupp(struct socket *so, u_long cmd, void *data,
 }
 
 static int
+pr_ctloutput_notsupp(struct socket *so, struct sockopt *sopt)
+{
+	return (ENOPROTOOPT);
+}
+
+static int
 pr_disconnect_notsupp(struct socket *so)
 {
 	return (EOPNOTSUPP);
 }
 
-static int
+int
 pr_listen_notsupp(struct socket *so, int backlog, struct thread *td)
 {
 	return (EOPNOTSUPP);
 }
 
 static int
-pr_peeraddr_notsupp(struct socket *so, struct sockaddr **nam)
+pr_peeraddr_notsupp(struct socket *so, struct sockaddr *nam)
 {
 	return (EOPNOTSUPP);
 }
@@ -150,40 +145,25 @@ pr_send_notsupp(struct socket *so, int flags, struct mbuf *m,
 }
 
 static int
+pr_sendfile_wait_notsupp(struct socket *so, off_t need, int *space)
+{
+	return (EOPNOTSUPP);
+}
+
+static int
 pr_ready_notsupp(struct socket *so, struct mbuf *m, int count)
 {
 	return (EOPNOTSUPP);
 }
 
 static int
-pr_shutdown_notsupp(struct socket *so)
+pr_shutdown_notsupp(struct socket *so, enum shutdown_how how)
 {
 	return (EOPNOTSUPP);
 }
 
 static int
-pr_sockaddr_notsupp(struct socket *so, struct sockaddr **nam)
-{
-	return (EOPNOTSUPP);
-}
-
-static int
-pr_sosend_notsupp(struct socket *so, struct sockaddr *addr, struct uio *uio,
-    struct mbuf *top, struct mbuf *control, int flags, struct thread *td)
-{
-	return (EOPNOTSUPP);
-}
-
-static int
-pr_soreceive_notsupp(struct socket *so, struct sockaddr **paddr,
-    struct uio *uio, struct mbuf **mp0, struct mbuf **controlp, int *flagsp)
-{
-	return (EOPNOTSUPP);
-}
-
-static int
-pr_sopoll_notsupp(struct socket *so, int events, struct ucred *cred,
-    struct thread *td)
+pr_sockaddr_notsupp(struct socket *so, struct sockaddr *nam)
 {
 	return (EOPNOTSUPP);
 }
@@ -201,33 +181,34 @@ pr_init(struct domain *dom, struct protosw *pr)
 	DEFAULT(pr_sosend, sosend_generic);
 	DEFAULT(pr_soreceive, soreceive_generic);
 	DEFAULT(pr_sopoll, sopoll_generic);
+	DEFAULT(pr_setsbopt, sbsetopt);
+	DEFAULT(pr_aio_queue, soaio_queue_generic);
+	DEFAULT(pr_kqfilter, sokqfilter_generic);
 
 #define NOTSUPP(foo)	if (pr->foo == NULL)  pr->foo = foo ## _notsupp
 	NOTSUPP(pr_accept);
-	NOTSUPP(pr_aio_queue);
 	NOTSUPP(pr_bind);
 	NOTSUPP(pr_bindat);
 	NOTSUPP(pr_connect);
 	NOTSUPP(pr_connect2);
 	NOTSUPP(pr_connectat);
 	NOTSUPP(pr_control);
+	NOTSUPP(pr_ctloutput);
 	NOTSUPP(pr_disconnect);
 	NOTSUPP(pr_listen);
 	NOTSUPP(pr_peeraddr);
 	NOTSUPP(pr_rcvd);
 	NOTSUPP(pr_rcvoob);
 	NOTSUPP(pr_send);
+	NOTSUPP(pr_sendfile_wait);
 	NOTSUPP(pr_shutdown);
 	NOTSUPP(pr_sockaddr);
-	NOTSUPP(pr_sosend);
-	NOTSUPP(pr_soreceive);
-	NOTSUPP(pr_sopoll);
 	NOTSUPP(pr_ready);
 }
 
 /*
  * Add a new protocol domain to the list of supported domains
- * Note: you cant unload it again because a socket may be using it.
+ * Note: you can't unload it again because a socket may be using it.
  * XXX can't fail at this time.
  */
 void

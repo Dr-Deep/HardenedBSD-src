@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2011, David E. O'Brien.
  * Copyright (c) 2009-2011, Juniper Networks, Inc.
@@ -29,17 +29,14 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/eventhandler.h>
 #include <sys/filedesc.h>
 #include <sys/imgact.h>
 #include <sys/priv.h>
+#include <sys/stdarg.h>
 #include <sys/sx.h>
 #include <sys/sysent.h>
 #include <sys/vnode.h>
-
-#include <machine/stdarg.h>
 
 static void filemon_output_event(struct filemon *filemon, const char *fmt, ...)
     __printflike(2, 3);

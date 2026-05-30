@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2009 Rick Macklem, University of Guelph
  * All rights reserved.
@@ -28,21 +28,19 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <fs/nfs/nfsport.h>
 
 extern int nfsrv_useacl;
 
 static int nfsrv_acemasktoperm(u_int32_t acetype, u_int32_t mask, int owner,
-    enum vtype type, acl_perm_t *permp);
+    __enum_uint8(vtype) type, acl_perm_t *permp);
 
 /*
- * Handle xdr for an ace.
+ * Handle xdr for an NFSv4 ace.
  */
 int
 nfsrv_dissectace(struct nfsrv_descript *nd, struct acl_entry *acep,
-    bool server, int *aceerrp, int *acesizep, NFSPROC_T *p)
+    bool server, int *aceerrp, int *acesizep)
 {
 	u_int32_t *tl;
 	int len, gotid = 0, owner = 0, error = 0, aceerr = 0;
@@ -67,7 +65,7 @@ nfsrv_dissectace(struct nfsrv_descript *nd, struct acl_entry *acep,
 		goto nfsmout;
 	} else if (len == 0) {
 		/* Netapp filers return a 0 length who for nil users */
-		acep->ae_tag = ACL_UNDEFINED_TAG;
+		acep->ae_tag = ACL_EVERYONE;	/* Avoid panics. */
 		acep->ae_id = ACL_UNDEFINED_ID;
 		acep->ae_perm = (acl_perm_t)0;
 		acep->ae_entry_type = ACL_ENTRY_TYPE_DENY;
@@ -183,12 +181,90 @@ nfsmout:
 	return (error);
 }
 
+static acl_tag_t nfsv4_to_posixacltag[NFSV4_POSIXACL_TAG_OTHER + 1] =
+    { ACL_UNDEFINED_TAG, ACL_USER_OBJ, ACL_USER, ACL_GROUP_OBJ,
+    ACL_GROUP, ACL_MASK, ACL_OTHER };
+
+/*
+ * Handle xdr for a POSIX draft ace.
+ */
+int
+nfsrv_dissectposixace(struct nfsrv_descript *nd, struct acl_entry *acep,
+    bool server, int *aceerrp, int *acesizep)
+{
+	uint32_t *tl, tag;
+	int len, error = 0, aceerr = 0;
+	u_char *name, namestr[NFSV4_SMALLSTR + 1];
+	gid_t gid;
+	uid_t uid;
+
+	*aceerrp = 0;
+	NFSM_DISSECT(tl, uint32_t *, 3 * NFSX_UNSIGNED);
+	tag = fxdr_unsigned(uint32_t, *tl++);
+	acep->ae_perm = fxdr_unsigned(acl_perm_t, *tl++);
+	len = fxdr_unsigned(int, *tl);
+	/*
+	 * The RFCs do not specify a limit to the length of the "who", but
+	 * NFSV4_OPAQUELIMIT (1024) should be sufficient.
+	 */
+	if (len < 0 || len > NFSV4_OPAQUELIMIT) {
+		error = NFSERR_BADXDR;
+		goto nfsmout;
+	}
+	if (tag < NFSV4_POSIXACL_TAG_USER_OBJ ||
+	    tag > NFSV4_POSIXACL_TAG_OTHER) {
+		error = NFSERR_ATTRNOTSUPP;
+		goto nfsmout;
+	}
+	acep->ae_tag = nfsv4_to_posixacltag[tag];
+	if (len > NFSV4_SMALLSTR)
+		name = malloc(len + 1, M_NFSSTRING, M_WAITOK);
+	else
+		name = namestr;
+	if (len > 0)
+		error = nfsrv_mtostr(nd, name, len);
+	if (error != 0) {
+		if (len > NFSV4_SMALLSTR)
+			free(name, M_NFSSTRING);
+		goto nfsmout;
+	}
+	switch (acep->ae_tag) {
+	case ACL_USER:
+		aceerr = nfsv4_strtouid(nd, name, len, &uid);
+		if (aceerr == 0)
+			acep->ae_id = uid;
+		break;
+	case ACL_GROUP:
+		aceerr = nfsv4_strtogid(nd, name, len, &gid);
+		if (aceerr == 0)
+			acep->ae_id = (uid_t)gid;
+		break;
+	case ACL_USER_OBJ:
+	case ACL_GROUP_OBJ:
+	case ACL_MASK:
+	case ACL_OTHER:
+		break;
+	default:
+		aceerr = NFSERR_ATTRNOTSUPP;
+	}
+	if (len > NFSV4_SMALLSTR)
+		free(name, M_NFSSTRING);
+
+	*aceerrp = aceerr;
+	if (acesizep != NULL)
+		*acesizep = NFSM_RNDUP(len) + (3 * NFSX_UNSIGNED);
+	error = 0;
+nfsmout:
+	NFSEXITCODE(error);
+	return (error);
+}
+
 /*
  * Turn an NFSv4 ace mask into R/W/X flag bits.
  */
 static int
 nfsrv_acemasktoperm(u_int32_t acetype, u_int32_t mask, int owner,
-    enum vtype type, acl_perm_t *permp)
+    __enum_uint8(vtype) type, acl_perm_t *permp)
 {
 	acl_perm_t perm = 0x0;
 	int error = 0;
@@ -278,14 +354,16 @@ out:
 
 /* local functions */
 static int nfsrv_buildace(struct nfsrv_descript *, u_char *, int,
-    enum vtype, int, int, struct acl_entry *);
+    __enum_uint8(vtype), int, int, struct acl_entry *);
+static int nfsrv_buildposixace(struct nfsrv_descript *, u_char *, int,
+    struct acl_entry *);
 
 /*
- * This function builds an NFS ace.
+ * This function builds an NFSv4 ace.
  */
 static int
 nfsrv_buildace(struct nfsrv_descript *nd, u_char *name, int namelen,
-    enum vtype type, int group, int owner, struct acl_entry *ace)
+    __enum_uint8(vtype) type, int group, int owner, struct acl_entry *ace)
 {
 	u_int32_t *tl, aceflag = 0x0, acemask = 0x0, acetype;
 	int full_len;
@@ -354,32 +432,7 @@ nfsrv_buildace(struct nfsrv_descript *nd, u_char *name, int namelen,
 		if (ace->ae_perm & ACL_SYNCHRONIZE)
 			acemask |= NFSV4ACE_SYNCHRONIZE;
 	} else {
-		if (ace->ae_perm & ACL_READ_DATA)
-			acemask |= NFSV4ACE_READDATA;
-		if (ace->ae_perm & ACL_WRITE_DATA)
-			acemask |= NFSV4ACE_WRITEDATA;
-		if (ace->ae_perm & ACL_APPEND_DATA)
-			acemask |= NFSV4ACE_APPENDDATA;
-		if (ace->ae_perm & ACL_READ_NAMED_ATTRS)
-			acemask |= NFSV4ACE_READNAMEDATTR;
-		if (ace->ae_perm & ACL_WRITE_NAMED_ATTRS)
-			acemask |= NFSV4ACE_WRITENAMEDATTR;
-		if (ace->ae_perm & ACL_EXECUTE)
-			acemask |= NFSV4ACE_EXECUTE;
-		if (ace->ae_perm & ACL_READ_ATTRIBUTES)
-			acemask |= NFSV4ACE_READATTRIBUTES;
-		if (ace->ae_perm & ACL_WRITE_ATTRIBUTES)
-			acemask |= NFSV4ACE_WRITEATTRIBUTES;
-		if (ace->ae_perm & ACL_DELETE)
-			acemask |= NFSV4ACE_DELETE;
-		if (ace->ae_perm & ACL_READ_ACL)
-			acemask |= NFSV4ACE_READACL;
-		if (ace->ae_perm & ACL_WRITE_ACL)
-			acemask |= NFSV4ACE_WRITEACL;
-		if (ace->ae_perm & ACL_WRITE_OWNER)
-			acemask |= NFSV4ACE_WRITEOWNER;
-		if (ace->ae_perm & ACL_SYNCHRONIZE)
-			acemask |= NFSV4ACE_SYNCHRONIZE;
+		acemask = nfs_aceperm(ace->ae_perm);
 	}
 	*tl++ = txdr_unsigned(acemask);
 	*tl++ = txdr_unsigned(namelen);
@@ -390,10 +443,100 @@ nfsrv_buildace(struct nfsrv_descript *nd, u_char *name, int namelen,
 }
 
 /*
+ * Convert ae_perm to NFSv4 ACL acemask4 for regular files.
+ */
+uint32_t
+nfs_aceperm(acl_perm_t ae_perm)
+{
+	uint32_t acemask = 0x0;
+
+	if (ae_perm & ACL_READ_DATA)
+		acemask |= NFSV4ACE_READDATA;
+	if (ae_perm & ACL_WRITE_DATA)
+		acemask |= NFSV4ACE_WRITEDATA;
+	if (ae_perm & ACL_APPEND_DATA)
+		acemask |= NFSV4ACE_APPENDDATA;
+	if (ae_perm & ACL_READ_NAMED_ATTRS)
+		acemask |= NFSV4ACE_READNAMEDATTR;
+	if (ae_perm & ACL_WRITE_NAMED_ATTRS)
+		acemask |= NFSV4ACE_WRITENAMEDATTR;
+	if (ae_perm & ACL_EXECUTE)
+		acemask |= NFSV4ACE_EXECUTE;
+	if (ae_perm & ACL_READ_ATTRIBUTES)
+		acemask |= NFSV4ACE_READATTRIBUTES;
+	if (ae_perm & ACL_WRITE_ATTRIBUTES)
+		acemask |= NFSV4ACE_WRITEATTRIBUTES;
+	if (ae_perm & ACL_DELETE)
+		acemask |= NFSV4ACE_DELETE;
+	if (ae_perm & ACL_READ_ACL)
+		acemask |= NFSV4ACE_READACL;
+	if (ae_perm & ACL_WRITE_ACL)
+		acemask |= NFSV4ACE_WRITEACL;
+	if (ae_perm & ACL_WRITE_OWNER)
+		acemask |= NFSV4ACE_WRITEOWNER;
+	if (ae_perm & ACL_SYNCHRONIZE)
+		acemask |= NFSV4ACE_SYNCHRONIZE;
+	return (acemask);
+}
+
+/*
+ * This function builds a POSIX draft ace.
+ */
+static int
+nfsrv_buildposixace(struct nfsrv_descript *nd, u_char *name, int namelen,
+    struct acl_entry *ace)
+{
+	uint32_t *tl;
+	int full_len;
+
+	full_len = NFSM_RNDUP(namelen);
+	NFSM_BUILD(tl, uint32_t *, 3 * NFSX_UNSIGNED + full_len);
+
+	/*
+	 * Fill in the ace tag.
+	 */
+	switch (ace->ae_tag) {
+	case ACL_USER_OBJ:
+		*tl++ = txdr_unsigned(NFSV4_POSIXACL_TAG_USER_OBJ);
+		break;
+	case ACL_USER:
+		*tl++ = txdr_unsigned(NFSV4_POSIXACL_TAG_USER);
+		break;
+	case ACL_GROUP_OBJ:
+		*tl++ = txdr_unsigned(NFSV4_POSIXACL_TAG_GROUP_OBJ);
+		break;
+	case ACL_GROUP:
+		*tl++ = txdr_unsigned(NFSV4_POSIXACL_TAG_GROUP);
+		break;
+	case ACL_MASK:
+		*tl++ = txdr_unsigned(NFSV4_POSIXACL_TAG_MASK);
+		break;
+	case ACL_OTHER:
+		*tl++ = txdr_unsigned(NFSV4_POSIXACL_TAG_OTHER);
+		break;
+	default:
+		printf("nfsrv_buildposixace: bad ae_tag 0x%x\n", ace->ae_tag);
+		*tl++ = txdr_unsigned(0);
+	}
+
+	/*
+	 * Fill in the permission bits.
+	 */
+	*tl++ = txdr_unsigned(ace->ae_perm);
+	*tl++ = txdr_unsigned(namelen);
+	if (namelen > 0) {
+		if (full_len - namelen)
+			*(tl + (namelen / NFSX_UNSIGNED)) = 0x0;
+		memcpy(tl, name, namelen);
+	}
+	return (full_len + 3 * NFSX_UNSIGNED);
+}
+
+/*
  * Build an NFSv4 ACL.
  */
 int
-nfsrv_buildacl(struct nfsrv_descript *nd, NFSACL_T *aclp, enum vtype type,
+nfsrv_buildacl(struct nfsrv_descript *nd, NFSACL_T *aclp, __enum_uint8(vtype) type,
     NFSPROC_T *p)
 {
 	int i, entrycnt = 0, retlen;
@@ -443,6 +586,64 @@ nfsrv_buildacl(struct nfsrv_descript *nd, NFSACL_T *aclp, enum vtype type,
 		}
 		retlen += nfsrv_buildace(nd, name, namelen, type, isgroup,
 		    isowner, &aclp->acl_entry[i]);
+		entrycnt++;
+		if (malloced)
+			free(name, M_NFSSTRING);
+	}
+	*entrycntp = txdr_unsigned(entrycnt);
+	return (retlen);
+}
+
+/*
+ * Build a POSIX draft ACL.
+ */
+int
+nfsrv_buildposixacl(struct nfsrv_descript *nd, NFSACL_T *aclp,
+    acl_type_t acltype)
+{
+	int i, entrycnt = 0, retlen;
+	uint32_t *entrycntp;
+	unsigned int cnt;
+	int namelen;
+	u_char *name, namestr[NFSV4_SMALLSTR];
+	bool malloced;
+
+	NFSM_BUILD(entrycntp, uint32_t *, NFSX_UNSIGNED);
+	retlen = NFSX_UNSIGNED;
+	cnt = 0;
+	if (aclp != NULL)
+		cnt = aclp->acl_cnt;
+	/*
+	 * Loop through the acl entries, building each one.
+	 */
+	for (i = 0; i < cnt; i++) {
+		malloced = false;
+		switch (aclp->acl_entry[i].ae_tag) {
+		case ACL_USER_OBJ:
+		case ACL_GROUP_OBJ:
+		case ACL_OTHER:
+		case ACL_MASK:
+			namelen = 0;
+			break;
+		case ACL_USER:
+			name = namestr;
+			nfsv4_uidtostr(aclp->acl_entry[i].ae_id, &name,
+			    &namelen);
+			if (name != namestr)
+				malloced = true;
+			break;
+		case ACL_GROUP:
+			name = namestr;
+			nfsv4_gidtostr((gid_t)aclp->acl_entry[i].ae_id, &name,
+			    &namelen);
+			if (name != namestr)
+				malloced = true;
+			break;
+		default:
+			continue;
+		}
+		retlen += nfsrv_buildposixace(nd, name, namelen,
+		    &aclp->acl_entry[i]);
 		entrycnt++;
 		if (malloced)
 			free(name, M_NFSSTRING);

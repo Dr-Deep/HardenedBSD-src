@@ -24,10 +24,8 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 #include "test.h"
-__FBSDID("$FreeBSD$");
 
 #define __LIBARCHIVE_BUILD
-#include <archive_crc32.h>
 
 static
 int extract_one(struct archive* a, struct archive_entry* ae, uint32_t crc)
@@ -48,7 +46,7 @@ int extract_one(struct archive* a, struct archive_entry* ae, uint32_t crc)
 		goto fn_exit;
 	}
 
-	computed_crc = crc32(0, buf, fsize);
+	computed_crc = bitcrc32(0, buf, fsize);
 	assertEqualInt(computed_crc, crc);
 	ret = 0;
 
@@ -85,7 +83,7 @@ int extract_one_using_blocks(struct archive* a, int block_size, uint32_t crc)
 			/* ok */
 		}
 
-		computed_crc = crc32(computed_crc, buf, bytes_read);
+		computed_crc = bitcrc32(computed_crc, buf, bytes_read);
 	}
 
 	assertEqualInt(computed_crc, crc);
@@ -157,7 +155,7 @@ verify_basic(struct archive *a, int seek_checks)
 	if (archive_zlib_version() != NULL) {
 		failure("file2 has a bad CRC, so read should fail and not change buff");
 		memset(buff, 'a', 19);
-		assertEqualInt(ARCHIVE_WARN, archive_read_data(a, buff, 19));
+		assertEqualInt(ARCHIVE_FAILED, archive_read_data(a, buff, 19));
 		assertEqualMem(buff, "aaaaaaaaaaaaaaaaaaa", 19);
 	} else {
 		assertEqualInt(ARCHIVE_FAILED, archive_read_data(a, buff, 19));
@@ -746,6 +744,7 @@ DEFINE_TEST(test_read_format_zip_zstd_one_file)
 	if (ARCHIVE_OK != archive_read_support_filter_zstd(a)) {
 		skipping("zstd is not fully supported on this platform");
 		archive_read_close(a);
+		archive_read_free(a);
 		return;
 	}
 	extract_reference_file(refname);
@@ -771,6 +770,7 @@ DEFINE_TEST(test_read_format_zip_zstd_one_file_blockread)
 	if (ARCHIVE_OK != archive_read_support_filter_zstd(a)) {
 		skipping("zstd is not fully supported on this platform");
 		archive_read_close(a);
+		archive_read_free(a);
 		return;
 	}
 	extract_reference_file(refname);
@@ -796,6 +796,7 @@ DEFINE_TEST(test_read_format_zip_zstd_multi)
 	if (ARCHIVE_OK != archive_read_support_filter_zstd(a)) {
 		skipping("zstd is not fully supported on this platform");
 		archive_read_close(a);
+		archive_read_free(a);
 		return;
 	}
 	extract_reference_file(refname);
@@ -833,6 +834,7 @@ DEFINE_TEST(test_read_format_zip_zstd_multi_blockread)
 	if (ARCHIVE_OK != archive_read_support_filter_zstd(a)) {
 		skipping("zstd is not fully supported on this platform");
 		archive_read_close(a);
+		archive_read_free(a);
 		return;
 	}
 	extract_reference_file(refname);
@@ -1017,6 +1019,7 @@ DEFINE_TEST(test_read_format_zip_lzma_alone_leak)
 	if(ARCHIVE_OK != archive_read_support_filter_lzma(a)) {
 		skipping("lzma reading is not fully supported on this platform");
 		archive_read_close(a);
+		archive_read_free(a);
 		return;
 	}
 

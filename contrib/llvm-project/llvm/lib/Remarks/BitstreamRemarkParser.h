@@ -13,13 +13,13 @@
 #ifndef LLVM_LIB_REMARKS_BITSTREAM_REMARK_PARSER_H
 #define LLVM_LIB_REMARKS_BITSTREAM_REMARK_PARSER_H
 
-#include "llvm/ADT/Optional.h"
 #include "llvm/Remarks/BitstreamRemarkContainer.h"
 #include "llvm/Remarks/BitstreamRemarkParser.h"
 #include "llvm/Remarks/RemarkFormat.h"
 #include "llvm/Remarks/RemarkParser.h"
 #include <cstdint>
 #include <memory>
+#include <optional>
 
 namespace llvm {
 namespace remarks {
@@ -31,7 +31,7 @@ struct BitstreamRemarkParser : public RemarkParser {
   /// The buffer to parse.
   BitstreamParserHelper ParserHelper;
   /// The string table used for parsing strings.
-  Optional<ParsedStringTable> StrTab;
+  std::optional<ParsedStringTable> StrTab;
   /// Temporary remark buffer used when the remarks are stored separately.
   std::unique_ptr<MemoryBuffer> TmpRemarkBuffer;
   /// The common metadata used to decide how to parse the buffer.
@@ -47,11 +47,6 @@ struct BitstreamRemarkParser : public RemarkParser {
   /// stream.
   explicit BitstreamRemarkParser(StringRef Buf)
       : RemarkParser(Format::Bitstream), ParserHelper(Buf) {}
-
-  /// Create a parser that uses a pre-parsed string table.
-  BitstreamRemarkParser(StringRef Buf, ParsedStringTable StrTab)
-      : RemarkParser(Format::Bitstream), ParserHelper(Buf),
-        StrTab(std::move(StrTab)) {}
 
   Expected<std::unique_ptr<Remark>> next() override;
 
@@ -73,12 +68,12 @@ private:
   Error processSeparateRemarksMetaMeta(BitstreamMetaParserHelper &Helper);
   Expected<std::unique_ptr<Remark>>
   processRemark(BitstreamRemarkParserHelper &Helper);
-  Error processExternalFilePath(Optional<StringRef> ExternalFilePath);
+  Error processExternalFilePath(std::optional<StringRef> ExternalFilePath);
 };
 
 Expected<std::unique_ptr<BitstreamRemarkParser>> createBitstreamParserFromMeta(
-    StringRef Buf, Optional<ParsedStringTable> StrTab = None,
-    Optional<StringRef> ExternalFilePrependPath = None);
+    StringRef Buf,
+    std::optional<StringRef> ExternalFilePrependPath = std::nullopt);
 
 } // end namespace remarks
 } // end namespace llvm

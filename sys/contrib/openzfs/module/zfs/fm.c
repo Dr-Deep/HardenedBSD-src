@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -68,9 +69,9 @@
 #include <sys/condvar.h>
 #include <sys/zfs_ioctl.h>
 
-static int zfs_zevent_len_max = 512;
+static uint_t zfs_zevent_len_max = 512;
 
-static int zevent_len_cur = 0;
+static uint_t zevent_len_cur = 0;
 static int zevent_waiters = 0;
 static int zevent_flags = 0;
 
@@ -148,8 +149,7 @@ zfs_zevent_drain(zevent_t *ev)
 	list_remove(&zevent_list, ev);
 
 	/* Remove references to this event in all private file data */
-	while ((ze = list_head(&ev->ev_ze_list)) != NULL) {
-		list_remove(&ev->ev_ze_list, ze);
+	while ((ze = list_remove_head(&ev->ev_ze_list)) != NULL) {
 		ze->ze_zevent = NULL;
 		ze->ze_dropped++;
 	}
@@ -158,7 +158,7 @@ zfs_zevent_drain(zevent_t *ev)
 }
 
 void
-zfs_zevent_drain_all(int *count)
+zfs_zevent_drain_all(uint_t *count)
 {
 	zevent_t *ev;
 
@@ -337,7 +337,7 @@ zfs_zevent_next(zfs_zevent_t *ze, nvlist_t **event, uint64_t *event_size,
 		}
 	}
 
-	VERIFY(nvlist_size(ev->ev_nvl, &size, NV_ENCODE_NATIVE) == 0);
+	VERIFY0(nvlist_size(ev->ev_nvl, &size, NV_ENCODE_NATIVE));
 	if (size > *event_size) {
 		*event_size = size;
 		error = ENOMEM;
@@ -380,8 +380,7 @@ zfs_zevent_wait(zfs_zevent_t *ze)
 			break;
 		}
 
-		error = cv_wait_sig(&zevent_cv, &zevent_lock);
-		if (signal_pending(current)) {
+		if (cv_wait_sig(&zevent_cv, &zevent_lock) == 0) {
 			error = SET_ERROR(EINTR);
 			break;
 		} else if (!list_is_empty(&zevent_list)) {
@@ -893,7 +892,7 @@ fm_fmri_hc_create(nvlist_t *fmri, int version, const nvlist_t *auth,
 	uint_t n;
 	int i, j;
 	va_list ap;
-	char *hcname, *hcid;
+	const char *hcname, *hcid;
 
 	if (!fm_fmri_hc_set_common(fmri, version, auth))
 		return;
@@ -955,6 +954,7 @@ fm_fmri_hc_create(nvlist_t *fmri, int version, const nvlist_t *auth,
 			}
 			atomic_inc_64(
 			    &erpt_kstat_data.fmri_set_failed.value.ui64);
+			va_end(ap);
 			return;
 		}
 	}
@@ -1342,7 +1342,7 @@ fm_init(void)
 void
 fm_fini(void)
 {
-	int count;
+	uint_t count;
 
 	zfs_ereport_fini();
 
@@ -1354,7 +1354,7 @@ fm_fini(void)
 	zevent_flags |= ZEVENT_SHUTDOWN;
 	while (zevent_waiters > 0) {
 		mutex_exit(&zevent_lock);
-		schedule();
+		kpreempt(KPREEMPT_SYNC);
 		mutex_enter(&zevent_lock);
 	}
 	mutex_exit(&zevent_lock);
@@ -1368,7 +1368,8 @@ fm_fini(void)
 		fm_ksp = NULL;
 	}
 }
-#endif /* _KERNEL */
 
-ZFS_MODULE_PARAM(zfs_zevent, zfs_zevent_, len_max, INT, ZMOD_RW,
+ZFS_MODULE_PARAM(zfs_zevent, zfs_zevent_, len_max, UINT, ZMOD_RW,
 	"Max event queue length");
+
+#endif /* _KERNEL */

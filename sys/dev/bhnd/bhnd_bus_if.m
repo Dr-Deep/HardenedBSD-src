@@ -26,7 +26,6 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 # USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
-# $FreeBSD$
 
 #include <sys/types.h>
 #include <sys/bus.h>
@@ -534,7 +533,7 @@ METHOD int read_board_info {
 /**
  * Notify a bhnd bus that a child was added.
  *
- * This method must be called by concrete bhnd(4) driver impementations
+ * This method must be called by concrete bhnd(4) driver implementations
  * after @p child's bus state is fully initialized.
  *
  * @param dev The bhnd bus whose child is being added.
@@ -616,7 +615,7 @@ METHOD int read_iost {
  * @param child The device to query.
  *
  * @retval true If @p child is held in RESET or not clocked (BHND_IOCTL_CLK_EN),
- * or an error occured determining @p child's hardware state.
+ * or an error occurred determining @p child's hardware state.
  * @retval false If @p child is clocked and is not held in RESET.
  */
 METHOD bool is_hw_suspended {
@@ -924,7 +923,7 @@ METHOD struct bhnd_resource * alloc_resource {
 	device_t dev;
 	device_t child;
 	int type;
-	int *rid;
+	int rid;
 	rman_res_t start;
 	rman_res_t end;
 	rman_res_t count;
@@ -940,8 +939,6 @@ METHOD struct bhnd_resource * alloc_resource {
 METHOD int release_resource {
 	device_t dev;
 	device_t child;
-	int type;
-	int rid;
 	struct bhnd_resource *res;
 } DEFAULT bhnd_bus_generic_release_resource;
 
@@ -954,8 +951,6 @@ METHOD int release_resource {
 METHOD int activate_resource {
 	device_t dev;
         device_t child;
-	int type;
-        int rid;
         struct bhnd_resource *r;
 } DEFAULT bhnd_bus_generic_activate_resource;
 
@@ -968,8 +963,6 @@ METHOD int activate_resource {
 METHOD int deactivate_resource {
         device_t dev;
         device_t child;
-        int type;
-	int rid;
         struct bhnd_resource *r;
 } DEFAULT bhnd_bus_generic_deactivate_resource;
 

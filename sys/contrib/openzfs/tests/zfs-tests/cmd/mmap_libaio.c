@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -33,7 +34,7 @@
 #include <libaio.h>
 #include <err.h>
 
-io_context_t io_ctx;
+static io_context_t io_ctx;
 
 static void
 do_sync_io(struct iocb *iocb)

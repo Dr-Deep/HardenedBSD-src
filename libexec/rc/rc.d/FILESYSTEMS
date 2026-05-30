@@ -1,10 +1,9 @@
 #!/bin/sh
 #
-# $FreeBSD$
 #
 
 # PROVIDE: FILESYSTEMS
-# REQUIRE: root mountcritlocal cleanvar tmp
+# REQUIRE: root mountcritlocal tmp var
 
 #	This is a dummy dependency, for services which require filesystems
 #	to be mounted before starting.  It also serves as the default early /

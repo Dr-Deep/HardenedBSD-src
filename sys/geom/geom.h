@@ -33,8 +33,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _GEOM_GEOM_H_
@@ -284,15 +282,16 @@ void g_detach(struct g_consumer *cp);
 void g_error_provider(struct g_provider *pp, int error);
 struct g_provider *g_provider_by_name(char const *arg);
 int g_getattr__(const char *attr, struct g_consumer *cp, void *var, int len);
-#define g_getattr(a, c, v) g_getattr__((a), (c), (v), sizeof *(v))
+#define g_getattr(a, c, v) g_getattr__((a), (c), (v), sizeof(*(v)))
 int g_handleattr(struct bio *bp, const char *attribute, const void *val,
     int len);
 int g_handleattr_int(struct bio *bp, const char *attribute, int val);
 int g_handleattr_off_t(struct bio *bp, const char *attribute, off_t val);
 int g_handleattr_uint16_t(struct bio *bp, const char *attribute, uint16_t val);
 int g_handleattr_str(struct bio *bp, const char *attribute, const char *str);
-struct g_consumer * g_new_consumer(struct g_geom *gp);
-struct g_geom * g_new_geomf(struct g_class *mp, const char *fmt, ...)
+struct g_consumer *g_new_consumer(struct g_geom *gp);
+struct g_geom *g_new_geom(struct g_class *mp, const char *name);
+struct g_geom *g_new_geomf(struct g_class *mp, const char *fmt, ...)
     __printflike(2, 3);
 struct g_provider * g_new_providerf(struct g_geom *gp, const char *fmt, ...)
     __printflike(2, 3);
@@ -419,7 +418,7 @@ g_free(void *ptr)
 	static moduledata_t name##_mod = {			\
 		#name, g_modevent, &class			\
 	};							\
-	DECLARE_MODULE(name, name##_mod, SI_SUB_DRIVERS, SI_ORDER_SECOND);
+	DECLARE_MODULE(name, name##_mod, SI_SUB_DRIVERS, SI_ORDER_THIRD);
 
 int g_is_geom_thread(struct thread *td);
 

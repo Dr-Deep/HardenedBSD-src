@@ -60,9 +60,6 @@
  * Support for managing the display via DPMS for suspend/resume.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/bus.h>
 #include <sys/kernel.h>
@@ -109,7 +106,7 @@ static device_method_t dpms_methods[] = {
 	DEVMETHOD(device_detach,	dpms_detach),
 	DEVMETHOD(device_suspend,	dpms_suspend),
 	DEVMETHOD(device_resume,	dpms_resume),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t dpms_driver = {

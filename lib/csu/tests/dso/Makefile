@@ -1,6 +1,6 @@
-# $FreeBSD$
-
 .PATH: ${.CURDIR:H}
+
+PACKAGE=	tests
 SHLIB=		h_csu
 SHLIB_NAME=	libh_csu.so
 SHLIB_MAJOR=	1
@@ -20,6 +20,6 @@ SRCS+=	${src}.c
 SRCS+=	${src}.cc
 .endfor
 
-LIBDIR=		${TESTSBASE}/lib/csu/dynamiclib/
+LIBDIR=		${TESTSBASE}/lib/csu/dynamiclib
 
 .include <bsd.lib.mk>

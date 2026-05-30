@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2004-2006 Marcel Moolenaar
  * All rights reserved.
@@ -25,9 +25,6 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -198,7 +195,7 @@ scc_bfe_attach(device_t dev, u_int ipc)
 			m->m_mode = 1U << mode;
 			if ((cl->cl_modes & m->m_mode) == 0 || ch->ch_sysdev)
 				continue;
-			m->m_dev = device_add_child(dev, NULL, -1);
+			m->m_dev = device_add_child(dev, NULL, DEVICE_UNIT_ANY);
 			device_set_ivars(m->m_dev, (void *)m);
 			error = device_probe_child(dev, m->m_dev);
 			if (!error) {
@@ -409,7 +406,7 @@ scc_bfe_probe(device_t dev, u_int regshft, u_int rclk, u_int rid)
 }
 
 struct resource *
-scc_bus_alloc_resource(device_t dev, device_t child, int type, int *rid,
+scc_bus_alloc_resource(device_t dev, device_t child, int type, int rid __unused,
     rman_res_t start, rman_res_t end, rman_res_t count, u_int flags)
 {
 	struct resource_list_entry *rle;
@@ -428,7 +425,6 @@ scc_bus_alloc_resource(device_t dev, device_t child, int type, int *rid,
 	rle = resource_list_find(&ch->ch_rlist, type, 0);
 	if (rle == NULL)
 		return (NULL);
-	*rid = 0;
 	return (rle->res);
 }
 
@@ -498,8 +494,7 @@ scc_bus_read_ivar(device_t dev, device_t child, int index, uintptr_t *result)
 }
 
 int
-scc_bus_release_resource(device_t dev, device_t child, int type, int rid,
-    struct resource *res)
+scc_bus_release_resource(device_t dev, device_t child, struct resource *res)
 {
 	struct resource_list_entry *rle;
 	struct scc_chan *ch;
@@ -510,7 +505,8 @@ scc_bus_release_resource(device_t dev, device_t child, int type, int rid,
 
 	m = device_get_ivars(child);
 	ch = m->m_chan;
-	rle = resource_list_find(&ch->ch_rlist, type, rid);
+	rle = resource_list_find(&ch->ch_rlist, rman_get_type(res),
+	    rman_get_rid(res));
 	return ((rle == NULL) ? EINVAL : 0);
 }
 

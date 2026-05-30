@@ -29,8 +29,6 @@
  *
  * OpenBSD: abtn.c,v 1.12 2009/01/10 18:00:59 robert Exp
  * NetBSD: abtn.c,v 1.1 1999/07/12 17:48:26 tsubai Exp
- *
- * $FreeBSD$
  */
 
 #include <sys/param.h>
@@ -69,7 +67,7 @@ static device_method_t abtn_methods[] = {
 
 	/* ADB interface */
 	DEVMETHOD(adb_receive_packet,	abtn_receive_packet),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t abtn_driver = {

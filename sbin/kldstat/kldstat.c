@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1997 Doug Rabson
  * All rights reserved.
@@ -26,9 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/types.h>
 #include <sys/param.h>
 #include <sys/module.h>
@@ -38,7 +35,7 @@ __FBSDID("$FreeBSD$");
 #include <libutil.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <strings.h>
+#include <string.h>
 #include <unistd.h>
 
 #define	PTR_WIDTH ((int)(sizeof(void *) * 2 + 2))
@@ -54,7 +51,7 @@ printmod(int modid)
 {
 	struct module_stat stat;
 
-	bzero(&stat, sizeof(stat));
+	memset(&stat, 0, sizeof(stat));
 	stat.version = sizeof(struct module_stat);
 	if (modstat(modid, &stat) < 0) {
 		warn("can't stat module id %d", modid);

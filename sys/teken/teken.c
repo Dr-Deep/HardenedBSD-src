@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008-2009 Ed Schouten <ed@FreeBSD.org>
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include <sys/cdefs.h>
@@ -705,6 +703,8 @@ static const char * const special_strings_cons25[] = {
 	[TKEY_F7] = "\x1B[S",		[TKEY_F8] = "\x1B[T",
 	[TKEY_F9] = "\x1B[U",		[TKEY_F10] = "\x1B[V",
 	[TKEY_F11] = "\x1B[W",		[TKEY_F12] = "\x1B[X",
+
+	[TKEY_BTAB] = "\x1B[Z",
 };
 
 static const char * const special_strings_ckeys[] = {
@@ -728,6 +728,8 @@ static const char * const special_strings_normal[] = {
 	[TKEY_F7] = "\x1B[18~",		[TKEY_F8] = "\x1B[19~",
 	[TKEY_F9] = "\x1B[20~",		[TKEY_F10] = "\x1B[21~",
 	[TKEY_F11] = "\x1B[23~",	[TKEY_F12] = "\x1B[24~",
+
+	[TKEY_BTAB] = "\x1B[Z",
 };
 
 const char *

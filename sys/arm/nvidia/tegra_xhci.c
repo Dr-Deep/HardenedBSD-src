@@ -25,8 +25,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * XHCI driver for Tegra SoCs.
  */
@@ -54,10 +52,10 @@ __FBSDID("$FreeBSD$");
 #include <machine/bus.h>
 #include <machine/resource.h>
 
-#include <dev/extres/clk/clk.h>
-#include <dev/extres/hwreset/hwreset.h>
-#include <dev/extres/phy/phy.h>
-#include <dev/extres/regulator/regulator.h>
+#include <dev/clk/clk.h>
+#include <dev/hwreset/hwreset.h>
+#include <dev/phy/phy.h>
+#include <dev/regulator/regulator.h>
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 #include <dev/usb/usb.h>
@@ -289,7 +287,7 @@ struct tegra_xhci_softc {
 
 	struct intr_config_hook	irq_hook;
 	bool			xhci_inited;
-	vm_offset_t		fw_vaddr;
+	void			*fw_vaddr;
 	vm_size_t		fw_size;
 };
 
@@ -744,7 +742,7 @@ load_fw(struct tegra_xhci_softc *sc)
 	const struct firmware *fw;
 	const struct tegra_xusb_fw_hdr *fw_hdr;
 	vm_paddr_t fw_paddr, fw_base;
-	vm_offset_t fw_vaddr;
+	void *fw_vaddr;
 	vm_size_t fw_size;
 	uint32_t code_tags, code_size;
 	struct clocktime fw_clock;
@@ -775,9 +773,9 @@ load_fw(struct tegra_xhci_softc *sc)
 
 	fw_vaddr = kmem_alloc_contig(fw_size, M_WAITOK, 0, -1UL, PAGE_SIZE, 0,
 	    VM_MEMATTR_UNCACHEABLE);
-	fw_paddr = vtophys(fw_vaddr);
+	fw_paddr = vtophys((uintptr_t)fw_vaddr);
 	fw_hdr = (const struct tegra_xusb_fw_hdr *)fw_vaddr;
-	memcpy((void *)fw_vaddr, fw->data, fw_size);
+	memcpy(fw_vaddr, fw->data, fw_size);
 
 	firmware_put(fw, FIRMWARE_UNLOAD);
 	sc->fw_vaddr = fw_vaddr;
@@ -820,7 +818,7 @@ load_fw(struct tegra_xhci_softc *sc)
 		DELAY(100);
 	}
 	if (i <= 0) {
-		device_printf(sc->dev, "Timedout while wating for DMA, "
+		device_printf(sc->dev, "Timedout while waiting for DMA, "
 		    "state: 0x%08X\n",
 		    CSB_RD4(sc, XUSB_CSB_MEMPOOL_L2IMEMOP_RESULT));
 		return (ETIMEDOUT);
@@ -837,7 +835,7 @@ load_fw(struct tegra_xhci_softc *sc)
 		DELAY(100);
 	}
 	if (i <= 0) {
-		device_printf(sc->dev, "Timedout while wating for FALCON cpu, "
+		device_printf(sc->dev, "Timedout while waiting for FALCON cpu, "
 		    "state: 0x%08X\n", CSB_RD4(sc, XUSB_FALCON_CPUCTL));
 		return (ETIMEDOUT);
 	}
@@ -918,12 +916,16 @@ tegra_xhci_detach(device_t dev)
 {
 	struct tegra_xhci_softc *sc;
 	struct xhci_softc *xsc;
+	int error;
 
 	sc = device_get_softc(dev);
 	xsc = &sc->xhci_softc;
 
 	/* during module unload there are lots of children leftover */
-	device_delete_children(dev);
+	error = bus_generic_detach(dev);
+	if (error != 0)
+		return (error);
+
 	if (sc->xhci_inited) {
 		usb_callout_drain(&xsc->sc_callout);
 		xhci_halt_controller(xsc);
@@ -947,7 +949,7 @@ tegra_xhci_detach(device_t dev)
 		xhci_uninit(xsc);
 	if (sc->irq_hdl_mbox != NULL)
 		bus_teardown_intr(dev, sc->irq_res_mbox, sc->irq_hdl_mbox);
-	if (sc->fw_vaddr != 0)
+	if (sc->fw_vaddr != NULL)
 		kmem_free(sc->fw_vaddr, sc->fw_size);
 	LOCK_DESTROY(sc);
 	return (0);
@@ -1050,7 +1052,7 @@ tegra_xhci_attach(device_t dev)
 	strlcpy(xsc->sc_vendor, "Nvidia", sizeof(xsc->sc_vendor));
 
 	/* Add USB bus device. */
-	xsc->sc_bus.bdev = device_add_child(sc->dev, "usbus", -1);
+	xsc->sc_bus.bdev = device_add_child(sc->dev, "usbus", DEVICE_UNIT_ANY);
 	if (xsc->sc_bus.bdev == NULL) {
 		device_printf(sc->dev, "Could not add USB device\n");
 		rv = ENXIO;

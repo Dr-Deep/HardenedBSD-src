@@ -3,18 +3,28 @@
 PACKAGE=lib${LIB}
 SHLIBDIR?= /lib
 
-LIB=	hbsdcontrol
+LIB=		hbsdcontrol
 SHLIB_MAJOR=	0
 
-.PATH: ${SRCTOP}/contrib/hardenedbsd/hbsdcontrol
-CFLAGS+=-I${.CURDIR}
+CFLAGS+=	-I${.CURDIR}
 
-SRCS=	libhbsdcontrol.c
-INCS=	libhbsdcontrol.h
-MAN+=	libhbsdcontrol.3
-MLINKS+=	libhbsdcontrol.3	hbsdcontrol_set_extattr.3
-MLINKS+=	libhbsdcontrol.3	hbsdcontrol_rm_extattr.3
-MLINKS+=	libhbsdcontrol.3	hbsdcontrol_set_feature_state.3
-MLINKS+=	libhbsdcontrol.3	hbsdcontrol_rm_feature_state.3
+SRCS=		libhbsdcontrol.c
+INCS=		libhbsdcontrol.h
+
+# Features
+SRCS+=		aslr.c
+SRCS+=		disallow_map32bit.c
+SRCS+=		harden_shm.c
+SRCS+=		insecure_kmod.c
+SRCS+=		mprotect.c
+SRCS+=		pageexec.c
+SRCS+=		prohibit_ptrace_capsicum.c
+SRCS+=		segvguard.c
+SRCS+=		shlibrandom.c
+
+MAN=
+
+LIBADD+=	pthread
+LIBADD+=	util
 
 .include <bsd.lib.mk>

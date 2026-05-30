@@ -55,9 +55,6 @@
 #include "opt_acpi.h"
 #include "opt_platform.h"
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
@@ -283,7 +280,7 @@ static kobj_method_t uart_mu_methods[] = {
 	KOBJMETHOD(uart_transmit,	uart_mu_bus_transmit),
 	KOBJMETHOD(uart_grab,		uart_mu_bus_grab),
 	KOBJMETHOD(uart_ungrab,		uart_mu_bus_ungrab),
-	{ 0, 0 }
+	KOBJMETHOD_END
 };
 
 static struct uart_class uart_mu_class = {

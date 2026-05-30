@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -22,13 +23,14 @@
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
-#if defined(__x86_64) && defined(HAVE_PCLMULQDQ)
+#if defined(__x86_64) && HAVE_SIMD(PCLMULQDQ)
 
 #include <sys/types.h>
 #include <sys/simd.h>
+#include <sys/asm_linkage.h>
 
 /* These functions are used to execute pclmulqdq based assembly methods */
-extern void gcm_mul_pclmulqdq(uint64_t *, uint64_t *, uint64_t *);
+extern void ASMABI gcm_mul_pclmulqdq(uint64_t *, uint64_t *, uint64_t *);
 
 #include <modes/gcm_impl.h>
 
@@ -61,4 +63,4 @@ const gcm_impl_ops_t gcm_pclmulqdq_impl = {
 	.name = "pclmulqdq"
 };
 
-#endif /* defined(__x86_64) && defined(HAVE_PCLMULQDQ) */
+#endif /* defined(__x86_64) && HAVE_SIMD(PCLMULQDQ) */

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2000 Michael Smith
  * Copyright (c) 2001 Scott Long
@@ -31,8 +31,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * PCI bus interface and resource allocation.
  */
@@ -74,7 +72,7 @@ static device_method_t aacraid_methods[] = {
 
 	DEVMETHOD(bus_print_child,	bus_generic_print_child),
 	DEVMETHOD(bus_driver_added,	bus_generic_driver_added),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t aacraid_pci_driver = {

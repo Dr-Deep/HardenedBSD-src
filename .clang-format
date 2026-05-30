@@ -1,8 +1,8 @@
-# $FreeBSD$
 # Basic .clang-format
 ---
 BasedOnStyle: WebKit
 AlignAfterOpenBracket: DontAlign
+AlignConsecutiveMacros: AcrossEmptyLines
 AlignConsecutiveAssignments: false
 AlignConsecutiveDeclarations: false
 AlignEscapedNewlines: Left
@@ -95,6 +95,7 @@ ForEachMacros:
   - TAILQ_FOREACH_SAFE
   - VM_MAP_ENTRY_FOREACH
   - VM_PAGE_DUMP_FOREACH
+SpaceBeforeParens: ControlStatementsExceptForEachMacros
 IndentCaseLabels: false
 IndentPPDirectives: None
 Language: Cpp
@@ -150,10 +151,10 @@ IncludeCategories:
   - Regex: '^<(fs|nfs(|client|server)|ufs)/'
     Priority: 8
     SortPriority: 80
-  - Regex: '^<[^/].*\.h'
+  - Regex: '^<[^/].*'
     Priority: 9
     SortPriority: 90
-  - Regex: '^\".*\.h\"'
+  - Regex: '^\".*\"'
     Priority: 10
     SortPriority: 100
 # LLVM's header include ordering style is almost the exact opposite of ours.
@@ -163,7 +164,7 @@ IncludeCategories:
 # http://llvm.org/docs/CodingStandards.html#include-style
 IncludeIsMainRegex: 'BLAH_DONT_MATCH_ANYTHING'
 SortIncludes: true
-KeepEmptyLinesAtTheStartOfBlocks: true
+KeepEmptyLinesAtTheStartOfBlocks: false
 TypenameMacros:
   - ARB_ELMTYPE
   - ARB_HEAD

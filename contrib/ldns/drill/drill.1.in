@@ -19,8 +19,8 @@ drill \- get (debug) information out of DNS(SEC)
 ]
 
 .SH DESCRIPTION
-\fBdrill\fR is a tool to designed to get all sorts of information out of the
-DNS. It is specificly designed to be used with DNSSEC. 
+\fBdrill\fR is a tool designed to get all sorts of information out of the
+DNS. It is specifically designed to be used with DNSSEC.
 .PP
 The name \fBdrill\fR is a pun on \fBdig\fR. With \fBdrill\fR you should be able
 get even more information than with \fBdig\fR.
@@ -222,6 +222,15 @@ specify named base64 tsig key, and optional an algorithm (defaults to hmac-md5.s
 \fB\-z \fR
 don't randomize the nameserver list before sending queries.
 
+
+.SS EDNS QUERY OPTIONS
+
+.TP
+\fB\+nsid \fR
+When set, this EDNS option includes an EDNS name server ID request in the query.
+
+
+
 .SH "EXIT STATUS"
 The exit status is 0 if the looked up answer is secure and trusted,
 or insecure.
@@ -240,7 +249,7 @@ unbound-anchor(8)
 Jelte Jansen and Miek Gieben. Both of NLnet Labs.
 
 .SH REPORTING BUGS
-Report bugs to <ldns-team@nlnetlabs.nl>.
+Report bugs to <dns-team@nlnetlabs.nl>.
 
 .SH BUGS
 

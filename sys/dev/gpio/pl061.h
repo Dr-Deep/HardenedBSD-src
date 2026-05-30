@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2020 Amazon.com, Inc. or its affiliates.
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef __DEV_PL061_H__
@@ -48,6 +46,7 @@ struct pl061_softc {
 	struct resource		*sc_mem_res;
 	struct resource		*sc_irq_res;
 	void			*sc_irq_hdlr;
+	intptr_t		sc_xref;
 	int			sc_mem_rid;
 	int			sc_irq_rid;
 	struct pl061_pin_irqsrc sc_isrcs[PL061_NUM_GPIO];

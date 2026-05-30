@@ -20,7 +20,6 @@
 #   o generate foo_isa.c, foo_pci.c, foo_pccard.c, foo_cardbus.c, and foovar.h
 #   o Put pccard stuff in here.
 #
-# $FreeBSD$"
 #
 #
 if [ "X${1}" = "X" ]; then
@@ -34,8 +33,6 @@ else
 	TOP=${2}
 fi
 UPPER=`echo ${1} |tr "[:lower:]" "[:upper:]"`
-
-RCS_KEYWORD=FreeBSD
 
 if [ -d ${TOP}/modules/${1} ]; then
 	echo "There appears to already be a module called ${1}"
@@ -91,7 +88,6 @@ DONE
 #######################################################################
 cat >${TOP}/i386/conf/${UPPER} <<DONE
 # Configuration file for kernel type: ${UPPER}
-# \$${RCS_KEYWORD}$
 
 files		"${TOP}/conf/files.${UPPER}"
 
@@ -142,9 +138,6 @@ cat >${TOP}/dev/${1}/${1}.c <<DONE
  * http://www.daemonnews.org/200008/isa.html is required reading.
  * hopefully it will make it's way into the handbook.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("\$${RCS_KEYWORD}$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -349,7 +342,8 @@ ${1}_isa_identify (driver_t *driver, device_t parent)
 		if ((ioport == 0) && (irq == 0))
 			return; /* We've added all our local hints. */
 
-		child = BUS_ADD_CHILD(parent, ISA_ORDER_SPECULATIVE, "${1}", -1);
+		child = BUS_ADD_CHILD(parent, ISA_ORDER_SPECULATIVE, "${1}",
+		    DEVICE_UNIT_ANY);
 		bus_set_resource(child, SYS_RES_IOPORT,	0, ioport, NUMPORTS);
 		bus_set_resource(child, SYS_RES_IRQ,	0, irq, 1);
 		bus_set_resource(child, SYS_RES_DRQ,	0, res[i].drq, 1);
@@ -957,8 +951,6 @@ fi
 
 cat >${TOP}/modules/${1}/Makefile <<DONE
 #	${UPPER} Loadable Kernel Module
-#
-# \$${RCS_KEYWORD}: $
 
 .PATH:  \${.CURDIR}/../../dev/${1}
 KMOD    = ${1}

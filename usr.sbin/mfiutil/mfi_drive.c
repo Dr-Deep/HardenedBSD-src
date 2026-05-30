@@ -27,12 +27,11 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include <sys/types.h>
 #include <sys/errno.h>
+#include <sys/sbuf.h>
 #include <ctype.h>
 #include <err.h>
 #include <fcntl.h>
@@ -43,6 +42,7 @@
 #include <string.h>
 #include <strings.h>
 #include <unistd.h>
+#include <cam/cam.h>
 #include <cam/scsi/scsi_all.h>
 #include "mfiutil.h"
 
@@ -58,9 +58,9 @@ const char *
 mfi_drive_name(struct mfi_pd_info *pinfo, uint16_t device_id, uint32_t def)
 {
 	struct mfi_pd_info info;
+	struct sbuf sb;
 	static char buf[16];
-	char *p;
-	int error, fd, len;
+	int fd;
 
 	if ((def & MFI_DNAME_HONOR_OPTS) != 0 &&
 	    (mfi_opts & (MFI_DNAME_ES|MFI_DNAME_DEVICE_ID)) != 0)
@@ -74,7 +74,7 @@ mfi_drive_name(struct mfi_pd_info *pinfo, uint16_t device_id, uint32_t def)
 		else
 			snprintf(buf, sizeof(buf), "%2u", device_id);
 
-		fd = mfi_open(mfi_unit, O_RDWR);
+		fd = mfi_open(mfi_device, O_RDWR);
 		if (fd < 0) {
 			warn("mfi_open");
 			return (buf);
@@ -91,40 +91,29 @@ mfi_drive_name(struct mfi_pd_info *pinfo, uint16_t device_id, uint32_t def)
 		pinfo = &info;
 	}
 
-	p = buf;
-	len = sizeof(buf);
+	sbuf_new(&sb, buf, sizeof(buf), SBUF_FIXEDLEN);
 	if (def & MFI_DNAME_DEVICE_ID) {
 		if (device_id == 0xffff)
-			error = snprintf(p, len, "MISSING");
+			sbuf_printf(&sb, "MISSING");
 		else
-			error = snprintf(p, len, "%2u", device_id);
-		if (error >= 0) {
-			p += error;
-			len -= error;
-		}
+			sbuf_printf(&sb, "%2u", device_id);
 	}
 	if ((def & (MFI_DNAME_ES|MFI_DNAME_DEVICE_ID)) ==
-	    (MFI_DNAME_ES|MFI_DNAME_DEVICE_ID) && len >= 2) {
-		*p++ = ' ';
-		len--;
-		*p = '\0';
-		len--;
+	    (MFI_DNAME_ES|MFI_DNAME_DEVICE_ID)) {
+		sbuf_cat(&sb, " ");
 	}
 	if (def & MFI_DNAME_ES) {
 		if (pinfo->encl_device_id == 0xffff)
-			error = snprintf(p, len, "S%u",
+			sbuf_printf(&sb, "S%u",
 			    pinfo->slot_number);
 		else if (pinfo->encl_device_id == pinfo->ref.v.device_id)
-			error = snprintf(p, len, "E%u",
+			sbuf_printf(&sb, "E%u",
 			    pinfo->encl_index);
 		else
-			error = snprintf(p, len, "E%u:S%u",
+			sbuf_printf(&sb, "E%u:S%u",
 			    pinfo->encl_index, pinfo->slot_number);
-		if (error >= 0) {
-			p += error;
-			len -= error;
-		}
 	}
+	sbuf_finish(&sb);
 
 	return (buf);
 }
@@ -291,50 +280,14 @@ mfi_pd_get_info(int fd, uint16_t device_id, struct mfi_pd_info *info,
 	    sizeof(struct mfi_pd_info), mbox, 2, statusp));
 }
 
-static void
-cam_strvis(char *dst, const char *src, int srclen, int dstlen)
-{
-
-	/* Trim leading/trailing spaces, nulls. */
-	while (srclen > 0 && src[0] == ' ')
-		src++, srclen--;
-	while (srclen > 0
-	    && (src[srclen-1] == ' ' || src[srclen-1] == '\0'))
-		srclen--;
-
-	while (srclen > 0 && dstlen > 1) {
-		char *cur_pos = dst;
-
-		if (*src < 0x20) {
-			/* SCSI-II Specifies that these should never occur. */
-			/* non-printable character */
-			if (dstlen > 4) {
-				*cur_pos++ = '\\';
-				*cur_pos++ = ((*src & 0300) >> 6) + '0';
-				*cur_pos++ = ((*src & 0070) >> 3) + '0';
-				*cur_pos++ = ((*src & 0007) >> 0) + '0';
-			} else {
-				*cur_pos++ = '?';
-			}
-		} else {
-			/* normal character */
-			*cur_pos++ = *src;
-		}
-		src++;
-		srclen--;
-		dstlen -= cur_pos - dst;
-		dst = cur_pos;
-	}
-	*dst = '\0';
-}
-
 /* Borrowed heavily from scsi_all.c:scsi_print_inquiry(). */
 const char *
 mfi_pd_inq_string(struct mfi_pd_info *info)
 {
 	struct scsi_inquiry_data iqd, *inq_data = &iqd;
-	char vendor[16], product[48], revision[16], rstr[12], serial[SID_VENDOR_SPECIFIC_0_SIZE];
-	static char inq_string[64];
+	char vendor[SID_VENDOR_SIZE+1], product[SID_PRODUCT_SIZE+1],
+		 revision[SID_REVISION_SIZE+1], rstr[9], serial[SID_VENDOR_SPECIFIC_0_SIZE+1];
+	static char inq_string[80];
 
 	memcpy(inq_data, info->inquiry_data,
 	    (sizeof (iqd) <  sizeof (info->inquiry_data))?
@@ -346,14 +299,14 @@ mfi_pd_inq_string(struct mfi_pd_info *info)
 	if (SID_QUAL(inq_data) != SID_QUAL_LU_CONNECTED)
 		return (NULL);
 
-	cam_strvis(vendor, inq_data->vendor, sizeof(inq_data->vendor),
-	    sizeof(vendor));
-	cam_strvis(product, inq_data->product, sizeof(inq_data->product),
-	    sizeof(product));
-	cam_strvis(revision, inq_data->revision, sizeof(inq_data->revision),
-	    sizeof(revision));
-	cam_strvis(serial, (char *)inq_data->vendor_specific0, sizeof(inq_data->vendor_specific0),
-	    sizeof(serial));
+	cam_strvis_flag(vendor, inq_data->vendor, sizeof(inq_data->vendor),
+	    sizeof(vendor), CAM_STRVIS_FLAG_NONASCII_TRIM);
+	cam_strvis_flag(product, inq_data->product, sizeof(inq_data->product),
+	    sizeof(product), CAM_STRVIS_FLAG_NONASCII_TRIM);
+	cam_strvis_flag(revision, inq_data->revision, sizeof(inq_data->revision),
+	    sizeof(revision), CAM_STRVIS_FLAG_NONASCII_TRIM);
+	cam_strvis_flag(serial, (char *)inq_data->vendor_specific0, sizeof(inq_data->vendor_specific0),
+	    sizeof(serial), CAM_STRVIS_FLAG_NONASCII_SPC);
 
 	/* Hack for SATA disks, no idea how to tell speed. */
 	if (strcmp(vendor, "ATA") == 0) {
@@ -388,7 +341,7 @@ drive_set_state(char *drive, uint16_t new_state)
 	uint8_t mbox[6];
 	int error, fd;
 
-	fd = mfi_open(mfi_unit, O_RDWR);
+	fd = mfi_open(mfi_device, O_RDWR);
 	if (fd < 0) {
 		error = errno;
 		warn("mfi_open");
@@ -503,7 +456,7 @@ start_rebuild(int ac, char **av)
 		return (EINVAL);
 	}
 
-	fd = mfi_open(mfi_unit, O_RDWR);
+	fd = mfi_open(mfi_device, O_RDWR);
 	if (fd < 0) {
 		error = errno;
 		warn("mfi_open");
@@ -560,7 +513,7 @@ abort_rebuild(int ac, char **av)
 		return (EINVAL);
 	}
 
-	fd = mfi_open(mfi_unit, O_RDWR);
+	fd = mfi_open(mfi_device, O_RDWR);
 	if (fd < 0) {
 		error = errno;
 		warn("mfi_open");
@@ -616,7 +569,7 @@ drive_progress(int ac, char **av)
 		return (EINVAL);
 	}
 
-	fd = mfi_open(mfi_unit, O_RDWR);
+	fd = mfi_open(mfi_device, O_RDWR);
 	if (fd < 0) {
 		error = errno;
 		warn("mfi_open");
@@ -682,7 +635,7 @@ drive_clear(int ac, char **av)
 		return (EINVAL);
 	}
 
-	fd = mfi_open(mfi_unit, O_RDWR);
+	fd = mfi_open(mfi_device, O_RDWR);
 	if (fd < 0) {
 		error = errno;
 		warn("mfi_open");
@@ -742,7 +695,7 @@ drive_locate(int ac, char **av)
 		return (EINVAL);
 	}
 
-	fd = mfi_open(mfi_unit, O_RDWR);
+	fd = mfi_open(mfi_device, O_RDWR);
 	if (fd < 0) {
 		error = errno;
 		warn("mfi_open");

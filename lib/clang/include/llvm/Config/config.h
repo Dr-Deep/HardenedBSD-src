@@ -1,4 +1,3 @@
-/* $FreeBSD$ */
 #ifndef CONFIG_H
 #define CONFIG_H
 
@@ -55,17 +54,8 @@
    don't. */
 #define HAVE_DECL_STRERROR_S 0
 
-/* Define to 1 if you have the DIA SDK installed, and to 0 if you don't. */
-#define LLVM_ENABLE_DIA_SDK 0
-
-/* Define to 1 if you have the <dlfcn.h> header file. */
-#define HAVE_DLFCN_H 1
-
 /* Define if dlopen() is available on this platform. */
 #define HAVE_DLOPEN 1
-
-/* Define if dladdr() is available on this platform. */
-#define HAVE_DLADDR 1
 
 #if !defined(__arm__) || defined(__USING_SJLJ_EXCEPTIONS__) || defined(__ARM_DWARF_EH__)
 /* Define to 1 if we can register EH frames on this platform. */
@@ -77,15 +67,6 @@
 
 /* Define if __unw_add_dynamic_fde() is available on this platform. */
 /* #undef HAVE_UNW_ADD_DYNAMIC_FDE */
-
-/* Define to 1 if you have the <errno.h> header file. */
-#define HAVE_ERRNO_H 1
-
-/* Define to 1 if you have the <fcntl.h> header file. */
-#define HAVE_FCNTL_H 1
-
-/* Define to 1 if you have the <fenv.h> header file. */
-#define HAVE_FENV_H 1
 
 /* Define if libffi is available on this platform. */
 /* #undef HAVE_FFI_CALL */
@@ -105,9 +86,6 @@
 /* Define to 1 if you have the `getpagesize' function. */
 #define HAVE_GETPAGESIZE 1
 
-/* Define to 1 if you have the `getrlimit' function. */
-#define HAVE_GETRLIMIT 1
-
 /* Define to 1 if you have the `getrusage' function. */
 #define HAVE_GETRUSAGE 1
 
@@ -115,7 +93,7 @@
 #define HAVE_ISATTY 1
 
 /* Define to 1 if you have the `edit' library (-ledit). */
-#define HAVE_LIBEDIT 1
+#define HAVE_LIBEDIT TRUE
 
 /* Define to 1 if you have the `pfm' library (-lpfm). */
 /* #undef HAVE_LIBPFM */
@@ -135,16 +113,14 @@
 /* Define to 1 if you have the `pthread_setname_np' function. */
 #define HAVE_PTHREAD_SETNAME_NP 1
 
-/* Define to 1 if you have the <link.h> header file. */
-#if __has_include(<link.h>)
-#define HAVE_LINK_H 1
-#else
-#define HAVE_LINK_H 0
+/* Define to 1 if you have the `pthread_get_name_np' function. */
+#if defined(__FreeBSD__)
+#define HAVE_PTHREAD_GET_NAME_NP 1
 #endif
 
-/* Define to 1 if you have the `lseek64' function. */
-#if defined(__linux__)
-#define HAVE_LSEEK64 1
+/* Define to 1 if you have the `pthread_set_name_np' function. */
+#if defined(__FreeBSD__)
+#define HAVE_PTHREAD_SET_NAME_NP 1
 #endif
 
 /* Define to 1 if you have the <mach/mach.h> header file. */
@@ -181,9 +157,6 @@
 /* Define to 1 if you have the `pread' function. */
 #define HAVE_PREAD 1
 
-/* Have pthread_getspecific */
-#define HAVE_PTHREAD_GETSPECIFIC 1
-
 /* Define to 1 if you have the <pthread.h> header file. */
 #define HAVE_PTHREAD_H 1
 
@@ -199,17 +172,8 @@
 /* Define to 1 if you have the `setenv' function. */
 #define HAVE_SETENV 1
 
-/* Define to 1 if you have the `setrlimit' function. */
-#define HAVE_SETRLIMIT 1
-
 /* Define to 1 if you have the `sigaltstack' function. */
 #define HAVE_SIGALTSTACK 1
-
-/* Define to 1 if you have the <signal.h> header file. */
-#define HAVE_SIGNAL_H 1
-
-/* Define to 1 if you have the `strerror' function. */
-#define HAVE_STRERROR 1
 
 /* Define to 1 if you have the `strerror_r' function. */
 #define HAVE_STRERROR_R 1
@@ -217,23 +181,11 @@
 /* Define to 1 if you have the `sysconf' function. */
 #define HAVE_SYSCONF 1
 
-/* Define to 1 if you have the <sys/ioctl.h> header file. */
-#define HAVE_SYS_IOCTL_H 1
-
 /* Define to 1 if you have the <sys/mman.h> header file. */
 #define HAVE_SYS_MMAN_H 1
 
-/* Define to 1 if you have the <sys/param.h> header file. */
-#define HAVE_SYS_PARAM_H 1
-
-/* Define to 1 if you have the <sys/resource.h> header file. */
-#define HAVE_SYS_RESOURCE_H 1
-
-/* Define to 1 if you have the <sys/stat.h> header file. */
-#define HAVE_SYS_STAT_H 1
-
-/* Define to 1 if you have the <sys/time.h> header file. */
-#define HAVE_SYS_TIME_H 1
+/* Define to 1 if you have the <sys/ioctl.h> header file. */
+#define HAVE_SYS_IOCTL_H 1
 
 /* Define to 1 if stat struct has st_mtimespec member .*/
 #if !defined(__linux__)
@@ -244,21 +196,6 @@
 #if !defined(__APPLE__)
 #define HAVE_STRUCT_STAT_ST_MTIM_TV_NSEC 1
 #endif
-
-/* Define to 1 if you have the <sys/types.h> header file. */
-#define HAVE_SYS_TYPES_H 1
-
-/* Define if the setupterm() function is supported this platform. */
-#if defined(__FreeBSD__)
-/*
- * This is only needed for terminalHasColors(). When disabled LLVM falls back
- * to checking a list of TERM prefixes which is sufficient for a bootstrap tool.
- */
-#define LLVM_ENABLE_TERMINFO 1
-#endif
-
-/* Define to 1 if you have the <termios.h> header file. */
-#define HAVE_TERMIOS_H 1
 
 /* Define to 1 if you have the <unistd.h> header file. */
 #define HAVE_UNISTD_H 1
@@ -326,21 +263,23 @@
 /* Have host's ___chkstk_ms */
 /* #undef HAVE____CHKSTK_MS */
 
+/* Define if ICU library is available */
+#define HAVE_ICU 0
+
+/* Define if iconv library is available */
+#define HAVE_ICONV 0
+
 /* Linker version detected at compile time. */
 /* #undef HOST_LINK_VERSION */
-
-/* Target triple LLVM will generate code for by default */
-/* Doesn't use `cmakedefine` because it is allowed to be empty. */
-/* #undef LLVM_DEFAULT_TARGET_TRIPLE */
 
 /* Define if overriding target triple is enabled */
 /* #undef LLVM_TARGET_TRIPLE_ENV */
 
-/* LLVM version information */
-/* #undef LLVM_VERSION_INFO */
-
 /* Whether tools show host and target info when invoked with --version */
 #define LLVM_VERSION_PRINTER_SHOW_HOST_TARGET_INFO 1
+
+/* Whether tools show optional build config flags when invoked with --version */
+#define LLVM_VERSION_PRINTER_SHOW_BUILD_CONFIG 1
 
 /* Define if libxml2 is supported on this platform. */
 /* #undef LLVM_ENABLE_LIBXML2 */
@@ -366,19 +305,13 @@
 #define PACKAGE_NAME "LLVM"
 
 /* Define to the full name and version of this package. */
-#define PACKAGE_STRING "LLVM 14.0.5"
+#define PACKAGE_STRING "LLVM 21.1.8"
 
 /* Define to the version of this package. */
-#define PACKAGE_VERSION "14.0.5"
+#define PACKAGE_VERSION "21.1.8"
 
 /* Define to the vendor of this package. */
 /* #undef PACKAGE_VENDOR */
-
-/* Define as the return type of signal handlers (`int' or `void'). */
-#define RETSIGTYPE void
-
-/* Define if std::is_trivially_copyable is supported */
-#define HAVE_STD_IS_TRIVIALLY_COPYABLE 1
 
 /* Define to a function implementing stricmp */
 /* #undef stricmp */
@@ -400,5 +333,9 @@
 #endif
 
 /* #undef HAVE_PROC_PID_RUSAGE */
+
+#define HAVE_BUILTIN_THREAD_POINTER 1
+
+/* #undef HAVE_GETAUXVAL */
 
 #endif

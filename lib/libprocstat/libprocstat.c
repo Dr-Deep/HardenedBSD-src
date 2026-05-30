@@ -35,9 +35,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/elf.h>
 #include <sys/time.h>
@@ -53,6 +50,7 @@ __FBSDID("$FreeBSD$");
 #define	_WANT_SOCKET
 #include <sys/socketvar.h>
 #include <sys/domain.h>
+#define	_WANT_PROTOSW
 #include <sys/protosw.h>
 #include <sys/un.h>
 #define	_WANT_UNPCB
@@ -86,8 +84,6 @@ __FBSDID("$FreeBSD$");
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
-#define	_WANT_INPCB
-#include <netinet/in_pcb.h>
 
 #include <assert.h>
 #include <ctype.h>
@@ -349,7 +345,7 @@ struct filestat_list *
 procstat_getfiles(struct procstat *procstat, struct kinfo_proc *kp, int mmapped)
 {
 
-	switch(procstat->type) {
+	switch (procstat->type) {
 	case PROCSTAT_KVM:
 		return (procstat_getfiles_kvm(procstat, kp, mmapped));
 	case PROCSTAT_SYSCTL:
@@ -629,6 +625,10 @@ procstat_getfiles_kvm(struct procstat *procstat, struct kinfo_proc *kp, int mmap
 			type = PS_FST_TYPE_EVENTFD;
 			data = file.f_data;
 			break;
+		case DTYPE_INOTIFY:
+			type = PS_FST_TYPE_INOTIFY;
+			data = file.f_data;
+			break;
 		default:
 			continue;
 		}
@@ -721,6 +721,7 @@ kinfo_type2fst(int kftype)
 		{ KF_TYPE_SOCKET, PS_FST_TYPE_SOCKET },
 		{ KF_TYPE_VNODE, PS_FST_TYPE_VNODE },
 		{ KF_TYPE_EVENTFD, PS_FST_TYPE_EVENTFD },
+		{ KF_TYPE_INOTIFY, PS_FST_TYPE_INOTIFY },
 		{ KF_TYPE_UNKNOWN, PS_FST_TYPE_UNKNOWN }
 	};
 #define NKFTYPES	(sizeof(kftypes2fst) / sizeof(*kftypes2fst))
@@ -1329,8 +1330,7 @@ procstat_get_vnode_info_kvm(kvm_t *kd, struct filestat *fst,
 		return (1);
 	}
 	vn->vn_mntdir = getmnton(kd, vnode.v_mount);
-	if ((vnode.v_type == VBLK || vnode.v_type == VCHR) &&
-	    vnode.v_rdev != NULL){
+	if (VTYPE_ISDEV(vnode.v_type) && vnode.v_rdev != NULL) {
 		vn->vn_dev = dev2udev(kd, vnode.v_rdev);
 		(void)kdevtoname(kd, vnode.v_rdev, vn->vn_devname);
 	} else {
@@ -1476,7 +1476,6 @@ procstat_get_socket_info_kvm(kvm_t *kd, struct filestat *fst,
     struct sockstat *sock, char *errbuf)
 {
 	struct domain dom;
-	struct inpcb inpcb;
 	struct protosw proto;
 	struct socket s;
 	struct unpcb unpcb;
@@ -1525,28 +1524,15 @@ procstat_get_socket_info_kvm(kvm_t *kd, struct filestat *fst,
 	sock->proto = proto.pr_protocol;
 	sock->dom_family = dom.dom_family;
 	sock->so_pcb = (uintptr_t)s.so_pcb;
+	sock->sendq = s.so_snd.sb_ccc;
+	sock->recvq = s.so_rcv.sb_ccc;
+	sock->so_rcv_sb_state = s.so_rcv.sb_state;
+	sock->so_snd_sb_state = s.so_snd.sb_state;
 
 	/*
 	 * Protocol specific data.
 	 */
-	switch(dom.dom_family) {
-	case AF_INET:
-	case AF_INET6:
-		if (proto.pr_protocol == IPPROTO_TCP) {
-			if (s.so_pcb) {
-				if (kvm_read(kd, (u_long)s.so_pcb,
-				    (char *)&inpcb, sizeof(struct inpcb))
-				    != sizeof(struct inpcb)) {
-					warnx("can't read inpcb at %p",
-					    (void *)s.so_pcb);
-				} else
-					sock->inp_ppcb =
-					    (uintptr_t)inpcb.inp_ppcb;
-				sock->sendq = s.so_snd.sb_ccc;
-				sock->recvq = s.so_rcv.sb_ccc;
-			}
-		}
-		break;
+	switch (dom.dom_family) {
 	case AF_UNIX:
 		if (s.so_pcb) {
 			if (kvm_read(kd, (u_long)s.so_pcb, (char *)&unpcb,
@@ -1554,11 +1540,7 @@ procstat_get_socket_info_kvm(kvm_t *kd, struct filestat *fst,
 				warnx("can't read unpcb at %p",
 				    (void *)s.so_pcb);
 			} else if (unpcb.unp_conn) {
-				sock->so_rcv_sb_state = s.so_rcv.sb_state;
-				sock->so_snd_sb_state = s.so_snd.sb_state;
 				sock->unp_conn = (uintptr_t)unpcb.unp_conn;
-				sock->sendq = s.so_snd.sb_ccc;
-				sock->recvq = s.so_rcv.sb_ccc;
 			}
 		}
 		break;
@@ -1602,11 +1584,10 @@ procstat_get_socket_info_sysctl(struct filestat *fst, struct sockstat *sock,
 	/*
 	 * Protocol specific data.
 	 */
-	switch(sock->dom_family) {
+	switch (sock->dom_family) {
 	case AF_INET:
 	case AF_INET6:
 		if (sock->proto == IPPROTO_TCP) {
-			sock->inp_ppcb = kif->kf_un.kf_sock.kf_sock_inpcb;
 			sock->sendq = kif->kf_un.kf_sock.kf_sock_sendq;
 			sock->recvq = kif->kf_un.kf_sock.kf_sock_recvq;
 		}
@@ -1963,7 +1944,7 @@ procstat_getvmmap(struct procstat *procstat, struct kinfo_proc *kp,
     unsigned int *cntp)
 {
 
-	switch(procstat->type) {
+	switch (procstat->type) {
 	case PROCSTAT_KVM:
 		warnx("kvm method is not supported");
 		return (NULL);
@@ -1992,6 +1973,7 @@ procstat_getgroups_kvm(kvm_t *kd, struct kinfo_proc *kp, unsigned int *cntp)
 	struct ucred ucred;
 	gid_t *groups;
 	size_t len;
+	unsigned int ngroups;
 
 	assert(kd != NULL);
 	assert(kp != NULL);
@@ -2009,19 +1991,22 @@ procstat_getgroups_kvm(kvm_t *kd, struct kinfo_proc *kp, unsigned int *cntp)
 		    proc.p_ucred, kp->ki_pid);
 		return (NULL);
 	}
-	len = ucred.cr_ngroups * sizeof(gid_t);
+	ngroups = 1 + ucred.cr_ngroups;
+	len = ngroups * sizeof(gid_t);
 	groups = malloc(len);
 	if (groups == NULL) {
 		warn("malloc(%zu)", len);
 		return (NULL);
 	}
-	if (!kvm_read_all(kd, (unsigned long)ucred.cr_groups, groups, len)) {
+	groups[0] = ucred.cr_gid;
+	if (!kvm_read_all(kd, (unsigned long)ucred.cr_groups, groups + 1,
+	    len - sizeof(gid_t))) {
 		warnx("can't read groups at %p for pid %d",
 		    ucred.cr_groups, kp->ki_pid);
 		free(groups);
 		return (NULL);
 	}
-	*cntp = ucred.cr_ngroups;
+	*cntp = ngroups;
 	return (groups);
 }
 
@@ -2068,7 +2053,7 @@ gid_t *
 procstat_getgroups(struct procstat *procstat, struct kinfo_proc *kp,
     unsigned int *cntp)
 {
-	switch(procstat->type) {
+	switch (procstat->type) {
 	case PROCSTAT_KVM:
 		return (procstat_getgroups_kvm(procstat->kd, kp, cntp));
 	case PROCSTAT_SYSCTL:
@@ -2146,7 +2131,7 @@ int
 procstat_getumask(struct procstat *procstat, struct kinfo_proc *kp,
     unsigned short *maskp)
 {
-	switch(procstat->type) {
+	switch (procstat->type) {
 	case PROCSTAT_KVM:
 		return (procstat_getumask_kvm(procstat->kd, kp, maskp));
 	case PROCSTAT_SYSCTL:
@@ -2236,7 +2221,7 @@ int
 procstat_getrlimit(struct procstat *procstat, struct kinfo_proc *kp, int which,
     struct rlimit* rlimit)
 {
-	switch(procstat->type) {
+	switch (procstat->type) {
 	case PROCSTAT_KVM:
 		return (procstat_getrlimit_kvm(procstat->kd, kp, which,
 		    rlimit));
@@ -2295,7 +2280,7 @@ int
 procstat_getpathname(struct procstat *procstat, struct kinfo_proc *kp,
     char *pathname, size_t maxlen)
 {
-	switch(procstat->type) {
+	switch (procstat->type) {
 	case PROCSTAT_KVM:
 		/* XXX: Return empty string. */
 		if (maxlen > 0)
@@ -2368,7 +2353,7 @@ procstat_getosrel_core(struct procstat_core *core, int *osrelp)
 int
 procstat_getosrel(struct procstat *procstat, struct kinfo_proc *kp, int *osrelp)
 {
-	switch(procstat->type) {
+	switch (procstat->type) {
 	case PROCSTAT_KVM:
 		return (procstat_getosrel_kvm(procstat->kd, kp, osrelp));
 	case PROCSTAT_SYSCTL:
@@ -2383,7 +2368,7 @@ procstat_getosrel(struct procstat *procstat, struct kinfo_proc *kp, int *osrelp)
 
 #define PROC_AUXV_MAX	256
 
-#if __ELF_WORD_SIZE == 64
+#ifdef PS_ARCH_HAS_FREEBSD32
 static const char *elf32_sv_names[] = {
 	"Linux ELF32",
 	"FreeBSD ELF32",
@@ -2394,7 +2379,7 @@ is_elf32_sysctl(pid_t pid)
 {
 	int error, name[4];
 	size_t len, i;
-	static char sv_name[256];
+	char sv_name[32];
 
 	name[0] = CTL_KERN;
 	name[1] = KERN_PROC;
@@ -2416,7 +2401,6 @@ procstat_getauxv32_sysctl(pid_t pid, unsigned int *cntp)
 {
 	Elf_Auxinfo *auxv;
 	Elf32_Auxinfo *auxv32;
-	void *ptr;
 	size_t len;
 	unsigned int i, count;
 	int name[4];
@@ -2437,8 +2421,8 @@ procstat_getauxv32_sysctl(pid_t pid, unsigned int *cntp)
 			warn("sysctl: kern.proc.auxv: %d: %d", pid, errno);
 		goto out;
 	}
-	count = len / sizeof(Elf_Auxinfo);
-	auxv = malloc(count  * sizeof(Elf_Auxinfo));
+	count = len / sizeof(Elf32_Auxinfo);
+	auxv = malloc(count * sizeof(Elf_Auxinfo));
 	if (auxv == NULL) {
 		warn("malloc(%zu)", count * sizeof(Elf_Auxinfo));
 		goto out;
@@ -2450,15 +2434,24 @@ procstat_getauxv32_sysctl(pid_t pid, unsigned int *cntp)
 		 * necessarily true.
 		 */
 		auxv[i].a_type = auxv32[i].a_type;
-		ptr = &auxv32[i].a_un;
-		auxv[i].a_un.a_val = *((uint32_t *)ptr);
+		/*
+		 * Don't sign extend values.  Existing entries are positive
+		 * integers or pointers.  Under freebsd32, programs typically
+		 * have a full [0, 2^32) address space (perhaps minus the last
+		 * page) and treating this as a signed integer would be
+		 * confusing since these are not kernel pointers.
+		 *
+		 * XXX: A more complete translation would be ABI and
+		 * type-aware.
+		 */
+		auxv[i].a_un.a_val = (uint32_t)auxv32[i].a_un.a_val;
 	}
 	*cntp = count;
 out:
 	free(auxv32);
 	return (auxv);
 }
-#endif /* __ELF_WORD_SIZE == 64 */
+#endif /* PS_ARCH_HAS_FREEBSD32 */
 
 static Elf_Auxinfo *
 procstat_getauxv_sysctl(pid_t pid, unsigned int *cntp)
@@ -2467,7 +2460,7 @@ procstat_getauxv_sysctl(pid_t pid, unsigned int *cntp)
 	int name[4];
 	size_t len;
 
-#if __ELF_WORD_SIZE == 64
+#ifdef PS_ARCH_HAS_FREEBSD32
 	if (is_elf32_sysctl(pid))
 		return (procstat_getauxv32_sysctl(pid, cntp));
 #endif
@@ -2508,7 +2501,7 @@ Elf_Auxinfo *
 procstat_getauxv(struct procstat *procstat, struct kinfo_proc *kp,
     unsigned int *cntp)
 {
-	switch(procstat->type) {
+	switch (procstat->type) {
 	case PROCSTAT_KVM:
 		warnx("kvm method is not supported");
 		return (NULL);
@@ -2622,7 +2615,7 @@ struct kinfo_kstack *
 procstat_getkstack(struct procstat *procstat, struct kinfo_proc *kp,
     unsigned int *cntp)
 {
-	switch(procstat->type) {
+	switch (procstat->type) {
 	case PROCSTAT_KVM:
 		warnx("kvm method is not supported");
 		return (NULL);
@@ -2751,7 +2744,7 @@ fail:
 struct advlock_list *
 procstat_getadvlock(struct procstat *procstat)
 {
-	switch(procstat->type) {
+	switch (procstat->type) {
 	case PROCSTAT_KVM:
 		warnx("kvm method is not supported");
 		return (NULL);
@@ -2779,3 +2772,151 @@ procstat_freeadvlock(struct procstat *procstat __unused,
 	free(lst);
 }
 
+static rlim_t *
+procstat_getrlimitusage_sysctl(pid_t pid, unsigned *cntp)
+{
+	int error, name[4];
+	rlim_t *val;
+	size_t len;
+
+	name[0] = CTL_KERN;
+	name[1] = KERN_PROC;
+	name[2] = KERN_PROC_RLIMIT_USAGE;
+	name[3] = pid;
+
+	len = 0;
+	error = sysctl(name, nitems(name), NULL, &len, NULL, 0);
+	if (error == -1)
+		return (NULL);
+	val = malloc(len);
+	if (val == NULL)
+		return (NULL);
+
+	error = sysctl(name, nitems(name), val, &len, NULL, 0);
+	if (error == -1) {
+		free(val);
+		return (NULL);
+	}
+	*cntp = len / sizeof(rlim_t);
+	return (val);
+}
+
+rlim_t *
+procstat_getrlimitusage(struct procstat *procstat, struct kinfo_proc *kp,
+    unsigned int *cntp)
+{
+	switch (procstat->type) {
+	case PROCSTAT_KVM:
+		warnx("kvm method is not supported");
+		return (NULL);
+	case PROCSTAT_SYSCTL:
+		return (procstat_getrlimitusage_sysctl(kp->ki_pid, cntp));
+	case PROCSTAT_CORE:
+		warnx("core method is not supported");
+		return (NULL);
+	default:
+		warnx("unknown access method: %d", procstat->type);
+		return (NULL);
+	}
+}
+
+void
+procstat_freerlimitusage(struct procstat *procstat __unused, rlim_t *resusage)
+{
+	free(resusage);
+}
+
+static struct kinfo_knote *
+procstat_get_kqueue_info_sysctl(pid_t pid, int kqfd, unsigned int *cntp,
+    char *errbuf)
+{
+	int error, name[5];
+	struct kinfo_knote *val;
+	size_t len;
+
+	name[0] = CTL_KERN;
+	name[1] = KERN_PROC;
+	name[2] = KERN_PROC_KQUEUE;
+	name[3] = pid;
+	name[4] = kqfd;
+
+	len = 0;
+	error = sysctl(name, nitems(name), NULL, &len, NULL, 0);
+	if (error == -1) {
+		snprintf(errbuf, _POSIX2_LINE_MAX,
+		    "KERN_PROC_KQUEUE.pid<%d>.kq<%d> (size q) failed: %s",
+		    pid, kqfd, strerror(errno));
+		return (NULL);
+	}
+	val = malloc(len);
+	if (val == NULL) {
+		snprintf(errbuf, _POSIX2_LINE_MAX, "no memory");
+		return (NULL);
+	}
+
+	error = sysctl(name, nitems(name), val, &len, NULL, 0);
+	if (error == -1) {
+		snprintf(errbuf, _POSIX2_LINE_MAX,
+		    "KERN_PROC_KQUEUE.pid<%d>.kq<%d> failed: %s",
+		    pid, kqfd, strerror(errno));
+		free(val);
+		return (NULL);
+	}
+	*cntp = len / sizeof(*val);
+	return (val);
+}
+
+struct kinfo_knote *
+procstat_get_kqueue_info(struct procstat *procstat,
+    struct kinfo_proc *kp, int kqfd, unsigned int *count, char *errbuf)
+{
+	struct kinfo_knote *kn, *k, *res, *rn;
+	size_t len, kqn;
+
+	switch (procstat->type) {
+	case PROCSTAT_KVM:
+		warnx("kvm method is not supported");
+		return (NULL);
+	case PROCSTAT_SYSCTL:
+		return (procstat_get_kqueue_info_sysctl(kp->ki_pid, kqfd,
+		    count, errbuf));
+	case PROCSTAT_CORE:
+		k = procstat_core_get(procstat->core, PSC_TYPE_KQUEUES,
+		    NULL, &len);
+		if (k == NULL) {
+			snprintf(errbuf, _POSIX2_LINE_MAX,
+			    "getting NT_PROCSTAT_KQUEUES note failed");
+			*count = 0;
+			return (NULL);
+		}
+		for (kqn = 0, kn = k; kn < k + len / sizeof(*kn); kn++) {
+			if (kn->knt_kq_fd == kqfd)
+				kqn++;
+		}
+		res = calloc(kqn, sizeof(*res));
+		if (res == NULL) {
+			free(k);
+			snprintf(errbuf, _POSIX2_LINE_MAX,
+			    "no memory");
+			return (NULL);
+		}
+		for (kn = k, rn = res; kn < k + len / sizeof(*kn); kn++) {
+			if (kn->knt_kq_fd != kqfd)
+				continue;
+			*rn = *kn;
+			rn++;
+		}
+		*count = kqn;
+		free(k);
+		return (res);
+	default:
+		warnx("unknown access method: %d", procstat->type);
+		return (NULL);
+	}
+}
+
+void
+procstat_freekqinfo(struct procstat *procstat __unused, struct kinfo_knote *v)
+{
+	free(v);
+}

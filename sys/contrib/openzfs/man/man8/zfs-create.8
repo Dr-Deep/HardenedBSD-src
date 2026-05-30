@@ -1,3 +1,4 @@
+.\" SPDX-License-Identifier: CDDL-1.0
 .\"
 .\" CDDL HEADER START
 .\"
@@ -29,7 +30,7 @@
 .\" Copyright 2018 Nexenta Systems, Inc.
 .\" Copyright 2019 Joyent, Inc.
 .\"
-.Dd March 16, 2022
+.Dd June 2, 2023
 .Dt ZFS-CREATE 8
 .Os
 .
@@ -84,6 +85,10 @@ property inherited from their parent.
 Any property specified on the command line using the
 .Fl o
 option is ignored.
+If the
+.Fl p
+option is specified multiple times, parent datasets are created with
+.Sy canmount Ns = Ns Ar off .
 If the target filesystem already exists, the operation completes successfully.
 .It Fl n
 Do a dry-run
@@ -116,7 +121,7 @@ key only appears if the
 option is used.
 The
 .Sy property
-key has two values, a property name that property's value.
+key has two values, a property name and that property's value.
 The
 .Sy property
 key may appear zero or more times, once for each property that will be set local
@@ -176,6 +181,10 @@ property inherited from their parent.
 Any property specified on the command line using the
 .Fl o
 option is ignored.
+If the
+.Fl p
+option is specified multiple times, parent datasets are created with
+.Sy canmount Ns = Ns Ar off .
 If the target filesystem already exists, the operation completes successfully.
 .It Fl s
 Creates a sparse volume with no reservation.
@@ -234,14 +243,11 @@ if the volume is not sparse.
 Print verbose information about the created dataset.
 .El
 .El
-.Ss ZFS Volumes as Swap
-ZFS volumes may be used as swap devices.
-After creating the volume with the
-.Nm zfs Cm create Fl V
-enable the swap area using the
-.Xr swapon 8
-command.
-Swapping to files on ZFS filesystems is not supported.
+.Ss ZFS for Swap
+Swapping to a ZFS volume is prone to deadlock and not recommended.
+See OpenZFS FAQ.
+.Pp
+Swapping to a file on a ZFS filesystem is not supported.
 .
 .Sh EXAMPLES
 .\" These are, respectively, examples 1, 10 from zfs.8

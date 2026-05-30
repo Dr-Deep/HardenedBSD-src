@@ -1,38 +1,5 @@
-/***************************************************************************
- *
- *   BSD LICENSE
- * 
- *   Copyright(c) 2007-2022 Intel Corporation. All rights reserved.
- *   All rights reserved.
- * 
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- * 
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- * 
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
- *
- ***************************************************************************/
+/* SPDX-License-Identifier: BSD-3-Clause */
+/* Copyright(c) 2007-2025 Intel Corporation */
 
 /*
  *****************************************************************************
@@ -418,8 +385,12 @@ typedef enum _CpaAccelerationServiceType
     /**< RAID */
     CPA_ACC_SVC_TYPE_XML = CPA_INSTANCE_TYPE_XML,
     /**< XML */
-    CPA_ACC_SVC_TYPE_VIDEO_ANALYTICS
+    CPA_ACC_SVC_TYPE_VIDEO_ANALYTICS,
     /**< Video Analytics */
+    CPA_ACC_SVC_TYPE_CRYPTO_ASYM,
+    /**< Cryptography - Asymmetric service */
+    CPA_ACC_SVC_TYPE_CRYPTO_SYM
+    /**< Cryptography - Symmetric service */
 } CpaAccelerationServiceType;
 
 /**
@@ -586,7 +557,7 @@ typedef struct _CpaInstanceInfo2 {
     CpaPhysicalInstanceId physInstId;
     /**< Identifies the "physical instance" of the accelerator. */
 
-#define CPA_MAX_CORES 256
+#define CPA_MAX_CORES 4096
     /**< Maximum number of cores to support in the coreAffinity bitmap. */
     CPA_BITMAP(coreAffinity, CPA_MAX_CORES);
     /**< A bitmap identifying the core or cores to which the instance
@@ -669,6 +640,124 @@ typedef enum _CpaInstanceEvent
      * host and guests. 
      */
 } CpaInstanceEvent;
+
+/*****************************************************************************/
+/* CPA Instance Management Functions                                         */
+/*****************************************************************************/
+/**
+ *****************************************************************************
+ * @file cpa.h
+ * @ingroup cpa
+ *      Get the number of Acceleration Service instances that are supported by
+ *      the API implementation.
+ *
+ * @description
+ *     This function will get the number of instances that are supported
+ *     for the required Acceleration Service by an implementation of the CPA
+ *     API. This number is then used to determine the size of the array that
+ *     must be passed to @ref cpaGetInstances().
+ *
+ * @context
+ *      This function MUST NOT be called from an interrupt context as it MAY
+ *      sleep.
+ * @assumptions
+ *      None
+ * @sideEffects
+ *      None
+ * @blocking
+ *      This function is synchronous and blocking.
+ * @reentrant
+ *      No
+ * @threadSafe
+ *      Yes
+ *
+ * @param[in]  accelerationServiceType    Acceleration Service required
+ * @param[out] pNumInstances              Pointer to where the number of
+ *                                        instances will be written.
+ *
+ * @retval CPA_STATUS_SUCCESS        Function executed successfully.
+ * @retval CPA_STATUS_FAIL           Function failed.
+ * @retval CPA_STATUS_INVALID_PARAM  Invalid parameter passed in.
+ * @retval CPA_STATUS_UNSUPPORTED    Function is not supported.
+ *
+ * @pre
+ *      None
+ * @post
+ *      None
+ * @note
+ *      This function operates in a synchronous manner and no asynchronous
+ *      callback will be generated
+ *
+ * @see
+ *      cpaGetInstances
+ *
+ *****************************************************************************/
+CpaStatus
+cpaGetNumInstances(
+        const CpaAccelerationServiceType accelerationServiceType,
+        Cpa16U *pNumInstances);
+
+/**
+ *****************************************************************************
+ * @file cpa.h
+ * @ingroup cpa
+ *      Get the handles to the required Acceleration Service instances that are
+ *      supported by the API implementation.
+ *
+ * @description
+ *      This function will return handles to the required Acceleration Service
+ *      instances that are supported by an implementation of the CPA API. These
+ *      instance handles can then be used as input parameters with other
+ *      API functions.
+ *
+ *      This function will populate an array that has been allocated by the
+ *      caller. The size of this array will have been determined by the
+ *      cpaGetNumInstances() function.
+ *
+ * @context
+ *      This function MUST NOT be called from an interrupt context as it MAY
+ *      sleep.
+ * @assumptions
+ *      None
+ * @sideEffects
+ *      None
+ * @blocking
+ *      This function is synchronous and blocking.
+ * @reentrant
+ *      No
+ * @threadSafe
+ *      Yes
+ *
+ * @param[in]  accelerationServiceType   Acceleration Service requested
+ * @param[in]  numInstances              Size of the array. If the value is
+ *                                       greater than the number of instances
+ *                                       supported, then an error (@ref
+ *                                       CPA_STATUS_INVALID_PARAM) is returned.
+ * @param[in,out] cpaInstances           Pointer to where the instance
+ *                                       handles will be written.
+ *
+ * @retval CPA_STATUS_SUCCESS        Function executed successfully.
+ * @retval CPA_STATUS_FAIL           Function failed.
+ * @retval CPA_STATUS_INVALID_PARAM  Invalid parameter passed in.
+ * @retval CPA_STATUS_UNSUPPORTED    Function is not supported.
+ *
+ * @pre
+ *      None
+ * @post
+ *      None
+ * @note
+ *      This function operates in a synchronous manner and no asynchronous
+ *      callback will be generated
+ *
+ * @see
+ *      cpaGetNumInstances
+ *
+ *****************************************************************************/
+CpaStatus
+cpaGetInstances(
+        const CpaAccelerationServiceType accelerationServiceType,
+        Cpa16U numInstances,
+        CpaInstanceHandle *cpaInstances);
 
 #ifdef __cplusplus
 } /* close the extern "C" { */

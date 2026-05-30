@@ -25,9 +25,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/linker.h>
 
@@ -39,8 +36,7 @@ __FBSDID("$FreeBSD$");
 
 #include "bootstrap.h"
 #include "libuboot.h"
-
-extern vm_offset_t md_load(char *, vm_offset_t *, vm_offset_t *);
+#include "modinfo.h"
 
 int
 __elfN(uboot_load)(char *filename, uint64_t dest,
@@ -57,7 +53,7 @@ __elfN(uboot_load)(char *filename, uint64_t dest,
 	 * No need to sync the icache for modules: this will
 	 * be done by the kernel after relocation.
 	 */
-	if (!strcmp((*result)->f_type, "elf kernel"))
+	if (!strcmp((*result)->f_type, md_kerntype))
 		__syncicache((void *) (*result)->f_addr, (*result)->f_size);
 #endif
 	return (0);
@@ -91,6 +87,6 @@ __elfN(uboot_exec)(struct preloaded_file *fp)
 }
 
 struct file_format uboot_elf = {
-	__elfN(uboot_load),
-	__elfN(uboot_exec)
+	.l_load = __elfN(uboot_load),
+	.l_exec = __elfN(uboot_exec)
 };

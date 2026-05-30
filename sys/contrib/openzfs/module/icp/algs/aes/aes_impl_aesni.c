@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -22,19 +23,20 @@
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
-#if defined(__x86_64) && defined(HAVE_AES)
+#if defined(__x86_64) && HAVE_SIMD(AES)
 
 #include <sys/simd.h>
 #include <sys/types.h>
+#include <sys/asm_linkage.h>
 
 /* These functions are used to execute AES-NI instructions: */
-extern int rijndael_key_setup_enc_intel(uint32_t rk[],
+extern ASMABI int rijndael_key_setup_enc_intel(uint32_t rk[],
 	const uint32_t cipherKey[], uint64_t keyBits);
-extern int rijndael_key_setup_dec_intel(uint32_t rk[],
+extern ASMABI int rijndael_key_setup_dec_intel(uint32_t rk[],
 	const uint32_t cipherKey[], uint64_t keyBits);
-extern void aes_encrypt_intel(const uint32_t rk[], int Nr,
+extern ASMABI void aes_encrypt_intel(const uint32_t rk[], int Nr,
 	const uint32_t pt[4], uint32_t ct[4]);
-extern void aes_decrypt_intel(const uint32_t rk[], int Nr,
+extern ASMABI void aes_decrypt_intel(const uint32_t rk[], int Nr,
 	const uint32_t ct[4], uint32_t pt[4]);
 
 
@@ -121,4 +123,4 @@ const aes_impl_ops_t aes_aesni_impl = {
 	.name = "aesni"
 };
 
-#endif /* defined(__x86_64) && defined(HAVE_AES) */
+#endif /* defined(__x86_64) && HAVE_SIMD(AES) */

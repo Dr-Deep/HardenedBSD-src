@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -44,8 +45,6 @@ void *safe_realloc(void *, size_t);
 void zpool_no_memory(void);
 uint_t num_logs(nvlist_t *nv);
 uint64_t array64_max(uint64_t array[], unsigned int len);
-int highbit64(uint64_t i);
-int lowbit64(uint64_t i);
 
 /*
  * Misc utility functions
@@ -75,11 +74,10 @@ typedef struct zpool_list zpool_list_t;
 
 zpool_list_t *pool_list_get(int, char **, zprop_list_t **, zfs_type_t,
     boolean_t, int *);
-void pool_list_update(zpool_list_t *);
+int pool_list_refresh(zpool_list_t *);
 int pool_list_iter(zpool_list_t *, int unavail, zpool_iter_f, void *);
 void pool_list_free(zpool_list_t *);
 int pool_list_count(zpool_list_t *);
-void pool_list_remove(zpool_list_t *, zpool_handle_t *);
 
 extern libzfs_handle_t *g_zfs;
 
@@ -126,6 +124,10 @@ vdev_cmd_data_list_t *all_pools_for_each_vdev_run(int argc, char **argv,
 
 void free_vdev_cmd_data_list(vdev_cmd_data_list_t *vcdl);
 
+void free_vdev_cmd_data(vdev_cmd_data_t *data);
+
+int vdev_run_cmd_simple(char *path, char *cmd);
+
 int check_device(const char *path, boolean_t force,
     boolean_t isspare, boolean_t iswholedisk);
 boolean_t check_sector_size_database(char *path, int *sector_size);
@@ -133,6 +135,9 @@ void vdev_error(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 int check_file(const char *file, boolean_t force, boolean_t isspare);
 void after_zpool_upgrade(zpool_handle_t *zhp);
 int check_file_generic(const char *file, boolean_t force, boolean_t isspare);
+
+int zpool_power(zpool_handle_t *zhp, char *vdev, boolean_t turn_on);
+int zpool_power_current_state(zpool_handle_t *zhp, char *vdev);
 
 #ifdef	__cplusplus
 }

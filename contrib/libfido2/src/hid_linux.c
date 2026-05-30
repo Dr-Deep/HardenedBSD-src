@@ -1,7 +1,8 @@
 /*
- * Copyright (c) 2019 Yubico AB. All rights reserved.
+ * Copyright (c) 2019-2024 Yubico AB. All rights reserved.
  * Use of this source code is governed by a BSD-style
  * license that can be found in the LICENSE file.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <sys/types.h>
@@ -54,20 +55,21 @@ get_report_descriptor(int fd, struct hidraw_report_descriptor *hrd)
 static bool
 is_fido(const char *path)
 {
-	int				fd;
-	uint32_t			usage_page = 0;
-	struct hidraw_report_descriptor	hrd;
+	int				 fd = -1;
+	uint32_t			 usage_page = 0;
+	struct hidraw_report_descriptor	*hrd = NULL;
 
-	memset(&hrd, 0, sizeof(hrd));
-
-	if ((fd = fido_hid_unix_open(path)) == -1)
-		return (false);
-
-	if (get_report_descriptor(fd, &hrd) < 0 ||
-	    fido_hid_get_usage(hrd.value, hrd.size, &usage_page) < 0)
+	if ((hrd = calloc(1, sizeof(*hrd))) == NULL ||
+	    (fd = fido_hid_unix_open(path)) == -1)
+		goto out;
+	if (get_report_descriptor(fd, hrd) < 0 ||
+	    fido_hid_get_usage(hrd->value, hrd->size, &usage_page) < 0)
 		usage_page = 0;
 
-	if (close(fd) == -1)
+out:
+	free(hrd);
+
+	if (fd != -1 && close(fd) == -1)
 		fido_log_error(errno, "%s: close", __func__);
 
 	return (usage_page == 0xf1d0);
@@ -75,12 +77,13 @@ is_fido(const char *path)
 
 static int
 parse_uevent(const char *uevent, int *bus, int16_t *vendor_id,
-    int16_t *product_id)
+    int16_t *product_id, char **hid_name)
 {
 	char			*cp;
 	char			*p;
 	char			*s;
-	int			 ok = -1;
+	bool			 found_id = false;
+	bool			 found_name = false;
 	short unsigned int	 x;
 	short unsigned int	 y;
 	short unsigned int	 z;
@@ -89,20 +92,25 @@ parse_uevent(const char *uevent, int *bus, int16_t *vendor_id,
 		return (-1);
 
 	while ((p = strsep(&cp, "\n")) != NULL && *p != '\0') {
-		if (strncmp(p, "HID_ID=", 7) == 0) {
+		if (!found_id && strncmp(p, "HID_ID=", 7) == 0) {
 			if (sscanf(p + 7, "%hx:%hx:%hx", &x, &y, &z) == 3) {
 				*bus = (int)x;
 				*vendor_id = (int16_t)y;
 				*product_id = (int16_t)z;
-				ok = 0;
-				break;
+				found_id = true;
 			}
+		} else if (!found_name && strncmp(p, "HID_NAME=", 9) == 0) {
+			if ((*hid_name = strdup(p + 9)) != NULL)
+				found_name = true;
 		}
 	}
 
 	free(s);
 
-	return (ok);
+	if (!found_name || !found_id)
+		return (-1);
+
+	return (0);
 }
 
 static char *
@@ -135,6 +143,7 @@ copy_info(fido_dev_info_t *di, struct udev *udev,
 	char			*uevent = NULL;
 	struct udev_device	*dev = NULL;
 	int			 bus = 0;
+	char			*hid_name = NULL;
 	int			 ok = -1;
 
 	memset(di, 0, sizeof(*di));
@@ -146,7 +155,8 @@ copy_info(fido_dev_info_t *di, struct udev *udev,
 		goto fail;
 
 	if ((uevent = get_parent_attr(dev, "hid", NULL, "uevent")) == NULL ||
-	    parse_uevent(uevent, &bus, &di->vendor_id, &di->product_id) < 0) {
+	    parse_uevent(uevent, &bus, &di->vendor_id, &di->product_id,
+	    &hid_name) < 0) {
 		fido_log_debug("%s: uevent", __func__);
 		goto fail;
 	}
@@ -159,10 +169,17 @@ copy_info(fido_dev_info_t *di, struct udev *udev,
 #endif
 
 	di->path = strdup(path);
-	if ((di->manufacturer = get_usb_attr(dev, "manufacturer")) == NULL)
-		di->manufacturer = strdup("unknown");
-	if ((di->product = get_usb_attr(dev, "product")) == NULL)
-		di->product = strdup("unknown");
+	di->manufacturer = get_usb_attr(dev, "manufacturer");
+	di->product = get_usb_attr(dev, "product");
+
+	if (di->manufacturer == NULL && di->product == NULL) {
+		di->product = hid_name;  /* fallback */
+		hid_name = NULL;
+	}
+	if (di->manufacturer == NULL)
+		di->manufacturer = strdup("");
+	if (di->product == NULL)
+		di->product = strdup("");
 	if (di->path == NULL || di->manufacturer == NULL || di->product == NULL)
 		goto fail;
 
@@ -172,6 +189,7 @@ fail:
 		udev_device_unref(dev);
 
 	free(uevent);
+	free(hid_name);
 
 	if (ok < 0) {
 		free(di->path);
@@ -240,9 +258,13 @@ void *
 fido_hid_open(const char *path)
 {
 	struct hid_linux *ctx;
-	struct hidraw_report_descriptor hrd;
+	struct hidraw_report_descriptor *hrd;
 	struct timespec tv_pause;
 	long interval_ms, retries = 0;
+	bool looped;
+
+retry:
+	looped = false;
 
 	if ((ctx = calloc(1, sizeof(*ctx))) == NULL ||
 	    (ctx->fd = fido_hid_unix_open(path)) == -1) {
@@ -256,7 +278,8 @@ fido_hid_open(const char *path)
 			fido_hid_close(ctx);
 			return (NULL);
 		}
-		if (retries++ >= 15) {
+		looped = true;
+		if (retries++ >= 20) {
 			fido_log_debug("%s: flock timeout", __func__);
 			fido_hid_close(ctx);
 			return (NULL);
@@ -271,14 +294,23 @@ fido_hid_open(const char *path)
 		}
 	}
 
-	if (get_report_descriptor(ctx->fd, &hrd) < 0 ||
-	    fido_hid_get_report_len(hrd.value, hrd.size, &ctx->report_in_len,
+	if (looped) {
+		fido_log_debug("%s: retrying", __func__);
+		fido_hid_close(ctx);
+		goto retry;
+	}
+
+	if ((hrd = calloc(1, sizeof(*hrd))) == NULL ||
+	    get_report_descriptor(ctx->fd, hrd) < 0 ||
+	    fido_hid_get_report_len(hrd->value, hrd->size, &ctx->report_in_len,
 	    &ctx->report_out_len) < 0 || ctx->report_in_len == 0 ||
 	    ctx->report_out_len == 0) {
 		fido_log_debug("%s: using default report sizes", __func__);
 		ctx->report_in_len = CTAP_MAX_REPORT_LEN;
 		ctx->report_out_len = CTAP_MAX_REPORT_LEN;
 	}
+
+	free(hrd);
 
 	return (ctx);
 }

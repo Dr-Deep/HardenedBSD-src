@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2013 Nathan Whitehorn
  * All rights reserved.
@@ -26,8 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/module.h>
@@ -42,12 +40,15 @@ __FBSDID("$FreeBSD$");
 
 #include <dev/fdt/simplebus.h>
 
+#include "pci_if.h"
+#include "pcib_if.h"
+
 /*
  * Bus interface.
  */
 static int		simplebus_probe(device_t dev);
 static struct resource *simplebus_alloc_resource(device_t, device_t, int,
-    int *, rman_res_t, rman_res_t, rman_res_t, u_int);
+    int, rman_res_t, rman_res_t, rman_res_t, u_int);
 static void		simplebus_probe_nomatch(device_t bus, device_t child);
 static int		simplebus_print_child(device_t bus, device_t child);
 static device_t		simplebus_add_child(device_t dev, u_int order,
@@ -63,6 +64,21 @@ static ssize_t		simplebus_get_property(device_t bus, device_t child,
  */
 static const struct ofw_bus_devinfo *simplebus_get_devinfo(device_t bus,
     device_t child);
+
+/*
+ * PCI interface for MSI interrupts
+ */
+static pci_get_id_t simplebus_get_id;
+static pci_alloc_msi_t simplebus_alloc_msi;
+
+/*
+ * PCIB interface
+ */
+static pcib_alloc_msi_t simplebus_pcib_alloc_msi;
+static pcib_release_msi_t simplebus_pcib_release_msi;
+static pcib_alloc_msix_t simplebus_pcib_alloc_msix;
+static pcib_release_msix_t simplebus_pcib_release_msix;
+static pcib_map_msi_t simplebus_pcib_map_msi;
 
 /*
  * Driver methods.
@@ -89,11 +105,15 @@ static device_method_t	simplebus_methods[] = {
 	DEVMETHOD(bus_activate_resource, bus_generic_activate_resource),
 	DEVMETHOD(bus_deactivate_resource, bus_generic_deactivate_resource),
 	DEVMETHOD(bus_adjust_resource,	bus_generic_adjust_resource),
+	DEVMETHOD(bus_map_resource,	bus_generic_map_resource),
+	DEVMETHOD(bus_unmap_resource,	bus_generic_unmap_resource),
 	DEVMETHOD(bus_set_resource,	bus_generic_rl_set_resource),
 	DEVMETHOD(bus_get_resource,	bus_generic_rl_get_resource),
+	DEVMETHOD(bus_delete_resource,	bus_generic_rl_delete_resource),
 	DEVMETHOD(bus_child_pnpinfo,	ofw_bus_gen_child_pnpinfo),
 	DEVMETHOD(bus_get_resource_list, simplebus_get_resource_list),
 	DEVMETHOD(bus_get_property,	simplebus_get_property),
+	DEVMETHOD(bus_get_device_path,  ofw_bus_gen_get_device_path),
 
 	/* ofw_bus interface */
 	DEVMETHOD(ofw_bus_get_devinfo,	simplebus_get_devinfo),
@@ -102,6 +122,17 @@ static device_method_t	simplebus_methods[] = {
 	DEVMETHOD(ofw_bus_get_name,	ofw_bus_gen_get_name),
 	DEVMETHOD(ofw_bus_get_node,	ofw_bus_gen_get_node),
 	DEVMETHOD(ofw_bus_get_type,	ofw_bus_gen_get_type),
+
+	/* PCI interface for MSI interrupts */
+	DEVMETHOD(pci_get_id,		simplebus_get_id),
+	DEVMETHOD(pci_alloc_msi,	simplebus_alloc_msi),
+
+	/* PCIB interface */
+	DEVMETHOD(pcib_alloc_msi,	simplebus_pcib_alloc_msi),
+	DEVMETHOD(pcib_release_msi,	simplebus_pcib_release_msi),
+	DEVMETHOD(pcib_alloc_msix,	simplebus_pcib_alloc_msix),
+	DEVMETHOD(pcib_release_msix,	simplebus_pcib_release_msix),
+	DEVMETHOD(pcib_map_msi,		simplebus_pcib_map_msi),
 
 	DEVMETHOD_END
 };
@@ -180,19 +211,25 @@ simplebus_attach(device_t dev)
 	if (rv != 0)
 		return (rv);
 
-	return (bus_generic_attach(dev));
+	bus_attach_children(dev);
+	return (0);
 }
 
 int
 simplebus_detach(device_t dev)
 {
 	struct		simplebus_softc *sc;
+	int	rv;
+
+	rv = bus_generic_detach(dev);
+	if (rv != 0)
+		return (rv);
 
 	sc = device_get_softc(dev);
 	if (sc->ranges != NULL)
 		free(sc->ranges, M_DEVBUF);
 
-	return (bus_generic_detach(dev));
+	return (0);
 }
 
 void
@@ -357,7 +394,7 @@ static ssize_t
 simplebus_get_property(device_t bus, device_t child, const char *propname,
     void *propvalue, size_t size, device_property_type_t type)
 {
-	phandle_t node = ofw_bus_get_node(child);
+	phandle_t node, xref;
 	ssize_t ret, i;
 	uint32_t *buffer;
 	uint64_t val;
@@ -367,11 +404,13 @@ simplebus_get_property(device_t bus, device_t child, const char *propname,
 	case DEVICE_PROP_BUFFER:
 	case DEVICE_PROP_UINT32:
 	case DEVICE_PROP_UINT64:
+	case DEVICE_PROP_HANDLE:
 		break;
 	default:
 		return (-1);
 	}
 
+	node = ofw_bus_get_node(child);
 	if (propvalue == NULL || size == 0)
 		return (OF_getproplen(node, propname));
 
@@ -402,13 +441,26 @@ simplebus_get_property(device_t bus, device_t child, const char *propname,
 			((uint64_t *)buffer)[i / 2] = val;
 		}
 		return (ret);
-	 }
+	}
+
+	if (type == DEVICE_PROP_HANDLE) {
+		if (size < sizeof(node))
+			return (-1);
+		ret = OF_getencprop(node, propname, &xref, sizeof(xref));
+		if (ret <= 0)
+			return (ret);
+
+		node = OF_node_from_xref(xref);
+		if (propvalue != NULL)
+			*(uint32_t *)propvalue = node;
+		return (ret);
+	}
 
 	return (OF_getprop(node, propname, propvalue, size));
 }
 
 static struct resource *
-simplebus_alloc_resource(device_t bus, device_t child, int type, int *rid,
+simplebus_alloc_resource(device_t bus, device_t child, int type, int rid,
     rman_res_t start, rman_res_t end, rman_res_t count, u_int flags)
 {
 	struct simplebus_softc *sc;
@@ -426,14 +478,11 @@ simplebus_alloc_resource(device_t bus, device_t child, int type, int *rid,
 		if ((di = device_get_ivars(child)) == NULL)
 			return (NULL);
 
-		if (type == SYS_RES_IOPORT)
-			type = SYS_RES_MEMORY;
-
-		rle = resource_list_find(&di->rl, type, *rid);
+		rle = resource_list_find(&di->rl, type, rid);
 		if (rle == NULL) {
 			if (bootverbose)
 				device_printf(bus, "no default resources for "
-				    "rid = %d, type = %d\n", *rid, type);
+				    "rid = %d, type = %d\n", rid, type);
 			return (NULL);
 		}
 		start = rle->start;
@@ -513,4 +562,109 @@ simplebus_print_child(device_t bus, device_t child)
 		rv += printf(" disabled");
 	rv += bus_print_child_footer(bus, child);
 	return (rv);
+}
+
+static int
+simplebus_get_id(device_t dev, device_t child, enum pci_id_type type,
+    uintptr_t *id)
+{
+	phandle_t node, xref;
+	pcell_t *cells;
+	uintptr_t rid;
+	int error, ncells;
+
+	if (type != PCI_ID_MSI)
+		return (EINVAL);
+
+	node = ofw_bus_get_node(child);
+	error = ofw_bus_parse_xref_list_alloc(node, "msi-parent", "#msi-cells",
+	    0, &xref, &ncells, &cells);
+	if (error != 0)
+		return (error);
+
+	rid = 0;
+	if (ncells > 0)
+		rid = cells[0];
+
+	*id = rid;
+	return (0);
+}
+
+static int
+simplebus_alloc_msi(device_t bus, device_t child, int *count)
+{
+	struct simplebus_devinfo *ndi;
+	struct resource_list_entry *rle;
+	int error, i, irq_count, *irqs;
+
+	if (*count < 1)
+		return (EINVAL);
+
+	ndi = device_get_ivars(child);
+	if (ndi == NULL)
+		return (ENXIO);
+
+	/* Only MSI or non-MSI for now */
+	rle = resource_list_find(&ndi->rl, SYS_RES_IRQ, 0);
+	if (rle != NULL && rle->res != NULL)
+		return (ENXIO);
+
+	irq_count = *count;
+	irqs = mallocarray(irq_count, sizeof(int), M_DEVBUF, M_WAITOK | M_ZERO);
+
+	error = PCIB_ALLOC_MSI(bus, child, irq_count, irq_count, irqs);
+	if (error != 0)
+		goto out;
+
+	for (i = 0; i < irq_count; i++) {
+		error = bus_generic_rl_set_resource(bus, child, SYS_RES_IRQ,
+		    i + 1, irqs[i], 1);
+		if (error != 0)
+			break;
+	}
+
+	/* Clean up resources if something failed */
+	if (error != 0) {
+		for (int j = 0; j < i; j++) {
+			bus_generic_rl_delete_resource(bus, child, SYS_RES_IRQ,
+			    j + 1);
+		}
+	}
+out:
+	free(irqs, M_DEVBUF);
+	return (error);
+}
+
+static int
+simplebus_pcib_alloc_msi(device_t dev, device_t child, int count, int maxcount,
+    int *irqs)
+{
+	return (PCIB_ALLOC_MSI(device_get_parent(dev), child, count, maxcount,
+	    irqs));
+}
+
+static int
+simplebus_pcib_release_msi(device_t dev, device_t child, int count, int *irqs)
+{
+	return (PCIB_RELEASE_MSI(device_get_parent(dev), child, count, irqs));
+}
+
+static int
+simplebus_pcib_alloc_msix(device_t dev, device_t child, int *irq)
+{
+	return (PCIB_ALLOC_MSIX(device_get_parent(dev), child, irq));
+}
+
+static int
+simplebus_pcib_release_msix(device_t dev, device_t child, int irq)
+{
+	return (PCIB_RELEASE_MSIX(device_get_parent(dev), child, irq));
+}
+
+static int
+simplebus_pcib_map_msi(device_t dev, device_t child, int irq, uint64_t *addr,
+    uint32_t *data)
+{
+	return (PCIB_MAP_MSI(device_get_parent(dev), child, irq, addr,
+	    data));
 }

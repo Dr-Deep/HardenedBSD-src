@@ -25,9 +25,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/bus.h>
@@ -220,7 +217,7 @@ static device_method_t itwd_methods[] = {
 	DEVMETHOD(device_detach,	itwd_detach),
 
 	/* Terminate method list */
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t itwd_driver = {

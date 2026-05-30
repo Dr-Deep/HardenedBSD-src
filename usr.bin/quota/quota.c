@@ -32,21 +32,9 @@
  * SUCH DAMAGE.
  */
 
-#ifndef lint
-static const char copyright[] =
-"@(#) Copyright (c) 1980, 1990, 1993\n\
-	The Regents of the University of California.  All rights reserved.\n";
-#endif
-
-#ifndef lint
-static const char sccsid[] = "from: @(#)quota.c	8.1 (Berkeley) 6/6/93";
-#endif /* not lint */
-
 /*
  * Disk quota reporting program.
  */
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -86,7 +74,7 @@ struct quotause {
 
 static char *timeprt(int64_t seconds);
 static struct quotause *getprivs(long id, int quotatype);
-static void usage(void);
+static void usage(void) __dead2;
 static int showuid(u_long uid);
 static int showgid(u_long gid);
 static int showusrname(char *name);
@@ -112,8 +100,7 @@ static char	*filename = NULL;
 int
 main(int argc, char *argv[])
 {
-	int ngroups; 
-	gid_t mygid, gidset[NGROUPS];
+	int ngroups;
 	int i, ch, gflag = 0, uflag = 0, errflag = 0;
 
 	while ((ch = getopt(argc, argv, "f:ghlrquv")) != -1) {
@@ -154,11 +141,15 @@ main(int argc, char *argv[])
 		if (uflag)
 			errflag += showuid(getuid());
 		if (gflag) {
+			gid_t mygid, myegid, gidset[NGROUPS_MAX];
+
 			mygid = getgid();
-			ngroups = getgroups(NGROUPS, gidset);
+			errflag += showgid(mygid);
+			myegid = getegid();
+			errflag += showgid(myegid);
+			ngroups = getgroups(NGROUPS_MAX, gidset);
 			if (ngroups < 0)
 				err(1, "getgroups");
-			errflag += showgid(mygid);
 			for (i = 0; i < ngroups; i++)
 				if (gidset[i] != mygid)
 					errflag += showgid(gidset[i]);

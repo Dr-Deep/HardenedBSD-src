@@ -35,19 +35,14 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	from: @(#)trap.c	7.4 (Berkeley) 5/13/91
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * 386 Trap and System call handling
  */
 
 #include "opt_clock.h"
-#include "opt_compat.h"
 #include "opt_cpu.h"
 #include "opt_hwpmc_hooks.h"
 #include "opt_isa.h"
@@ -184,6 +179,33 @@ SYSCTL_INT(_machdep, OID_AUTO, uprintf_signal, CTLFLAG_RW,
     &uprintf_signal, 0,
     "Print debugging information on trap signal to ctty");
 
+
+#ifdef INVARIANTS
+static __inline register_t
+read_esp(void)
+{
+	register_t res;
+
+	__asm __volatile("movl\t%%esp,%0" : "=r" (res));
+	return (res);
+}
+
+void
+trap_check_kstack(void)
+{
+	struct thread *td;
+	vm_offset_t stk;
+
+	td = curthread;
+	stk = read_esp();
+	if (stk >= PMAP_TRM_MIN_ADDRESS)
+		panic("td %p stack %#x in trampoline", td, stk);
+	if (!kstack_contains(td, stk, 0))
+		panic("td %p stack %#x not in kstack VA %p %d",
+		    td, stk, td->td_kstack, td->td_kstack_pages);
+}
+#endif
+
 /*
  * Exception, fault, and trap interface to the FreeBSD kernel.
  * This common code is called from assembly language IDT gate entry
@@ -215,37 +237,22 @@ trap(struct trapframe *frame)
 	KASSERT((read_eflags() & PSL_I) == 0,
 	    ("trap: interrupts enabled, type %d frame %p", type, frame));
 
-#ifdef SMP
-	/* Handler for NMI IPIs used for stopping CPUs. */
-	if (type == T_NMI && ipi_nmi_handler() == 0)
-		return;
-#endif /* SMP */
-
 #ifdef KDB
 	if (kdb_active) {
 		kdb_reenter();
 		return;
 	}
 #endif
+	trap_check_kstack();
+
+	if (type == T_NMI) {
+		nmi_handle_intr(frame);
+		return;
+	}
 
 	if (type == T_RESERVED) {
 		trap_fatal(frame, 0);
 		return;
-	}
-
-	if (type == T_NMI) {
-#ifdef HWPMC_HOOKS
-		/*
-		 * CPU PMCs interrupt using an NMI so we check for that first.
-		 * If the HWPMC module is active, 'pmc_hook' will point to
-		 * the function to be called.  A non-zero return value from the
-		 * hook means that the NMI was consumed by it and that we can
-		 * return immediately.
-		 */
-		if (pmc_intr != NULL &&
-		    (*pmc_intr)(frame) != 0)
-			return;
-#endif
 	}
 
 	if (type == T_MCHK) {
@@ -421,7 +428,7 @@ user_trctrap_out:
 			}
 			return;
 #else /* !POWERFAIL_NMI */
-			nmi_handle_intr(type, frame);
+			nmi_handle_intr(frame);
 			return;
 #endif /* POWERFAIL_NMI */
 
@@ -678,7 +685,7 @@ kernel_trctrap:
 			}
 			return;
 #else /* !POWERFAIL_NMI */
-			nmi_handle_intr(type, frame);
+			nmi_handle_intr(frame);
 			return;
 #endif /* POWERFAIL_NMI */
 		}
@@ -1001,10 +1008,12 @@ dblfault_handler(void)
 	printf(
 	    "eip = %#08x esp = %#08x ebp = %#08x eax = %#08x\n"
 	    "edx = %#08x ecx = %#08x edi = %#08x esi = %#08x\n"
+	    "ebx = %#08x\n"
 	    "psl = %#08x cs  = %#08x ss  = %#08x ds  = %#08x\n"
 	    "es  = %#08x fs  = %#08x gs  = %#08x cr3 = %#08x\n",
 	    t->tss_eip, t->tss_esp, t->tss_ebp, t->tss_eax,
 	    t->tss_edx, t->tss_ecx, t->tss_edi, t->tss_esi,
+	    t->tss_ebx,
 	    t->tss_eflags, t->tss_cs, t->tss_ss, t->tss_ds,
 	    t->tss_es, t->tss_fs, t->tss_gs, t->tss_cr3);
 #ifdef SMP
@@ -1086,7 +1095,7 @@ cpu_fetch_syscall_args(struct thread *td)
 	}
 
  	if (sa->code >= p->p_sysent->sv_size)
- 		sa->callp = &p->p_sysent->sv_table[0];
+		sa->callp = &nosys_sysent;
   	else
  		sa->callp = &p->p_sysent->sv_table[sa->code];
 
@@ -1124,6 +1133,7 @@ syscall(struct trapframe *frame)
 		/* NOT REACHED */
 	}
 #endif
+	trap_check_kstack();
 	orig_tf_eflags = frame->tf_eflags;
 
 	td = curthread;

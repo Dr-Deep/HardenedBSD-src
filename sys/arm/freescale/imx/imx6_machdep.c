@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2013 Ian Lepore <ian@freebsd.org>
  * All rights reserved.
@@ -28,9 +28,6 @@
 
 #include "opt_platform.h"
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
@@ -38,6 +35,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/devmap.h>
 
 #include <vm/vm.h>
+#include <vm/pmap.h>
 
 #include <machine/bus.h>
 #include <machine/intr.h>
@@ -313,12 +311,13 @@ imx_soc_type(void)
 		    IMX6_ANALOG_DIGPROG_SOCTYPE_SHIFT;
 		/*printf("digprog = 0x%08x\n", digprog);*/
 		if (hwsoc == HWSOC_MX6DL) {
-			pcr = devmap_ptov(SCU_CONFIG_PHYSADDR, 4);
+			pcr = pmap_mapdev(SCU_CONFIG_PHYSADDR, 4);
 			if (pcr != NULL) {
 				/*printf("scu config = 0x%08x\n", *pcr);*/
 				if ((*pcr & 0x03) == 0) {
 					hwsoc = HWSOC_MX6SOLO;
 				}
+				pmap_unmapdev(pcr, 4);
 			}
 		}
 	}

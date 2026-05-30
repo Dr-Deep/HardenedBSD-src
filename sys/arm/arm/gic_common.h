@@ -24,15 +24,23 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _GIC_COMMON_H_
 #define _GIC_COMMON_H_
 
-#define	GIC_IVAR_HW_REV		500
-#define	GIC_IVAR_BUS		501
+struct arm_gic_range {
+	uint64_t bus;
+	uint64_t host;
+	uint64_t size;
+};
+
+enum {
+	GIC_IVAR_HW_REV = BUS_IVARS_GIC,
+	GIC_IVAR_BUS,
+	GIC_IVAR_VGIC,
+	GIC_IVAR_SUPPORT_LPIS
+};
 
 /* GIC_IVAR_BUS values */
 #define	GIC_BUS_UNKNOWN		0
@@ -42,6 +50,8 @@
 
 __BUS_ACCESSOR(gic, hw_rev, GIC, HW_REV, u_int);
 __BUS_ACCESSOR(gic, bus, GIC, BUS, u_int);
+__BUS_ACCESSOR(gic, vgic, GIC, VGIC, u_int);
+__BUS_ACCESSOR(gic, support_lpis, GIC, SUPPORT_LPIS, bool);
 
 /* Software Generated Interrupts */
 #define	GIC_FIRST_SGI		 0	/* Irqs 0-15 are SGIs/IPIs. */

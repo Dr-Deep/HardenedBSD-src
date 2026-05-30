@@ -31,9 +31,6 @@
  *	$KAME: route6.c,v 1.24 2001/03/14 03:07:05 itojun Exp $
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_inet.h"
 #include "opt_inet6.h"
 

@@ -30,9 +30,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__RCSID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/errno.h>
 #include <err.h>
@@ -316,10 +313,10 @@ clear_config(int ac, char **av)
 	}
 
 	printf("mpt%d: Configuration cleared\n", mpt_unit);
-	mpt_rescan_bus(-1, -1);
+	error = mpt_rescan_bus(-1, -1);
 	close(fd);
 
-	return (0);
+	return (error);
 }
 MPT_COMMAND(top, clear, clear_config);
 
@@ -774,7 +771,7 @@ create_volume(int ac, char **av)
 #ifdef DEBUG
 skip:
 #endif
-	mpt_rescan_bus(vol->VolumeBus, vol->VolumeID);
+	error = mpt_rescan_bus(vol->VolumeBus, vol->VolumeID);
 
 	/* Clean up. */
 	free(vol);
@@ -784,7 +781,7 @@ skip:
 	free(state.ioc2);
 	close(fd);
 
-	return (0);
+	return (error);
 }
 MPT_COMMAND(top, create, create_volume);
 
@@ -828,10 +825,10 @@ delete_volume(int ac, char **av)
 		return (error);
 	}
 
-	mpt_rescan_bus(-1, -1);
+	error = mpt_rescan_bus(-1, -1);
 	close(fd);
 
-	return (0);
+	return (error);
 }
 MPT_COMMAND(top, delete, delete_volume);
 
@@ -1074,7 +1071,9 @@ remove_spare(int ac, char **av)
 		return (error);
 	}
 
-	mpt_rescan_bus(info->PhysDiskBus, info->PhysDiskID);
+	error = mpt_rescan_bus(info->PhysDiskBus, info->PhysDiskID);
+	if (error)
+		return (error);
 	free(info);
 	close(fd);
 
@@ -1178,7 +1177,9 @@ pd_delete(int ac, char **av)
 		return (error);
 	}
 
-	mpt_rescan_bus(info->PhysDiskBus, info->PhysDiskID);
+	error = mpt_rescan_bus(info->PhysDiskBus, info->PhysDiskID);
+	if (error)
+		return (error);
 	free(info);
 	close(fd);
 

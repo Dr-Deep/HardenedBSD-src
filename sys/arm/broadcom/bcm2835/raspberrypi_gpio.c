@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2012 Oleksandr Tymoshenko <gonzo@FreeBSD.org>
  * Copyright (c) 2012-2015 Luiz Otavio O Souza <loos@FreeBSD.org>
@@ -28,8 +28,6 @@
  *
  */
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_platform.h"
 
 #include <sys/param.h>
@@ -406,10 +404,11 @@ rpi_fw_gpio_attach(device_t dev)
 		}
 	}
 	free(names, M_OFWPROP);
-	sc->sc_busdev = gpiobus_attach_bus(dev);
+	sc->sc_busdev = gpiobus_add_bus(dev);
 	if (sc->sc_busdev == NULL)
 		goto fail;
 
+	bus_attach_children(dev);
 	return (0);
 
 fail:

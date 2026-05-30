@@ -50,9 +50,6 @@
 #include "opt_platform.h"
 #include "opt_sched.h"
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/buf.h>
 #include <sys/bus.h>
@@ -60,6 +57,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/cpu.h>
 #include <sys/devmap.h>
 #include <sys/efi.h>
+#include <sys/efi_map.h>
 #include <sys/imgact.h>
 #include <sys/kdb.h>
 #include <sys/kernel.h>
@@ -109,8 +107,8 @@ __FBSDID("$FreeBSD$");
 #endif
 
 
-#if __ARM_ARCH < 6
-#error FreeBSD requires ARMv6 or later
+#if __ARM_ARCH < 7
+#error FreeBSD requires ARMv7 or later
 #endif
 
 struct pcpu __pcpu[MAXCPU];
@@ -124,8 +122,6 @@ vm_offset_t vector_page;
 /* The address at which the kernel was loaded.  Set early in initarm(). */
 vm_paddr_t arm_physmem_kernaddr;
 
-extern int *end;
-
 #ifdef FDT
 vm_paddr_t pmap_pa;
 vm_offset_t systempage;
@@ -138,6 +134,14 @@ vm_offset_t abtstack;
 static delay_func *delay_impl;
 static void *delay_arg;
 #endif
+
+#if defined(SOCDEV_PA)
+#if !defined(SOCDEV_VA)
+#error SOCDEV_PA defined, but not SOCDEV_VA
+#endif
+uintptr_t socdev_va = SOCDEV_VA;
+#endif
+
 
 struct kva_md_info kmi;
 /*
@@ -203,7 +207,7 @@ cpu_startup(void *dummy)
 
 	bufinit();
 	vm_pager_bufferinit();
-	pcb->pcb_regs.sf_sp = (u_int)thread0.td_kstack +
+	pcb->pcb_regs.sf_sp = (uintptr_t)thread0.td_kstack +
 	    USPACE_SVC_STACK_TOP;
 	pmap_set_pcb_pagedir(kernel_pmap, pcb);
 }
@@ -311,7 +315,7 @@ spinlock_enter(void)
 
 	td = curthread;
 	if (td->td_md.md_spinlock_count == 0) {
-		cspr = disable_interrupts(PSR_I | PSR_F);
+		cspr = disable_interrupts(PSR_I);
 		td->td_md.md_spinlock_count = 1;
 		td->td_md.md_saved_cspr = cspr;
 		critical_enter();
@@ -370,17 +374,18 @@ pcpu0_init(void)
 /*
  * Initialize proc0
  */
-void
-init_proc0(vm_offset_t kstack)
+static void
+init_proc0(void *kstack)
 {
 	proc_linkup0(&proc0, &thread0);
 	thread0.td_kstack = kstack;
 	thread0.td_kstack_pages = kstack_pages;
-	thread0.td_pcb = (struct pcb *)(thread0.td_kstack +
-	    thread0.td_kstack_pages * PAGE_SIZE) - 1;
+	thread0.td_pcb = (struct pcb *)td_kstack_top(&thread0) - 1;
 	thread0.td_pcb->pcb_flags = 0;
+	thread0.td_pcb->pcb_fpflags = 0;
 	thread0.td_pcb->pcb_vfpcpu = -1;
 	thread0.td_pcb->pcb_vfpstate.fpscr = VFPSCR_DN;
+	thread0.td_pcb->pcb_vfpsaved = &thread0.td_pcb->pcb_vfpstate;
 	thread0.td_frame = &proc0_tf;
 	pcpup->pc_curpcb = thread0.td_pcb;
 }
@@ -409,15 +414,26 @@ arm_kdb_init(void)
 }
 
 #ifdef FDT
+static void
+fdt_physmem_hardware_region_cb(const struct mem_region *mr, void *arg __unused)
+{
+	physmem_hardware_region(mr->mr_start, mr->mr_size);
+}
+
+static void
+fdt_physmem_exclude_region_cb(const struct mem_region *mr, void *arg __unused)
+{
+	physmem_exclude_region(mr->mr_start, mr->mr_size,
+	    EXFLAG_NODUMP | EXFLAG_NOALLOC);
+}
+
 void *
 initarm(struct arm_boot_params *abp)
 {
-	struct mem_region mem_regions[FDT_MEM_REGIONS];
 	vm_paddr_t lastaddr;
 	vm_offset_t dtbp, kernelstack, dpcpu;
 	char *env;
-	void *kmdp;
-	int err_devmap, mem_regions_sz;
+	int err_devmap;
 	phandle_t root;
 	char dts_version[255];
 #ifdef EFI
@@ -430,12 +446,13 @@ initarm(struct arm_boot_params *abp)
 
 	set_cpufuncs();
 	cpuinfo_init();
+	sched_instance_select();
+	link_elf_ireloc();
 
 	/*
 	 * Find the dtb passed in by the boot loader.
 	 */
-	kmdp = preload_search_by_type("elf kernel");
-	dtbp = MD_FETCH(kmdp, MODINFOMD_DTBP, vm_offset_t);
+	dtbp = MD_FETCH(preload_kmdp, MODINFOMD_DTBP, vm_offset_t);
 #if defined(FDT_DTB_STATIC)
 	/*
 	 * In case the device tree blob was not retrieved (from metadata) try
@@ -456,23 +473,23 @@ initarm(struct arm_boot_params *abp)
 #endif
 
 #ifdef EFI
-	efihdr = (struct efi_map_header *)preload_search_info(kmdp,
+	efihdr = (struct efi_map_header *)preload_search_info(preload_kmdp,
 	    MODINFO_METADATA | MODINFOMD_EFI_MAP);
 	if (efihdr != NULL) {
-		arm_add_efi_map_entries(efihdr, mem_regions, &mem_regions_sz);
+		efi_map_add_entries(efihdr);
+		efi_map_exclude_entries(efihdr);
 	} else
 #endif
 	{
 		/* Grab physical memory regions information from device tree. */
-		if (fdt_get_mem_regions(mem_regions, &mem_regions_sz,NULL) != 0)
+		if (fdt_foreach_mem_region(fdt_physmem_hardware_region_cb,
+		    NULL) != 0)
 			panic("Cannot get physical memory regions");
-	}
-	physmem_hardware_regions(mem_regions, mem_regions_sz);
 
-	/* Grab reserved memory regions information from device tree. */
-	if (fdt_get_reserved_regions(mem_regions, &mem_regions_sz) == 0)
-		physmem_exclude_regions(mem_regions, mem_regions_sz,
-		    EXFLAG_NODUMP | EXFLAG_NOALLOC);
+		/* Grab reserved memory regions information from device tree. */
+		fdt_foreach_reserved_region(fdt_physmem_exclude_region_cb,
+		    NULL);
+	}
 
 	/*
 	 * Set TEX remapping registers.
@@ -546,7 +563,7 @@ initarm(struct arm_boot_params *abp)
 
 	/* Establish static device mappings. */
 	err_devmap = platform_devmap_init();
-	devmap_bootstrap(0, NULL);
+	devmap_bootstrap();
 	vm_max_kernel_address = platform_lastaddr();
 
 	/*
@@ -566,7 +583,7 @@ initarm(struct arm_boot_params *abp)
 #endif
 
 	debugf("initarm: console initialized\n");
-	debugf(" arg1 kmdp = 0x%08x\n", (uint32_t)kmdp);
+	debugf(" arg1 kmdp = 0x%08x\n", (uint32_t)preload_kmdp);
 	debugf(" boothowto = 0x%08x\n", boothowto);
 	debugf(" dtbp = 0x%08x\n", (uint32_t)dtbp);
 	debugf(" lastaddr1: 0x%08x\n", lastaddr);
@@ -606,7 +623,7 @@ initarm(struct arm_boot_params *abp)
 	 */
 	/* Set stack for exception handlers */
 	undefined_init();
-	init_proc0(kernelstack);
+	init_proc0((void *)kernelstack);
 	arm_vector_init(ARM_VECTORS_HIGH, ARM_VEC_ALL);
 	enable_interrupts(PSR_A);
 	pmap_bootstrap(0);
@@ -629,7 +646,15 @@ initarm(struct arm_boot_params *abp)
 	arm_kdb_init();
 	/* Apply possible BP hardening. */
 	cpuinfo_init_bp_hardening();
-	return ((void *)STACKALIGN(thread0.td_pcb));
+
+#ifdef EFI
+	if (boothowto & RB_VERBOSE) {
+		if (efihdr != NULL)
+			efi_map_print_entries(efihdr);
+	}
+#endif
+
+	return (STACKALIGN(thread0.td_pcb));
 
 }
 #endif /* FDT */

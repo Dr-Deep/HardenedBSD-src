@@ -1,6 +1,5 @@
-/* $FreeBSD$ */
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008-2021 Hans Petter Selasky. All rights reserved.
  *
@@ -1590,7 +1589,7 @@ usbd_setup_ctrl_transfer(struct usb_xfer *xfer)
 		 * parts a time.
 		 */
 		DPRINTFN(0, "Too many frames: %u\n",
-		    (unsigned int)xfer->nframes);
+		    (unsigned)xfer->nframes);
 		goto error;
 	}
 
@@ -1890,8 +1889,10 @@ usbd_transfer_submit(struct usb_xfer *xfer)
 	 */
 #if USB_HAVE_BUSDMA
 	if (xfer->flags_int.bdma_enable) {
+		USB_BUS_LOCK(bus);
 		/* insert the USB transfer last in the BUS-DMA queue */
 		usb_command_wrapper(&xfer->xroot->dma_q, xfer);
+		USB_BUS_UNLOCK(bus);
 		return;
 	}
 #endif

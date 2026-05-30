@@ -27,18 +27,12 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
-#include "opt_compat.h"
 
 #include <sys/param.h>
-#include <sys/errno.h>
+#include <sys/proc.h>
 #include <sys/signal.h>
 #include <sys/syscallsubr.h>
-#include <sys/systm.h>
 #include <sys/time.h>
-#include <sys/types.h>
 
 #ifdef COMPAT_LINUX32
 #include <machine/../linux32/linux.h>
@@ -47,10 +41,10 @@ __FBSDID("$FreeBSD$");
 #include <machine/../linux/linux.h>
 #include <machine/../linux/linux_proto.h>
 #endif
-#include <compat/linux/linux_timer.h>
+#include <compat/linux/linux_time.h>
 
-static int
-linux_convert_l_sigevent(struct l_sigevent *l_sig, struct sigevent *sig)
+int
+linux_convert_l_sigevent(const struct l_sigevent *l_sig, struct sigevent *sig)
 {
 
 	CP(*l_sig, *sig, sigev_notify);
@@ -137,7 +131,7 @@ linux_timer_settime(struct thread *td, struct linux_timer_settime_args *uap)
 		return (error);
 	error = kern_ktimer_settime(td, uap->timerid, flags, &val, ovalp);
 	if (error == 0 && uap->old != NULL) {
-		error = native_to_linux_itimerspec(&l_val, &val);
+		error = native_to_linux_itimerspec(&l_oval, &oval);
 		if (error == 0)
 			error = copyout(&l_oval, uap->old, sizeof(l_oval));
 	}
@@ -164,7 +158,7 @@ linux_timer_settime64(struct thread *td, struct linux_timer_settime64_args *uap)
 		return (error);
 	error = kern_ktimer_settime(td, uap->timerid, flags, &val, ovalp);
 	if (error == 0 && uap->old != NULL) {
-		error = native_to_linux_itimerspec64(&l_val, &val);
+		error = native_to_linux_itimerspec64(&l_oval, &oval);
 		if (error == 0)
 			error = copyout(&l_oval, uap->old, sizeof(l_oval));
 	}

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2011-2015 LSI Corp.
  * Copyright (c) 2013-2015 Avago Technologies
@@ -29,9 +29,6 @@
  * Avago Technologies (LSI) MPT-Fusion Host Adapter FreeBSD
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /* Communications core for Avago Technologies (LSI) MPT2 */
 
 /* TODO Move headers to mpsvar */
@@ -54,12 +51,11 @@ __FBSDID("$FreeBSD$");
 #include <sys/taskqueue.h>
 #include <sys/sbuf.h>
 #include <sys/reboot.h>
+#include <sys/stdarg.h>
 
 #include <machine/bus.h>
 #include <machine/resource.h>
 #include <sys/rman.h>
-
-#include <machine/stdarg.h>
 
 #include <cam/cam.h>
 #include <cam/cam_ccb.h>

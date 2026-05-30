@@ -1,7 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-3-Clause
  *
- * Copyright (c) 2001 Dag-Erling Coïdan Smørgrav
+ * Copyright (c) 2001 Dag-Erling Smørgrav
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -29,8 +29,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_pseudofs.h"
 
 #include <sys/param.h>
@@ -72,18 +70,20 @@ pfs_alloc_node_flags(struct pfs_info *pi, const char *name, pfs_type_t type, int
 {
 	struct pfs_node *pn;
 	int malloc_flags;
+	size_t len;
 
-	KASSERT(strlen(name) < PFS_NAMELEN,
+	len = strlen(name);
+	KASSERT(len < PFS_NAMELEN,
 	    ("%s(): node name is too long", __func__));
 	if (flags & PFS_NOWAIT)
 		malloc_flags = M_NOWAIT | M_ZERO;
 	else
 		malloc_flags = M_WAITOK | M_ZERO;
-	pn = malloc(sizeof *pn, M_PFSNODES, malloc_flags);
+	pn = malloc(sizeof(*pn) + len + 1, M_PFSNODES, malloc_flags);
 	if (pn == NULL)
 		return (NULL);
 	mtx_init(&pn->pn_mutex, "pfs_node", NULL, MTX_DEF | MTX_DUPOK);
-	strlcpy(pn->pn_name, name, sizeof pn->pn_name);
+	memcpy(pn->pn_name, name, len);
 	pn->pn_type = type;
 	pn->pn_info = pi;
 	return (pn);
@@ -98,12 +98,10 @@ pfs_alloc_node(struct pfs_info *pi, const char *name, pfs_type_t type)
 /*
  * Add a node to a directory
  */
-static void
+static int
 pfs_add_node(struct pfs_node *parent, struct pfs_node *pn)
 {
-#ifdef INVARIANTS
 	struct pfs_node *iter;
-#endif
 
 	KASSERT(parent != NULL,
 	    ("%s(): parent is NULL", __func__));
@@ -123,8 +121,6 @@ pfs_add_node(struct pfs_node *parent, struct pfs_node *pn)
 			KASSERT(iter->pn_type != pfstype_procdir,
 			    ("%s(): nested process directories", __func__));
 	for (iter = parent->pn_nodes; iter != NULL; iter = iter->pn_next) {
-		KASSERT(strcmp(pn->pn_name, iter->pn_name) != 0,
-		    ("%s(): homonymous siblings", __func__));
 		if (pn->pn_type == pfstype_procdir)
 			KASSERT(iter->pn_type != pfstype_procdir,
 			    ("%s(): sibling process directories", __func__));
@@ -133,8 +129,19 @@ pfs_add_node(struct pfs_node *parent, struct pfs_node *pn)
 
 	pn->pn_parent = parent;
 	pfs_fileno_alloc(pn);
-
 	pfs_lock(parent);
+	for (iter = parent->pn_nodes; iter != NULL; iter = iter->pn_next) {
+		if (strcmp(pn->pn_name, iter->pn_name) != 0)
+			continue;
+		printf("pfs_add_node: homonymous siblings: '%s/%s' type %d\n",
+		    parent->pn_name, pn->pn_name, pn->pn_type);
+		/* Do not detach, because we are not yet attached. */
+		pn->pn_parent = NULL;
+		pfs_unlock(parent);
+		return (EEXIST);
+	}
+
+
 	if ((parent->pn_flags & PFS_PROCDEP) != 0)
 		pn->pn_flags |= PFS_PROCDEP;
 	if (parent->pn_nodes == NULL) {
@@ -151,10 +158,11 @@ pfs_add_node(struct pfs_node *parent, struct pfs_node *pn)
 		parent->pn_last_node = pn;
 	}
 	pfs_unlock(parent);
+	return (0);
 }
 
 /*
- * Detach a node from its aprent
+ * Detach a node from its parent
  */
 static void
 pfs_detach_node(struct pfs_node *pn)
@@ -196,6 +204,7 @@ static int
 pfs_fixup_dir_flags(struct pfs_node *parent, int flags)
 {
 	struct pfs_node *dot, *dotdot;
+	int rc;
 
 	dot = pfs_alloc_node_flags(parent->pn_info, ".", pfstype_this, flags);
 	if (dot == NULL)
@@ -205,9 +214,14 @@ pfs_fixup_dir_flags(struct pfs_node *parent, int flags)
 		pfs_destroy(dot);
 		return (ENOMEM);
 	}
-	pfs_add_node(parent, dot);
-	pfs_add_node(parent, dotdot);
-	return (0);
+	rc = pfs_add_node(parent, dot);
+	if (rc == 0)
+		rc = pfs_add_node(parent, dotdot);
+	if (rc != 0) {
+		pfs_destroy(dot);
+		pfs_destroy(dotdot);
+	}
+	return (rc);
 }
 
 static void
@@ -220,75 +234,101 @@ pfs_fixup_dir(struct pfs_node *parent)
 /*
  * Create a directory
  */
-struct pfs_node	*
-pfs_create_dir(struct pfs_node *parent, const char *name,
-	       pfs_attr_t attr, pfs_vis_t vis, pfs_destroy_t destroy,
-	       int flags)
+int
+pfs_create_dir(struct pfs_node *parent, struct pfs_node **opn,
+	       const char *name, pfs_attr_t attr, pfs_vis_t vis,
+	       pfs_destroy_t destroy, int flags)
 {
-	struct pfs_node *pn;
+	struct pfs_node *pdir, *pn;
 	int rc;
 
-	pn = pfs_alloc_node_flags(parent->pn_info, name,
+	/* Preserve in case the caller is reusing the one pointer for both. */
+	pdir = parent;
+	if (opn != NULL)
+		*opn = NULL;
+	pn = pfs_alloc_node_flags(pdir->pn_info, name,
 			 (flags & PFS_PROCDEP) ? pfstype_procdir : pfstype_dir, flags);
 	if (pn == NULL)
-		return (NULL);
+		return (ENOMEM);
 	pn->pn_attr = attr;
 	pn->pn_vis = vis;
 	pn->pn_destroy = destroy;
 	pn->pn_flags = flags;
-	pfs_add_node(parent, pn);
-	rc = pfs_fixup_dir_flags(pn, flags);
-	if (rc) {
+	rc = pfs_add_node(pdir, pn);
+	if (rc == 0)
+		rc = pfs_fixup_dir_flags(pn, flags);
+	if (rc != 0) {
 		pfs_destroy(pn);
-		return (NULL);
+		pn = NULL;
+	} else if (opn != NULL) {
+		*opn = pn;
 	}
-	return (pn);
+
+	return (rc);
 }
 
 /*
  * Create a file
  */
-struct pfs_node	*
-pfs_create_file(struct pfs_node *parent, const char *name, pfs_fill_t fill,
-		pfs_attr_t attr, pfs_vis_t vis, pfs_destroy_t destroy,
-		int flags)
+int
+pfs_create_file(struct pfs_node *parent, struct pfs_node **opn,
+		const char *name, pfs_fill_t fill, pfs_attr_t attr,
+		pfs_vis_t vis, pfs_destroy_t destroy, int flags)
 {
 	struct pfs_node *pn;
+	int rc;
 
+	if (opn != NULL)
+		*opn = NULL;
 	pn = pfs_alloc_node_flags(parent->pn_info, name, pfstype_file, flags);
 	if (pn == NULL)
-		return (NULL);
+		return (ENOMEM);
+
 	pn->pn_fill = fill;
 	pn->pn_attr = attr;
 	pn->pn_vis = vis;
 	pn->pn_destroy = destroy;
 	pn->pn_flags = flags;
-	pfs_add_node(parent, pn);
+	if ((rc = pfs_add_node(parent, pn)) != 0) {
+		pfs_destroy(pn);
+		pn = NULL;
+	} else if (opn != NULL) {
+		*opn = pn;
+	}
 
-	return (pn);
+	return (rc);
 }
 
 /*
  * Create a symlink
  */
-struct pfs_node	*
-pfs_create_link(struct pfs_node *parent, const char *name, pfs_fill_t fill,
-		pfs_attr_t attr, pfs_vis_t vis, pfs_destroy_t destroy,
-		int flags)
+int
+pfs_create_link(struct pfs_node *parent, struct pfs_node **opn,
+		const char *name, pfs_fill_t fill, pfs_attr_t attr,
+		pfs_vis_t vis, pfs_destroy_t destroy, int flags)
 {
 	struct pfs_node *pn;
+	int rc;
 
+	if (opn != NULL)
+		*opn = NULL;
 	pn = pfs_alloc_node_flags(parent->pn_info, name, pfstype_symlink, flags);
 	if (pn == NULL)
-		return (NULL);
+		return (ENOMEM);
+
 	pn->pn_fill = fill;
 	pn->pn_attr = attr;
 	pn->pn_vis = vis;
 	pn->pn_destroy = destroy;
 	pn->pn_flags = flags;
-	pfs_add_node(parent, pn);
+	if ((rc = pfs_add_node(parent, pn)) != 0) {
+		pfs_destroy(pn);
+		pn = NULL;
+	} else if (opn != NULL) {
+		*opn = pn;
+	}
 
-	return (pn);
+	return (rc);
 }
 
 /*
@@ -377,10 +417,10 @@ pfs_mount(struct pfs_info *pi, struct mount *mp)
 	vfs_mountedfrom(mp, pi->pi_name);
 	sbp->f_bsize = PAGE_SIZE;
 	sbp->f_iosize = PAGE_SIZE;
-	sbp->f_blocks = 1;
-	sbp->f_bfree = 0;
-	sbp->f_bavail = 0;
-	sbp->f_files = 1;
+	sbp->f_blocks = 2;
+	sbp->f_bfree = 2;
+	sbp->f_bavail = 2;
+	sbp->f_files = 0;
 	sbp->f_ffree = 0;
 
 	return (0);
@@ -455,6 +495,7 @@ pfs_init(struct pfs_info *pi, struct vfsconf *vfc)
 	if (error) {
 		pfs_destroy(root);
 		pi->pi_root = NULL;
+		pfs_fileno_uninit(pi);
 		return (error);
 	}
 

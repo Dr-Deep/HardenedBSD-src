@@ -1,4 +1,3 @@
-#	$FreeBSD$
 #
 # Copyright (c) 2018		Conrad Meyer <cem@FreeBSD.org>
 # Copyright (c) 2002, 2003	Sam Leffler, Errno Consulting
@@ -26,8 +25,7 @@
 # SUCH DAMAGE.
 #
 
-PROGS=	cryptocheck cryptotest cryptostats \
-	hifnstats ipsecstats safestats
+PROGS=	cryptocheck cryptostats ipsecstats safestats
 MAN=
 BINDIR?=	/usr/local/bin
 
@@ -35,10 +33,7 @@ BINDIR?=	/usr/local/bin
 LIBADD.cryptocheck+=	crypto util
 
 # cryptostats: dump statistics kept by the core crypto code
-# hifnstats: print statistics kept by the HIFN driver
 # safestats: statistics kept by the SafeNet driver
 # ipsecstats: print statistics kept by fast ipsec
-
-CLEANFILES+=	core a.out
 
 .include <bsd.progs.mk>

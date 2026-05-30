@@ -15,8 +15,6 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <stdint.h>
 #include <stdio.h>
 #include <stddef.h>
@@ -34,7 +32,7 @@ int
 yyerror(const char *msg)
 {
 	fprintf(stderr, "m4: %s in expr %s\n", msg, copy_toeval);
-	return(0);
+	return 0;
 }
 
 int

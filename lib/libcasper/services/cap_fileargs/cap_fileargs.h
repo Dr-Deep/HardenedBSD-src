@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2018 Mariusz Zaborski <oshogbo@FreeBSD.org>
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _FILEARGS_H_
@@ -77,7 +75,7 @@ fileargs_init(int argc __unused, char *argv[] __unused, int flags, mode_t mode,
     cap_rights_t *rightsp __unused, int operations __unused) {
 	fileargs_t *fa;
 
-	fa = malloc(sizeof(*fa));
+	fa = (fileargs_t *)malloc(sizeof(*fa));
 	if (fa != NULL) {
 		fa->fa_flags = flags;
 		fa->fa_mode = mode;

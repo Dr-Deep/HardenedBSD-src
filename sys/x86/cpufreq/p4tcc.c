@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2005 Nate Lawson
  * All rights reserved.
@@ -37,9 +37,6 @@
  * OpenBSD and imported by Maxim Sobolev.  It was rewritten by Nate Lawson
  * for use with the cpufreq framework.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -125,7 +122,7 @@ p4tcc_identify(driver_t *driver, device_t parent)
 		return;
 
 	/* Make sure we're not being doubly invoked. */
-	if (device_find_child(parent, "p4tcc", -1) != NULL)
+	if (device_find_child(parent, "p4tcc", DEVICE_UNIT_ANY) != NULL)
 		return;
 
 	/*

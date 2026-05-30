@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -22,6 +23,7 @@
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2012, 2015 by Delphix. All rights reserved.
  * Copyright (c) 2017, Intel Corporation.
+ * Copyright (c) 2023-2025, Klara, Inc.
  */
 
 /*
@@ -105,6 +107,8 @@
  * 	zinject
  * 	zinject <-a | -u pool>
  * 	zinject -c <id|all>
+ * 	zinject -E <delay> [-a] [-m] [-f freq] [-l level] [-r range]
+ *	    [-T iotype] [-t type object | -b bookmark pool]
  * 	zinject [-q] <-t type> [-f freq] [-u] [-a] [-m] [-e errno] [-l level]
  *	    [-r range] <object>
  * 	zinject [-f freq] [-a] [-m] [-u] -b objset:object:level:start:end pool
@@ -130,14 +134,18 @@
  * The '-f' flag controls the frequency of errors injected, expressed as a
  * real number percentage between 0.0001 and 100.  The default is 100.
  *
- * The this form is responsible for actually injecting the handler into the
+ * The <object> form is responsible for actually injecting the handler into the
  * framework.  It takes the arguments described above, translates them to the
  * internal tuple using libzpool, and then issues an ioctl() to register the
  * handler.
  *
- * The final form can target a specific bookmark, regardless of whether a
+ * The '-b' option can target a specific bookmark, regardless of whether a
  * human-readable interface has been designed.  It allows developers to specify
  * a particular block by number.
+ *
+ * The '-E' option injects pipeline ready stage delays for the given object or
+ * bookmark. The delay is specified in milliseconds, and it supports I/O type
+ * and range filters.
  */
 
 #include <errno.h>
@@ -208,6 +216,69 @@ type_to_name(uint64_t type)
 	}
 }
 
+struct errstr {
+	int		err;
+	const char	*str;
+};
+static const struct errstr errstrtable[] = {
+	{ EIO,		"io" },
+	{ ECKSUM,	"checksum" },
+	{ EINVAL,	"decompress" },
+	{ EACCES,	"decrypt" },
+	{ ENXIO,	"nxio" },
+	{ ECHILD,	"dtl" },
+	{ EILSEQ,	"corrupt" },
+	{ ENOSYS,	"noop" },
+	{ EFAULT,	"io-prefail" },
+	{ 0, NULL },
+};
+
+static int
+str_to_err(const char *str)
+{
+	for (int i = 0; errstrtable[i].str != NULL; i++)
+		if (strcasecmp(errstrtable[i].str, str) == 0)
+			return (errstrtable[i].err);
+	return (-1);
+}
+static const char *
+err_to_str(int err)
+{
+	for (int i = 0; errstrtable[i].str != NULL; i++)
+		if (errstrtable[i].err == err)
+			return (errstrtable[i].str);
+	return ("[unknown]");
+}
+
+static const char *const iotypestrtable[ZINJECT_IOTYPES] = {
+	[ZINJECT_IOTYPE_NULL]	= "null",
+	[ZINJECT_IOTYPE_READ]	= "read",
+	[ZINJECT_IOTYPE_WRITE]	= "write",
+	[ZINJECT_IOTYPE_FREE]	= "free",
+	[ZINJECT_IOTYPE_CLAIM]	= "claim",
+	[ZINJECT_IOTYPE_FLUSH]	= "flush",
+	[ZINJECT_IOTYPE_TRIM]	= "trim",
+	[ZINJECT_IOTYPE_ALL]	= "all",
+	[ZINJECT_IOTYPE_PROBE]	= "probe",
+};
+
+static zinject_iotype_t
+str_to_iotype(const char *arg)
+{
+	for (uint_t iotype = 0; iotype < ZINJECT_IOTYPES; iotype++)
+		if (iotypestrtable[iotype] != NULL &&
+		    strcasecmp(iotypestrtable[iotype], arg) == 0)
+			return (iotype);
+	return (ZINJECT_IOTYPES);
+}
+
+static const char *
+iotype_to_str(zinject_iotype_t iotype)
+{
+	if (iotype >= ZINJECT_IOTYPES || iotypestrtable[iotype] == NULL)
+		return ("[unknown]");
+	return (iotypestrtable[iotype]);
+}
 
 /*
  * Print usage message.
@@ -233,12 +304,13 @@ usage(void)
 	    "\t\tspa_vdev_exit() will trigger a panic.\n"
 	    "\n"
 	    "\tzinject -d device [-e errno] [-L <nvlist|uber|pad1|pad2>] [-F]\n"
-	    "\t\t[-T <read|write|free|claim|all>] [-f frequency] pool\n\n"
+	    "\t\t[-T <read|write|free|claim|flush|all>] [-f frequency] pool\n\n"
 	    "\t\tInject a fault into a particular device or the device's\n"
 	    "\t\tlabel.  Label injection can either be 'nvlist', 'uber',\n "
 	    "\t\t'pad1', or 'pad2'.\n"
-	    "\t\t'errno' can be 'nxio' (the default), 'io', 'dtl', or\n"
-	    "\t\t'corrupt' (bit flip).\n"
+	    "\t\t'errno' can be 'nxio' (the default), 'io', 'dtl',\n"
+	    "\t\t'corrupt' (bit flip), 'io-prefail' (unsuccessfully do\n"
+	    "\t\tnothing) or 'noop' (successfully do nothing).\n"
 	    "\t\t'frequency' is a value between 0.0001 and 100.0 that limits\n"
 	    "\t\tdevice error injection to a percentage of the IOs.\n"
 	    "\n"
@@ -277,6 +349,18 @@ usage(void)
 	    "\t\tcreate 3 lanes on the device; one lane with a latency\n"
 	    "\t\tof 10 ms and two lanes with a 25 ms latency.\n"
 	    "\n"
+	    "\tzinject -P import|export -s <seconds> pool\n"
+	    "\t\tAdd an artificial delay to a future pool import or export,\n"
+	    "\t\tsuch that the operation takes a minimum of supplied seconds\n"
+	    "\t\tto complete.\n"
+	    "\n"
+	    "\tzinject -E <delay> [-a] [-m] [-f freq] [-l level] [-r range]\n"
+	    "\t\t[-T iotype] [-t type object | -b bookmark pool]\n"
+	    "\n"
+	    "\t\tInject pipeline ready stage delays for the given object path\n"
+	    "\t\t(data or dnode) or raw bookmark. The delay is specified in\n"
+	    "\t\tmilliseconds.\n"
+	    "\n"
 	    "\tzinject -I [-s <seconds> | -g <txgs>] pool\n"
 	    "\t\tCause the pool to stop writing blocks yet not\n"
 	    "\t\treport errors for a duration.  Simulates buggy hardware\n"
@@ -307,7 +391,9 @@ usage(void)
 	    "0.\n"
 	    "\t\t-m\tAutomatically remount underlying filesystem.\n"
 	    "\t\t-r\tInject error over a particular logical range of an\n"
-	    "\t\t\tobject.  Will be translated to the appropriate blkid\n"
+	    "\t\t\tobject, specified as 'start[,end]'.  Numeric\n"
+	    "\t\t\tsuffixes (K, M, G, T, P, E) are accepted.\n"
+	    "\t\t\tWill be translated to the appropriate blkid\n"
 	    "\t\t\trange according to the object's properties.\n"
 	    "\t\t-a\tFlush the ARC cache.  Can be specified without any\n"
 	    "\t\t\tassociated object.\n"
@@ -359,31 +445,37 @@ print_data_handler(int id, const char *pool, zinject_record_t *record,
 {
 	int *count = data;
 
-	if (record->zi_guid != 0 || record->zi_func[0] != '\0')
+	if (record->zi_guid != 0 || record->zi_func[0] != '\0' ||
+	    record->zi_duration != 0) {
 		return (0);
+	}
 
 	if (*count == 0) {
 		(void) printf("%3s  %-15s  %-6s  %-6s  %-8s  %3s  %-4s  "
-		    "%-15s\n", "ID", "POOL", "OBJSET", "OBJECT", "TYPE",
-		    "LVL", "DVAs", "RANGE");
+		    "%-15s  %-6s  %-15s\n", "ID", "POOL", "OBJSET", "OBJECT",
+		    "TYPE", "LVL", "DVAs", "RANGE", "MATCH", "INJECT");
 		(void) printf("---  ---------------  ------  "
-		    "------  --------  ---  ----  ---------------\n");
+		    "------  --------  ---  ----  ---------------  "
+		    "------  ------\n");
 	}
 
 	*count += 1;
 
-	(void) printf("%3d  %-15s  %-6llu  %-6llu  %-8s  %-3d  0x%02x  ",
-	    id, pool, (u_longlong_t)record->zi_objset,
-	    (u_longlong_t)record->zi_object, type_to_name(record->zi_type),
-	    record->zi_level, record->zi_dvas);
-
-
-	if (record->zi_start == 0 &&
-	    record->zi_end == -1ULL)
-		(void) printf("all\n");
+	char rangebuf[32];
+	if (record->zi_start == 0 && record->zi_end == -1ULL)
+		snprintf(rangebuf, sizeof (rangebuf), "all");
 	else
-		(void) printf("[%llu, %llu]\n", (u_longlong_t)record->zi_start,
+		snprintf(rangebuf, sizeof (rangebuf), "[%llu, %llu]",
+		    (u_longlong_t)record->zi_start,
 		    (u_longlong_t)record->zi_end);
+
+
+	(void) printf("%3d  %-15s  %-6llu  %-6llu  %-8s  %-3d  0x%02x  %-15s  "
+	    "%6" PRIu64 "  %6" PRIu64 "\n", id, pool,
+	    (u_longlong_t)record->zi_objset,
+	    (u_longlong_t)record->zi_object, type_to_name(record->zi_type),
+	    record->zi_level, record->zi_dvas, rangebuf,
+	    record->zi_match_count, record->zi_inject_count);
 
 	return (0);
 }
@@ -401,14 +493,26 @@ print_device_handler(int id, const char *pool, zinject_record_t *record,
 		return (0);
 
 	if (*count == 0) {
-		(void) printf("%3s  %-15s  %s\n", "ID", "POOL", "GUID");
-		(void) printf("---  ---------------  ----------------\n");
+		(void) printf("%3s  %-15s  %-16s  %-5s  %-10s  %-9s  "
+		    "%-6s  %-6s\n",
+		    "ID", "POOL", "GUID", "TYPE", "ERROR", "FREQ",
+		    "MATCH", "INJECT");
+		(void) printf(
+		    "---  ---------------  ----------------  "
+		    "-----  ----------  ---------  "
+		    "------  ------\n");
 	}
 
 	*count += 1;
 
-	(void) printf("%3d  %-15s  %llx\n", id, pool,
-	    (u_longlong_t)record->zi_guid);
+	double freq = record->zi_freq == 0 ? 100.0f :
+	    (((double)record->zi_freq) / ZI_PERCENTAGE_MAX) * 100.0f;
+
+	(void) printf("%3d  %-15s  %llx  %-5s  %-10s  %8.4f%%  "
+	    "%6" PRIu64 "  %6" PRIu64 "\n", id, pool,
+	    (u_longlong_t)record->zi_guid,
+	    iotype_to_str(record->zi_iotype), err_to_str(record->zi_error),
+	    freq, record->zi_match_count, record->zi_inject_count);
 
 	return (0);
 }
@@ -426,18 +530,26 @@ print_delay_handler(int id, const char *pool, zinject_record_t *record,
 		return (0);
 
 	if (*count == 0) {
-		(void) printf("%3s  %-15s  %-15s  %-15s  %s\n",
-		    "ID", "POOL", "DELAY (ms)", "LANES", "GUID");
-		(void) printf("---  ---------------  ---------------  "
-		    "---------------  ----------------\n");
+		(void) printf("%3s  %-15s  %-16s  %-10s  %-5s  %-9s  "
+		    "%-6s  %-6s\n",
+		    "ID", "POOL", "GUID", "DELAY (ms)", "LANES", "FREQ",
+		    "MATCH", "INJECT");
+		(void) printf("---  ---------------  ----------------  "
+		    "----------  -----  ---------  "
+		    "------  ------\n");
 	}
 
 	*count += 1;
 
-	(void) printf("%3d  %-15s  %-15llu  %-15llu  %llx\n", id, pool,
+	double freq = record->zi_freq == 0 ? 100.0f :
+	    (((double)record->zi_freq) / ZI_PERCENTAGE_MAX) * 100.0f;
+
+	(void) printf("%3d  %-15s  %llx  %10llu  %5llu  %8.4f%%  "
+	    "%6" PRIu64 "  %6" PRIu64 "\n", id, pool,
+	    (u_longlong_t)record->zi_guid,
 	    (u_longlong_t)NSEC2MSEC(record->zi_timer),
 	    (u_longlong_t)record->zi_nlanes,
-	    (u_longlong_t)record->zi_guid);
+	    freq, record->zi_match_count, record->zi_inject_count);
 
 	return (0);
 }
@@ -459,6 +571,33 @@ print_panic_handler(int id, const char *pool, zinject_record_t *record,
 	*count += 1;
 
 	(void) printf("%3d  %-15s  %s\n", id, pool, record->zi_func);
+
+	return (0);
+}
+
+static int
+print_pool_delay_handler(int id, const char *pool, zinject_record_t *record,
+    void *data)
+{
+	int *count = data;
+
+	if (record->zi_cmd != ZINJECT_DELAY_IMPORT &&
+	    record->zi_cmd != ZINJECT_DELAY_EXPORT) {
+		return (0);
+	}
+
+	if (*count == 0) {
+		(void) printf("%3s  %-19s  %-11s  %s\n",
+		    "ID", "POOL", "DELAY (sec)", "COMMAND");
+		(void) printf("---  -------------------  -----------"
+		    "  -------\n");
+	}
+
+	*count += 1;
+
+	(void) printf("%3d  %-19s  %-11llu  %s\n",
+	    id, pool, (u_longlong_t)record->zi_duration,
+	    record->zi_cmd == ZINJECT_DELAY_IMPORT ? "import": "export");
 
 	return (0);
 }
@@ -487,6 +626,13 @@ print_all_handlers(void)
 	}
 
 	(void) iter_handlers(print_data_handler, &count);
+	if (count > 0) {
+		total += count;
+		(void) printf("\n");
+		count = 0;
+	}
+
+	(void) iter_handlers(print_pool_delay_handler, &count);
 	if (count > 0) {
 		total += count;
 		(void) printf("\n");
@@ -565,9 +711,27 @@ register_handler(const char *pool, int flags, zinject_record_t *record,
 	zc.zc_guid = flags;
 
 	if (zfs_ioctl(g_zfs, ZFS_IOC_INJECT_FAULT, &zc) != 0) {
-		(void) fprintf(stderr, "failed to add handler: %s\n",
-		    errno == EDOM ? "block level exceeds max level of object" :
-		    strerror(errno));
+		const char *errmsg = strerror(errno);
+
+		switch (errno) {
+		case EDOM:
+			errmsg = "block level exceeds max level of object";
+			break;
+		case EEXIST:
+			if (record->zi_cmd == ZINJECT_DELAY_IMPORT)
+				errmsg = "pool already imported";
+			if (record->zi_cmd == ZINJECT_DELAY_EXPORT)
+				errmsg = "a handler already exists";
+			break;
+		case ENOENT:
+			/* import delay injector running on older zfs module */
+			if (record->zi_cmd == ZINJECT_DELAY_IMPORT)
+				errmsg = "import delay injector not supported";
+			break;
+		default:
+			break;
+		}
+		(void) fprintf(stderr, "failed to add handler: %s\n", errmsg);
 		return (1);
 	}
 
@@ -577,12 +741,15 @@ register_handler(const char *pool, int flags, zinject_record_t *record,
 	if (quiet) {
 		(void) printf("%llu\n", (u_longlong_t)zc.zc_guid);
 	} else {
+		boolean_t show_object = B_FALSE;
+		boolean_t show_iotype = B_FALSE;
 		(void) printf("Added handler %llu with the following "
 		    "properties:\n", (u_longlong_t)zc.zc_guid);
 		(void) printf("  pool: %s\n", pool);
 		if (record->zi_guid) {
 			(void) printf("  vdev: %llx\n",
 			    (u_longlong_t)record->zi_guid);
+			show_iotype = B_TRUE;
 		} else if (record->zi_func[0] != '\0') {
 			(void) printf("  panic function: %s\n",
 			    record->zi_func);
@@ -592,7 +759,21 @@ register_handler(const char *pool, int flags, zinject_record_t *record,
 		} else if (record->zi_duration < 0) {
 			(void) printf(" txgs: %lld \n",
 			    (u_longlong_t)-record->zi_duration);
+		} else if (record->zi_timer > 0) {
+			(void) printf(" timer: %lld ms\n",
+			    (u_longlong_t)NSEC2MSEC(record->zi_timer));
+			if (record->zi_cmd == ZINJECT_DELAY_READY) {
+				show_object = B_TRUE;
+				show_iotype = B_TRUE;
+			}
 		} else {
+			show_object = B_TRUE;
+		}
+		if (show_iotype) {
+			(void) printf("iotype: %s\n",
+			    iotype_to_str(record->zi_iotype));
+		}
+		if (show_object) {
 			(void) printf("objset: %llu\n",
 			    (u_longlong_t)record->zi_objset);
 			(void) printf("object: %llu\n",
@@ -746,7 +927,7 @@ main(int argc, char **argv)
 	int quiet = 0;
 	int error = 0;
 	int domount = 0;
-	int io_type = ZIO_TYPES;
+	int io_type = ZINJECT_IOTYPE_ALL;
 	int action = VDEV_STATE_UNKNOWN;
 	err_type_t type = TYPE_INVAL;
 	err_type_t label = TYPE_INVAL;
@@ -760,6 +941,7 @@ main(int argc, char **argv)
 	int ret;
 	int flags = 0;
 	uint32_t dvas = 0;
+	hrtime_t ready_delay = -1;
 
 	if ((g_zfs = libzfs_init()) == NULL) {
 		(void) fprintf(stderr, "%s\n", libzfs_error_init(errno));
@@ -790,7 +972,7 @@ main(int argc, char **argv)
 	}
 
 	while ((c = getopt(argc, argv,
-	    ":aA:b:C:d:D:f:Fg:qhIc:t:T:l:mr:s:e:uL:p:")) != -1) {
+	    ":aA:b:C:d:D:E:f:Fg:qhIc:t:T:l:mr:s:e:uL:p:P:")) != -1) {
 		switch (c) {
 		case 'a':
 			flags |= ZINJECT_FLUSH_ARC;
@@ -842,24 +1024,13 @@ main(int argc, char **argv)
 			}
 			break;
 		case 'e':
-			if (strcasecmp(optarg, "io") == 0) {
-				error = EIO;
-			} else if (strcasecmp(optarg, "checksum") == 0) {
-				error = ECKSUM;
-			} else if (strcasecmp(optarg, "decompress") == 0) {
-				error = EINVAL;
-			} else if (strcasecmp(optarg, "decrypt") == 0) {
-				error = EACCES;
-			} else if (strcasecmp(optarg, "nxio") == 0) {
-				error = ENXIO;
-			} else if (strcasecmp(optarg, "dtl") == 0) {
-				error = ECHILD;
-			} else if (strcasecmp(optarg, "corrupt") == 0) {
-				error = EILSEQ;
-			} else {
+			error = str_to_err(optarg);
+			if (error < 0) {
 				(void) fprintf(stderr, "invalid error type "
-				    "'%s': must be 'io', 'checksum' or "
-				    "'nxio'\n", optarg);
+				    "'%s': must be one of: io decompress "
+				    "decrypt nxio dtl corrupt noop "
+				    "io-prefail\n",
+				    optarg);
 				usage();
 				libzfs_fini(g_zfs);
 				return (1);
@@ -920,6 +1091,19 @@ main(int argc, char **argv)
 			    sizeof (record.zi_func));
 			record.zi_cmd = ZINJECT_PANIC;
 			break;
+		case 'P':
+			if (strcasecmp(optarg, "import") == 0) {
+				record.zi_cmd = ZINJECT_DELAY_IMPORT;
+			} else if (strcasecmp(optarg, "export") == 0) {
+				record.zi_cmd = ZINJECT_DELAY_EXPORT;
+			} else {
+				(void) fprintf(stderr, "invalid command '%s': "
+				    "must be 'import' or 'export'\n", optarg);
+				usage();
+				libzfs_fini(g_zfs);
+				return (1);
+			}
+			break;
 		case 'q':
 			quiet = 1;
 			break;
@@ -939,20 +1123,11 @@ main(int argc, char **argv)
 			}
 			break;
 		case 'T':
-			if (strcasecmp(optarg, "read") == 0) {
-				io_type = ZIO_TYPE_READ;
-			} else if (strcasecmp(optarg, "write") == 0) {
-				io_type = ZIO_TYPE_WRITE;
-			} else if (strcasecmp(optarg, "free") == 0) {
-				io_type = ZIO_TYPE_FREE;
-			} else if (strcasecmp(optarg, "claim") == 0) {
-				io_type = ZIO_TYPE_CLAIM;
-			} else if (strcasecmp(optarg, "all") == 0) {
-				io_type = ZIO_TYPES;
-			} else {
+			io_type = str_to_iotype(optarg);
+			if (io_type == ZINJECT_IOTYPES) {
 				(void) fprintf(stderr, "invalid I/O type "
 				    "'%s': must be 'read', 'write', 'free', "
-				    "'claim' or 'all'\n", optarg);
+				    "'claim', 'flush' or 'all'\n", optarg);
 				usage();
 				libzfs_fini(g_zfs);
 				return (1);
@@ -970,6 +1145,18 @@ main(int argc, char **argv)
 			break;
 		case 'u':
 			flags |= ZINJECT_UNLOAD_SPA;
+			break;
+		case 'E':
+			ready_delay = MSEC2NSEC(strtol(optarg, &end, 10));
+			if (ready_delay <= 0 || *end != '\0') {
+				(void) fprintf(stderr, "invalid delay '%s': "
+				    "must be a positive duration\n", optarg);
+				usage();
+				libzfs_fini(g_zfs);
+				return (1);
+			}
+			record.zi_cmd = ZINJECT_DELAY_READY;
+			record.zi_timer = ready_delay;
 			break;
 		case 'L':
 			if ((label = name_to_type(optarg)) == TYPE_INVAL &&
@@ -999,7 +1186,7 @@ main(int argc, char **argv)
 	argc -= optind;
 	argv += optind;
 
-	if (record.zi_duration != 0)
+	if (record.zi_duration != 0 && record.zi_cmd == 0)
 		record.zi_cmd = ZINJECT_IGNORED_WRITES;
 
 	if (cancel != NULL) {
@@ -1008,7 +1195,7 @@ main(int argc, char **argv)
 		 */
 		if (raw != NULL || range != NULL || type != TYPE_INVAL ||
 		    level != 0 || record.zi_cmd != ZINJECT_UNINITIALIZED ||
-		    record.zi_freq > 0 || dvas != 0) {
+		    record.zi_freq > 0 || dvas != 0 || ready_delay >= 0) {
 			(void) fprintf(stderr, "cancel (-c) incompatible with "
 			    "any other options\n");
 			usage();
@@ -1044,7 +1231,7 @@ main(int argc, char **argv)
 		 */
 		if (raw != NULL || range != NULL || type != TYPE_INVAL ||
 		    level != 0 || record.zi_cmd != ZINJECT_UNINITIALIZED ||
-		    dvas != 0) {
+		    dvas != 0 || ready_delay >= 0) {
 			(void) fprintf(stderr, "device (-d) incompatible with "
 			    "data error injection\n");
 			usage();
@@ -1071,7 +1258,7 @@ main(int argc, char **argv)
 		}
 
 		if (error == EILSEQ &&
-		    (record.zi_freq == 0 || io_type != ZIO_TYPE_READ)) {
+		    (record.zi_freq == 0 || io_type != ZINJECT_IOTYPE_READ)) {
 			(void) fprintf(stderr, "device corrupt errors require "
 			    "io type read and a frequency value\n");
 			libzfs_fini(g_zfs);
@@ -1083,6 +1270,22 @@ main(int argc, char **argv)
 			libzfs_fini(g_zfs);
 			return (1);
 		}
+
+		if (record.zi_nlanes) {
+			switch (io_type) {
+			case ZINJECT_IOTYPE_READ:
+			case ZINJECT_IOTYPE_WRITE:
+			case ZINJECT_IOTYPE_ALL:
+				break;
+			default:
+				(void) fprintf(stderr, "I/O type for a delay "
+				    "must be 'read' or 'write'\n");
+				usage();
+				libzfs_fini(g_zfs);
+				return (1);
+			}
+		}
+
 		if (!error)
 			error = ENXIO;
 
@@ -1118,19 +1321,29 @@ main(int argc, char **argv)
 			return (1);
 		}
 
-		record.zi_cmd = ZINJECT_DATA_FAULT;
+		if (record.zi_cmd == ZINJECT_UNINITIALIZED) {
+			record.zi_cmd = ZINJECT_DATA_FAULT;
+			if (!error)
+				error = EIO;
+		} else if (error != 0) {
+			(void) fprintf(stderr, "error type -e incompatible "
+			    "with delay injection\n");
+			libzfs_fini(g_zfs);
+			return (1);
+		} else {
+			record.zi_iotype = io_type;
+		}
+
 		if (translate_raw(raw, &record) != 0) {
 			libzfs_fini(g_zfs);
 			return (1);
 		}
-		if (!error)
-			error = EIO;
 	} else if (record.zi_cmd == ZINJECT_PANIC) {
 		if (raw != NULL || range != NULL || type != TYPE_INVAL ||
 		    level != 0 || device != NULL || record.zi_freq > 0 ||
 		    dvas != 0) {
-			(void) fprintf(stderr, "panic (-p) incompatible with "
-			    "other options\n");
+			(void) fprintf(stderr, "%s incompatible with other "
+			    "options\n", "import|export delay (-P)");
 			usage();
 			libzfs_fini(g_zfs);
 			return (2);
@@ -1148,6 +1361,28 @@ main(int argc, char **argv)
 		if (argv[1] != NULL)
 			record.zi_type = atoi(argv[1]);
 		dataset[0] = '\0';
+	} else if (record.zi_cmd == ZINJECT_DELAY_IMPORT ||
+	    record.zi_cmd == ZINJECT_DELAY_EXPORT) {
+		if (raw != NULL || range != NULL || type != TYPE_INVAL ||
+		    level != 0 || device != NULL || record.zi_freq > 0 ||
+		    dvas != 0) {
+			(void) fprintf(stderr, "%s incompatible with other "
+			    "options\n", "import|export delay (-P)");
+			usage();
+			libzfs_fini(g_zfs);
+			return (2);
+		}
+
+		if (argc != 1 || record.zi_duration <= 0) {
+			(void) fprintf(stderr, "import|export delay (-P) "
+			    "injection requires a duration (-s) and a single "
+			    "pool name\n");
+			usage();
+			libzfs_fini(g_zfs);
+			return (2);
+		}
+
+		(void) strlcpy(pool, argv[0], sizeof (pool));
 	} else if (record.zi_cmd == ZINJECT_IGNORED_WRITES) {
 		if (raw != NULL || range != NULL || type != TYPE_INVAL ||
 		    level != 0 || record.zi_freq > 0 || dvas != 0) {
@@ -1230,6 +1465,13 @@ main(int argc, char **argv)
 			record.zi_dvas = dvas;
 		}
 
+		if (record.zi_cmd != ZINJECT_UNINITIALIZED && error != 0) {
+			(void) fprintf(stderr, "error type -e incompatible "
+			    "with delay injection\n");
+			libzfs_fini(g_zfs);
+			return (1);
+		}
+
 		if (error == EACCES) {
 			if (type != TYPE_DATA) {
 				(void) fprintf(stderr, "decryption errors "
@@ -1245,8 +1487,12 @@ main(int argc, char **argv)
 			 * not found.
 			 */
 			error = ECKSUM;
-		} else {
+		} else if (record.zi_cmd == ZINJECT_UNINITIALIZED) {
 			record.zi_cmd = ZINJECT_DATA_FAULT;
+			if (!error)
+				error = EIO;
+		} else {
+			record.zi_iotype = io_type;
 		}
 
 		if (translate_record(type, argv[0], range, level, &record, pool,
@@ -1254,8 +1500,6 @@ main(int argc, char **argv)
 			libzfs_fini(g_zfs);
 			return (1);
 		}
-		if (!error)
-			error = EIO;
 	}
 
 	/*

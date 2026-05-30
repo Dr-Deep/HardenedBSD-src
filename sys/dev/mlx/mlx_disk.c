@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1999 Jonathan Lemon
  * Copyright (c) 1999 Michael Smith
@@ -29,8 +29,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Disk driver for Mylex DAC960 RAID adapters.
  */
@@ -64,7 +62,7 @@ static device_method_t mlxd_methods[] = {
     DEVMETHOD(device_probe,	mlxd_probe),
     DEVMETHOD(device_attach,	mlxd_attach),
     DEVMETHOD(device_detach,	mlxd_detach),
-    { 0, 0 }
+    DEVMETHOD_END
 };
 
 static driver_t mlxd_driver = {

@@ -10,10 +10,10 @@
 /// tests can be debugified without affecting the output MIR.
 //===----------------------------------------------------------------------===//
 
-#include "llvm/CodeGen/MachineFunctionPass.h"
+#include "llvm/CodeGen/MachineBasicBlock.h"
+#include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/Passes.h"
-#include "llvm/IR/DebugInfo.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/Utils/Debugify.h"
@@ -50,7 +50,7 @@ struct StripDebugMachineModule : public ModulePass {
         continue;
       MachineFunction &MF = *MaybeMF;
       for (MachineBasicBlock &MBB : MF) {
-        for (MachineInstr &MI : llvm::make_early_inc_range(MBB)) {
+        for (MachineInstr &MI : llvm::make_early_inc_range(MBB.instrs())) {
           if (MI.isDebugInstr()) {
             // FIXME: We should remove all of them. However, AArch64 emits an
             //        invalid `DBG_VALUE $lr` with only one operand instead of

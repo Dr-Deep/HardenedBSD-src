@@ -24,9 +24,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
@@ -40,7 +37,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/bus.h>
 #include <machine/cpu.h>
 
-#include <dev/extres/clk/clk.h>
+#include <dev/clk/clk.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
 #include "tegra_soctherm_if.h"
@@ -179,9 +176,9 @@ tegra124_coretemp_identify(driver_t *driver, device_t parent)
 	root = OF_finddevice("/");
 	if (!ofw_bus_node_is_compatible(root, "nvidia,tegra124"))
 		return;
-	if (device_find_child(parent, "tegra124_coretemp", -1) != NULL)
+	if (device_find_child(parent, "tegra124_coretemp", DEVICE_UNIT_ANY) != NULL)
 		return;
-	if (BUS_ADD_CHILD(parent, 0, "tegra124_coretemp", -1) == NULL)
+	if (BUS_ADD_CHILD(parent, 0, "tegra124_coretemp", DEVICE_UNIT_ANY) == NULL)
 		device_printf(parent, "add child failed\n");
 }
 

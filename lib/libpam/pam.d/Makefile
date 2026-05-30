@@ -1,14 +1,9 @@
-# $FreeBSD$
-
 .include <src.opts.mk>
-
-PACKAGE=	runtime
 
 NO_OBJ=
 
 CONFGROUPS=	CONFS
 CONFS=	README \
-	cron \
 	imap \
 	login \
 	other \
@@ -19,25 +14,17 @@ CONFS=	README \
 CONFDIR=	/etc/pam.d
 CONFSMODE_README=	444
 
-.if ${MK_AT} != "no"
-CONFGROUPS+=	AT
-AT+=	atrun
-ATPACKAGE+=	at
-.endif
+CONFGROUPS+=	CRON
+CRON=		cron
+CRONPACKAGE=	cron
 
-.if ${MK_FTP} != "no"
-CONFGROUPS+=	FTP
-FTP+=	ftpd
-FTPPACKAGE=	ftp
+CONFGROUPS.${MK_AT}+=	AT
+AT=		atrun
+ATPACKAGE=	at
 
-afterinstallconfig:
-	${INSTALL_LINK} ${TAG_ARGS} ${DESTDIR}${CONFDIR}/ftpd ${DESTDIR}${CONFDIR}/ftp
-.endif
-
-.if ${MK_TELNET} != "no"
-CONFGROUPS+=	TELNET
-TELNET+=	telnetd
-TELNETPACKAGE=	telnet
-.endif
+CONFGROUPS.${MK_FTP}+=	FTP
+FTP=		ftp ftpd
+# Do not put these in the ftp package, since ports also use them.
+FTPPACKAGE=	pam
 
 .include <bsd.prog.mk>

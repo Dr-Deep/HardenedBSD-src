@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2001 Daniel Eischen <deischen@freebsd.org>
  * Copyright (c) 2000-2001 Jason Evans <jasone@freebsd.org>
@@ -27,10 +27,7 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
-#include <sys/types.h>
+#include <sys/param.h>
 #include <sys/mman.h>
 #include <sys/queue.h>
 #include <sys/pax.h>
@@ -134,10 +131,7 @@ static char *last_stack = NULL;
 static inline size_t
 round_up(size_t size)
 {
-	if (size % _thr_page_size != 0)
-		size = ((size / _thr_page_size) + 1) *
-		    _thr_page_size;
-	return size;
+	return (roundup2(size, _thr_page_size));
 }
 
 void
@@ -161,8 +155,7 @@ singlethread_map_stacks_exec(void)
 	mib[0] = CTL_KERN;
 	mib[1] = KERN_USRSTACK;
 	len = sizeof(usrstack);
-	if (sysctl(mib, sizeof(mib) / sizeof(mib[0]), &usrstack, &len, NULL, 0)
-	    == -1)
+	if (sysctl(mib, nitems(mib), &usrstack, &len, NULL, 0) == -1)
 		return;
 	if (getrlimit(RLIMIT_STACK, &rlim) == -1)
 		return;

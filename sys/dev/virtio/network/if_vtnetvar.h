@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2011, Bryan Venteicher <bryanv@FreeBSD.org>
  * All rights reserved.
@@ -24,15 +24,15 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _IF_VTNETVAR_H
 #define _IF_VTNETVAR_H
 
+#define VTNET_ALTQ_CAPABLE (0)
 #ifdef ALTQ
-#define	VTNET_LEGACY_TX
+#undef VTNET_ALTQ_CAPABLE
+#define	VTNET_ALTQ_CAPABLE (1)
 #endif
 
 struct vtnet_softc;
@@ -46,7 +46,7 @@ struct vtnet_statistics {
 	uint64_t	rx_csum_bad_ethtype;
 	uint64_t	rx_csum_bad_ipproto;
 	uint64_t	rx_csum_bad_offset;
-	uint64_t	rx_csum_bad_proto;
+	uint64_t	rx_csum_inaccessible_ipproto;
 	uint64_t	tx_csum_unknown_ethtype;
 	uint64_t	tx_csum_proto_mismatch;
 	uint64_t	tx_tso_not_tcp;
@@ -114,18 +114,14 @@ struct vtnet_txq {
 	struct vtnet_softc	*vtntx_sc;
 	struct virtqueue	*vtntx_vq;
 	struct sglist		*vtntx_sg;
-#ifndef VTNET_LEGACY_TX
 	struct buf_ring		*vtntx_br;
-#endif
 	int			 vtntx_id;
 	int			 vtntx_watchdog;
 	int			 vtntx_intr_threshold;
 	struct vtnet_txq_stats	 vtntx_stats;
 	struct taskqueue	*vtntx_tq;
 	struct task		 vtntx_intrtask;
-#ifndef VTNET_LEGACY_TX
 	struct task		 vtntx_defrtask;
-#endif
 #ifdef DEV_NETMAP
 	struct virtio_net_hdr_mrg_rxbuf vtntx_shrhdr;
 #endif  /* DEV_NETMAP */
@@ -142,7 +138,7 @@ struct vtnet_txq {
 
 struct vtnet_softc {
 	device_t		 vtnet_dev;
-	struct ifnet		*vtnet_ifp;
+	if_t			 vtnet_ifp;
 	struct vtnet_rxq	*vtnet_rxqs;
 	struct vtnet_txq	*vtnet_txqs;
 	pfil_head_t		 vtnet_pfil;
@@ -195,6 +191,11 @@ struct vtnet_softc {
 	char			 vtnet_mtx_name[16];
 	uint8_t			 vtnet_hwaddr[ETHER_ADDR_LEN];
 };
+/* vtnet flag descriptions for use with printf(9) %b identifier. */
+#define VTNET_FLAGS_BITS \
+    "\20\1MODERN\2MAC\3CTRL_VQ\4CTRL_RX\5CTRL_MAC\6VLAN_FILTER\7TSO_ECN" \
+    "\10MRG_RXBUFS\11LRO_NOMRG\12MQ\13INDIRECT\14EVENT_IDX\15SUSPENDED" \
+    "\16FIXUP_NEEDS_CSUM\17SW_LRO"
 
 static bool
 vtnet_modern(struct vtnet_softc *sc)
@@ -234,7 +235,13 @@ vtnet_software_lro(struct vtnet_softc *sc)
  */
 #define VTNET_VLAN_FILTER_NWORDS	(4096 / 32)
 
-/* We depend on these being the same size (and same layout). */
+/*
+ * We depend on all of the hdr structures being even, and matching the standard
+ * length. As well, we depend on two being identally sized (with the same
+ * layout).
+ */
+CTASSERT(sizeof(struct virtio_net_hdr_v1) == 12);
+CTASSERT(sizeof(struct virtio_net_hdr) == 10);
 CTASSERT(sizeof(struct virtio_net_hdr_mrg_rxbuf) ==
     sizeof(struct virtio_net_hdr_v1));
 
@@ -370,7 +377,7 @@ CTASSERT(((VTNET_TX_SEGS_MAX - 1) * MCLBYTES) >= VTNET_MAX_MTU);
  */
 #define VTNET_DEFAULT_BUFRING_SIZE	4096
 
-#define VTNET_CORE_MTX(_sc)		&(_sc)->vtnet_mtx
+#define VTNET_CORE_MTX(_sc)		(&(_sc)->vtnet_mtx)
 #define VTNET_CORE_LOCK(_sc)		mtx_lock(VTNET_CORE_MTX((_sc)))
 #define VTNET_CORE_UNLOCK(_sc)		mtx_unlock(VTNET_CORE_MTX((_sc)))
 #define VTNET_CORE_LOCK_DESTROY(_sc)	mtx_destroy(VTNET_CORE_MTX((_sc)))

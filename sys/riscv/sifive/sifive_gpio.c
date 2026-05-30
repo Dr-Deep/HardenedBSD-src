@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2021 Jessica Clarke <jrtc27@FreeBSD.org>
  *
@@ -27,9 +27,6 @@
  */
 
 /* TODO: Provide interrupt controller interface */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -160,13 +157,14 @@ sfgpio_attach(device_t dev)
 		sc->gpio_pins[i].gp_name[GPIOMAXNAME - 1] = '\0';
 	}
 
-	sc->busdev = gpiobus_attach_bus(dev);
+	sc->busdev = gpiobus_add_bus(dev);
 	if (sc->busdev == NULL) {
 		device_printf(dev, "Cannot attach gpiobus\n");
 		error = ENXIO;
 		goto fail;
 	}
 
+	bus_attach_children(dev);
 	return (0);
 
 fail:

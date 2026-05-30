@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008 Ed Schouten <ed@FreeBSD.org>
  * All rights reserved.
@@ -30,9 +30,8 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_capsicum.h"
+#include "opt_pax.h"
 #include "opt_printf.h"
 
 #include <sys/param.h>
@@ -46,16 +45,19 @@ __FBSDID("$FreeBSD$");
 #ifdef COMPAT_43TTY
 #include <sys/ioctl_compat.h>
 #endif /* COMPAT_43TTY */
+#include <sys/jail.h>
 #include <sys/kernel.h>
 #include <sys/limits.h>
 #include <sys/malloc.h>
 #include <sys/mount.h>
+#include <sys/pax.h>
 #include <sys/poll.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/serial.h>
 #include <sys/signal.h>
 #include <sys/stat.h>
+#include <sys/stdarg.h>
 #include <sys/sx.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
@@ -68,8 +70,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/vnode.h>
 
 #include <fs/devfs/devfs.h>
-
-#include <machine/stdarg.h>
 
 static MALLOC_DEFINE(M_TTY, "tty", "tty device");
 
@@ -87,8 +87,8 @@ static const char	*dev_console_filename;
 /*
  * Flags that are supported and stored by this implementation.
  */
-#define TTYSUP_IFLAG	(IGNBRK|BRKINT|IGNPAR|PARMRK|INPCK|ISTRIP|\
-			INLCR|IGNCR|ICRNL|IXON|IXOFF|IXANY|IMAXBEL)
+#define TTYSUP_IFLAG	(IGNBRK|BRKINT|IGNPAR|PARMRK|INPCK|ISTRIP|INLCR|\
+			IGNCR|ICRNL|IXON|IXOFF|IXANY|IMAXBEL|IUTF8)
 #define TTYSUP_OFLAG	(OPOST|ONLCR|TAB3|ONOEOT|OCRNL|ONOCR|ONLRET)
 #define TTYSUP_LFLAG	(ECHOKE|ECHOE|ECHOK|ECHO|ECHONL|ECHOPRT|\
 			ECHOCTL|ISIG|ICANON|ALTWERASE|IEXTEN|TOSTOP|\
@@ -255,9 +255,6 @@ ttydev_leave(struct tty *tp)
 	ttyoutq_free(&tp->t_outq);
 	tp->t_outlow = 0;
 
-	knlist_clear(&tp->t_inpoll.si_note, 1);
-	knlist_clear(&tp->t_outpoll.si_note, 1);
-
 	if (!tty_gone(tp))
 		ttydevsw_close(tp);
 
@@ -371,7 +368,7 @@ done:	tp->t_flags &= ~TF_OPENCLOSE;
 
 static int
 ttydev_close(struct cdev *dev, int fflag, int devtype __unused,
-    struct thread *td __unused)
+    struct thread *td)
 {
 	struct tty *tp = dev->si_drv1;
 
@@ -394,8 +391,11 @@ ttydev_close(struct cdev *dev, int fflag, int devtype __unused,
 	}
 
 	/* If revoking, flush output now to avoid draining it later. */
-	if (fflag & FREVOKE)
+	if ((fflag & FREVOKE) != 0) {
 		tty_flush(tp, FWRITE);
+		knlist_delete(&tp->t_inpoll.si_note, td, 1);
+		knlist_delete(&tp->t_outpoll.si_note, td, 1);
+	}
 
 	tp->t_flags &= ~TF_EXCLUDE;
 
@@ -602,6 +602,12 @@ ttydev_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag,
 	case  TIOCSETP:
 	case  TIOCSLTC:
 #endif /* COMPAT_43TTY */
+		if (cmd == TIOCSTI) {
+			error = pax_harden_tty(td);
+			if (error) {
+				goto done;
+			}
+		}
 		/*
 		 * If the ioctl() causes the TTY to be modified, let it
 		 * wait in the background.
@@ -752,16 +758,18 @@ tty_kqops_write_event(struct knote *kn, long hint __unused)
 	}
 }
 
-static struct filterops tty_kqops_read = {
+static const struct filterops tty_kqops_read = {
 	.f_isfd = 1,
 	.f_detach = tty_kqops_read_detach,
 	.f_event = tty_kqops_read_event,
+	.f_copy = knote_triv_copy,
 };
 
-static struct filterops tty_kqops_write = {
+static const struct filterops tty_kqops_write = {
 	.f_isfd = 1,
 	.f_detach = tty_kqops_write_detach,
 	.f_event = tty_kqops_write_event,
+	.f_copy = knote_triv_copy,
 };
 
 static int
@@ -1036,7 +1044,7 @@ static bool
 ttydevsw_defbusy(struct tty *tp __unused)
 {
 
-	return (FALSE);
+	return (false);
 }
 
 /*
@@ -1122,6 +1130,8 @@ tty_dealloc(void *arg)
 	ttyoutq_free(&tp->t_outq);
 	seldrain(&tp->t_inpoll);
 	seldrain(&tp->t_outpoll);
+	knlist_clear(&tp->t_inpoll.si_note, 0);
+	knlist_clear(&tp->t_outpoll.si_note, 0);
 	knlist_destroy(&tp->t_inpoll.si_note);
 	knlist_destroy(&tp->t_outpoll.si_note);
 
@@ -1261,6 +1271,10 @@ tty_drop_ctty(struct tty *tp, struct proc *p)
 	session->s_ttydp = NULL;
 	SESS_UNLOCK(session);
 
+	if (tp->t_session == session) {
+		tp->t_session = NULL;
+		tp->t_pgrp = NULL;
+	}
 	tp->t_sessioncnt--;
 	p->p_flag &= ~P_CONTROLT;
 	PROC_UNLOCK(p);
@@ -1290,6 +1304,7 @@ tty_to_xtty(struct tty *tp, struct xtty *xt)
 
 	tty_assert_locked(tp);
 
+	memset(xt, 0, sizeof(*xt));
 	xt->xt_size = sizeof(struct xtty);
 	xt->xt_insize = ttyinq_getsize(&tp->t_inq);
 	xt->xt_incc = ttyinq_bytescanonicalized(&tp->t_inq);
@@ -1309,9 +1324,12 @@ static int
 sysctl_kern_ttys(SYSCTL_HANDLER_ARGS)
 {
 	unsigned long lsize;
+	struct thread *td = curthread;
 	struct xtty *xtlist, *xt;
 	struct tty *tp;
+	struct proc *p;
 	int error;
+	bool cansee;
 
 	sx_slock(&tty_list_sx);
 	lsize = tty_list_count * sizeof(struct xtty);
@@ -1324,13 +1342,28 @@ sysctl_kern_ttys(SYSCTL_HANDLER_ARGS)
 
 	TAILQ_FOREACH(tp, &tty_list, t_list) {
 		tty_lock(tp);
-		tty_to_xtty(tp, xt);
+		if (tp->t_session != NULL &&
+		    (p = atomic_load_ptr(&tp->t_session->s_leader)) != NULL) {
+			PROC_LOCK(p);
+			cansee = (p_cansee(td, p) == 0);
+			PROC_UNLOCK(p);
+		} else {
+			cansee = !jailed(td->td_ucred);
+		}
+		if (cansee) {
+			tty_to_xtty(tp, xt);
+			xt++;
+		}
 		tty_unlock(tp);
-		xt++;
 	}
 	sx_sunlock(&tty_list_sx);
 
-	error = SYSCTL_OUT(req, xtlist, lsize);
+	lsize = (xt - xtlist) * sizeof(struct xtty);
+	if (lsize > 0) {
+		error = SYSCTL_OUT(req, xtlist, lsize);
+	} else {
+		error = 0;
+	}
 	free(xtlist, M_TTY);
 	return (error);
 }
@@ -1624,6 +1657,24 @@ tty_set_winsize(struct tty *tp, const struct winsize *wsz)
 }
 
 static int
+tty_sti_check(struct tty *tp, int fflag, struct thread *td)
+{
+	/* Root can bypass all of our constraints. */
+	if (priv_check(td, PRIV_TTY_STI) == 0)
+		return (0);
+
+	/* Unprivileged users must have it opened for read. */
+	if ((fflag & FREAD) == 0)
+		return (EPERM);
+
+	/* It must also be their controlling tty. */
+	if (!tty_is_ctty(tp, td->td_proc))
+		return (EACCES);
+
+	return (0);
+}
+
+static int
 tty_generic_ioctl(struct tty *tp, u_long cmd, void *data, int fflag,
     struct thread *td)
 {
@@ -1672,7 +1723,7 @@ tty_generic_ioctl(struct tty *tp, u_long cmd, void *data, int fflag,
 		/* This device supports non-blocking operation. */
 		return (0);
 	case FIONREAD:
-		*(int *)data = ttyinq_bytescanonicalized(&tp->t_inq);
+		*(int *)data = ttydisc_bytesavail(tp);
 		return (0);
 	case FIONWRITE:
 	case TIOCOUTQ:
@@ -1704,6 +1755,7 @@ tty_generic_ioctl(struct tty *tp, u_long cmd, void *data, int fflag,
 	case TIOCSETAW:
 	case TIOCSETAF: {
 		struct termios *t = data;
+		bool canonicalize = false;
 
 		/*
 		 * Who makes up these funny rules? According to POSIX,
@@ -1753,6 +1805,19 @@ tty_generic_ioctl(struct tty *tp, u_long cmd, void *data, int fflag,
 				return (error);
 		}
 
+		/*
+		 * We'll canonicalize any partial input if we're transitioning
+		 * ICANON one way or the other.  If we're going from -ICANON ->
+		 * ICANON, then in the worst case scenario we're in the middle
+		 * of a line but both ttydisc_read() and FIONREAD will search
+		 * for one of our line terminals.
+		 */
+		if ((t->c_lflag & ICANON) != (tp->t_termios.c_lflag & ICANON))
+			canonicalize = true;
+		else if (tp->t_termios.c_cc[VEOF] != t->c_cc[VEOF] ||
+		    tp->t_termios.c_cc[VEOL] != t->c_cc[VEOL])
+			canonicalize = true;
+
 		/* Copy new non-device driver parameters. */
 		tp->t_termios.c_iflag = t->c_iflag;
 		tp->t_termios.c_oflag = t->c_oflag;
@@ -1761,13 +1826,15 @@ tty_generic_ioctl(struct tty *tp, u_long cmd, void *data, int fflag,
 
 		ttydisc_optimize(tp);
 
+		if (canonicalize)
+			ttydisc_canonicalize(tp);
 		if ((t->c_lflag & ICANON) == 0) {
 			/*
 			 * When in non-canonical mode, wake up all
-			 * readers. Canonicalize any partial input. VMIN
-			 * and VTIME could also be adjusted.
+			 * readers. Any partial input has already been
+			 * canonicalized above if we were in canonical mode.
+			 * VMIN and VTIME could also be adjusted.
 			 */
-			ttyinq_canonicalize(&tp->t_inq);
 			tty_wakeup(tp, FREAD);
 		}
 
@@ -1952,11 +2019,12 @@ tty_generic_ioctl(struct tty *tp, u_long cmd, void *data, int fflag,
 		tty_info(tp);
 		return (0);
 	case TIOCSTI:
-		if ((fflag & FREAD) == 0 && priv_check(td, PRIV_TTY_STI))
+		if (pax_harden_tty(td)) {
 			return (EPERM);
-		if (!tty_is_ctty(tp, td->td_proc) &&
-		    priv_check(td, PRIV_TTY_STI))
-			return (EACCES);
+		}
+		error = tty_sti_check(tp, fflag, td);
+		if (error != 0)
+			return (error);
 		ttydisc_rint(tp, *(char *)data, 0);
 		ttydisc_rint_done(tp);
 		return (0);

@@ -15,8 +15,6 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- * $FreeBSD$
  */
 #include "opt_ah.h"
 
@@ -326,7 +324,7 @@ ar5212GetRfgain(struct ath_hal *ah)
 				ahp->ah_rfgainState = HAL_RFGAIN_NEED_CHANGE;
 				/* for ap51 */
 				ahp->ah_cwCalRequire = AH_TRUE;
-				/* Request IQ recalibration for temperature chang */
+				/* Request IQ recalibration for temperature change */
 				ahp->ah_bIQCalibration = IQ_CAL_INACTIVE;
 			}
 		}

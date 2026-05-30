@@ -21,10 +21,8 @@ namespace llvm {
 class MCCodeEmitter;
 class MCContext;
 class MCInstrInfo;
-class MCRegisterInfo;
 
 MCCodeEmitter *createR600MCCodeEmitter(const MCInstrInfo &MCII,
-                                       const MCRegisterInfo &MRI,
                                        MCContext &Ctx);
 MCInstrInfo *createR600MCInstrInfo();
 
@@ -34,8 +32,8 @@ MCInstrInfo *createR600MCInstrInfo();
 #include "R600GenRegisterInfo.inc"
 
 #define GET_INSTRINFO_ENUM
-#define GET_INSTRINFO_OPERAND_ENUM
 #define GET_INSTRINFO_SCHED_ENUM
+#define GET_INSTRINFO_MC_HELPER_DECLS
 #include "R600GenInstrInfo.inc"
 
 #define GET_SUBTARGETINFO_ENUM

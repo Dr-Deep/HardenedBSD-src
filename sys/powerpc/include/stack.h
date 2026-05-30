@@ -22,8 +22,6 @@
  *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
- *
- * $FreeBSD$
  */
 
 #ifndef _MACHINE_STACK_H_
@@ -32,5 +30,24 @@
 extern int trapexit[];
 extern int asttrapexit[];
 extern int end[];
+
+#ifdef _SYS_PROC_H_
+
+#include <machine/pcb.h>
+
+/* Get the current kernel thread stack usage. */
+#define	GET_STACK_USAGE(total, used) do {				\
+	struct thread *td = curthread;					\
+	(total) = ptoa(td->td_kstack_pages) - sizeof(struct pcb);	\
+	(used) = td->td_kstack + (total) - (char *)&td;			\
+} while (0)
+
+static __inline bool
+kstack_contains(struct thread *td, vm_offset_t va, size_t len)
+{
+	return (va >= (vm_offset_t)td->td_kstack && va + len >= va &&
+	    va + len <= (vm_offset_t)td_kstack_top(td) - sizeof(struct pcb));
+}
+#endif	/* _SYS_PROC_H_ */
 
 #endif /* !_MACHINE_STACK_H_ */

@@ -25,9 +25,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <stand.h>
 
@@ -42,8 +39,6 @@ __FBSDID("$FreeBSD$");
 
 #ifdef EFI_ZFS_BOOT
 static zfsinfo_list_t zfsinfo;
-
-uint64_t pool_guid;
 
 zfsinfo_list_t *
 efizfs_get_zfsinfo_list(void)
@@ -81,7 +76,7 @@ efizfs_get_guid_by_handle(EFI_HANDLE handle, uint64_t *guid)
 }
 
 static void
-insert_zfs(EFI_HANDLE handle, uint64_t guid)
+insert_zfs(EFI_HANDLE handle, uint64_t guid, bool head)
 {
         zfsinfo_t *zi;
 
@@ -89,7 +84,10 @@ insert_zfs(EFI_HANDLE handle, uint64_t guid)
 	if (zi != NULL) {
         	zi->zi_handle = handle;
         	zi->zi_pool_guid = guid;
-        	STAILQ_INSERT_TAIL(&zfsinfo, zi, zi_link);
+		if (head)
+			STAILQ_INSERT_HEAD(&zfsinfo, zi, zi_link);
+		else
+			STAILQ_INSERT_TAIL(&zfsinfo, zi, zi_link);
 	}
 }
 
@@ -114,13 +112,9 @@ efi_zfs_probe(void)
 		STAILQ_FOREACH(pd, &hd->pd_part, pd_link) {
 			snprintf(devname, sizeof(devname), "%s%dp%d:",
 			    efipart_hddev.dv_name, hd->pd_unit, pd->pd_unit);
-			guid = 0;
-			if (zfs_probe_dev(devname, &guid) == 0) {
-				insert_zfs(pd->pd_handle, guid);
-				if (pd->pd_handle == boot_img->DeviceHandle)
-					pool_guid = guid;
-			}
-
+			if (zfs_probe_dev(devname, &guid, false) == 0)
+				insert_zfs(pd->pd_handle, guid,
+				    pd->pd_handle == boot_img->DeviceHandle);
 		}
 	}
 }

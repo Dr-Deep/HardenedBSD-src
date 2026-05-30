@@ -1,4 +1,5 @@
 #!/bin/ksh -p
+# SPDX-License-Identifier: CDDL-1.0
 #
 # This file and its contents are supplied under the terms of the
 # Common Development and Distribution License ("CDDL"), version 1.0.
@@ -39,10 +40,6 @@ function cleanup
 	poolexists $TESTPOOL && destroy_pool $TESTPOOL
 	[[ -d "$TESTDIR" ]] && log_must rm -r "$TESTDIR"
 }
-
-if is_freebsd; then
-	log_unsupported "FreeBSD has no hole punching mechanism for the time being."
-fi
 
 typeset trim12_pid trim3_pid
 typeset -r VDEV1="$TESTDIR/file_vdev1"

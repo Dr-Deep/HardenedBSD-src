@@ -29,22 +29,14 @@
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/types.h>
 #include <sys/aio.h>
 #include "libc_private.h"
-
-__weak_reference(__sys_aio_suspend, __aio_suspend);
 
 #pragma weak aio_suspend
 int
 aio_suspend(const struct aiocb * const iocbs[], int niocb,
     const struct timespec *timeout)
 {
-
-	return (((int (*)(const struct aiocb * const[], int,
-	    const struct timespec *))
-	    __libc_interposing[INTERPOS_aio_suspend])(iocbs, niocb, timeout));
+	return (INTERPOS_SYS(aio_suspend, iocbs, niocb, timeout));
 }

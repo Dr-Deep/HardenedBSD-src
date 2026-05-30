@@ -1,5 +1,4 @@
 /*	$NetBSD: ieeefp.h,v 1.1 2001/01/10 19:02:06 bjh21 Exp $	*/
-/* $FreeBSD$ */
 /*-
  * Based on ieeefp.h written by J.T. Conklin, Apr 28, 1995
  * Public domain.
@@ -49,5 +48,15 @@ typedef enum {
 } fp_prec_t;
 
 #define fp_except_t	int
+
+/* Augment the userland declarations. */
+__BEGIN_DECLS
+extern fp_rnd_t    fpgetround(void);
+extern fp_rnd_t    fpsetround(fp_rnd_t);
+extern fp_except_t fpgetmask(void);
+extern fp_except_t fpsetmask(fp_except_t);
+extern fp_except_t fpgetsticky(void);
+extern fp_except_t fpsetsticky(fp_except_t);
+__END_DECLS
 
 #endif /* _MACHINE_IEEEFP_H_ */

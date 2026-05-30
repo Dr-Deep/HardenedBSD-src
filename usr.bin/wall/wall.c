@@ -29,20 +29,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-
-__FBSDID("$FreeBSD$");
-
-#ifndef lint
-static const char copyright[] =
-"@(#) Copyright (c) 1988, 1990, 1993\n\
-	The Regents of the University of California.  All rights reserved.\n";
-#endif
-
-#ifndef lint
-static const char sccsid[] = "@(#)wall.c	8.2 (Berkeley) 11/16/93";
-#endif
-
 /*
  * This program is not related to David Wall, whose Stanford Ph.D. thesis
  * is entitled "Mechanisms for Broadcast and Selective Broadcast".
@@ -58,6 +44,7 @@ static const char sccsid[] = "@(#)wall.c	8.2 (Berkeley) 11/16/93";
 #include <locale.h>
 #include <paths.h>
 #include <pwd.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -70,7 +57,7 @@ static const char sccsid[] = "@(#)wall.c	8.2 (Berkeley) 11/16/93";
 #include "ttymsg.h"
 
 static void makemsg(char *);
-static void usage(void);
+static void usage(void) __dead2;
 
 static struct wallgroup {
 	struct wallgroup *next;
@@ -104,7 +91,6 @@ main(int argc, char *argv[])
 	struct wallgroup *g;
 	struct group *grp;
 	char **np;
-	const char *p;
 	struct passwd *pw;
 
 	(void)setlocale(LC_CTYPE, "");
@@ -172,8 +158,8 @@ main(int argc, char *argv[])
 			if (ingroup == 0)
 				continue;
 		}
-		if ((p = ttymsg(&iov, 1, utmp->ut_line, 60*5)) != NULL)
-			warnx("%s", p);
+		if (ttymsg(&iov, 1, utmp->ut_line, 60 * 5, 1) != 0)
+			warn("%s", utmp->ut_line);
 	}
 	exit(0);
 }

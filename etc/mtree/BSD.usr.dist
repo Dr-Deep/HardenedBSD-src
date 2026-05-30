@@ -1,4 +1,3 @@
-# $FreeBSD$
 #
 # Please see the file src/etc/mtree/README before making changes to this file.
 #
@@ -7,43 +6,55 @@
 .
     bin
     ..
-    include
-        private
-            bsddialog
+    include                   tags=package=clibs-dev
+        private               tags=package=clibs-dev
+            bsddialog         tags=package=utilities-dev
             ..
-            bsdstat
+            bsdstat           tags=package=libbsdstat-dev
             ..
-            event1
+            event1            tags=package=libevent1-dev
             ..
-            gmock
-                internal
-                    custom
+            gmock             tags=package=utilities-dev
+                internal      tags=package=utilities-dev
+                    custom    tags=package=utilities-dev
                     ..
                 ..
             ..
-            gtest
-                internal
-                    custom
+            gtest             tags=package=utilities-dev
+                internal      tags=package=utilities-dev
+                    custom    tags=package=utilities-dev
                     ..
                 ..
             ..
-            sqlite3
+            pkgconf           tags=package=pkgconf-dev
             ..
-            ucl
+            samplerate        tags=package=sound-dev
             ..
-            zstd
+            sqlite3           tags=package=libsqlite3-dev
+            ..
+            ucl               tags=package=libucl-dev
+            ..
+            yaml              tags=package=libyaml-dev
+            ..
+            zstd              tags=package=runtime-dev
             ..
         ..
     ..
     lib
         clang
-            14.0.5
+            21
                 include
                     cuda_wrappers
+                        bits
+                        ..
                     ..
                     fuzzer
                     ..
+                    hlsl
+                    ..
                     openmp_wrappers
+                    ..
+                    orc_rt
                     ..
                     ppc_wrappers
                     ..
@@ -66,20 +77,38 @@
         ..
         dtrace
         ..
-        engines
+        engines-3
         ..
         flua
+            freebsd
+                sys
+                ..
+            ..
         ..
         i18n
+        ..
+        krb5                    tags=package=kerberos-kdc
+            kdb                 tags=package=kerberos-kdc
+            ..
+            plugins             tags=package=kerberos-kdc
+                kdb             tags=package=kerberos-kdc
+                ..
+                preauth         tags=package=kerberos-kdc
+                ..
+                tls             tags=package=kerberos-kdc
+                ..
+            ..
         ..
         libxo
             encoder
             ..
         ..
+        ossl-modules
+        ..
+        virtual_oss
+        ..
     ..
     libdata
-        gcc
-        ..
         ldscripts
         ..
         pkgconfig
@@ -150,10 +179,12 @@
         ..
         dwatch
         ..
+        fwget
+        ..
         hyperv
         ..
-        lpr
-            ru
+        lpr			tags=package=lp
+            ru			tags=package=lp
             ..
         ..
         sendmail
@@ -170,9 +201,11 @@
     sbin
     ..
     share
-        atf             tags=package=tests
+        atf             tags=package=atf
         ..
         bhyve
+            gdb
+            ..
             kbdlayout
             ..
         ..
@@ -193,31 +226,11 @@
             ..
         ..
         calendar
-            de_AT.ISO_8859-15
-            ..
-            de_DE.ISO8859-1
-            ..
-            fr_FR.ISO8859-1
-            ..
-            hr_HR.ISO8859-2
-            ..
-            hu_HU.ISO8859-2
-            ..
-            pt_BR.ISO8859-1
-            ..
-            pt_BR.UTF-8
-            ..
-            ru_RU.KOI8-R
-            ..
-            ru_RU.UTF-8
-            ..
-            uk_UA.KOI8-U
-            ..
         ..
         certs
-            trusted tags=package=caroot
+            trusted         tags=package=caroot
             ..
-            untrusted tags=package=caroot
+            untrusted       tags=package=caroot
             ..
         ..
         dict
@@ -225,17 +238,15 @@
         doc
             IPv6
             ..
-            atf             tags=package=tests
+            atf             tags=package=atf
             ..
-            kyua             tags=package=tests
+            kyua            tags=package=kyua
             ..
             legal
             ..
-            llvm
-                clang
+            llvm            tags=package=clang
+                clang       tags=package=clang
                 ..
-            ..
-            ncurses
             ..
             ntp
                 drivers
@@ -258,12 +269,12 @@
         ..
         dtrace
         ..
+        et        tags=package=kerberos-dev
+        ..
         examples
             BSD_daemon
             ..
             FreeBSD_version
-            ..
-            IPv6
             ..
             bhyve
             ..
@@ -276,8 +287,6 @@
             diskless
             ..
             dma
-            ..
-            drivers
             ..
             dwatch
             ..
@@ -296,6 +305,8 @@
             hostapd
             ..
             indent
+            ..
+            inotify
             ..
             ipfilter
             ..
@@ -327,7 +338,7 @@
                     ..
                 ..
             ..
-            kyua             tags=package=tests
+            kyua            tags=package=kyua
             ..
             libusb20
             ..
@@ -337,15 +348,13 @@
             ..
             netgraph
             ..
-            perfmon
-            ..
             pf
             ..
             ppi
             ..
             ppp
             ..
-            printing
+            printing		tags=package=lp
             ..
             scsi_target
             ..
@@ -364,6 +373,8 @@
             smbfs
                 print
                 ..
+            ..
+            sound
             ..
             sunrpc
                 dir
@@ -468,16 +479,22 @@
                 ..
             ..
             pkg
-                revoked tags=package=runtime
+                revoked         tags=package=runtime
                 ..
-                trusted tags=package=runtime
+                trusted         tags=package=runtime
+                ..
+            ..
+            pkgbase-15
+                revoked         tags=package=runtime
+                ..
+                trusted         tags=package=runtime
                 ..
             ..
         ..
-        kyua             tags=package=tests
-            misc         tags=package=tests
+        kyua            tags=package=kyua
+            misc            tags=package=kyua
             ..
-            store        tags=package=tests
+            store           tags=package=kyua
             ..
         ..
         locale
@@ -494,8 +511,6 @@
             man4
                 aarch64
                 ..
-                amd64
-                ..
                 arm
                 ..
                 i386
@@ -510,12 +525,6 @@
             man7
             ..
             man8
-                amd64
-                ..
-                i386
-                ..
-                powerpc
-                ..
             ..
             man9
             ..
@@ -834,6 +843,10 @@
                 ..
             ..
         ..
+        pkg
+            triggers
+            ..
+        ..
         security
         ..
         sendmail
@@ -854,7 +867,7 @@
             scrnmaps
             ..
         ..
-        tabset
+        tabset                tags=package=ncurses-lib
         ..
         vi
             catalog
@@ -908,8 +921,6 @@
             Mexico
             ..
             Pacific
-            ..
-            SystemV
             ..
             US
             ..

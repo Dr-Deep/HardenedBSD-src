@@ -34,9 +34,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/efi.h>
 #include <sys/kernel.h>
@@ -48,18 +45,18 @@ __FBSDID("$FreeBSD$");
 #include <sys/systm.h>
 #include <sys/vmmeter.h>
 
-#include <machine/metadata.h>
-#include <machine/pcb.h>
 #include <machine/pte.h>
-#include <machine/vfp.h>
+#include <machine/rsi.h>
 #include <machine/vmparam.h>
 
 #include <vm/vm.h>
 #include <vm/pmap.h>
+#include <vm/vm_extern.h>
 #include <vm/vm_map.h>
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
 #include <vm/vm_pager.h>
+#include <vm/vm_radix.h>
 
 static vm_object_t obj_1t1_pt;
 static vm_pindex_t efi_1t1_idx;
@@ -69,11 +66,13 @@ static uint64_t efi_ttbr0;
 void
 efi_destroy_1t1_map(void)
 {
+	struct pctrie_iter pages;
 	vm_page_t m;
 
 	if (obj_1t1_pt != NULL) {
+		vm_page_iter_init(&pages, obj_1t1_pt);
 		VM_OBJECT_RLOCK(obj_1t1_pt);
-		TAILQ_FOREACH(m, &obj_1t1_pt->memq, listq)
+		VM_RADIX_FOREACH(m, &pages)
 			m->ref_count = VPRC_OBJREF;
 		vm_wire_sub(obj_1t1_pt->resident_page_count);
 		VM_OBJECT_RUNLOCK(obj_1t1_pt);
@@ -108,34 +107,37 @@ efi_1t1_l3(vm_offset_t va)
 	if (*l0 == 0) {
 		m = efi_1t1_page();
 		mphys = VM_PAGE_TO_PHYS(m);
-		*l0 = mphys | L0_TABLE;
+		*l0 = PHYS_TO_PTE(mphys) | TATTR_UXN_TABLE |
+		    TATTR_AP_TABLE_NO_EL0 | L0_TABLE;
 	} else {
-		mphys = *l0 & ~ATTR_MASK;
+		mphys = PTE_TO_PHYS(*l0);
 	}
 
-	l1 = (pd_entry_t *)PHYS_TO_DMAP(mphys);
+	l1 = PHYS_TO_DMAP(mphys);
 	l1_idx = pmap_l1_index(va);
 	l1 += l1_idx;
 	if (*l1 == 0) {
 		m = efi_1t1_page();
 		mphys = VM_PAGE_TO_PHYS(m);
-		*l1 = mphys | L1_TABLE;
+		*l1 = PHYS_TO_PTE(mphys) | TATTR_UXN_TABLE |
+		    TATTR_AP_TABLE_NO_EL0 | L1_TABLE;
 	} else {
-		mphys = *l1 & ~ATTR_MASK;
+		mphys = PTE_TO_PHYS(*l1);
 	}
 
-	l2 = (pd_entry_t *)PHYS_TO_DMAP(mphys);
+	l2 = PHYS_TO_DMAP(mphys);
 	l2_idx = pmap_l2_index(va);
 	l2 += l2_idx;
 	if (*l2 == 0) {
 		m = efi_1t1_page();
 		mphys = VM_PAGE_TO_PHYS(m);
-		*l2 = mphys | L2_TABLE;
+		*l2 = PHYS_TO_PTE(mphys) | TATTR_UXN_TABLE |
+		    TATTR_AP_TABLE_NO_EL0 | L2_TABLE;
 	} else {
-		mphys = *l2 & ~ATTR_MASK;
+		mphys = PTE_TO_PHYS(*l2);
 	}
 
-	l3 = (pt_entry_t *)PHYS_TO_DMAP(mphys);
+	l3 = PHYS_TO_DMAP(mphys);
 	l3 += pmap_l3_index(va);
 	KASSERT(*l3 == 0, ("%s: Already mapped: va %#jx *pt %#jx", __func__,
 	    va, *l3));
@@ -147,20 +149,15 @@ efi_1t1_l3(vm_offset_t va)
  * Map a physical address from EFI runtime space into KVA space.  Returns 0 to
  * indicate a failed mapping so that the caller may handle error.
  */
-vm_offset_t
+void *
 efi_phys_to_kva(vm_paddr_t paddr)
 {
-	vm_offset_t vaddr;
-
-	if (PHYS_IN_DMAP(paddr)) {
-		vaddr = PHYS_TO_DMAP(paddr);
-		if (pmap_klookup(vaddr, NULL))
-			return (vaddr);
-	}
+	if (PHYS_IN_DMAP(paddr))
+		return (PHYS_TO_DMAP(paddr));
 
 	/* TODO: Map memory not in the DMAP */
 
-	return (0);
+	return (NULL);
 }
 
 /*
@@ -175,6 +172,7 @@ efi_create_1t1_map(struct efi_md *map, int ndesc, int descsz)
 	vm_page_t efi_l0_page;
 	uint64_t idx;
 	int i, mode;
+	uint64_t pa;
 
 	obj_1t1_pt = vm_pager_allocate(OBJT_PHYS, NULL, L0_ENTRIES +
 	    L0_ENTRIES * Ln_ENTRIES + L0_ENTRIES * Ln_ENTRIES * Ln_ENTRIES +
@@ -183,7 +181,7 @@ efi_create_1t1_map(struct efi_md *map, int ndesc, int descsz)
 	VM_OBJECT_WLOCK(obj_1t1_pt);
 	efi_l0_page = efi_1t1_page();
 	VM_OBJECT_WUNLOCK(obj_1t1_pt);
-	efi_l0 = (pd_entry_t *)PHYS_TO_DMAP(VM_PAGE_TO_PHYS(efi_l0_page));
+	efi_l0 = VM_PAGE_TO_DMAP(efi_l0_page);
 	efi_ttbr0 = ASID_TO_OPERAND(ASID_RESERVED_FOR_EFI) |
 	    VM_PAGE_TO_PHYS(efi_l0_page);
 
@@ -220,10 +218,14 @@ efi_create_1t1_map(struct efi_md *map, int ndesc, int descsz)
 		else
 			mode = VM_MEMATTR_DEVICE;
 
-		printf("MAP %lx mode %x pages %lu\n", p->md_phys, mode, p->md_pages);
+		if (bootverbose) {
+			printf("MAP %lx mode %x pages %lu\n",
+			    p->md_phys, mode, p->md_pages);
+		}
 
-		l3_attr = ATTR_DEFAULT | ATTR_S1_IDX(mode) |
-		    ATTR_S1_AP(ATTR_S1_AP_RW) | ATTR_S1_nG | L3_PAGE;
+		l3_attr = ATTR_S1_UXN | ATTR_AF | pmap_sh_attr |
+		    ATTR_S1_IDX(mode) | ATTR_S1_AP(ATTR_S1_AP_RW) |
+		    ATTR_S1_nG | L3_PAGE;
 		if (mode == VM_MEMATTR_DEVICE || p->md_attr & EFI_MD_ATTR_XP)
 			l3_attr |= ATTR_S1_XN;
 
@@ -231,7 +233,13 @@ efi_create_1t1_map(struct efi_md *map, int ndesc, int descsz)
 		for (va = p->md_phys, idx = 0; idx < p->md_pages;
 		    idx += (PAGE_SIZE / EFI_PAGE_SIZE), va += PAGE_SIZE) {
 			l3 = efi_1t1_l3(va);
-			*l3 = va | l3_attr;
+
+			if (mode == VM_MEMATTR_DEVICE && in_realm())
+				pa = va | prot_ns_shared_pa;
+			else
+				pa = va;
+
+			*l3 = PHYS_TO_PTE(pa) | l3_attr;
 		}
 		VM_OBJECT_WUNLOCK(obj_1t1_pt);
 	}
@@ -245,14 +253,26 @@ fail:
 int
 efi_arch_enter(void)
 {
+	uint64_t tcr;
 
 	CRITICAL_ASSERT(curthread);
+	curthread->td_md.md_efirt_dis_pf = vm_fault_disable_pagefaults();
 
 	/*
 	 * Temporarily switch to EFI's page table.  However, we leave curpmap
 	 * unchanged in order to prevent its ASID from being reclaimed before
 	 * we switch back to its page table in efi_arch_leave().
+	 *
+	 * UEFI sdoesn't care about TBI, so enable it. It's more likely
+	 * userspace will have TBI on as it's only disabled for backwards
+	 * compatibility.
 	 */
+	tcr = READ_SPECIALREG(tcr_el1);
+	if ((tcr & MD_TCR_FIELDS) != TCR_TBI0) {
+		tcr &= ~MD_TCR_FIELDS;
+		tcr |= TCR_TBI0;
+		WRITE_SPECIALREG(tcr_el1, tcr);
+	}
 	set_ttbr0(efi_ttbr0);
 	if (PCPU_GET(bcast_tlbi_workaround) != 0)
 		invalidate_local_icache();
@@ -263,6 +283,7 @@ efi_arch_enter(void)
 void
 efi_arch_leave(void)
 {
+	uint64_t proc_tcr, tcr;
 
 	/*
 	 * Restore the pcpu pointer. Some UEFI implementations trash it and
@@ -274,14 +295,16 @@ efi_arch_leave(void)
 	__asm __volatile(
 	    "mrs x18, tpidr_el1	\n"
 	);
+	proc_tcr = curthread->td_proc->p_md.md_tcr;
+	tcr = READ_SPECIALREG(tcr_el1);
+	if ((tcr & MD_TCR_FIELDS) != proc_tcr) {
+		tcr &= ~MD_TCR_FIELDS;
+		tcr |= proc_tcr;
+		WRITE_SPECIALREG(tcr_el1, tcr);
+	}
 	set_ttbr0(pmap_to_ttbr0(PCPU_GET(curpmap)));
 	if (PCPU_GET(bcast_tlbi_workaround) != 0)
 		invalidate_local_icache();
+	vm_fault_enable_pagefaults(curthread->td_md.md_efirt_dis_pf);
 }
 
-int
-efi_rt_arch_call(struct efirt_callinfo *ec)
-{
-
-	panic("not implemented");
-}

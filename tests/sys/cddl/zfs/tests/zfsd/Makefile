@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 .include <src.opts.mk>
 
 PACKAGE=tests
@@ -22,6 +20,7 @@ ${PACKAGE}FILES+=	zfsd_autoreplace_003_pos.ksh
 ${PACKAGE}FILES+=	zfsd_degrade_001_pos.ksh
 ${PACKAGE}FILES+=	zfsd_degrade_002_pos.ksh
 ${PACKAGE}FILES+=	zfsd_fault_001_pos.ksh
+${PACKAGE}FILES+=	zfsd_fault_002_pos.ksh
 ${PACKAGE}FILES+=	zfsd_hotspare_001_pos.ksh
 ${PACKAGE}FILES+=	zfsd_hotspare_002_pos.ksh
 ${PACKAGE}FILES+=	zfsd_hotspare_003_pos.ksh
@@ -31,8 +30,12 @@ ${PACKAGE}FILES+=	zfsd_hotspare_006_pos.ksh
 ${PACKAGE}FILES+=	zfsd_hotspare_007_pos.ksh
 ${PACKAGE}FILES+=	zfsd_hotspare_008_neg.ksh
 ${PACKAGE}FILES+=	zfsd_import_001_pos.ksh
+${PACKAGE}FILES+=	zfsd_offline_001_neg.ksh
+${PACKAGE}FILES+=	zfsd_offline_002_neg.ksh
 ${PACKAGE}FILES+=	zfsd_replace_001_pos.ksh
 ${PACKAGE}FILES+=	zfsd_replace_002_pos.ksh
 ${PACKAGE}FILES+=	zfsd_replace_003_pos.ksh
+${PACKAGE}FILES+=	zfsd_replace_004_pos.ksh
+${PACKAGE}FILES+=	zfsd_replace_005_pos.ksh
 
 .include <bsd.test.mk>

@@ -1,4 +1,3 @@
-# $FreeBSD$
 #
 # You must include bsd.test.mk instead of this file from your Makefile.
 #
@@ -56,8 +55,6 @@ LDADD.${_T}+= ${LIBATF_CXX} ${LIBATF_C}
 .endif
 TEST_INTERFACE.${_T}= atf
 .endfor
-# Silence warnings about usage of deprecated std::auto_ptr
-CXXWARNFLAGS+=	-Wno-deprecated-declarations
 .endif
 
 .if !empty(ATF_TESTS_SH)
@@ -144,7 +141,7 @@ CLEANFILES+= ${_T} ${_T}.tmp
 # this proves to be useful within the tests.
 ATF_TESTS_PYTEST_SED_${_T}?= # empty
 ATF_TESTS_PYTEST_SRC_${_T}?= ${.CURDIR}/${_T:S,.xtmp$,,}
-${_T}:
+${_T}: ${_T:S/.xtmp//}
 	echo "#! /usr/libexec/atf_pytest_wrapper -P ${TESTSBASE}" > ${.TARGET}.tmp
 .if empty(ATF_TESTS_PYTEST_SED_${_T})
 	cat ${ATF_TESTS_PYTEST_SRC_${_T}}  >>${.TARGET}.tmp

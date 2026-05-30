@@ -13,9 +13,9 @@
 #include "M68kRegisterBankInfo.h"
 #include "M68kInstrInfo.h" // For the register classes
 #include "M68kSubtarget.h"
-#include "llvm/CodeGen/GlobalISel/RegisterBank.h"
-#include "llvm/CodeGen/GlobalISel/RegisterBankInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/RegisterBank.h"
+#include "llvm/CodeGen/RegisterBankInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 
 #define GET_TARGET_REGBANK_IMPL
@@ -33,7 +33,7 @@ enum PartialMappingIdx {
   PMI_Min = PMI_GPR,
 };
 
-RegisterBankInfo::PartialMapping PartMappings[]{
+const RegisterBankInfo::PartialMapping PartMappings[]{
     // GPR Partial Mapping
     {0, 32, GPRRegBank},
 };
@@ -43,7 +43,7 @@ enum ValueMappingIdx {
   GPR3OpsIdx = 1,
 };
 
-RegisterBankInfo::ValueMapping ValueMappings[] = {
+const RegisterBankInfo::ValueMapping ValueMappings[] = {
     // invalid
     {nullptr, 0},
     // 3 operands in GPRs
@@ -57,12 +57,6 @@ RegisterBankInfo::ValueMapping ValueMappings[] = {
 
 M68kRegisterBankInfo::M68kRegisterBankInfo(const TargetRegisterInfo &TRI)
     : M68kGenRegisterBankInfo() {}
-
-const RegisterBank &
-M68kRegisterBankInfo::getRegBankFromRegClass(const TargetRegisterClass &RC,
-                                             LLT) const {
-  return getRegBank(M68k::GPRRegBankID);
-}
 
 const RegisterBankInfo::InstructionMapping &
 M68kRegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {

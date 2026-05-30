@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2010 Luigi Rizzo, Riccardo Panicucci, Universita` di Pisa
  * All rights reserved
@@ -30,8 +30,6 @@
  * Dummynet portions related to packet handling.
  */
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_inet6.h"
 
 #include <sys/param.h>
@@ -45,12 +43,14 @@ __FBSDID("$FreeBSD$");
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/rwlock.h>
+#include <sys/sdt.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/sysctl.h>
 
 #include <net/if.h>	/* IFNAMSIZ, struct ifaddr, ifq head, lock.h mutex.h */
 #include <net/if_var.h>	/* NET_EPOCH_... */
+#include <net/if_private.h>
 #include <net/netisr.h>
 #include <net/vnet.h>
 
@@ -70,6 +70,9 @@ __FBSDID("$FreeBSD$");
 #include <netpfil/ipfw/dn_aqm.h>
 #endif
 #include <netpfil/ipfw/dn_sched.h>
+
+SDT_PROVIDER_DEFINE(dummynet);
+SDT_PROBE_DEFINE2(dummynet, , , drop, "struct mbuf *", "struct dn_queue *");
 
 /*
  * We keep a private variable for the simulation time, but we could
@@ -498,8 +501,28 @@ dn_enqueue(struct dn_queue *q, struct mbuf* m, int drop)
 	ni->tot_pkts++;
 	if (drop)
 		goto drop;
-	if (f->plr && random() < f->plr)
-		goto drop;
+	if (f->plr[0] || f->plr[1]) {
+		if (__predict_true(f->plr[1] == 0)) {
+			if (random() < f->plr[0])
+				goto drop;
+		} else {
+			switch (f->pl_state) {
+			case PLR_STATE_B:
+				if (random() < f->plr[3])
+					f->pl_state = PLR_STATE_G;
+				if (random() < f->plr[2])
+					goto drop;
+				break;
+			case PLR_STATE_G: /* FALLTHROUGH */
+			default:
+				if (random() < f->plr[1])
+					f->pl_state = PLR_STATE_B;
+				if (random() < f->plr[0])
+					goto drop;
+				break;
+			}
+		}
+	}
 	if (m->m_pkthdr.rcvif != NULL)
 		m_rcvif_serialize(m);
 #ifdef NEW_AQM
@@ -526,6 +549,7 @@ dn_enqueue(struct dn_queue *q, struct mbuf* m, int drop)
 
 drop:
 	V_dn_cfg.io_pkt_drop++;
+	SDT_PROBE2(dummynet, , , drop, m, q);
 	q->ni.drops++;
 	ni->drops++;
 	FREE_PKT(m);
@@ -866,7 +890,7 @@ tag_mbuf(struct mbuf *m, int dir, struct ip_fw_args *fwa)
 		dt->if_index = fwa->ifp->if_index;
 		dt->if_idxgen = fwa->ifp->if_idxgen;
 	}
-	/* dt->output tame is updated as we move through */
+	/* dt->output_time is updated as we move through */
 	dt->output_time = V_dn_cfg.curr_time;
 	dt->iphdr_off = (dir & PROTO_LAYER2) ? ETHER_HDR_LEN : 0;
 	return 0;
@@ -982,6 +1006,7 @@ done:
 
 dropit:
 	V_dn_cfg.io_pkt_drop++;
+	SDT_PROBE2(dummynet, , , drop, m, q);
 	DN_BH_WUNLOCK();
 	if (m)
 		FREE_PKT(m);

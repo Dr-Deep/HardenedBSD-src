@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008 Marcel Moolenaar
  * Copyright (c) 2001 Benno Rice
@@ -27,8 +27,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _MACHINE_ATOMIC_H_
@@ -167,6 +165,28 @@ _ATOMIC_ADD(long)
  * { *p &= ~v; }
  */
 
+#ifdef	ISA_206_ATOMICS
+#define __atomic_clear_char(p, v, t)				\
+    __asm __volatile(						\
+	"1:	lbarx	%0, 0, %2\n"				\
+	"	andc	%0, %0, %3\n"				\
+	"	stbcx.	%0, 0, %2\n"				\
+	"	bne-	1b\n"					\
+	: "=&r" (t), "=m" (*p)					\
+	: "r" (p), "r" (v), "m" (*p)				\
+	: "cr0", "memory")					\
+    /* __atomic_clear_short */
+#define __atomic_clear_short(p, v, t)				\
+    __asm __volatile(						\
+	"1:	lharx	%0, 0, %2\n"				\
+	"	andc	%0, %0, %3\n"				\
+	"	sthcx.	%0, 0, %2\n"				\
+	"	bne-	1b\n"					\
+	: "=&r" (t), "=m" (*p)					\
+	: "r" (p), "r" (v), "m" (*p)				\
+	: "cr0", "memory")					\
+    /* __atomic_clear_short */
+#endif
 #define __atomic_clear_int(p, v, t)				\
     __asm __volatile(						\
 	"1:	lwarx	%0, 0, %2\n"				\
@@ -224,6 +244,11 @@ _ATOMIC_ADD(long)
     }								\
     /* _ATOMIC_CLEAR */
 
+#ifdef	ISA_206_ATOMICS
+_ATOMIC_CLEAR(char)
+_ATOMIC_CLEAR(short)
+#endif
+
 _ATOMIC_CLEAR(int)
 _ATOMIC_CLEAR(long)
 
@@ -267,6 +292,28 @@ _ATOMIC_CLEAR(long)
  * atomic_set(p, v)
  * { *p |= v; }
  */
+#ifdef	ISA_206_ATOMICS
+#define __atomic_set_char(p, v, t)				\
+    __asm __volatile(						\
+	"1:	lbarx	%0, 0, %2\n"				\
+	"	or	%0, %3, %0\n"				\
+	"	stbcx.	%0, 0, %2\n"				\
+	"	bne-	1b\n"					\
+	: "=&r" (t), "=m" (*p)					\
+	: "r" (p), "r" (v), "m" (*p)				\
+	: "cr0", "memory")					\
+    /* __atomic_set_char */
+#define __atomic_set_short(p, v, t)				\
+    __asm __volatile(						\
+	"1:	lharx	%0, 0, %2\n"				\
+	"	or	%0, %3, %0\n"				\
+	"	sthcx.	%0, 0, %2\n"				\
+	"	bne-	1b\n"					\
+	: "=&r" (t), "=m" (*p)					\
+	: "r" (p), "r" (v), "m" (*p)				\
+	: "cr0", "memory")					\
+    /* __atomic_set_short */
+#endif
 
 #define __atomic_set_int(p, v, t)				\
     __asm __volatile(						\
@@ -324,6 +371,11 @@ _ATOMIC_CLEAR(long)
 	__atomic_set_##type(p, v, t);				\
     }								\
     /* _ATOMIC_SET */
+
+#ifdef	ISA_206_ATOMICS
+_ATOMIC_SET(char)
+_ATOMIC_SET(short)
+#endif
 
 _ATOMIC_SET(int)
 _ATOMIC_SET(long)
@@ -504,7 +556,7 @@ atomic_readandclear_long(volatile u_long *addr)
  */
 #define	ATOMIC_STORE_LOAD(TYPE)					\
 static __inline u_##TYPE					\
-atomic_load_acq_##TYPE(volatile u_##TYPE *p)			\
+atomic_load_acq_##TYPE(const volatile u_##TYPE *p)		\
 {								\
 	u_##TYPE v;						\
 								\
@@ -536,10 +588,10 @@ ATOMIC_STORE_LOAD(long)
 #define	atomic_store_rel_ptr	atomic_store_rel_long
 #else
 static __inline u_long
-atomic_load_acq_long(volatile u_long *addr)
+atomic_load_acq_long(const volatile u_long *addr)
 {
 
-	return ((u_long)atomic_load_acq_int((volatile u_int *)addr));
+	return ((u_long)atomic_load_acq_int((const volatile u_int *)addr));
 }
 
 static __inline void
@@ -1095,11 +1147,15 @@ atomic_testandset_acq_long(volatile u_long *p, u_int v)
 	return (a);
 }
 
-#define	atomic_testandclear_int		atomic_testandclear_int
-#define	atomic_testandset_int		atomic_testandset_int
-#define	atomic_testandclear_long	atomic_testandclear_long
-#define	atomic_testandset_long		atomic_testandset_long
-#define	atomic_testandset_acq_long	atomic_testandset_acq_long
+#ifdef __powerpc64__
+#define	atomic_testandclear_ptr		atomic_testandclear_long
+#define	atomic_testandset_ptr		atomic_testandset_long
+#else
+#define	atomic_testandclear_ptr(p,v)					\
+	atomic_testandclear_32((volatile u_int *)(p), v)
+#define	atomic_testandset_ptr(p,v)					\
+	atomic_testandset_32((volatile u_int *)(p), v)
+#endif
 
 static __inline void
 atomic_thread_fence_acq(void)
@@ -1135,7 +1191,14 @@ atomic_thread_fence_seq_cst(void)
 #define	atomic_cmpset_short	atomic_cmpset_16
 #define	atomic_fcmpset_char	atomic_fcmpset_8
 #define	atomic_fcmpset_short	atomic_fcmpset_16
-#endif
+#define	atomic_set_short	atomic_set_16
+#define	atomic_clear_short	atomic_clear_16
+#else
+#define	atomic_set_8		atomic_set_char
+#define	atomic_clear_8		atomic_clear_char
+#define	atomic_set_16		atomic_set_short
+#define	atomic_clear_16		atomic_clear_short
+#endif	/* ISA_206_ATOMICS */
 
 /* These need sys/_atomic_subword.h on non-ISA-2.06-atomic platforms. */
 ATOMIC_CMPSET_ACQ_REL(char);

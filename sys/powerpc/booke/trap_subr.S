@@ -25,8 +25,6 @@
  * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
  * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 /*-
  * Copyright (C) 1995, 1996 Wolfgang Solfrank.
@@ -167,13 +165,13 @@
 
 /*
  * FRAME_SETUP assumes:
- *	SPRG{1-3}	SP at the time interrupt occured
+ *	SPRG{1-3}	SP at the time interrupt occurred
  *	savearea	r30-r31, DEAR, ESR, xSRR0-1
  *	r30		CR
  *	r31		scratch
  *	r1		kernel stack
  *
- * sprg_sp - SPRG reg containing SP at the time interrupt occured
+ * sprg_sp - SPRG reg containing SP at the time interrupt occurred
  * savearea - temp save
  * exc - exception number (EXC_xxx)
  *
@@ -636,28 +634,6 @@ INTERRUPT(int_vecast)
 	STANDARD_PROLOG(SPR_SPRG1, PC_TEMPSAVE, SPR_SRR0, SPR_SRR1)
 	FRAME_SETUP(SPR_SPRG1, PC_TEMPSAVE, EXC_VECAST_E)
 	b	trap_common
-
-
-#ifdef __SPE__
-/*****************************************************************************
- * Floating point Assist interrupt
- ****************************************************************************/
-INTERRUPT(int_spe_fpdata)
-	STANDARD_PROLOG(SPR_SPRG1, PC_TEMPSAVE, SPR_SRR0, SPR_SRR1)
-	FRAME_SETUP(SPR_SPRG1, PC_TEMPSAVE, EXC_SPFPD)
-	addi	%r3, %r1, CALLSIZE
-	bl	spe_handle_fpdata
-	FRAME_LEAVE(SPR_SRR0, SPR_SRR1)
-	rfi
-
-INTERRUPT(int_spe_fpround)
-	STANDARD_PROLOG(SPR_SPRG1, PC_TEMPSAVE, SPR_SRR0, SPR_SRR1)
-	FRAME_SETUP(SPR_SPRG1, PC_TEMPSAVE, EXC_SPFPR)
-	addi	%r3, %r1, CALLSIZE
-	bl	spe_handle_fpround
-	FRAME_LEAVE(SPR_SRR0, SPR_SRR1)
-	rfi
-#endif
 
 
 #ifdef HWPMC_HOOKS

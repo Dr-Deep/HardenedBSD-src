@@ -12,25 +12,21 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/IVUsers.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/CodeMetrics.h"
 #include "llvm/Analysis/LoopAnalysisManager.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Config/llvm-config.h"
-#include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
-#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
-#include "llvm/IR/Type.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-#include <algorithm>
 using namespace llvm;
 
 #define DEBUG_TYPE "iv-users"
@@ -77,7 +73,7 @@ static bool isInteresting(const SCEV *S, const Instruction *I, const Loop *L,
   // An add is interesting if exactly one of its operands is interesting.
   if (const SCEVAddExpr *Add = dyn_cast<SCEVAddExpr>(S)) {
     bool AnyInterestingYet = false;
-    for (const auto *Op : Add->operands())
+    for (const SCEV *Op : Add->operands())
       if (isInteresting(Op, I, L, SE, LI)) {
         if (AnyInterestingYet)
           return false;
@@ -138,7 +134,7 @@ static bool IVUseShouldUsePostIncValue(Instruction *User, Value *Operand,
 /// add its users to the IVUsesByStride set and return true.  Otherwise, return
 /// false.
 bool IVUsers::AddUsersIfInteresting(Instruction *I) {
-  const DataLayout &DL = I->getModule()->getDataLayout();
+  const DataLayout &DL = I->getDataLayout();
 
   // Add this IV user to the Processed set before returning false to ensure that
   // all IV users are members of the set. See IVUsers::isIVUserOrOperand.
@@ -278,7 +274,7 @@ void IVUsers::print(raw_ostream &OS, const Module *M) const {
     OS << "  ";
     IVUse.getOperandValToReplace()->printAsOperand(OS, false);
     OS << " = " << *getReplacementExpr(IVUse);
-    for (auto PostIncLoop : IVUse.PostIncLoops) {
+    for (const auto *PostIncLoop : IVUse.PostIncLoops) {
       OS << " (post-inc with loop ";
       PostIncLoop->getHeader()->printAsOperand(OS, false);
       OS << ")";
@@ -301,9 +297,7 @@ void IVUsers::releaseMemory() {
   IVUses.clear();
 }
 
-IVUsersWrapperPass::IVUsersWrapperPass() : LoopPass(ID) {
-  initializeIVUsersWrapperPassPass(*PassRegistry::getPassRegistry());
-}
+IVUsersWrapperPass::IVUsersWrapperPass() : LoopPass(ID) {}
 
 void IVUsersWrapperPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<AssumptionCacheTracker>();
@@ -338,8 +332,8 @@ const SCEV *IVUsers::getReplacementExpr(const IVStrideUse &IU) const {
 
 /// getExpr - Return the expression for the use.
 const SCEV *IVUsers::getExpr(const IVStrideUse &IU) const {
-  return normalizeForPostIncUse(getReplacementExpr(IU), IU.getPostIncLoops(),
-                                *SE);
+  const SCEV *Replacement = getReplacementExpr(IU);
+  return normalizeForPostIncUse(Replacement, IU.getPostIncLoops(), *SE);
 }
 
 static const SCEVAddRecExpr *findAddRecForLoop(const SCEV *S, const Loop *L) {
@@ -350,7 +344,7 @@ static const SCEVAddRecExpr *findAddRecForLoop(const SCEV *S, const Loop *L) {
   }
 
   if (const SCEVAddExpr *Add = dyn_cast<SCEVAddExpr>(S)) {
-    for (const auto *Op : Add->operands())
+    for (const SCEV *Op : Add->operands())
       if (const SCEVAddRecExpr *AR = findAddRecForLoop(Op, L))
         return AR;
     return nullptr;
@@ -360,7 +354,10 @@ static const SCEVAddRecExpr *findAddRecForLoop(const SCEV *S, const Loop *L) {
 }
 
 const SCEV *IVUsers::getStride(const IVStrideUse &IU, const Loop *L) const {
-  if (const SCEVAddRecExpr *AR = findAddRecForLoop(getExpr(IU), L))
+  const SCEV *Expr = getExpr(IU);
+  if (!Expr)
+    return nullptr;
+  if (const SCEVAddRecExpr *AR = findAddRecForLoop(Expr, L))
     return AR->getStepRecurrence(*SE);
   return nullptr;
 }

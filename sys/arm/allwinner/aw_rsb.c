@@ -21,16 +21,11 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
  * Allwinner RSB (Reduced Serial Bus) and P2WI (Push-Pull Two Wire Interface)
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -48,8 +43,8 @@ __FBSDID("$FreeBSD$");
 #include <dev/iicbus/iiconf.h>
 #include <dev/iicbus/iicbus.h>
 
-#include <dev/extres/clk/clk.h>
-#include <dev/extres/hwreset/hwreset.h>
+#include <dev/clk/clk.h>
+#include <dev/hwreset/hwreset.h>
 
 #include "iicbus_if.h"
 
@@ -103,10 +98,12 @@ __FBSDID("$FreeBSD$");
 
 #define	A31_P2WI	1
 #define	A23_RSB		2
+#define	H616_P2WI	3
 
 static struct ofw_compat_data compat_data[] = {
 	{ "allwinner,sun6i-a31-p2wi",		A31_P2WI },
 	{ "allwinner,sun8i-a23-rsb",		A23_RSB },
+	{ "allwinner,sun50i-h616-rsb",		H616_P2WI },
 	{ NULL,					0 }
 };
 
@@ -403,6 +400,7 @@ rsb_probe(device_t dev)
 		device_set_desc(dev, "Allwinner RSB");
 		break;
 	case A31_P2WI:
+	case H616_P2WI:
 		device_set_desc(dev, "Allwinner P2WI");
 		break;
 	default:
@@ -447,14 +445,14 @@ rsb_attach(device_t dev)
 	/* Set the PMIC into RSB mode as ATF might have leave it in I2C mode */
 	RSB_WRITE(sc, RSB_PMCR, RSB_PMCR_REG(PMIC_MODE_REG) | RSB_PMCR_DATA(PMIC_MODE_RSB) | RSB_PMCR_START);
 
-	sc->iicbus = device_add_child(dev, "iicbus", -1);
+	sc->iicbus = device_add_child(dev, "iicbus", DEVICE_UNIT_ANY);
 	if (sc->iicbus == NULL) {
 		device_printf(dev, "cannot add iicbus child device\n");
 		error = ENXIO;
 		goto fail;
 	}
 
-	bus_generic_attach(dev);
+	bus_attach_children(dev);
 
 	return (0);
 

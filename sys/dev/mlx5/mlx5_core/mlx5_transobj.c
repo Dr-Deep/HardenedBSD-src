@@ -21,8 +21,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include "opt_rss.h"
@@ -166,6 +164,18 @@ int mlx5_core_create_tir(struct mlx5_core_dev *dev, u32 *in, int inlen,
 		*tirn = MLX5_GET(create_tir_out, out, tirn);
 
 	return err;
+}
+
+
+int
+mlx5_core_modify_tir(struct mlx5_core_dev *dev, u32 *in, int inlen)
+{
+	u32 out[MLX5_ST_SZ_DW(create_tir_out)] = {0};
+	int err;
+
+	MLX5_SET(modify_tir_in, in, opcode, MLX5_CMD_OP_MODIFY_TIR);
+	err = mlx5_cmd_exec(dev, in, inlen, out, sizeof(out));
+	return (err);
 }
 
 void mlx5_core_destroy_tir(struct mlx5_core_dev *dev, u32 tirn, u32 uid)

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -59,7 +60,6 @@ typedef struct dmu_recv_cookie {
 	uint64_t drc_ivset_guid;
 	void *drc_owner;
 	cred_t *drc_cred;
-	proc_t *drc_proc;
 	nvlist_t *drc_begin_nvl;
 
 	objset_t *drc_os;
@@ -79,8 +79,8 @@ typedef struct dmu_recv_cookie {
 	objlist_t *drc_ignore_objlist;
 } dmu_recv_cookie_t;
 
-int dmu_recv_begin(char *, char *, dmu_replay_record_t *,
-    boolean_t, boolean_t, boolean_t, nvlist_t *, nvlist_t *, char *,
+int dmu_recv_begin(const char *, const char *, dmu_replay_record_t *,
+    boolean_t, boolean_t, boolean_t, nvlist_t *, nvlist_t *, const char *,
     dmu_recv_cookie_t *, zfs_file_t *, offset_t *);
 int dmu_recv_stream(dmu_recv_cookie_t *, offset_t *);
 int dmu_recv_end(dmu_recv_cookie_t *, void *);

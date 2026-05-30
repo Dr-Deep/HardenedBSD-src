@@ -32,14 +32,12 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)buf.h	8.9 (Berkeley) 3/30/95
- * $FreeBSD$
  */
 
 #ifndef _SYS_BIO_H_
 #define	_SYS_BIO_H_
 
+#include <sys/_exterr.h>
 #include <sys/queue.h>
 #include <sys/disk_zone.h>
 
@@ -68,17 +66,18 @@
 #define	BIO_TRANSIENT_MAPPING	0x20
 #define	BIO_VLIST	0x40
 #define	BIO_SWAP	0x200	/* Swap-related I/O */
+#define	BIO_EXTERR	0x2000
 #define BIO_SPEEDUP_WRITE	0x4000	/* Resource shortage at upper layers */
 #define BIO_SPEEDUP_TRIM	0x8000	/* Resource shortage at upper layers */
 
-#define	PRINT_BIO_FLAGS "\20\20speedup_trim\17speedup_write\12swap\7vlist\6transient_mapping\5unmapped" \
+#define	PRINT_BIO_FLAGS "\20\20speedup_trim\17speedup_write\16exterr"	\
+	"\12swap\7vlist\6transient_mapping\5unmapped"			\
 	"\4ordered\3onqueue\2done\1error"
 
 
 #ifdef _KERNEL
 struct disk;
 struct bio;
-struct vm_map;
 
 typedef void bio_task_t(void *);
 
@@ -98,7 +97,6 @@ struct bio {
 	struct vm_page **bio_ma;	/* Or unmapped. */
 	int	bio_ma_offset;		/* Offset in the first page of bio_ma. */
 	int	bio_ma_n;		/* Number of pages in bio_ma. */
-	int	bio_error;		/* Errno for BIO_ERROR. */
 	long	bio_resid;		/* Remaining I/O in bytes. */
 	void	(*bio_done)(struct bio *);
 	void	*bio_driver1;		/* Private use by the provider. */
@@ -134,7 +132,11 @@ struct bio {
 
 	/* XXX: these go away when bio chaining is introduced */
 	daddr_t bio_pblkno;               /* physical block number */
+	struct kexterr bio_exterr;
 };
+
+/* Errno for BIO_ERROR. */
+#define	bio_error	bio_exterr.error
 
 struct uio;
 struct devstat;
@@ -147,7 +149,6 @@ struct bio_queue_head {
 	int batched;
 };
 
-extern struct vm_map *bio_transient_map;
 extern int bio_transient_maxcnt;
 
 void biodone(struct bio *bp);

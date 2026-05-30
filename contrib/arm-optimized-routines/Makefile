@@ -1,7 +1,7 @@
 # Makefile - requires GNU make
 #
-# Copyright (c) 2018-2020, Arm Limited.
-# SPDX-License-Identifier: MIT
+# Copyright (c) 2018-2024, Arm Limited.
+# SPDX-License-Identifier: MIT OR Apache-2.0 WITH LLVM-exception
 
 srcdir = .
 prefix = /usr
@@ -25,6 +25,17 @@ LDLIBS =
 AR = $(CROSS_COMPILE)ar
 RANLIB = $(CROSS_COMPILE)ranlib
 INSTALL = install
+# Detect OS.
+# Assume Unix environment: Linux, Darwin, or Msys.
+OS := $(shell uname -s)
+OS := $(patsubst MSYS%,Msys,$(OS))
+# Following math dependencies can be adjusted in config file
+# if necessary, e.g. for Msys.
+libm-libs = -lm
+libc-libs = -lc
+mpfr-libs = -lmpfr
+gmp-libs = -lgmp
+mpc-libs = -lmpc
 
 all:
 

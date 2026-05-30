@@ -19,26 +19,22 @@
  *
  * CDDL HEADER END
  *
- * $FreeBSD$
- *
  */
 /*
  * Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/types.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/kmem.h>
+#include <sys/proc.h>
 #include <sys/smp.h>
 #include <sys/dtrace_impl.h>
 #include <sys/dtrace_bsd.h>
+#include <cddl/dev/dtrace/dtrace_cddl.h>
 #include <machine/armreg.h>
 #include <machine/clock.h>
 #include <machine/frame.h>
@@ -65,16 +61,19 @@ dtrace_invop_hdlr_t *dtrace_invop_hdlr;
 int
 dtrace_invop(uintptr_t addr, struct trapframe *frame, uintptr_t eax)
 {
+	struct thread *td;
 	dtrace_invop_hdlr_t *hdlr;
 	int rval;
 
+	rval = 0;
+	td = curthread;
+	td->t_dtrace_trapframe = frame;
 	for (hdlr = dtrace_invop_hdlr; hdlr != NULL; hdlr = hdlr->dtih_next)
 		if ((rval = hdlr->dtih_func(addr, frame, eax)) != 0)
-			return (rval);
-
-	return (0);
+			break;
+	td->t_dtrace_trapframe = NULL;
+	return (rval);
 }
-
 
 void
 dtrace_invop_add(int (*func)(uintptr_t, struct trapframe *, uintptr_t))
@@ -125,32 +124,31 @@ dtrace_toxic_ranges(void (*func)(uintptr_t base, uintptr_t limit))
 	(*func)(0, (uintptr_t)VM_MIN_KERNEL_ADDRESS);
 }
 
-void
-dtrace_xcall(processorid_t cpu, dtrace_xcall_t func, void *arg)
-{
-	cpuset_t cpus;
+static uint64_t nsec_scale;
 
-	if (cpu == DTRACE_CPUALL)
-		cpus = all_cpus;
-	else
-		CPU_SETOF(cpu, &cpus);
+#define SCALE_SHIFT	25
 
-	smp_rendezvous_cpus(cpus, smp_no_rendezvous_barrier, func,
-	    smp_no_rendezvous_barrier, arg);
-}
-
+/*
+ * Choose scaling factors which let us convert a cntvct_el0 value to nanoseconds
+ * without overflow, as in the amd64 implementation.
+ *
+ * Documentation for the ARM generic timer states that typical counter
+ * frequencies are in the range 1Mhz-50Mhz; in ARMv9 the frequency is fixed at
+ * 1GHz.  The lower bound of 1MHz forces the shift to be at most 25 bits.  At
+ * that frequency, the calculation (hi * scale) << (32 - shift) will not
+ * overflow for over 100 years, assuming that the counter value starts at 0 upon
+ * boot.
+ */
 static void
-dtrace_sync_func(void)
+dtrace_gethrtime_init(void *arg __unused)
 {
+	uint64_t freq;
 
+	freq = READ_SPECIALREG(cntfrq_el0);
+	nsec_scale = ((uint64_t)NANOSEC << SCALE_SHIFT) / freq;
 }
-
-void
-dtrace_sync(void)
-{
-
-	dtrace_xcall(DTRACE_CPUALL, (dtrace_xcall_t)dtrace_sync_func, NULL);
-}
+SYSINIT(dtrace_gethrtime_init, SI_SUB_DTRACE, SI_ORDER_ANY,
+    dtrace_gethrtime_init, NULL);
 
 /*
  * DTrace needs a high resolution time function which can be called from a
@@ -162,10 +160,13 @@ uint64_t
 dtrace_gethrtime(void)
 {
 	uint64_t count, freq;
+	uint32_t lo, hi;
 
 	count = READ_SPECIALREG(cntvct_el0);
-	freq = READ_SPECIALREG(cntfrq_el0);
-	return ((1000000000UL * count) / freq);
+	lo = count;
+	hi = count >> 32;
+	return (((lo * nsec_scale) >> SCALE_SHIFT) +
+	    ((hi * nsec_scale) << (32 - SCALE_SHIFT)));
 }
 
 /*
@@ -207,7 +208,7 @@ dtrace_trap(struct trapframe *frame, u_int type)
 		case EXCP_DATA_ABORT:
 			/* Flag a bad address. */
 			cpu_core[curcpu].cpuc_dtrace_flags |= CPU_DTRACE_BADADDR;
-			cpu_core[curcpu].cpuc_dtrace_illval = 0;
+			cpu_core[curcpu].cpuc_dtrace_illval = frame->tf_far;
 
 			/*
 			 * Offset the instruction pointer to the instruction
@@ -263,17 +264,15 @@ dtrace_store64(uint64_t *addr, struct trapframe *frame, u_int reg)
 static int
 dtrace_invop_start(struct trapframe *frame)
 {
-	int data, invop, reg, update_sp;
-	register_t arg1, arg2;
-	register_t *sp;
-	int offs;
-	int tmp;
-	int i;
+	int data, invop, tmp;
 
 	invop = dtrace_invop(frame->tf_elr, frame, frame->tf_x[0]);
 
 	tmp = (invop & LDP_STP_MASK);
 	if (tmp == STP_64 || tmp == LDP_64) {
+		register_t arg1, arg2, *sp;
+		int offs;
+
 		sp = (register_t *)frame->tf_sp;
 		data = invop;
 		arg1 = (data >> ARG1_SHIFT) & ARG1_MASK;

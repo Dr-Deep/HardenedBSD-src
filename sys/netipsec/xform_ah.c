@@ -1,4 +1,3 @@
-/*	$FreeBSD$	*/
 /*	$OpenBSD: ip_ah.c,v 1.63 2001/06/26 06:18:58 angelos Exp $ */
 /*-
  * The authors of this code are John Ioannidis (ji@tla.org),
@@ -131,6 +130,7 @@ xform_ah_authsize(const struct auth_hash *esph)
 		alen = esph->hashsize / 2;	/* RFC4868 2.3 */
 		break;
 
+	case CRYPTO_POLY1305:
 	case CRYPTO_AES_NIST_GMAC:
 		alen = esph->hashsize;
 		break;
@@ -692,6 +692,7 @@ ah_input_cb(struct cryptop *crp)
 {
 	IPSEC_DEBUG_DECLARE(char buf[IPSEC_ADDRSTRLEN]);
 	unsigned char calc[AH_ALEN_MAX];
+	struct rm_priotracker sahtree_tracker;
 	struct mbuf *m;
 	struct xform_data *xd;
 	struct secasvar *sav;
@@ -711,6 +712,14 @@ ah_input_cb(struct cryptop *crp)
 	nxt = xd->nxt;
 	protoff = xd->protoff;
 	cryptoid = xd->cryptoid;
+	ipsec_sahtree_rlock(&sahtree_tracker);
+	if (sav->state >= SADB_SASTATE_DEAD) {
+		/* saidx is freed */
+		DPRINTF(("%s: dead SA %p spi %#x\n", __func__, sav, sav->spi));
+		AHSTAT_INC(ahs_notdb);
+		error = ESRCH;
+		goto bad;
+	}
 	saidx = &sav->sah->saidx;
 	IPSEC_ASSERT(saidx->dst.sa.sa_family == AF_INET ||
 		saidx->dst.sa.sa_family == AF_INET6,
@@ -731,7 +740,7 @@ ah_input_cb(struct cryptop *crp)
 		error = crp->crp_etype;
 		goto bad;
 	} else {
-		AHSTAT_INC(ahs_hist[sav->alg_auth]);
+		AHSTAT_INC2(ahs_hist, sav->alg_auth);
 		crypto_freereq(crp);		/* No longer needed. */
 		crp = NULL;
 	}
@@ -808,12 +817,14 @@ ah_input_cb(struct cryptop *crp)
 	switch (saidx->dst.sa.sa_family) {
 #ifdef INET6
 	case AF_INET6:
-		error = ipsec6_common_input_cb(m, sav, skip, protoff);
+		error = ipsec6_common_input_cb(m, sav, skip, protoff,
+		    &sahtree_tracker);
 		break;
 #endif
 #ifdef INET
 	case AF_INET:
-		error = ipsec4_common_input_cb(m, sav, skip, protoff);
+		error = ipsec4_common_input_cb(m, sav, skip, protoff,
+		    &sahtree_tracker);
 		break;
 #endif
 	default:
@@ -823,6 +834,7 @@ ah_input_cb(struct cryptop *crp)
 	CURVNET_RESTORE();
 	return error;
 bad:
+	ipsec_sahtree_runlock(&sahtree_tracker);
 	CURVNET_RESTORE();
 	if (sav)
 		key_freesav(&sav);
@@ -1137,7 +1149,7 @@ ah_output_cb(struct cryptop *crp)
 
 	free(xd, M_AH);
 	crypto_freereq(crp);
-	AHSTAT_INC(ahs_hist[sav->alg_auth]);
+	AHSTAT_INC2(ahs_hist, sav->alg_auth);
 #ifdef REGRESSION
 	/* Emulate man-in-the-middle attack when ipsec_integrity is TRUE. */
 	if (V_ipsec_integrity) {

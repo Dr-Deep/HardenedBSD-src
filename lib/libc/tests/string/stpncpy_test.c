@@ -1,6 +1,10 @@
 /*-
  * Copyright (c) 2009 David Schultz <das@FreeBSD.org>
+ * Copyright (c) 2023, 2025 The FreeBSD Foundation
  * All rights reserved.
+ *
+ * Portions of this software were developed by Robert Clausecker
+ * <fuz@FreeBSD.org> under sponsorship from the FreeBSD Foundation.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -24,17 +28,17 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/mman.h>
 #include <assert.h>
+#include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include <atf-c.h>
+
+static char *(*stpncpy_fn)(char *restrict, const char *restrict, size_t);
 
 static char *
 makebuf(size_t len, int guard_at_end)
@@ -48,66 +52,153 @@ makebuf(size_t len, int guard_at_end)
 	buf = mmap(NULL, alloc_size, PROT_READ | PROT_WRITE, MAP_ANON, -1, 0);
 	assert(buf);
 	if (guard_at_end) {
-		assert(munmap(buf + alloc_size - page_size, page_size) == 0);
+		assert(mprotect(buf + alloc_size - page_size, page_size, PROT_NONE) == 0);
 		return (buf + alloc_size - page_size - len);
 	} else {
-		assert(munmap(buf, page_size) == 0);
+		assert(mprotect(buf, page_size, PROT_NONE) == 0);
 		return (buf + page_size);
 	}
 }
 
 static void
-test_stpncpy(const char *s)
+freebuf(char *buf, size_t len, int guard_at_end)
 {
-	char *src, *dst;
-	size_t size, len, bufsize, x;
+	size_t alloc_size, page_size;
+
+	page_size = getpagesize();
+	alloc_size = roundup2(len, page_size) + page_size;
+
+	if (guard_at_end)
+		munmap(buf + len + page_size - alloc_size, alloc_size);
+	else
+		munmap(buf - page_size, alloc_size);
+}
+
+static void
+test_stpncpy(const char *s, size_t size)
+{
+	char *src, *dst, *expected;
+	size_t bufsize, x;
 	int i, j;
 
-	size = strlen(s) + 1;
 	for (i = 0; i <= 1; i++) {
 		for (j = 0; j <= 1; j++) {
-			for (bufsize = 0; bufsize <= size + 10; bufsize++) {
-				src = makebuf(size, i);
-				memcpy(src, s, size);
+			for (bufsize = 0; bufsize <= size + 32; bufsize++) {
 				dst = makebuf(bufsize, j);
+				if (bufsize < size) {
+					src = makebuf(bufsize, i);
+					memcpy(src, s, bufsize);
+					expected = dst + bufsize;
+				} else {
+					src = makebuf(size, i);
+					memcpy(src, s, size);
+					expected = dst + size - 1;
+				}
+
 				memset(dst, 'X', bufsize);
-				len = (bufsize < size) ? bufsize : size - 1;
-				assert(stpncpy(dst, src, bufsize) == dst+len);
-				assert(memcmp(src, dst, len) == 0);
-				for (x = len; x < bufsize; x++)
+				assert(stpncpy_fn(dst, src, bufsize) == expected);
+				assert(memcmp(src, dst, MIN(bufsize, size)) == 0);
+				for (x = size; x < bufsize; x++)
 					assert(dst[x] == '\0');
+
+				freebuf(dst, bufsize, j);
+				freebuf(src, MIN(bufsize, size), i);
 			}
 		}
 	}
 }
 
-ATF_TC_WITHOUT_HEAD(nul);
-ATF_TC_BODY(nul, tc)
+static void
+test_sentinel(char *dest, char *src, size_t destlen, size_t srclen)
 {
+	size_t i;
+	const char *res, *wantres;
+	const char *fail = NULL;
 
-	test_stpncpy("");
+	for (i = 0; i < srclen; i++)
+		/* src will never include (){} */
+		src[i] = '0' + i;
+	src[srclen] = '\0';
+
+	/* source sentinels: not to be copied */
+	src[-1] = '(';
+	src[srclen+1] = ')';
+
+	memset(dest, 0xee, destlen);
+
+	/* destination sentinels: not to be touched */
+	dest[-1] = '{';
+	dest[destlen] = '}';
+
+	wantres = dest + (srclen > destlen ? destlen : srclen);
+	res = stpncpy_fn(dest, src, destlen);
+
+	if (dest[-1] != '{')
+		fail = "start sentinel overwritten";
+	else if (dest[destlen] != '}')
+		fail = "end sentinel overwritten";
+	else if (strncmp(src, dest, destlen) != 0)
+		fail = "string not copied correctly";
+	else if (res != wantres)
+		fail = "incorrect return value";
+	else for (i = srclen; i < destlen; i++)
+		if (dest[i] != '\0') {
+			fail = "incomplete NUL padding";
+			break;
+		}
+
+	if (fail)
+		atf_tc_fail_nonfatal("%s\n"
+		    "stpncpy(%p \"%s\", %p \"%s\", %zu) = %p (want %p)\n",
+		    fail, dest, dest, src, src, destlen, res, wantres);
 }
 
-ATF_TC_WITHOUT_HEAD(foo);
-ATF_TC_BODY(foo, tc)
+ATF_TC_WITHOUT_HEAD(null);
+ATF_TC_BODY(null, tc)
 {
-
-	test_stpncpy("foo");
+	ATF_CHECK_EQ(stpncpy_fn(NULL, NULL, 0), NULL);
 }
 
-ATF_TC_WITHOUT_HEAD(glorp);
-ATF_TC_BODY(glorp, tc)
+ATF_TC_WITHOUT_HEAD(bounds);
+ATF_TC_BODY(bounds, tc)
 {
+	size_t i;
+	char buf[64];
 
-	test_stpncpy("glorp");
+	for (i = 0; i < sizeof(buf) - 1; i++) {
+		buf[i] = ' ' + i;
+		buf[i+1] = '\0';
+		test_stpncpy(buf, i + 2);
+	}
+}
+
+ATF_TC_WITHOUT_HEAD(alignments);
+ATF_TC_BODY(alignments, tc)
+{
+	size_t srcalign, destalign, srclen, destlen;
+	char src[15+3+64]; /* 15 offsets + 64 max length + NUL + sentinels */
+	char dest[15+2+64]; /* 15 offsets + 64 max length + sentinels */
+
+	for (srcalign = 0; srcalign < 16; srcalign++)
+		for (destalign = 0; destalign < 16; destalign++)
+			for (srclen = 0; srclen < 64; srclen++)
+				for (destlen = 0; destlen < 64; destlen++)
+					test_sentinel(dest+destalign+1,
+					    src+srcalign+1, destlen, srclen);
 }
 
 ATF_TP_ADD_TCS(tp)
 {
+	void *dl_handle;
 
-	ATF_TP_ADD_TC(tp, nul);
-	ATF_TP_ADD_TC(tp, foo);
-	ATF_TP_ADD_TC(tp, glorp);
+	dl_handle = dlopen(NULL, RTLD_LAZY);
+	stpncpy_fn = dlsym(dl_handle, "test_stpncpy");
+	if (stpncpy_fn == NULL)
+		stpncpy_fn = stpncpy;
+
+	ATF_TP_ADD_TC(tp, null);
+	ATF_TP_ADD_TC(tp, bounds);
+	ATF_TP_ADD_TC(tp, alignments);
 
 	return (atf_no_error());
 }

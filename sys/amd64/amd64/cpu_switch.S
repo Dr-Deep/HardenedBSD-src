@@ -29,15 +29,12 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include <machine/asmacros.h>
 #include <machine/specialreg.h>
 
 #include "assym.inc"
-#include "opt_sched.h"
 
 /*****************************************************************************/
 /* Scheduling                                                                */
@@ -93,14 +90,8 @@ ENTRY(cpu_switch)
 	jnz	2f
 	testb	$CPUID_STDEXT_FSGSBASE,cpu_stdext_feature(%rip)
 	jz	2f
-	movl	%fs,%eax
-	cmpl	$KUF32SEL,%eax
-	jne	1f
 	rdfsbase %rax
 	movq	%rax,PCB_FSBASE(%r8)
-1:	movl	%gs,%eax
-	cmpl	$KUG32SEL,%eax
-	jne	2f
 	movq	%rdx,%r12
 	movl	$MSR_KGSBASE,%ecx		/* Read user gs base */
 	rdmsr
@@ -144,13 +135,11 @@ ctx_switch_fpusave_done:
 	movq	%r15,TD_LOCK(%r13)		/* Release the old thread */
 sw1:
 	leaq	TD_MD_PCB(%r12),%r8
-#if defined(SCHED_ULE) && defined(SMP)
 	movq	$blocked_lock, %rdx
 	movq	TD_LOCK(%r12),%rcx
 	cmpq	%rcx, %rdx
 	je	sw1wait
 sw1cont:
-#endif
 	/*
 	 * At this point, we've switched address spaces and are ready
 	 * to load up the rest of the next context.
@@ -388,7 +377,7 @@ END(savectx)
 /*
  * resumectx(pcb)
  * Resuming processor state from pcb.
- */     
+ */
 ENTRY(resumectx)
 	/* Switch to KPML5/4phys. */
 	movq	KPML4phys,%rax
@@ -500,7 +489,6 @@ ENTRY(resumectx)
 END(resumectx)
 
 /* Wait for the new thread to become unblocked */
-#if defined(SCHED_ULE) && defined(SMP)
 sw1wait:
 1:
 	pause
@@ -508,4 +496,5 @@ sw1wait:
 	cmpq	%rcx, %rdx
 	je	1b
 	jmp	sw1cont
-#endif
+
+	.section .note.GNU-stack,"",%progbits

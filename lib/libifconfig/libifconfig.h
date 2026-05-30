@@ -22,8 +22,6 @@
  * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #pragma once
@@ -31,9 +29,13 @@
 #include <sys/types.h>
 
 #include <net/if.h>
+#include <net/if_bridgevar.h> /* for ifbvlan_set_t */
 
 #include <netinet/in.h>
+#include <netinet/ip_carp.h>
 #include <netinet6/in6_var.h>
+
+#include <stdbool.h>
 
 #define ND6_IFF_DEFAULTIF    0x8000
 
@@ -41,7 +43,8 @@ typedef enum {
 	OK = 0,
 	OTHER,
 	IOCTL,
-	SOCKET
+	SOCKET,
+	NETLINK
 } ifconfig_errtype;
 
 /*
@@ -51,7 +54,6 @@ typedef enum {
 struct ifconfig_handle;
 typedef struct ifconfig_handle ifconfig_handle_t;
 
-struct carpreq;
 struct ifaddrs;
 struct ifbropreq;
 struct ifbreq;
@@ -65,9 +67,12 @@ struct lagg_reqport;
 struct ifconfig_bridge_status {
 	struct ifbropreq *params;	/**< current operational parameters */
 	struct ifbreq *members;		/**< list of bridge members */
+	ifbvlan_set_t *member_vlans;	/**< bridge member vlan sets */
 	size_t members_count;		/**< how many member interfaces */
 	uint32_t cache_size;		/**< size of address cache */
 	uint32_t cache_lifetime;	/**< address cache entry lifetime */
+	ifbr_flags_t flags;		/**< bridge flags */
+	ether_vlanid_t defpvid;		/**< default pvid */
 };
 
 struct ifconfig_capabilities {
@@ -129,7 +134,7 @@ ifconfig_handle_t *ifconfig_open(void);
  */
 void ifconfig_close(ifconfig_handle_t *h);
 
-/** Identifies what kind of error occured. */
+/** Identifies what kind of error occurred. */
 ifconfig_errtype ifconfig_err_errtype(ifconfig_handle_t *h);
 
 /** Retrieves the errno associated with the error, if any. */
@@ -168,7 +173,6 @@ int ifconfig_set_name(ifconfig_handle_t *h, const char *name,
     const char *newname);
 int ifconfig_get_orig_name(ifconfig_handle_t *h, const char *ifname,
     char **orig_name);
-int ifconfig_set_fib(ifconfig_handle_t *h, const char *name, int fib);
 int ifconfig_get_fib(ifconfig_handle_t *h, const char *name, int *fib);
 int ifconfig_set_mtu(ifconfig_handle_t *h, const char *name, const int mtu);
 int ifconfig_get_mtu(ifconfig_handle_t *h, const char *name, int *mtu);
@@ -279,13 +283,31 @@ ifmedia_t *ifconfig_media_lookup_options(ifmedia_t media, const char **opts,
 int ifconfig_media_get_downreason(ifconfig_handle_t *h, const char *name,
     struct ifdownreason *ifdr);
 
+struct ifconfig_carp {
+	size_t		carpr_count;
+	uint32_t	carpr_vhid;
+	uint32_t	carpr_state;
+	int32_t		carpr_advbase;
+	int32_t		carpr_advskew;
+	uint8_t		carpr_key[CARP_KEY_LEN];
+	struct in_addr	carpr_addr;
+	struct in6_addr	carpr_addr6;
+	carp_version_t	carpr_version;
+	uint8_t		carpr_vrrp_prio;
+	uint16_t	carpr_vrrp_adv_inter;
+};
+
+int ifconfig_carp_get_vhid(ifconfig_handle_t *h, const char *name,
+    struct ifconfig_carp *carpr, uint32_t vhid);
 int ifconfig_carp_get_info(ifconfig_handle_t *h, const char *name,
-    struct carpreq *carpr, int ncarpr);
+    struct ifconfig_carp *carpr, size_t ncarp);
+int ifconfig_carp_set_info(ifconfig_handle_t *h, const char *name,
+    const struct ifconfig_carp *carpr);
 
 /** Retrieve additional information about an inet address
  * @param h	An open ifconfig state object
  * @param name	The interface name
- * @param ifa	Pointer to the the address structure of interest
+ * @param ifa	Pointer to the address structure of interest
  * @param addr	Return argument.  It will be filled with additional information
  *              about the address.
  * @return	0 on success, nonzero on failure.
@@ -296,7 +318,7 @@ int ifconfig_inet_get_addrinfo(ifconfig_handle_t *h,
 /** Retrieve additional information about an inet6 address
  * @param h	An open ifconfig state object
  * @param name	The interface name
- * @param ifa	Pointer to the the address structure of interest
+ * @param ifa	Pointer to the address structure of interest
  * @param addr	Return argument.  It will be filled with additional information
  *              about the address.
  * @return	0 on success, nonzero on failure.
@@ -361,3 +383,12 @@ int ifconfig_set_vlantag(ifconfig_handle_t *h, const char *name,
  * 		length of *lenp * IFNAMSIZ bytes.
  */
 int ifconfig_list_cloners(ifconfig_handle_t *h, char **bufp, size_t *lenp);
+
+/** Brings the interface up/down
+ * @param h	    An open ifconfig state object
+ * @param ifname    The interface name
+ * @param up	    true to bring the interface up, false to bring it down
+ * @return	    0 on success, nonzero on failure.
+ *		    On failure, the error info on the handle is set.
+ */
+int ifconfig_set_up(ifconfig_handle_t *h, const char *ifname, bool up);

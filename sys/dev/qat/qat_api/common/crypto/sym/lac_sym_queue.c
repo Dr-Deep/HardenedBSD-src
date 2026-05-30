@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/* Copyright(c) 2007-2022 Intel Corporation */
-/* $FreeBSD$ */
+/* Copyright(c) 2007-2025 Intel Corporation */
 
 /**
  ***************************************************************************
@@ -57,11 +56,7 @@ LacSymQueue_RequestSend(const CpaInstanceHandle instanceHandle,
 	 */
 	if ((CPA_FALSE == pSessionDesc->nonBlockingOpsInProgress) ||
 	    (NULL != pSessionDesc->pRequestQueueTail)) {
-		if (CPA_STATUS_SUCCESS !=
-		    LAC_SPINLOCK(&pSessionDesc->requestQueueLock)) {
-			LAC_LOG_ERROR("Failed to lock request queue");
-			return CPA_STATUS_RESOURCE;
-		}
+		LAC_SPINLOCK(&pSessionDesc->requestQueueLock);
 
 		/* Re-check blockingOpsInProgress and pRequestQueueTail in case
 		 * either
@@ -95,10 +90,7 @@ LacSymQueue_RequestSend(const CpaInstanceHandle instanceHandle,
 			/* request is queued, don't send to QAT here */
 			enqueued = CPA_TRUE;
 		}
-		if (CPA_STATUS_SUCCESS !=
-		    LAC_SPINUNLOCK(&pSessionDesc->requestQueueLock)) {
-			LAC_LOG_ERROR("Failed to unlock request queue");
-		}
+		LAC_SPINUNLOCK(&pSessionDesc->requestQueueLock);
 	}
 
 	if (CPA_FALSE == enqueued) {
@@ -119,7 +111,7 @@ LacSymQueue_RequestSend(const CpaInstanceHandle instanceHandle,
 		 */
 		if (CPA_CY_SYM_PACKET_TYPE_FULL !=
 		    pRequest->pOpData->packetType) {
-			/* Select blocking operations which this reqest will
+			/* Select blocking operations which this request will
 			 * complete */
 			pSessionDesc->nonBlockingOpsInProgress = CPA_FALSE;
 		}

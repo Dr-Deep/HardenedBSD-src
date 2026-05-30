@@ -30,21 +30,7 @@
  * SUCH DAMAGE.
  */
 
-#ifndef lint
-static const char copyright[] =
-"@(#) Copyright (c) 1983, 1993\n\
-	The Regents of the University of California.  All rights reserved.\n";
-#endif /* not lint */
-
-#if 0
-#ifndef lint
-static char sccsid[] = "@(#)lpc.c	8.3 (Berkeley) 4/28/95";
-#endif /* not lint */
-#endif
-
 #include "lp.cdefs.h"		/* A cross-platform version of <sys/cdefs.h> */
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 
 #include <ctype.h>
@@ -372,6 +358,8 @@ ingroup(const char *grname)
 			err(1, "getgroups");
 	}
 	gid = gptr->gr_gid;
+	if (gid == getegid())
+		return(1);
 	for (i = 0; i < ngroups; i++)
 		if (gid == groups[i])
 			return(1);

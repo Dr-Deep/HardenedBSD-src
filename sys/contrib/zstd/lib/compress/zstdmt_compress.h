@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2020, Yann Collet, Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *
  * This source code is licensed under both the BSD-style license (found in the
@@ -11,10 +11,10 @@
  #ifndef ZSTDMT_COMPRESS_H
  #define ZSTDMT_COMPRESS_H
 
- #if defined (__cplusplus)
- extern "C" {
- #endif
-
+/* ===   Dependencies   === */
+#include "../common/zstd_deps.h"   /* size_t */
+#define ZSTD_STATIC_LINKING_ONLY   /* ZSTD_parameters */
+#include "../zstd.h"            /* ZSTD_inBuffer, ZSTD_outBuffer, ZSTDLIB_API */
 
 /* Note : This is an internal API.
  *        These APIs used to be exposed with ZSTDLIB_API,
@@ -25,18 +25,12 @@
  *        otherwise ZSTDMT_createCCtx*() will fail.
  */
 
-/* ===   Dependencies   === */
-#include "../common/zstd_deps.h"   /* size_t */
-#define ZSTD_STATIC_LINKING_ONLY   /* ZSTD_parameters */
-#include "../zstd.h"            /* ZSTD_inBuffer, ZSTD_outBuffer, ZSTDLIB_API */
-
-
 /* ===   Constants   === */
-#ifndef ZSTDMT_NBWORKERS_MAX
-#  define ZSTDMT_NBWORKERS_MAX 200
+#ifndef ZSTDMT_NBWORKERS_MAX /* a different value can be selected at compile time */
+#  define ZSTDMT_NBWORKERS_MAX ((sizeof(void*)==4) /*32-bit*/ ? 64 : 256)
 #endif
-#ifndef ZSTDMT_JOBSIZE_MIN
-#  define ZSTDMT_JOBSIZE_MIN (1 MB)
+#ifndef ZSTDMT_JOBSIZE_MIN   /* a different value can be selected at compile time */
+#  define ZSTDMT_JOBSIZE_MIN (512 KB)
 #endif
 #define ZSTDMT_JOBLOG_MAX   (MEM_32bits() ? 29 : 30)
 #define ZSTDMT_JOBSIZE_MAX  (MEM_32bits() ? (512 MB) : (1024 MB))
@@ -65,8 +59,11 @@ size_t ZSTDMT_nextInputSizeHint(const ZSTDMT_CCtx* mtctx);
  *  Private use only. Init streaming operation.
  *  expects params to be valid.
  *  must receive dict, or cdict, or none, but not both.
+ *  mtctx can be freshly constructed or reused from a prior compression.
+ *  If mtctx is reused, memory allocations from the prior compression may not be freed,
+ *  even if they are not needed for the current compression.
  *  @return : 0, or an error code */
-size_t ZSTDMT_initCStream_internal(ZSTDMT_CCtx* zcs,
+size_t ZSTDMT_initCStream_internal(ZSTDMT_CCtx* mtctx,
                     const void* dict, size_t dictSize, ZSTD_dictContentType_e dictContentType,
                     const ZSTD_CDict* cdict,
                     ZSTD_CCtx_params params, unsigned long long pledgedSrcSize);
@@ -101,10 +98,5 @@ void ZSTDMT_updateCParams_whileCompressing(ZSTDMT_CCtx* mtctx, const ZSTD_CCtx_p
  *  able to count progression inside worker threads.
  */
 ZSTD_frameProgression ZSTDMT_getFrameProgression(ZSTDMT_CCtx* mtctx);
-
-
-#if defined (__cplusplus)
-}
-#endif
 
 #endif   /* ZSTDMT_COMPRESS_H */

@@ -1,12 +1,12 @@
-# $FreeBSD$
-
 .include <src.opts.mk>
 
 MANDOCDIR=	${SRCTOP}/contrib/mandoc
 .PATH: ${MANDOCDIR}
 
+PACKAGE=	mandoc
+
 PROG=	mandoc
-MAN=	mandoc.1 eqn.7 mandoc_char.7 tbl.7 man.7 mdoc.7 roff.7
+MAN=	mandoc.1 mandoc.db.5 eqn.7 mandoc_char.7 tbl.7 man.7 mdoc.7 roff.7
 MLINKS=	mandoc.1 mdocml.1
 .if ${MK_MAN_UTILS} != no
 MAN+=	apropos.1 makewhatis.8
@@ -17,6 +17,10 @@ LINKS=	${BINDIR}/mandoc ${BINDIR}/whatis \
 .elif defined(BOOTSTRAPPING)
 .error MK_MAN_UTILS should be set to yes when bootstrapping
 .endif
+
+FILESGROUPS=	TRIGGERS
+TRIGGERS=	mandoc.ucl
+TRIGGERSDIR=	/usr/share/pkg/triggers
 
 LIBMAN_SRCS=	man.c \
 		man_macro.c \
@@ -35,6 +39,7 @@ LIBMDOC_SRCS=	arch.c \
 
 LIBROFF_SRCS=	eqn.c \
 		roff.c \
+		roff_escape.c \
 		roff_html.c \
 		roff_term.c \
 		roff_validate.c \
@@ -49,13 +54,13 @@ LIB_SRCS=	${LIBMAN_SRCS} \
 		chars.c \
 		mandoc.c \
 		mandoc_aux.c \
+		mandoc_dbg.c \
 		mandoc_msg.c \
 		mandoc_ohash.c \
 		mandoc_xr.c \
 		msec.c \
 		preconv.c \
-		read.c \
-		compat_recallocarray.c \
+		read.c
 
 HTML_SRCS=	eqn_html.c \
 		html.c \

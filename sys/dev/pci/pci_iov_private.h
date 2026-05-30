@@ -22,8 +22,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _PCI_IOV_PRIVATE_H_
@@ -40,6 +38,8 @@ struct pcicfg_iov {
 	device_t iov_pf;
 	struct cdev *iov_cdev;
 	nvlist_t *iov_schema;
+
+	struct resource *iov_bus_res;
 
 	struct pci_iov_bar iov_bar[PCIR_MAX_BAR_0 + 1];
 	struct rman rman;

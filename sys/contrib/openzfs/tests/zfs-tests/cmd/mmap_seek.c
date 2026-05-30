@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -35,26 +36,45 @@
 #include <linux/fs.h>
 #endif
 
-static void
-seek_data(int fd, off_t offset, off_t expected)
-{
-	off_t data_offset = lseek(fd, offset, SEEK_DATA);
-	if (data_offset != expected) {
-		fprintf(stderr, "lseek(fd, %d, SEEK_DATA) = %d (expected %d)\n",
-		    (int)offset, (int)data_offset, (int)expected);
-		exit(2);
-	}
-}
+/* some older uClibc's lack the defines, so we'll manually define them */
+#ifdef	__UCLIBC__
+#ifndef	SEEK_DATA
+#define	SEEK_DATA 3
+#endif
+#ifndef	SEEK_HOLE
+#define	SEEK_HOLE 4
+#endif
+#endif
 
 static void
+seek_expect(int fd, off_t offset, int whence, off_t expect_offset)
+{
+	errno = 0;
+	off_t seek_offset = lseek(fd, offset, whence);
+	if (seek_offset == expect_offset)
+		return;
+
+	int err = errno;
+	fprintf(stderr, "lseek(fd, %jd, SEEK_%s) = %jd (expected %jd)",
+	    offset, (whence == SEEK_DATA ? "DATA" : "HOLE"),
+	    seek_offset, expect_offset);
+	if (err != 0)
+		fprintf(stderr, " (errno %d [%s])\n", err, strerror(err));
+	else
+		fputc('\n', stderr);
+	exit(2);
+}
+
+static inline void
+seek_data(int fd, off_t offset, off_t expected)
+{
+	seek_expect(fd, offset, SEEK_DATA, expected);
+}
+
+static inline void
 seek_hole(int fd, off_t offset, off_t expected)
 {
-	off_t hole_offset = lseek(fd, offset, SEEK_HOLE);
-	if (hole_offset != expected) {
-		fprintf(stderr, "lseek(fd, %d, SEEK_HOLE) = %d (expected %d)\n",
-		    (int)offset, (int)hole_offset, (int)expected);
-		exit(2);
-	}
+	seek_expect(fd, offset, SEEK_HOLE, expected);
 }
 
 int

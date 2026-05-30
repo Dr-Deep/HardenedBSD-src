@@ -13,11 +13,8 @@
  * ====================================================
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
- * __ieee754_fmodf(x,y)
+ * fmodf(x,y)
  * Return x mod y in exact arithmetic
  * Method: shift and subtract
  */
@@ -28,9 +25,9 @@ __FBSDID("$FreeBSD$");
 static const float one = 1.0, Zero[] = {0.0, -0.0,};
 
 float
-__ieee754_fmodf(float x, float y)
+fmodf(float x, float y)
 {
-	int32_t n,hx,hy,hz,ix,iy,sx,i;
+	int32_t hx, hy, hz, ix, iy, n, sx;
 
 	GET_FLOAT_WORD(hx,x);
 	GET_FLOAT_WORD(hy,y);
@@ -47,14 +44,16 @@ __ieee754_fmodf(float x, float y)
 	    return Zero[(u_int32_t)sx>>31];	/* |x|=|y| return x*0*/
 
     /* determine ix = ilogb(x) */
-	if(hx<0x00800000) {	/* subnormal x */
-	    for (ix = -126,i=(hx<<8); i>0; i<<=1) ix -=1;
-	} else ix = (hx>>23)-127;
+	if(hx<0x00800000)
+	    ix = subnormal_ilogbf(hx);
+	else
+	    ix = (hx>>23)-127;
 
     /* determine iy = ilogb(y) */
-	if(hy<0x00800000) {	/* subnormal y */
-	    for (iy = -126,i=(hy<<8); i>=0; i<<=1) iy -=1;
-	} else iy = (hy>>23)-127;
+	if(hy<0x00800000)
+	    iy = subnormal_ilogbf(hy);
+	else
+	    iy = (hy>>23)-127;
 
     /* set up {hx,lx}, {hy,ly} and align y to x */
 	if(ix >= -126)

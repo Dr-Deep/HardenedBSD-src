@@ -24,9 +24,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/buf.h>
@@ -57,7 +54,7 @@ static device_method_t nvme_pci_methods[] = {
 	DEVMETHOD(device_suspend,   nvme_pci_suspend),
 	DEVMETHOD(device_resume,    nvme_pci_resume),
 	DEVMETHOD(device_shutdown,  nvme_shutdown),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t nvme_pci_driver = {
@@ -94,6 +91,8 @@ static struct _pcsid
 	{ 0x05401c5f,		0, 0, "Memblaze Pblaze4", QUIRK_DELAY_B4_CHK_RDY },
 	{ 0xa821144d,		0, 0, "Samsung PM1725", QUIRK_DELAY_B4_CHK_RDY },
 	{ 0xa822144d,		0, 0, "Samsung PM1725a", QUIRK_DELAY_B4_CHK_RDY },
+	{ 0x07f015ad,		0, 0, "VMware NVMe Controller" },
+	{ 0x2003106b,		0, 0, "Apple S3X NVMe Controller" },
 	{ 0x00000000,		0, 0, NULL  }
 };
 
@@ -152,31 +151,77 @@ nvme_pci_probe (device_t device)
 static int
 nvme_ctrlr_allocate_bar(struct nvme_controller *ctrlr)
 {
+	int error;
 
 	ctrlr->resource_id = PCIR_BAR(0);
+	ctrlr->msix_table_resource_id = -1;
+	ctrlr->msix_table_resource = NULL;
+	ctrlr->msix_pba_resource_id = -1;
+	ctrlr->msix_pba_resource = NULL;
 
+	/*
+	 * Using RF_ACTIVE will set the Memory Space bit in the PCI command register.
+	 * The remaining BARs will get mapped in before they've been programmed with
+	 * an address.  To avoid this we'll not set this flag and instead call
+	 * bus_activate_resource() after all the BARs have been programmed.
+	 */
 	ctrlr->resource = bus_alloc_resource_any(ctrlr->dev, SYS_RES_MEMORY,
-	    &ctrlr->resource_id, RF_ACTIVE);
+	    &ctrlr->resource_id, 0);
 
-	if(ctrlr->resource == NULL) {
+	if (ctrlr->resource == NULL) {
 		nvme_printf(ctrlr, "unable to allocate pci resource\n");
 		return (ENOMEM);
 	}
 
-	ctrlr->bus_tag = rman_get_bustag(ctrlr->resource);
-	ctrlr->bus_handle = rman_get_bushandle(ctrlr->resource);
-	ctrlr->regs = (struct nvme_registers *)ctrlr->bus_handle;
-
 	/*
-	 * The NVMe spec allows for the MSI-X table to be placed behind
-	 *  BAR 4/5, separate from the control/doorbell registers.  Always
-	 *  try to map this bar, because it must be mapped prior to calling
-	 *  pci_alloc_msix().  If the table isn't behind BAR 4/5,
-	 *  bus_alloc_resource() will just return NULL which is OK.
+	 * The NVMe spec allows for the MSI-X tables to be placed behind
+	 *  BAR 4 and/or 5, separate from the control/doorbell registers.
 	 */
-	ctrlr->bar4_resource_id = PCIR_BAR(4);
-	ctrlr->bar4_resource = bus_alloc_resource_any(ctrlr->dev, SYS_RES_MEMORY,
-	    &ctrlr->bar4_resource_id, RF_ACTIVE);
+
+	ctrlr->msix_table_resource_id = pci_msix_table_bar(ctrlr->dev);
+	ctrlr->msix_pba_resource_id = pci_msix_pba_bar(ctrlr->dev);
+
+	if (ctrlr->msix_table_resource_id >= 0 &&
+	    ctrlr->msix_table_resource_id != ctrlr->resource_id) {
+		ctrlr->msix_table_resource = bus_alloc_resource_any(ctrlr->dev,
+		    SYS_RES_MEMORY, &ctrlr->msix_table_resource_id, 0);
+		if (ctrlr->msix_table_resource == NULL) {
+			nvme_printf(ctrlr, "unable to allocate msi-x table resource\n");
+			return (ENOMEM);
+		}
+	}
+	if (ctrlr->msix_pba_resource_id >= 0 &&
+	    ctrlr->msix_pba_resource_id != ctrlr->resource_id &&
+	    ctrlr->msix_pba_resource_id != ctrlr->msix_table_resource_id) {
+		ctrlr->msix_pba_resource = bus_alloc_resource_any(ctrlr->dev,
+		    SYS_RES_MEMORY, &ctrlr->msix_pba_resource_id, 0);
+		if (ctrlr->msix_pba_resource == NULL) {
+			nvme_printf(ctrlr, "unable to allocate msi-x pba resource\n");
+			return (ENOMEM);
+		}
+	}
+
+	error = bus_activate_resource(ctrlr->dev, ctrlr->resource);
+	if (error) {
+		nvme_printf(ctrlr, "unable to activate pci resource: %d\n", error);
+		return (error);
+	}
+	if (ctrlr->msix_table_resource != NULL) {
+		error = bus_activate_resource(ctrlr->dev, ctrlr->msix_table_resource);
+		if (error) {
+			nvme_printf(ctrlr, "unable to activate msi-x table resource: %d\n",
+			    error);
+			return (error);
+		}
+	}
+	if (ctrlr->msix_pba_resource != NULL) {
+		error = bus_activate_resource(ctrlr->dev, ctrlr->msix_pba_resource);
+		if (error) {
+			nvme_printf(ctrlr, "unable to activate msi-x pba resource: %d\n",
+			    error);
+			return (error);
+		}
+	}
 
 	return (0);
 }
@@ -202,9 +247,14 @@ bad:
 		    ctrlr->resource_id, ctrlr->resource);
 	}
 
-	if (ctrlr->bar4_resource != NULL) {
+	if (ctrlr->msix_table_resource != NULL) {
 		bus_release_resource(dev, SYS_RES_MEMORY,
-		    ctrlr->bar4_resource_id, ctrlr->bar4_resource);
+		    ctrlr->msix_table_resource_id, ctrlr->msix_table_resource);
+	}
+
+	if (ctrlr->msix_pba_resource != NULL) {
+		bus_release_resource(dev, SYS_RES_MEMORY,
+		    ctrlr->msix_pba_resource_id, ctrlr->msix_pba_resource);
 	}
 
 	if (ctrlr->tag)

@@ -81,7 +81,7 @@ void NativeThreadFreeBSD::SetStoppedBySignal(uint32_t signo,
   SetStopped();
 
   m_stop_info.reason = StopReason::eStopReasonSignal;
-  m_stop_info.details.signal.signo = signo;
+  m_stop_info.signo = signo;
 
   m_stop_description.clear();
   if (info) {
@@ -90,8 +90,7 @@ void NativeThreadFreeBSD::SetStoppedBySignal(uint32_t signo,
     case SIGBUS:
     case SIGFPE:
     case SIGILL:
-      const auto reason = GetCrashReason(*info);
-      m_stop_description = GetCrashReasonString(reason, *info);
+      m_stop_description = GetCrashReasonString(*info);
       break;
     }
   }
@@ -100,19 +99,19 @@ void NativeThreadFreeBSD::SetStoppedBySignal(uint32_t signo,
 void NativeThreadFreeBSD::SetStoppedByBreakpoint() {
   SetStopped();
   m_stop_info.reason = StopReason::eStopReasonBreakpoint;
-  m_stop_info.details.signal.signo = SIGTRAP;
+  m_stop_info.signo = SIGTRAP;
 }
 
 void NativeThreadFreeBSD::SetStoppedByTrace() {
   SetStopped();
   m_stop_info.reason = StopReason::eStopReasonTrace;
-  m_stop_info.details.signal.signo = SIGTRAP;
+  m_stop_info.signo = SIGTRAP;
 }
 
 void NativeThreadFreeBSD::SetStoppedByExec() {
   SetStopped();
   m_stop_info.reason = StopReason::eStopReasonExec;
-  m_stop_info.details.signal.signo = SIGTRAP;
+  m_stop_info.signo = SIGTRAP;
 }
 
 void NativeThreadFreeBSD::SetStoppedByWatchpoint(uint32_t wp_index) {
@@ -127,7 +126,7 @@ void NativeThreadFreeBSD::SetStoppedByWatchpoint(uint32_t wp_index) {
   SetStopped();
   m_stop_description = ostr.str();
   m_stop_info.reason = StopReason::eStopReasonWatchpoint;
-  m_stop_info.details.signal.signo = SIGTRAP;
+  m_stop_info.signo = SIGTRAP;
 }
 
 void NativeThreadFreeBSD::SetStoppedByFork(lldb::pid_t child_pid,
@@ -135,6 +134,7 @@ void NativeThreadFreeBSD::SetStoppedByFork(lldb::pid_t child_pid,
   SetStopped();
 
   m_stop_info.reason = StopReason::eStopReasonFork;
+  m_stop_info.signo = SIGTRAP;
   m_stop_info.details.fork.child_pid = child_pid;
   m_stop_info.details.fork.child_tid = child_tid;
 }
@@ -144,6 +144,7 @@ void NativeThreadFreeBSD::SetStoppedByVFork(lldb::pid_t child_pid,
   SetStopped();
 
   m_stop_info.reason = StopReason::eStopReasonVFork;
+  m_stop_info.signo = SIGTRAP;
   m_stop_info.details.fork.child_pid = child_pid;
   m_stop_info.details.fork.child_tid = child_tid;
 }
@@ -152,13 +153,14 @@ void NativeThreadFreeBSD::SetStoppedByVForkDone() {
   SetStopped();
 
   m_stop_info.reason = StopReason::eStopReasonVForkDone;
+  m_stop_info.signo = SIGTRAP;
 }
 
 void NativeThreadFreeBSD::SetStoppedWithNoReason() {
   SetStopped();
 
   m_stop_info.reason = StopReason::eStopReasonNone;
-  m_stop_info.details.signal.signo = 0;
+  m_stop_info.signo = 0;
 }
 
 void NativeThreadFreeBSD::SetStopped() {
@@ -250,14 +252,14 @@ Status NativeThreadFreeBSD::SetWatchpoint(lldb::addr_t addr, size_t size,
                                           uint32_t watch_flags, bool hardware) {
   assert(m_state == eStateStopped);
   if (!hardware)
-    return Status("not implemented");
+    return Status::FromErrorString("not implemented");
   Status error = RemoveWatchpoint(addr);
   if (error.Fail())
     return error;
   uint32_t wp_index =
       GetRegisterContext().SetHardwareWatchpoint(addr, size, watch_flags);
   if (wp_index == LLDB_INVALID_INDEX32)
-    return Status("Setting hardware watchpoint failed.");
+    return Status::FromErrorString("Setting hardware watchpoint failed.");
   m_watchpoint_index_map.insert({addr, wp_index});
   return Status();
 }
@@ -270,7 +272,7 @@ Status NativeThreadFreeBSD::RemoveWatchpoint(lldb::addr_t addr) {
   m_watchpoint_index_map.erase(wp);
   if (GetRegisterContext().ClearHardwareWatchpoint(wp_index))
     return Status();
-  return Status("Clearing hardware watchpoint failed.");
+  return Status::FromErrorString("Clearing hardware watchpoint failed.");
 }
 
 Status NativeThreadFreeBSD::SetHardwareBreakpoint(lldb::addr_t addr,
@@ -283,7 +285,7 @@ Status NativeThreadFreeBSD::SetHardwareBreakpoint(lldb::addr_t addr,
   uint32_t bp_index = GetRegisterContext().SetHardwareBreakpoint(addr, size);
 
   if (bp_index == LLDB_INVALID_INDEX32)
-    return Status("Setting hardware breakpoint failed.");
+    return Status::FromErrorString("Setting hardware breakpoint failed.");
 
   m_hw_break_index_map.insert({addr, bp_index});
   return Status();
@@ -300,7 +302,7 @@ Status NativeThreadFreeBSD::RemoveHardwareBreakpoint(lldb::addr_t addr) {
     return Status();
   }
 
-  return Status("Clearing hardware breakpoint failed.");
+  return Status::FromErrorString("Clearing hardware breakpoint failed.");
 }
 
 llvm::Error
@@ -312,6 +314,10 @@ NativeThreadFreeBSD::CopyWatchpointsFrom(NativeThreadFreeBSD &source) {
     m_hw_break_index_map = source.m_hw_break_index_map;
   }
   return s;
+}
+
+NativeProcessFreeBSD &NativeThreadFreeBSD::GetProcess() {
+  return static_cast<NativeProcessFreeBSD &>(m_process);
 }
 
 llvm::Expected<std::unique_ptr<llvm::MemoryBuffer>>

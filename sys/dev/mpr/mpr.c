@@ -30,9 +30,6 @@
  *
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /* Communications core for Avago Technologies (LSI) MPT3 */
 
 /* TODO Move headers to mprvar */
@@ -740,7 +737,7 @@ mpr_iocfacts_allocate(struct mpr_softc *sc, uint8_t attaching)
 	 * XXX If the number of MSI-X vectors changes during re-init, this
 	 * won't see it and adjust.
 	 */
-	if (attaching && (error = mpr_pci_setup_interrupts(sc)) != 0) {
+	if ((attaching || reallocating) && (error = mpr_pci_setup_interrupts(sc)) != 0) {
 		mpr_dprint(sc, MPR_INIT|MPR_ERROR,
 		    "Failed to setup interrupts\n");
 		mpr_free(sc);
@@ -1197,7 +1194,7 @@ mpr_get_iocfacts(struct mpr_softc *sc, MPI2_IOC_FACTS_REPLY *facts)
 {
 	MPI2_DEFAULT_REPLY *reply;
 	MPI2_IOC_FACTS_REQUEST request;
-	int error, req_sz, reply_sz;
+	int error, req_sz, reply_sz, retry = 0;
 
 	MPR_FUNCTRACE(sc);
 	mpr_dprint(sc, MPR_INIT, "%s entered\n", __func__);
@@ -1206,13 +1203,26 @@ mpr_get_iocfacts(struct mpr_softc *sc, MPI2_IOC_FACTS_REPLY *facts)
 	reply_sz = sizeof(MPI2_IOC_FACTS_REPLY);
 	reply = (MPI2_DEFAULT_REPLY *)facts;
 
+	/*
+	 * Retry sending the initialization sequence. Sometimes, especially with
+	 * older firmware, the initialization process fails. Retrying allows the
+	 * error to clear in the firmware.
+	 */
 	bzero(&request, req_sz);
 	request.Function = MPI2_FUNCTION_IOC_FACTS;
-	error = mpr_request_sync(sc, &request, reply, req_sz, reply_sz, 5);
+	while (retry < 5) {
+		error = mpr_request_sync(sc, &request, reply, req_sz, reply_sz, 5);
+		if (error == 0)
+			break;
+		mpr_dprint(sc, MPR_FAULT, "%s failed retry %d\n", __func__, retry);
+		DELAY(1000);
+                retry++;
+	}
 
-	adjust_iocfacts_endianness(facts);
-	mpr_dprint(sc, MPR_TRACE, "facts->IOCCapabilities 0x%x\n", facts->IOCCapabilities);
-
+	if (error == 0) {
+		adjust_iocfacts_endianness(facts);
+		mpr_dprint(sc, MPR_TRACE, "facts->IOCCapabilities 0x%x\n", facts->IOCCapabilities);
+	}
 	mpr_dprint(sc, MPR_INIT, "%s exit, error= %d\n", __func__, error);
 	return (error);
 }
@@ -1502,7 +1512,8 @@ mpr_alloc_requests(struct mpr_softc *sc)
 	rsize = sc->chain_frame_size * sc->num_chains;
 	bus_dma_template_init(&t, sc->mpr_parent_dmat);
 	BUS_DMA_TEMPLATE_FILL(&t, BD_ALIGNMENT(16), BD_MAXSIZE(rsize),
-	    BD_MAXSEGSIZE(rsize), BD_NSEGMENTS((howmany(rsize, PAGE_SIZE))));
+	    BD_MAXSEGSIZE(rsize), BD_NSEGMENTS((howmany(rsize, PAGE_SIZE))),
+	    BD_BOUNDARY(BUS_SPACE_MAXSIZE_32BIT+1));
 	if (bus_dma_template_tag(&t, &sc->chain_dmat)) {
 		mpr_dprint(sc, MPR_ERROR, "Cannot allocate chain DMA tag\n");
 		return (ENOMEM);
@@ -1554,7 +1565,8 @@ mpr_alloc_requests(struct mpr_softc *sc)
 	BUS_DMA_TEMPLATE_FILL(&t, BD_MAXSIZE(BUS_SPACE_MAXSIZE_32BIT),
 	    BD_NSEGMENTS(nsegs), BD_MAXSEGSIZE(BUS_SPACE_MAXSIZE_32BIT),
 	    BD_FLAGS(BUS_DMA_ALLOCNOW), BD_LOCKFUNC(busdma_lock_mutex),
-	    BD_LOCKFUNCARG(&sc->mpr_mtx));
+	    BD_LOCKFUNCARG(&sc->mpr_mtx),
+	    BD_BOUNDARY(BUS_SPACE_MAXSIZE_32BIT+1));
 	if (bus_dma_template_tag(&t, &sc->buffer_dmat)) {
 		mpr_dprint(sc, MPR_ERROR, "Cannot allocate buffer DMA tag\n");
 		return (ENOMEM);
@@ -1716,6 +1728,7 @@ mpr_get_tunables(struct mpr_softc *sc)
 	sc->enable_ssu = MPR_SSU_ENABLE_SSD_DISABLE_HDD;
 	sc->spinup_wait_time = DEFAULT_SPINUP_WAIT;
 	sc->use_phynum = 1;
+	sc->encl_min_slots = 0;
 	sc->max_reqframes = MPR_REQ_FRAMES;
 	sc->max_prireqframes = MPR_PRI_REQ_FRAMES;
 	sc->max_replyframes = MPR_REPLY_FRAMES;
@@ -1735,6 +1748,7 @@ mpr_get_tunables(struct mpr_softc *sc)
 	TUNABLE_INT_FETCH("hw.mpr.enable_ssu", &sc->enable_ssu);
 	TUNABLE_INT_FETCH("hw.mpr.spinup_wait_time", &sc->spinup_wait_time);
 	TUNABLE_INT_FETCH("hw.mpr.use_phy_num", &sc->use_phynum);
+	TUNABLE_INT_FETCH("hw.mpr.encl_min_slots", &sc->encl_min_slots);
 	TUNABLE_INT_FETCH("hw.mpr.max_reqframes", &sc->max_reqframes);
 	TUNABLE_INT_FETCH("hw.mpr.max_prireqframes", &sc->max_prireqframes);
 	TUNABLE_INT_FETCH("hw.mpr.max_replyframes", &sc->max_replyframes);
@@ -1783,6 +1797,10 @@ mpr_get_tunables(struct mpr_softc *sc)
 	snprintf(tmpstr, sizeof(tmpstr), "dev.mpr.%d.use_phy_num",
 	    device_get_unit(sc->mpr_dev));
 	TUNABLE_INT_FETCH(tmpstr, &sc->use_phynum);
+
+	snprintf(tmpstr, sizeof(tmpstr), "dev.mpr.%d.encl_min_slots",
+	    device_get_unit(sc->mpr_dev));
+	TUNABLE_INT_FETCH(tmpstr, &sc->encl_min_slots);
 
 	snprintf(tmpstr, sizeof(tmpstr), "dev.mpr.%d.max_reqframes",
 	    device_get_unit(sc->mpr_dev));
@@ -1873,7 +1891,7 @@ mpr_setup_sysctl(struct mpr_softc *sc)
 
 	SYSCTL_ADD_STRING(sysctl_ctx, SYSCTL_CHILDREN(sysctl_tree),
 	    OID_AUTO, "msg_version", CTLFLAG_RD, sc->msg_version,
-	    strlen(sc->msg_version), "message interface version");
+	    strlen(sc->msg_version), "message interface version (deprecated)");
 
 	SYSCTL_ADD_INT(sysctl_ctx, SYSCTL_CHILDREN(sysctl_tree),
 	    OID_AUTO, "io_cmds_active", CTLFLAG_RD,
@@ -1938,6 +1956,10 @@ mpr_setup_sysctl(struct mpr_softc *sc)
 	SYSCTL_ADD_UQUAD(sysctl_ctx, SYSCTL_CHILDREN(sysctl_tree),
 	    OID_AUTO, "prp_page_alloc_fail", CTLFLAG_RD,
 	    &sc->prp_page_alloc_fail, "PRP page allocation failures");
+
+	SYSCTL_ADD_INT(sysctl_ctx, SYSCTL_CHILDREN(sysctl_tree),
+	    OID_AUTO, "encl_min_slots", CTLFLAG_RW, &sc->encl_min_slots, 0,
+	    "force enclosure minimum slots");
 }
 
 static struct mpr_debug_string {
@@ -2759,13 +2781,14 @@ mpr_update_events(struct mpr_softc *sc, struct mpr_event_handle *handle,
 	evtreq->SASBroadcastPrimitiveMasks = 0;
 #ifdef MPR_DEBUG_ALL_EVENTS
 	{
-		u_char fullmask[16];
-		memset(fullmask, 0x00, 16);
-		bcopy(fullmask, (uint8_t *)&evtreq->EventMasks, 16);
+		u_char fullmask[sizeof(evtreq->EventMasks)];
+		memset(fullmask, 0x00, sizeof(fullmask));
+		bcopy(fullmask, (uint8_t *)&evtreq->EventMasks, sizeof(fullmask));
 	}
 #else
+	bcopy(sc->event_mask, (uint8_t *)&evtreq->EventMasks, sizeof(sc->event_mask));
 	for (i = 0; i < MPI2_EVENT_NOTIFY_EVENTMASK_WORDS; i++)
-		evtreq->EventMasks[i] = htole32(sc->event_mask[i]);
+		evtreq->EventMasks[i] = htole32(evtreq->EventMasks[i]);
 #endif
 	cm->cm_desc.Default.RequestFlags = MPI2_REQ_DESCRIPT_FLAGS_DEFAULT_TYPE;
 	cm->cm_data = NULL;
@@ -2814,13 +2837,14 @@ mpr_reregister_events(struct mpr_softc *sc)
 	evtreq->SASBroadcastPrimitiveMasks = 0;
 #ifdef MPR_DEBUG_ALL_EVENTS
 	{
-		u_char fullmask[16];
-		memset(fullmask, 0x00, 16);
-		bcopy(fullmask, (uint8_t *)&evtreq->EventMasks, 16);
+		u_char fullmask[sizeof(evtreq->EventMasks)];
+		memset(fullmask, 0x00, sizeof(fullmask));
+		bcopy(fullmask, (uint8_t *)&evtreq->EventMasks, sizeof(fullmask));
 	}
 #else
+	bcopy(sc->event_mask, (uint8_t *)&evtreq->EventMasks, sizeof(sc->event_mask));
 	for (i = 0; i < MPI2_EVENT_NOTIFY_EVENTMASK_WORDS; i++)
-		evtreq->EventMasks[i] = htole32(sc->event_mask[i]);
+		evtreq->EventMasks[i] = htole32(evtreq->EventMasks[i]);
 #endif
 	cm->cm_desc.Default.RequestFlags = MPI2_REQ_DESCRIPT_FLAGS_DEFAULT_TYPE;
 	cm->cm_data = NULL;

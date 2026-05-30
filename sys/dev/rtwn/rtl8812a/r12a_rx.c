@@ -25,8 +25,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_wlan.h"
 
 #include <sys/param.h>
@@ -66,9 +64,7 @@ __FBSDID("$FreeBSD$");
 void
 r12a_ratectl_tx_complete(struct rtwn_softc *sc, uint8_t *buf, int len)
 {
-#if __FreeBSD_version >= 1200012
 	struct ieee80211_ratectl_tx_status txs;
-#endif
 	struct r12a_c2h_tx_rpt *rpt;
 	struct ieee80211_node *ni;
 	int ntries;
@@ -108,13 +104,11 @@ r12a_ratectl_tx_complete(struct rtwn_softc *sc, uint8_t *buf, int len)
 		    (rpt->txrptb0 & (R12A_TXRPTB0_RETRY_OVER |
 		    R12A_TXRPTB0_LIFE_EXPIRE)) ? " not" : "", ntries);
 
-#if __FreeBSD_version >= 1200012
 		txs.flags = IEEE80211_RATECTL_STATUS_LONG_RETRY |
 			    IEEE80211_RATECTL_STATUS_FINAL_RATE;
 		txs.long_retries = ntries;
-		if (rpt->final_rate > RTWN_RIDX_OFDM54) {	/* MCS */
-			txs.final_rate =
-			    rpt->final_rate - RTWN_RIDX_HT_MCS_SHIFT;
+		if (RTWN_RATE_IS_HT(rpt->final_rate)) {	/* MCS */
+			txs.final_rate = RTWN_RIDX_TO_MCS(rpt->final_rate);
 			txs.final_rate |= IEEE80211_RATE_MCS;
 		} else
 			txs.final_rate = ridx2rate[rpt->final_rate];
@@ -125,16 +119,6 @@ r12a_ratectl_tx_complete(struct rtwn_softc *sc, uint8_t *buf, int len)
 		else
 			txs.status = IEEE80211_RATECTL_TX_SUCCESS;
 		ieee80211_ratectl_tx_complete(ni, &txs);
-#else
-		struct ieee80211vap *vap = ni->ni_vap;
-		if (rpt->txrptb0 & R12A_TXRPTB0_RETRY_OVER) {
-			ieee80211_ratectl_tx_complete(vap, ni,
-			    IEEE80211_RATECTL_TX_FAILURE, &ntries, NULL);
-		} else {
-			ieee80211_ratectl_tx_complete(vap, ni,
-			    IEEE80211_RATECTL_TX_SUCCESS, &ntries, NULL);
-		}
-#endif
 	} else {
 		RTWN_DPRINTF(sc, RTWN_DEBUG_INTR,
 		    "%s: macid %u, ni is NULL\n", __func__, rpt->macid);
@@ -206,8 +190,16 @@ r12a_check_frame_checksum(struct rtwn_softc *sc, struct mbuf *m)
 		    (rxdw1 & R12A_RXDW1_IPV6) ? "IPv6" : "IP",
 		    (rxdw1 & R12A_RXDW1_CKSUM_ERR) ? "invalid" : "valid");
 
+		/*
+		 * There seems to be a problem with UDP checksum processing
+		 * with the checksum value = 0 (ie, no checksum.)
+		 * So, don't treat it as a permament failure; just let
+		 * the IP stack take a crack at validating frames.
+		 *
+		 * See kern/285837 for more details.
+		 */
 		if (rxdw1 & R12A_RXDW1_CKSUM_ERR)
-			return (-1);
+			return (0);
 
 		if ((rxdw1 & R12A_RXDW1_IPV6) ?
 		    (rs->rs_flags & R12A_RXCKSUM6_EN) :
@@ -262,7 +254,8 @@ r12a_get_rx_stats(struct rtwn_softc *sc, struct ieee80211_rx_stats *rxs,
 			rxs->c_pktflags |= IEEE80211_RX_F_AMPDU_MORE;
 	}
 
-	if ((rxdw4 & R12A_RXDW4_SPLCP) && rate >= RTWN_RIDX_HT_MCS(0))
+	if ((rxdw4 & R12A_RXDW4_SPLCP) &&
+	    (RTWN_RATE_IS_HT(rate) || RTWN_RATE_IS_VHT(rate)))
 		rxs->c_pktflags |= IEEE80211_RX_F_SHORTGI;
 
 	switch (MS(rxdw4, R12A_RXDW4_BW)) {
@@ -288,31 +281,38 @@ r12a_get_rx_stats(struct rtwn_softc *sc, struct ieee80211_rx_stats *rxs,
 		/* XXX check with RTL8812AU */
 		is5ghz = (physt->cfosho[2] != 0x01);
 
-		if (rate < RTWN_RIDX_HT_MCS(0)) {
+		if (RTWN_RATE_IS_CCK(rate) || RTWN_RATE_IS_OFDM(rate)) {
 			if (is5ghz)
 				rxs->c_phytype = IEEE80211_RX_FP_11A;
 			else
 				rxs->c_phytype = IEEE80211_RX_FP_11G;
-		} else {
+		} else if (RTWN_RATE_IS_HT(rate)) {
 			if (is5ghz)
 				rxs->c_phytype = IEEE80211_RX_FP_11NA;
 			else
 				rxs->c_phytype = IEEE80211_RX_FP_11NG;
+		} else if (RTWN_RATE_IS_VHT(rate)) {
+			/* TODO: there's no FP_VHT_5GHZ yet */
+			rxs->c_phytype = IEEE80211_RX_FP_11NA;
 		}
 	}
 
 	/* Map HW rate index to 802.11 rate. */
-	if (rate < RTWN_RIDX_HT_MCS(0)) {
+	if (RTWN_RATE_IS_CCK(rate) || RTWN_RATE_IS_OFDM(rate)) {
 		rxs->c_rate = ridx2rate[rate];
 		if (RTWN_RATE_IS_CCK(rate))
 			rxs->c_pktflags |= IEEE80211_RX_F_CCK;
 		else
 			rxs->c_pktflags |= IEEE80211_RX_F_OFDM;
-	} else {	/* MCS0~15. */
-		/* TODO: VHT rates */
+	} else if (RTWN_RATE_IS_HT(rate)) {	/* MCS0~15. */
 		rxs->c_rate =
-		    IEEE80211_RATE_MCS | (rate - RTWN_RIDX_HT_MCS_SHIFT);
+		    IEEE80211_RATE_MCS | RTWN_RIDX_TO_MCS(rate);
 		rxs->c_pktflags |= IEEE80211_RX_F_HT;
+	} else if (RTWN_RATE_IS_VHT(rate)) {
+		/* XXX: need to revisit VHT rate representation */
+		rxs->c_vhtnss = (rate - RTWN_RIDX_VHT_MCS_SHIFT) / 10;
+		rxs->c_rate = (rate - RTWN_RIDX_VHT_MCS_SHIFT) % 10;
+		rxs->c_pktflags |= IEEE80211_RX_F_VHT;
 	}
 
 	/*

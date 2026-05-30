@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2019 Michal Meloun <mmel@FreeBSD.org>
  *
@@ -26,8 +26,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Thermometer and thermal zones driver for RockChip SoCs.
  * Calibration data are taken from Linux, because this part of SoC
@@ -46,9 +44,9 @@ __FBSDID("$FreeBSD$");
 
 #include <machine/bus.h>
 
-#include <dev/extres/clk/clk.h>
-#include <dev/extres/hwreset/hwreset.h>
-#include <dev/extres/syscon/syscon.h>
+#include <dev/clk/clk.h>
+#include <dev/hwreset/hwreset.h>
+#include <dev/syscon/syscon.h>
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
@@ -139,7 +137,7 @@ struct tsadc_softc {
 
 	clk_t			tsadc_clk;
 	clk_t			apb_pclk_clk;
-	hwreset_t		hwreset;
+	hwreset_array_t		hwreset;
 	struct syscon		*grf;
 
 	struct tsadc_conf	*conf;
@@ -486,7 +484,7 @@ tsadc_init_tsensor(struct tsadc_softc *sc, struct tsensor *sensor)
 	WR4(sc, TSADC_INT_EN, val);
 
 	/* Shutdown temperature */
-	val =  tsadc_raw_to_temp(sc, sc->shutdown_temp);
+	val =  tsadc_temp_to_raw(sc, sc->shutdown_temp);
 	WR4(sc, TSADC_COMP_SHUT(sensor->channel), val);
 	val = RD4(sc, TSADC_AUTO_CON);
 	val |= TSADC_AUTO_SRC_EN(sensor->channel);
@@ -736,9 +734,9 @@ tsadc_attach(device_t dev)
 	}
 
 	/* FDT resources */
-	rv = hwreset_get_by_ofw_name(dev, 0, "tsadc-apb", &sc->hwreset);
+	rv = hwreset_array_get_ofw(dev, 0, &sc->hwreset);
 	if (rv != 0) {
-		device_printf(dev, "Cannot get 'tsadc-apb' reset\n");
+		device_printf(dev, "Cannot get resets\n");
 		goto fail;
 	}
 	rv = clk_get_by_ofw_name(dev, 0, "tsadc", &sc->tsadc_clk);
@@ -775,7 +773,7 @@ tsadc_attach(device_t dev)
 		sc->shutdown_pol = sc->conf->shutdown_pol;
 
 	/* Wakeup controller */
-	rv = hwreset_assert(sc->hwreset);
+	rv = hwreset_array_assert(sc->hwreset);
 	if (rv != 0) {
 		device_printf(dev, "Cannot assert reset\n");
 		goto fail;
@@ -798,7 +796,7 @@ tsadc_attach(device_t dev)
 		device_printf(dev, "Cannot enable 'apb_pclk' clock: %d\n", rv);
 		goto fail;
 	}
-	rv = hwreset_deassert(sc->hwreset);
+	rv = hwreset_array_deassert(sc->hwreset);
 	if (rv != 0) {
 		device_printf(dev, "Cannot deassert reset\n");
 		goto fail;
@@ -820,7 +818,8 @@ tsadc_attach(device_t dev)
 	}
 
 	OF_device_register_xref(OF_xref_from_node(node), dev);
-	return (bus_generic_attach(dev));
+	bus_attach_children(dev);
+	return (0);
 
 fail_sysctl:
 	sysctl_ctx_free(&tsadc_sysctl_ctx);
@@ -832,7 +831,7 @@ fail:
 	if (sc->apb_pclk_clk != NULL)
 		clk_release(sc->apb_pclk_clk);
 	if (sc->hwreset != NULL)
-		hwreset_release(sc->hwreset);
+		hwreset_array_release(sc->hwreset);
 	if (sc->irq_res != NULL)
 		bus_release_resource(dev, SYS_RES_IRQ, 0, sc->irq_res);
 	if (sc->mem_res != NULL)
@@ -855,7 +854,7 @@ tsadc_detach(device_t dev)
 	if (sc->apb_pclk_clk != NULL)
 		clk_release(sc->apb_pclk_clk);
 	if (sc->hwreset != NULL)
-		hwreset_release(sc->hwreset);
+		hwreset_array_release(sc->hwreset);
 	if (sc->irq_res != NULL)
 		bus_release_resource(dev, SYS_RES_IRQ, 0, sc->irq_res);
 	if (sc->mem_res != NULL)

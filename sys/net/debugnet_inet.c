@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2019 Isilon Systems, LLC.
  * Copyright (c) 2005-2014 Sandvine Incorporated. All rights reserved.
@@ -29,8 +29,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_inet.h"
 
 #include <sys/param.h>
@@ -45,6 +43,7 @@ __FBSDID("$FreeBSD$");
 #include <net/if_dl.h>
 #include <net/if_types.h>
 #include <net/if_var.h>
+#include <net/if_private.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -53,7 +52,6 @@ __FBSDID("$FreeBSD$");
 #include <netinet/ip_var.h>
 #include <netinet/ip_options.h>
 #include <netinet/udp.h>
-#include <netinet/udp_var.h>
 
 #include <machine/in_cksum.h>
 #include <machine/pcb.h>

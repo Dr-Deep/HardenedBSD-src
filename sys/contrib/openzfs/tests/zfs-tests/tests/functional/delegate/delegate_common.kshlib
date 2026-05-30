@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: CDDL-1.0
 #
 # CDDL HEADER START
 #
@@ -256,6 +257,9 @@ function check_fs_perm
 		receive)
 			verify_fs_receive $user $perm $fs
 			;;
+		receive:append)
+			verify_fs_receive_append $user $perm $fs
+			;;
 		*)
 			common_perm $user $perm $fs
 			;;
@@ -421,6 +425,45 @@ function verify_fs_receive
 		rm -rf $bak_user $bak_root
 
 	done
+
+	return 0
+}
+
+function verify_fs_receive_append
+{
+	typeset user=$1
+	typeset perm=$2
+	typeset fs=$3
+
+	typeset dtst
+	typeset stamp=${perm}.${user}.$RANDOM
+	typeset newfs=$fs/newfs.$stamp
+	typeset bak_user=$TEST_BASE_DIR/bak.$user.$stamp
+
+	log_must zfs create $newfs
+	typeset dtst="$newfs"
+
+	typeset dtstsnap=$dtst@snap.$stamp
+	log_must zfs snapshot $dtstsnap
+
+	log_must eval "zfs send $dtstsnap > $bak_user"
+	log_must_busy zfs destroy -rf $dtst
+
+	log_must zfs allow $user create,mount,canmount $fs
+	user_run $user eval "zfs receive -o canmount=off -F $dtst < $bak_user"
+	log_must zfs unallow $user create,mount,canmount $fs
+	if datasetexists $dtstsnap ; then
+		return 1
+	fi
+
+	log_must zfs allow $user create,mount,canmount $fs
+	user_run $user eval "zfs receive -o canmount=off $dtst < $bak_user"
+	log_must zfs unallow $user create,mount,canmount $fs
+	if ! datasetexists $dtstsnap ; then
+		return 1
+	fi
+
+	rm -rf $bak_user
 
 	return 0
 }
@@ -861,7 +904,7 @@ function verify_fs_mount
 	fi
 
 	if ! ismounted $fs ; then
-		log_must zfs set mountpoint=$newmntpt $fs
+		log_must zfs set -u mountpoint=$newmntpt $fs
 		log_must rm -rf $newmntpt
 		log_must mkdir $newmntpt
 
@@ -878,7 +921,7 @@ function verify_fs_mount
 		fi
 		log_must zfs umount $fs
 		log_must rm -rf $newmntpt
-		log_must zfs set mountpoint=$mntpt $fs
+		log_must zfs set -u mountpoint=$mntpt $fs
 	fi
 
 	return 0
@@ -1191,10 +1234,10 @@ function verify_fs_aedsx
 	typeset oldval
 	set -A modes "on" "off"
 	oldval=$(get_prop $perm $fs)
-	if [[ $oldval == "on" ]]; then
-		n=1
-	elif [[ $oldval == "off" ]]; then
+	if [[ $oldval == "off" ]]; then
 		n=0
+	else
+		n=1
 	fi
 	log_note "$user zfs set $perm=${modes[$n]} $fs"
 	user_run $user zfs set $perm=${modes[$n]} $fs

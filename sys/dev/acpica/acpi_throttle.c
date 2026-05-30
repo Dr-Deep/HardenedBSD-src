@@ -26,8 +26,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_acpi.h"
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -133,7 +131,7 @@ acpi_throttle_identify(driver_t *driver, device_t parent)
 	ACPI_OBJECT *obj;
 
 	/* Make sure we're not being doubly invoked. */
-	if (device_find_child(parent, "acpi_throttle", -1))
+	if (device_find_child(parent, "acpi_throttle", DEVICE_UNIT_ANY))
 		return;
 
 	/* Check for a valid duty width and parent CPU type. */
@@ -175,8 +173,8 @@ acpi_throttle_probe(device_t dev)
 	 * Since p4tcc uses the same mechanism (but internal to the CPU),
 	 * we disable acpi_throttle when p4tcc is also present.
 	 */
-	if (device_find_child(device_get_parent(dev), "p4tcc", -1) &&
-	    !resource_disabled("p4tcc", 0))
+	if (device_find_child(device_get_parent(dev), "p4tcc", DEVICE_UNIT_ANY)
+	    && !resource_disabled("p4tcc", 0))
 		return (ENXIO);
 
 	device_set_desc(dev, "ACPI CPU Throttling");
@@ -277,7 +275,7 @@ acpi_throttle_evaluate(struct acpi_throttle_softc *sc)
 			return (ENXIO);
 		}
 		memcpy(&gas, obj.Buffer.Pointer + 3, sizeof(gas));
-		acpi_bus_alloc_gas(sc->cpu_dev, &sc->cpu_p_type, &thr_rid,
+		acpi_bus_alloc_gas(sc->cpu_dev, &sc->cpu_p_type, thr_rid,
 		    &gas, &sc->cpu_p_cnt, 0);
 		if (sc->cpu_p_cnt != NULL && bootverbose) {
 			device_printf(sc->cpu_dev, "P_CNT from _PTC %#jx\n",
@@ -297,7 +295,7 @@ acpi_throttle_evaluate(struct acpi_throttle_softc *sc)
 		gas.Address = sc->cpu_p_blk;
 		gas.SpaceId = ACPI_ADR_SPACE_SYSTEM_IO;
 		gas.BitWidth = 32;
-		acpi_bus_alloc_gas(sc->cpu_dev, &sc->cpu_p_type, &thr_rid,
+		acpi_bus_alloc_gas(sc->cpu_dev, &sc->cpu_p_type, thr_rid,
 		    &gas, &sc->cpu_p_cnt, 0);
 		if (sc->cpu_p_cnt != NULL) {
 			if (bootverbose)

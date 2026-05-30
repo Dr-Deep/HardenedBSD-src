@@ -20,8 +20,6 @@
  * CDDL HEADER END
  *
  * Portions Copyright 2006 John Birrell jb@freebsd.org
- *
- * $FreeBSD$
  */
 /*
  * Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
@@ -57,7 +55,7 @@ translator psinfo_t < struct proc *T > {
 	pr_uid = T->p_ucred->cr_ruid;
 	pr_euid = T->p_ucred->cr_uid;
 	pr_gid = T->p_ucred->cr_rgid;
-	pr_egid = T->p_ucred->cr_groups[0];
+	pr_egid = T->p_ucred->cr_gid;
 	pr_addr = 0;
 	pr_psargs = (T->p_args == 0) ? "" :
 	    memstr(T->p_args->ar_args, ' ', T->p_args->ar_length);

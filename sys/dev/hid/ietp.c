@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2020, 2022 Vladimir Kondratyev <wulf@FreeBSD.org>
  *
@@ -29,9 +29,6 @@
  * Elan I2C Touchpad driver. Based on Linux driver.
  * https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/tree/drivers/input/mouse/elan_i2c_core.c
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -105,6 +102,7 @@ struct ietp_softc {
 	device_t		dev;
 
 	struct evdev_dev	*evdev;
+	bool			open;
 	uint8_t			report_id;
 	hid_size_t		report_len;
 
@@ -118,7 +116,7 @@ struct ietp_softc {
 	uint16_t		trace_y;
 	uint16_t		res_x;		/* dots per mm */
 	uint16_t		res_y;
-	bool			hi_precission;
+	bool			hi_precision;
 	bool			is_clickpad;
 	bool			has_3buttons;
 };
@@ -132,9 +130,10 @@ static int		ietp_attach(struct ietp_softc *);
 static int		ietp_detach(struct ietp_softc *);
 static int32_t		ietp_res2dpmm(uint8_t, bool);
 
-static device_probe_t   ietp_iic_probe;
-static device_attach_t  ietp_iic_attach;
-static device_detach_t  ietp_iic_detach;
+static device_identify_t ietp_iic_identify;
+static device_probe_t	ietp_iic_probe;
+static device_attach_t	ietp_iic_attach;
+static device_detach_t	ietp_iic_detach;
 static device_resume_t	ietp_iic_resume;
 
 static int		ietp_iic_read_reg(device_t, uint16_t, size_t, void *);
@@ -200,6 +199,32 @@ static const struct hid_device_id ietp_iic_devs[] = {
 	IETP_IIC_DEV("ELAN1000"),
 };
 
+static uint8_t const ietp_dummy_rdesc_lo[] = {
+	0x05, HUP_GENERIC_DESKTOP,	/* Usage Page (Generic Desktop Ctrls)	*/
+	0x09, HUG_MOUSE,		/* Usage (Mouse)			*/
+	0xA1, 0x01,			/* Collection (Application)		*/
+	0x09, 0x01,			/*   Usage (0x01)			*/
+	0x15, 0x00,			/*   Logical Minimum (0)                */
+	0x26, 0xFF, 0x00,		/*   Logical Maximum (255)              */
+	0x95, IETP_REPORT_LEN_LO,	/*   Report Count (IETP_REPORT_LEN_LO)	*/
+	0x75, 0x08,			/*   Report Size (8)			*/
+	0x81, 0x02,			/*   Input (Data,Var,Abs)		*/
+	0xC0,				/* End Collection			*/
+};
+
+static uint8_t const ietp_dummy_rdesc_hi[] = {
+	0x05, HUP_GENERIC_DESKTOP,	/* Usage Page (Generic Desktop Ctrls)	*/
+	0x09, HUG_MOUSE,		/* Usage (Mouse)			*/
+	0xA1, 0x01,			/* Collection (Application)		*/
+	0x09, 0x01,			/*   Usage (0x01)			*/
+	0x15, 0x00,			/*   Logical Minimum (0)                */
+	0x26, 0xFF, 0x00,		/*   Logical Maximum (255)              */
+	0x95, IETP_REPORT_LEN_HI,	/*   Report Count (IETP_REPORT_LEN_HI)	*/
+	0x75, 0x08,			/*   Report Size (8)			*/
+	0x81, 0x02,			/*   Input (Data,Var,Abs)		*/
+	0xC0,				/* End Collection			*/
+};
+
 static const struct evdev_methods ietp_evdev_methods = {
 	.ev_open = &ietp_ev_open,
 	.ev_close = &ietp_ev_close,
@@ -208,13 +233,25 @@ static const struct evdev_methods ietp_evdev_methods = {
 static int
 ietp_ev_open(struct evdev_dev *evdev)
 {
-	return (hidbus_intr_start(evdev_get_softc(evdev)));
+	struct ietp_softc *sc = evdev_get_softc(evdev);
+	int error;
+
+	error = hid_intr_start(sc->dev);
+	if (error == 0)
+		sc->open = true;
+	return (error);
 }
 
 static int
 ietp_ev_close(struct evdev_dev *evdev)
 {
-	return (hidbus_intr_stop(evdev_get_softc(evdev)));
+	struct ietp_softc *sc = evdev_get_softc(evdev);
+	int error;
+
+	error = hid_intr_stop(sc->dev);
+	if (error == 0)
+		sc->open = false;
+	return (error);
 }
 
 static int
@@ -241,9 +278,9 @@ ietp_attach(struct ietp_softc *sc)
 	int32_t minor, major;
 	int error;
 
-	sc->report_id = sc->hi_precission ?
+	sc->report_id = sc->hi_precision ?
 	    IETP_REPORT_ID_HI : IETP_REPORT_ID_LO;
-	sc->report_len = sc->hi_precission ?
+	sc->report_len = sc->hi_precision ?
 	    IETP_REPORT_LEN_HI : IETP_REPORT_LEN_LO;
 
 	/* Try to detect 3-rd button by relative mouse TLC */
@@ -266,7 +303,7 @@ ietp_attach(struct ietp_softc *sc)
 	evdev_set_id(sc->evdev, hw->idBus, hw->idVendor, hw->idProduct,
 	    hw->idVersion);
 	evdev_set_serial(sc->evdev, hw->serial);
-	evdev_set_methods(sc->evdev, sc->dev, &ietp_evdev_methods);
+	evdev_set_methods(sc->evdev, sc, &ietp_evdev_methods);
 	evdev_set_flag(sc->evdev, EVDEV_FLAG_MT_STCOMPAT);
 	evdev_set_flag(sc->evdev, EVDEV_FLAG_EXT_EPOCH); /* hidbus child */
 
@@ -334,15 +371,31 @@ ietp_intr(void *context, void *buf, hid_size_t len)
 	int32_t x, y, w, h, wh;
 
 	/* we seem to get 0 length reports sometimes, ignore them */
-	report = buf;
-	if (*report != sc->report_id || len < sc->report_len)
+	if (len == 0)
 		return;
+	if (len != sc->report_len) {
+		DPRINTF("wrong report length (%d vs %d expected)", len, sc->report_len);
+		return;
+	}
+
+	report = buf;
+	if (*report != sc->report_id)
+		return;
+
+	evdev_push_key(sc->evdev, BTN_LEFT,
+	    report[IETP_TOUCH_INFO] & IETP_TOUCH_LMB);
+	evdev_push_key(sc->evdev, BTN_MIDDLE,
+	    report[IETP_TOUCH_INFO] & IETP_TOUCH_MMB);
+	evdev_push_key(sc->evdev, BTN_RIGHT,
+	    report[IETP_TOUCH_INFO] & IETP_TOUCH_RMB);
+	evdev_push_abs(sc->evdev, ABS_DISTANCE,
+	    (report[IETP_HOVER_INFO] & 0x40) >> 6);
 
 	for (finger = 0, fdata = report + IETP_FINGER_DATA;
 	     finger < IETP_MAX_FINGERS;
 	     finger++, fdata += IETP_FINGER_DATA_LEN) {
 		if ((report[IETP_TOUCH_INFO] & (1 << (finger + 3))) != 0) {
-			if (sc->hi_precission) {
+			if (sc->hi_precision) {
 				x = fdata[0] << 8 | fdata[1];
 				y = fdata[2] << 8 | fdata[3];
 				wh = report[IETP_WH_DATA + finger];
@@ -379,26 +432,54 @@ ietp_intr(void *context, void *buf, hid_size_t len)
 		}
 	}
 
-	evdev_push_key(sc->evdev, BTN_LEFT,
-	    report[IETP_TOUCH_INFO] & IETP_TOUCH_LMB);
-	evdev_push_key(sc->evdev, BTN_MIDDLE,
-	    report[IETP_TOUCH_INFO] & IETP_TOUCH_MMB);
-	evdev_push_key(sc->evdev, BTN_RIGHT,
-	    report[IETP_TOUCH_INFO] & IETP_TOUCH_RMB);
-	evdev_push_abs(sc->evdev, ABS_DISTANCE,
-	    (report[IETP_HOVER_INFO] & 0x40) >> 6);
-
 	evdev_sync(sc->evdev);
 }
 
 static int32_t
-ietp_res2dpmm(uint8_t res, bool hi_precission)
+ietp_res2dpmm(uint8_t res, bool hi_precision)
 {
 	int32_t dpi;
 
-	dpi = hi_precission ? 300 + res * 100 : 790 + res * 10;
+	dpi = hi_precision ? 300 + res * 100 : 790 + res * 10;
 
 	return (dpi * 10 /254);
+}
+
+static void
+ietp_iic_identify(driver_t *driver, device_t parent)
+{
+	device_t iichid = device_get_parent(parent);
+	static const uint16_t reg = IETP_PATTERN;
+	uint16_t addr = iicbus_get_addr(iichid) << 1;
+	uint8_t resp[2];
+	uint8_t cmd[2] = { reg & 0xff, (reg >> 8) & 0xff };
+	struct iic_msg msgs[2] = {
+	    { addr, IIC_M_WR | IIC_M_NOSTOP,  sizeof(cmd), cmd },
+	    { addr, IIC_M_RD, sizeof(resp), resp },
+	};
+	struct iic_rdwr_data ird = { msgs, nitems(msgs) };
+	uint8_t pattern;
+
+	if (HIDBUS_LOOKUP_ID(parent, ietp_iic_devs) == NULL)
+		return;
+
+	if (device_get_devclass(iichid) != devclass_find("iichid"))
+		return;
+
+	DPRINTF("Read reg 0x%04x with size %zu\n", reg, sizeof(resp));
+
+	if (hid_ioctl(parent, I2CRDWR, (uintptr_t)&ird) != 0)
+		return;
+
+	DPRINTF("Response: %*D\n", (int)size(resp), resp, " ");
+
+	pattern = (resp[0] == 0xFF && resp[1] == 0xFF) ? 0 : resp[1];
+	if (pattern >= 0x02)
+		hid_set_report_descr(parent, ietp_dummy_rdesc_hi,
+		    sizeof(ietp_dummy_rdesc_hi));
+	else
+		hid_set_report_descr(parent, ietp_dummy_rdesc_lo,
+		    sizeof(ietp_dummy_rdesc_lo));
 }
 
 static int
@@ -442,7 +523,7 @@ ietp_iic_attach(device_t dev)
 		return (EIO);
 	}
 	pattern = buf == 0xFFFF ? 0 : buf8[1];
-	sc->hi_precission = pattern >= 0x02;
+	sc->hi_precision = pattern >= 0x02;
 
 	reg = pattern >= 0x01 ? IETP_IC_TYPE : IETP_OSM_VERSION;
 	if (ietp_iic_read_reg(dev, reg, sizeof(buf), &buf) != 0) {
@@ -492,8 +573,8 @@ ietp_iic_attach(device_t dev)
 		return (EIO);
 	}
 	/* Conversion from internal format to dot per mm */
-	sc->res_x = ietp_res2dpmm(buf8[0], sc->hi_precission);
-	sc->res_y = ietp_res2dpmm(buf8[1], sc->hi_precission);
+	sc->res_x = ietp_res2dpmm(buf8[0], sc->hi_precision);
+	sc->res_y = ietp_res2dpmm(buf8[1], sc->hi_precision);
 
 	return (ietp_attach(sc));
 }
@@ -541,15 +622,17 @@ ietp_iic_set_absolute_mode(device_t dev, bool enable)
 	 * Some ASUS touchpads need to be powered on to enter absolute mode.
 	 */
 	require_wakeup = false;
-	for (i = 0; i < nitems(special_fw); i++) {
-		if (sc->ic_type == special_fw[i].ic_type &&
-		    sc->product_id == special_fw[i].product_id) {
-			require_wakeup = true;
-			break;
+	if (!sc->open) {
+		for (i = 0; i < nitems(special_fw); i++) {
+			if (sc->ic_type == special_fw[i].ic_type &&
+			    sc->product_id == special_fw[i].product_id) {
+				require_wakeup = true;
+				break;
+			}
 		}
 	}
 
-	if (require_wakeup && hidbus_intr_start(dev) != 0) {
+	if (require_wakeup && hid_intr_start(dev) != 0) {
 		device_printf(dev, "failed writing poweron command\n");
 		return (EIO);
 	}
@@ -560,7 +643,7 @@ ietp_iic_set_absolute_mode(device_t dev, bool enable)
 		error = EIO;
 	}
 
-	if (require_wakeup && hidbus_intr_stop(dev) != 0) {
+	if (require_wakeup && hid_intr_stop(dev) != 0) {
 		device_printf(dev, "failed writing poweroff command\n");
 		error = EIO;
 	}
@@ -610,6 +693,7 @@ ietp_iic_write_reg(device_t dev, uint16_t reg, uint16_t val)
 }
 
 static device_method_t ietp_methods[] = {
+	DEVMETHOD(device_identify,	ietp_iic_identify),
 	DEVMETHOD(device_probe,		ietp_iic_probe),
 	DEVMETHOD(device_attach,	ietp_iic_attach),
 	DEVMETHOD(device_detach,	ietp_iic_detach),

@@ -33,9 +33,6 @@
  *	$NetBSD: fpu.c,v 1.5 2001/07/22 11:29:46 wiz Exp $
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/proc.h>
 #include <sys/systm.h>
@@ -44,6 +41,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/fpu.h>
 #include <machine/pcb.h>
 #include <machine/psl.h>
+#include <machine/altivec.h>
 
 static void
 save_fpu_int(struct thread *td)
@@ -66,8 +64,19 @@ save_fpu_int(struct thread *td)
 	 * Save the floating-point registers and FPSCR to the PCB
 	 */
 	if (pcb->pcb_flags & PCB_VSX) {
-	#define SFP(n)   __asm ("stxvw4x " #n ", 0,%0" \
+#if _BYTE_ORDER == _BIG_ENDIAN
+	#define SFP(n)   __asm("stxvw4x " #n ", 0,%0" \
 			:: "b"(&pcb->pcb_fpu.fpr[n]));
+#else
+	/*
+	 * stxvw2x will swap words within the FP double word on LE systems,
+	 * leading to corruption if VSX is used to store state and FP is
+	 * subsequently used to restore state.
+	 * Use stxvd2x instead.
+	 */
+	#define SFP(n)   __asm("stxvd2x " #n ", 0,%0" \
+			:: "b"(&pcb->pcb_fpu.fpr[n]));
+#endif
 		SFP(0);		SFP(1);		SFP(2);		SFP(3);
 		SFP(4);		SFP(5);		SFP(6);		SFP(7);
 		SFP(8);		SFP(9);		SFP(10);	SFP(11);
@@ -78,7 +87,7 @@ save_fpu_int(struct thread *td)
 		SFP(28);	SFP(29);	SFP(30);	SFP(31);
 	#undef SFP
 	} else {
-	#define SFP(n)   __asm ("stfd " #n ", 0(%0)" \
+	#define SFP(n)   __asm("stfd " #n ", 0(%0)" \
 			:: "b"(&pcb->pcb_fpu.fpr[n].fpr));
 		SFP(0);		SFP(1);		SFP(2);		SFP(3);
 		SFP(4);		SFP(5);		SFP(6);		SFP(7);
@@ -151,8 +160,19 @@ enable_fpu(struct thread *td)
 			  :: "b"(&pcb->pcb_fpu.fpscr));
 
 	if (pcb->pcb_flags & PCB_VSX) {
-	#define LFP(n)   __asm ("lxvw4x " #n ", 0,%0" \
+#if _BYTE_ORDER == _BIG_ENDIAN
+	#define LFP(n)   __asm("lxvw4x " #n ", 0,%0" \
 			:: "b"(&pcb->pcb_fpu.fpr[n]));
+#else
+	/*
+	 * lxvw4x will swap words within the FP double word on LE systems,
+	 * leading to corruption if FP is used to store state and VSX is
+	 * subsequently used to restore state.
+	 * Use lxvd2x instead.
+	 */
+	#define LFP(n)   __asm("lxvd2x " #n ", 0,%0" \
+			:: "b"(&pcb->pcb_fpu.fpr[n]));
+#endif
 		LFP(0);		LFP(1);		LFP(2);		LFP(3);
 		LFP(4);		LFP(5);		LFP(6);		LFP(7);
 		LFP(8);		LFP(9);		LFP(10);	LFP(11);
@@ -163,7 +183,7 @@ enable_fpu(struct thread *td)
 		LFP(28);	LFP(29);	LFP(30);	LFP(31);
 	#undef LFP
 	} else {
-	#define LFP(n)   __asm ("lfd " #n ", 0(%0)" \
+	#define LFP(n)   __asm("lfd " #n ", 0(%0)" \
 			:: "b"(&pcb->pcb_fpu.fpr[n].fpr));
 		LFP(0);		LFP(1);		LFP(2);		LFP(3);
 		LFP(4);		LFP(5);		LFP(6);		LFP(7);
@@ -213,7 +233,7 @@ save_fpu_nodrop(struct thread *td)
  * Clear Floating-Point Status and Control Register
  */
 void
-cleanup_fpscr()
+cleanup_fpscr(void)
 {
 	register_t msr;
 
@@ -261,3 +281,124 @@ get_fpu_exception(struct thread *td)
 	return ucode;
 }
 
+void
+enable_fpu_kern(void)
+{
+	register_t msr;
+
+	msr = mfmsr() | PSL_FP;
+
+	if (cpu_features & PPC_FEATURE_HAS_VSX)
+		msr |= PSL_VSX;
+
+	mtmsr(msr);
+}
+
+void
+disable_fpu(struct thread *td)
+{
+	register_t msr;
+	struct pcb *pcb;
+	struct trapframe *tf;
+
+	pcb = td->td_pcb;
+	tf = trapframe(td);
+
+	/* Disable FPU in kernel (if enabled) */
+	msr = mfmsr() & ~(PSL_FP | PSL_VSX);
+	isync();
+	mtmsr(msr);
+
+	/*
+	 * Disable FPU in userspace. It will be re-enabled when
+	 * an FP or VSX instruction is executed.
+	 */
+	tf->srr1 &= ~(PSL_FP | PSL_VSX);
+	pcb->pcb_flags &= ~(PCB_FPU | PCB_VSX);
+}
+
+/*
+ * XXX: Implement fpu_kern_alloc_ctx/fpu_kern_free_ctx once fpu_kern_enter and
+ * fpu_kern_leave can handle !FPU_KERN_NOCTX.
+ */
+struct fpu_kern_ctx {
+#define	FPU_KERN_CTX_DUMMY	0x01	/* avoided save for the kern thread */
+#define	FPU_KERN_CTX_INUSE	0x02
+	uint32_t	 flags;
+};
+
+void
+fpu_kern_enter(struct thread *td, struct fpu_kern_ctx *ctx, u_int flags)
+{
+	struct pcb *pcb;
+
+	pcb = td->td_pcb;
+
+	KASSERT((flags & FPU_KERN_NOCTX) != 0 || ctx != NULL,
+	    ("ctx is required when !FPU_KERN_NOCTX"));
+	KASSERT(ctx == NULL || (ctx->flags & FPU_KERN_CTX_INUSE) == 0,
+	    ("using inuse ctx"));
+	KASSERT((pcb->pcb_flags & PCB_KERN_FPU_NOSAVE) == 0,
+	    ("recursive fpu_kern_enter while in PCB_KERN_FPU_NOSAVE state"));
+
+	if ((flags & FPU_KERN_NOCTX) != 0) {
+		critical_enter();
+
+		if (pcb->pcb_flags & PCB_FPU) {
+			save_fpu(td);
+			pcb->pcb_flags |= PCB_FPREGS;
+		}
+		enable_fpu_kern();
+
+		if (pcb->pcb_flags & PCB_VEC) {
+			save_vec(td);
+			pcb->pcb_flags |= PCB_VECREGS;
+		}
+		enable_vec_kern();
+
+		pcb->pcb_flags |= PCB_KERN_FPU | PCB_KERN_FPU_NOSAVE;
+		return;
+	}
+
+	KASSERT(0, ("fpu_kern_enter with !FPU_KERN_NOCTX not implemented!"));
+}
+
+int
+fpu_kern_leave(struct thread *td, struct fpu_kern_ctx *ctx)
+{
+	struct pcb *pcb;
+
+	pcb = td->td_pcb;
+
+	if ((pcb->pcb_flags & PCB_KERN_FPU_NOSAVE) != 0) {
+		KASSERT(ctx == NULL, ("non-null ctx after FPU_KERN_NOCTX"));
+		KASSERT(PCPU_GET(fpcurthread) == NULL,
+		    ("non-NULL fpcurthread for PCB_FP_NOSAVE"));
+		CRITICAL_ASSERT(td);
+
+		/* Disable FPU, VMX, and VSX */
+		disable_fpu(td);
+		disable_vec(td);
+
+		pcb->pcb_flags &= ~PCB_KERN_FPU_NOSAVE;
+
+		critical_exit();
+	} else {
+		KASSERT(0, ("fpu_kern_leave with !FPU_KERN_NOCTX not implemented!"));
+	}
+
+	pcb->pcb_flags &= ~PCB_KERN_FPU;
+
+	return 0;
+}
+
+int
+is_fpu_kern_thread(u_int flags __unused)
+{
+	struct pcb *curpcb;
+
+	if ((curthread->td_pflags & TDP_KTHREAD) == 0)
+		return (0);
+	curpcb = curthread->td_pcb;
+	return ((curpcb->pcb_flags & PCB_KERN_FPU) != 0);
+}

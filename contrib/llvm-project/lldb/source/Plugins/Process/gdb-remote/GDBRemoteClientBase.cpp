@@ -31,10 +31,9 @@ static const seconds kWakeupInterval(5);
 
 GDBRemoteClientBase::ContinueDelegate::~ContinueDelegate() = default;
 
-GDBRemoteClientBase::GDBRemoteClientBase(const char *comm_name,
-                                         const char *listener_name)
-    : GDBRemoteCommunication(comm_name, listener_name), m_async_count(0),
-      m_is_running(false), m_should_stop(false) {}
+GDBRemoteClientBase::GDBRemoteClientBase(const char *comm_name)
+    : GDBRemoteCommunication(), Broadcaster(nullptr, comm_name),
+      m_async_count(0), m_is_running(false), m_should_stop(false) {}
 
 StateType GDBRemoteClientBase::SendContinuePacketAndWaitForResponse(
     ContinueDelegate &delegate, const UnixSignals &signals,
@@ -181,7 +180,7 @@ bool GDBRemoteClientBase::Interrupt(std::chrono::seconds interrupt_timeout) {
 GDBRemoteCommunication::PacketResult
 GDBRemoteClientBase::SendPacketAndWaitForResponse(
     llvm::StringRef payload, StringExtractorGDBRemote &response,
-    std::chrono::seconds interrupt_timeout) {
+    std::chrono::seconds interrupt_timeout, bool sync_on_timeout) {
   Lock lock(*this, interrupt_timeout);
   if (!lock) {
     if (Log *log = GetLog(GDBRLog::Process))
@@ -192,7 +191,24 @@ GDBRemoteClientBase::SendPacketAndWaitForResponse(
     return PacketResult::ErrorSendFailed;
   }
 
-  return SendPacketAndWaitForResponseNoLock(payload, response);
+  return SendPacketAndWaitForResponseNoLock(payload, response, sync_on_timeout);
+}
+
+GDBRemoteCommunication::PacketResult
+GDBRemoteClientBase::ReadPacketWithOutputSupport(
+    StringExtractorGDBRemote &response, Timeout<std::micro> timeout,
+    bool sync_on_timeout,
+    llvm::function_ref<void(llvm::StringRef)> output_callback) {
+  auto result = ReadPacket(response, timeout, sync_on_timeout);
+  while (result == PacketResult::Success && response.IsNormalResponse() &&
+         response.PeekChar() == 'O') {
+    response.GetChar();
+    std::string output;
+    if (response.GetHexByteString(output))
+      output_callback(output);
+    result = ReadPacket(response, timeout, sync_on_timeout);
+  }
+  return result;
 }
 
 GDBRemoteCommunication::PacketResult
@@ -220,14 +236,15 @@ GDBRemoteClientBase::SendPacketAndReceiveResponseWithOutputSupport(
 
 GDBRemoteCommunication::PacketResult
 GDBRemoteClientBase::SendPacketAndWaitForResponseNoLock(
-    llvm::StringRef payload, StringExtractorGDBRemote &response) {
+    llvm::StringRef payload, StringExtractorGDBRemote &response,
+    bool sync_on_timeout) {
   PacketResult packet_result = SendPacketNoLock(payload);
   if (packet_result != PacketResult::Success)
     return packet_result;
 
   const size_t max_response_retries = 3;
   for (size_t i = 0; i < max_response_retries; ++i) {
-    packet_result = ReadPacket(response, GetPacketTimeout(), true);
+    packet_result = ReadPacket(response, GetPacketTimeout(), sync_on_timeout);
     // Make sure we received a response
     if (packet_result != PacketResult::Success)
       return packet_result;
@@ -347,7 +364,7 @@ GDBRemoteClientBase::Lock::Lock(GDBRemoteClientBase &comm,
 }
 
 void GDBRemoteClientBase::Lock::SyncWithContinueThread() {
-  Log *log = GetLog(GDBRLog::Process);
+  Log *log = GetLog(GDBRLog::Process|GDBRLog::Packets);
   std::unique_lock<std::mutex> lock(m_comm.m_mutex);
   if (m_comm.m_is_running && m_interrupt_timeout == std::chrono::seconds(0))
     return; // We were asked to avoid interrupting the sender. Lock is not

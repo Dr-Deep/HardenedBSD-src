@@ -26,8 +26,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _BCM2835_FIRMWARE_H_
@@ -194,6 +192,18 @@ union msg_set_gpio_config {
 	} req;
 	struct {
 		uint32_t gpio;
+	} resp;
+};
+
+#define	BCM2835_FIRMWARE_TAG_GET_GPIOVIRTBUF		0x00040010
+#define	BCM2835_FIRMWARE_TAG_SET_GPIOVIRTBUF		0x00048020
+
+union msg_gpiovirtbuf {
+	struct {
+		uint32_t addr;
+	} req;
+	struct {
+		uint32_t addr;
 	} resp;
 };
 

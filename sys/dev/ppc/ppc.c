@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1997-2000 Nicolas Souchu
  * Copyright (c) 2001 Alcove - Nicolas Souchu
@@ -28,8 +28,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_ppc.h"
 
 #include <sys/param.h>
@@ -1391,7 +1389,7 @@ ppc_exec_microseq(device_t dev, struct ppb_microseq **p_msq)
 
 		/* let's suppose the next instr. is the same */
 		prefetch:
-			for (;mi->opcode == MS_OP_RASSERT; INCR_PC)
+			for (; mi->opcode == MS_OP_RASSERT; INCR_PC)
 				w_reg(mi->arg[0].i, ppc, (char)mi->arg[1].i);
 
 			if (mi->opcode == MS_OP_DELAY) {
@@ -1803,7 +1801,7 @@ ppc_attach(device_t dev)
 	}
 
 	/* add ppbus as a child of this isa to parallel bridge */
-	ppc->ppbus = device_add_child(dev, "ppbus", -1);
+	ppc->ppbus = device_add_child(dev, "ppbus", DEVICE_UNIT_ANY);
 
 	/*
 	 * Probe the ppbus and attach devices found.
@@ -1817,13 +1815,16 @@ int
 ppc_detach(device_t dev)
 {
 	struct ppc_data *ppc = DEVTOSOFTC(dev);
+	int error;
 
 	if (ppc->res_irq == 0) {
 		return (ENXIO);
 	}
 
 	/* detach & delete all children */
-	device_delete_children(dev);
+	error = bus_generic_detach(dev);
+	if (error != 0)
+		return (error);
 
 	if (ppc->res_irq != 0) {
 		bus_teardown_intr(dev, ppc->res_irq, ppc->intr_cookie);
@@ -1963,14 +1964,14 @@ ppc_write_ivar(device_t bus, device_t dev, int index, uintptr_t val)
  * interrupt handlers.
  */
 struct resource *
-ppc_alloc_resource(device_t bus, device_t child, int type, int *rid,
+ppc_alloc_resource(device_t bus, device_t child, int type, int rid,
     rman_res_t start, rman_res_t end, rman_res_t count, u_int flags)
 {
 	struct ppc_data *ppc = DEVTOSOFTC(bus);
 
 	switch (type) {
 	case SYS_RES_IRQ:
-		if (*rid == 0)
+		if (rid == 0)
 			return (ppc->res_irq);
 		break;
 	}
@@ -1978,22 +1979,12 @@ ppc_alloc_resource(device_t bus, device_t child, int type, int *rid,
 }
 
 int
-ppc_release_resource(device_t bus, device_t child, int type, int rid,
-    struct resource *r)
+ppc_release_resource(device_t bus, device_t child, struct resource *r)
 {
-#ifdef INVARIANTS
 	struct ppc_data *ppc = DEVTOSOFTC(bus);
-#endif
 
-	switch (type) {
-	case SYS_RES_IRQ:
-		if (rid == 0) {
-			KASSERT(r == ppc->res_irq,
-			    ("ppc child IRQ resource mismatch"));
-			return (0);
-		}
-		break;
-	}
+	if (r == ppc->res_irq)
+		return (0);
 	return (EINVAL);
 }
 

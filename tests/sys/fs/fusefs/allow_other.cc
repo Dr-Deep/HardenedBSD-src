@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2019 The FreeBSD Foundation
  *
@@ -26,8 +26,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -54,9 +52,6 @@ const static char RELPATH[] = "some_file.txt";
 class NoAllowOther: public FuseTest {
 
 public:
-/* Unprivileged user id */
-int m_uid;
-
 virtual void SetUp() {
 	if (geteuid() != 0) {
 		GTEST_SKIP() << "This test must be run as root";

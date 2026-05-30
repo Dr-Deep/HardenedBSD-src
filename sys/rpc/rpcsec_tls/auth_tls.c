@@ -29,8 +29,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * auth_none.c
  * Creates a client authentication handle for passing "null"
@@ -126,9 +124,7 @@ authtls_marshal(AUTH *client, uint32_t xid, XDR *xdrs, struct mbuf *args)
 	if (!XDR_PUTBYTES(xdrs, ap->mclient, ap->mcnt))
 		return (FALSE);
 
-	xdrmbuf_append(xdrs, args);
-
-	return (TRUE);
+	return (xdr_putmbuf(xdrs, args));
 }
 
 /* All these unused parameters are required to keep ANSI-C from grumbling */

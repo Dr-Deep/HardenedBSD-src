@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -244,6 +245,9 @@ extern "C" {
 #define	DEV_PATH		"path"
 #define	DEV_IS_PART		"is_slice"
 #define	DEV_SIZE		"dev_size"
+
+/* Size of the whole parent block device (if dev is a partition) */
+#define	DEV_PARENT_SIZE		"dev_parent_size"
 #endif /* __linux__ */
 
 #define	EV_V1			1

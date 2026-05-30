@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2022 The FreeBSD Foundation
  *
@@ -28,6 +28,7 @@
  * SUCH DAMAGE.
  */
 
+#include <sys/param.h>
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
@@ -121,6 +122,7 @@ _objset_write(zfs_opt_t *zfs, zfs_objset_t *os, struct dnode_cursor *c,
 	STAILQ_FOREACH_SAFE(chunk, &os->dnodechunks, next, tmp) {
 		unsigned int i;
 
+		assert(chunk->nextfree > 0);
 		assert(chunk->nextfree <= os->dnodecount);
 		assert(chunk->nextfree <= DNODES_PER_CHUNK);
 
@@ -149,8 +151,8 @@ _objset_write(zfs_opt_t *zfs, zfs_objset_t *os, struct dnode_cursor *c,
 	 * Write the object set itself.  The saved block pointer will be copied
 	 * into the referencing DSL dataset or the uberblocks.
 	 */
-	vdev_pwrite_data(zfs, DMU_OT_OBJSET, ZIO_CHECKSUM_FLETCHER_4, 0, 1,
-	    os->phys, os->osblksz, os->osloc, &os->osbp);
+	vdev_pwrite_data(zfs, DMU_OT_OBJSET, ZIO_CHECKSUM_FLETCHER_4, 0,
+	    os->dnodecount - 1, os->phys, os->osblksz, os->osloc, &os->osbp);
 }
 
 void
@@ -184,8 +186,7 @@ objset_write(zfs_opt_t *zfs, zfs_objset_t *os)
 		 * We've finished allocating space, account for it in $MOS and
 		 * in the parent directory.
 		 */
-		dsl_dir_size_add(zfs->mosdsldir, os->space);
-		dsl_dir_size_add(zfs->rootdsldir, os->space);
+		dsl_dir_root_finalize(zfs, os->space);
 	}
 	_objset_write(zfs, os, c, dnodeloc);
 }

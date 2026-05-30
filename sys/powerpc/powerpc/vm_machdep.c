@@ -37,10 +37,7 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	from: @(#)vm_machdep.c	7.3 (Berkeley) 5/13/91
  *	Utah $Hdr: vm_machdep.c 1.16.1.1 89/06/23$
- * $FreeBSD$
  */
 /*-
  * Copyright (c) 1994, 1995, 1996 Carnegie-Mellon University.
@@ -124,11 +121,9 @@ cpu_fork(struct thread *td1, struct proc *p2, struct thread *td2, int flags)
 
 	/* Ensure td1 is up to date before copy. */
 	if (td1 == curthread)
-		cpu_save_thread_regs(td1);
+		cpu_update_pcb(td1);
 
-	pcb = (struct pcb *)((td2->td_kstack +
-	    td2->td_kstack_pages * PAGE_SIZE - sizeof(struct pcb)) & ~0x2fUL);
-	td2->td_pcb = pcb;
+	pcb = td2->td_pcb;
 
 	/* Copy the pcb */
 	bcopy(td1->td_pcb, pcb, sizeof(struct pcb));
@@ -138,15 +133,13 @@ cpu_fork(struct thread *td1, struct proc *p2, struct thread *td2, int flags)
 	 * Copy the trap frame for the return to user mode as if from a
 	 * syscall.  This copies most of the user mode register values.
 	 */
-	tf = (struct trapframe *)pcb - 1;
+	tf = td2->td_frame;
 	bcopy(td1->td_frame, tf, sizeof(*tf));
 
 	/* Set up trap frame. */
 	tf->fixreg[FIRSTARG] = 0;
 	tf->fixreg[FIRSTARG + 1] = 0;
 	tf->cr &= ~0x10000000;
-
-	td2->td_frame = tf;
 
 	cf = (struct callframe *)tf - 1;
 	memset(cf, 0, sizeof(struct callframe));
@@ -214,18 +207,6 @@ cpu_exit(struct thread *td)
  * fixed-size KVA.
  */
 
-void
-cpu_thread_swapin(struct thread *td)
-{
-
-}
-
-void
-cpu_thread_swapout(struct thread *td)
-{
-
-}
-
 bool
 cpu_exec_vmspace_reuse(struct proc *p __unused, vm_map_t map __unused)
 {
@@ -239,4 +220,14 @@ cpu_procctl(struct thread *td __unused, int idtype __unused, id_t id __unused,
 {
 
 	return (EINVAL);
+}
+
+void
+cpu_sync_core(void)
+{
+	/*
+	 * Linux performs "rfi" there.  Our rendezvous IPI handler on
+	 * the target cpu does "rfi" before and lwsync/sync after the
+	 * action, which is stronger than required.
+	 */
 }

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2016-2019 The DragonFly Project
  * Copyright (c) 2016-2019 Tomohiro Kusumi <tkusumi@netbsd.org>
  * All rights reserved.
@@ -29,8 +31,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

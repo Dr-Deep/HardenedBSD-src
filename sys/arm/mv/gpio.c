@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2006 Benno Rice.
  * Copyright (C) 2008 MARVELL INTERNATIONAL LTD.
@@ -30,9 +30,6 @@
  *
  * from: FreeBSD: //depot/projects/arm/src/sys/arm/xscale/pxa2x0/pxa2x0_gpio.c, rev 1
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -343,7 +340,7 @@ mv_gpio_attach(device_t dev)
 	if (rv != 0)
 		return (rv);
 
-	sc->sc_busdev = gpiobus_attach_bus(dev);
+	sc->sc_busdev = gpiobus_add_bus(dev);
 	if (sc->sc_busdev == NULL) {
 		mtx_destroy(&sc->mutex);
 		bus_release_resource(dev, SYS_RES_IRQ,
@@ -351,6 +348,7 @@ mv_gpio_attach(device_t dev)
 		return (ENXIO);
 	}
 
+	bus_attach_children(dev);
 	return (0);
 }
 

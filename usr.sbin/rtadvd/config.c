@@ -1,4 +1,3 @@
-/*	$FreeBSD$	*/
 /*	$KAME: config.c,v 1.84 2003/08/05 12:34:23 itojun Exp $	*/
 
 /*-
@@ -292,6 +291,7 @@ rm_rainfo(struct rainfo *rai)
 	struct rdnss *rdn;
 	struct rdnss_addr *rdna;
 	struct dnssl *dns;
+	struct pref64 *prf64;
 	struct rtinfo *rti;
 
 	syslog(LOG_DEBUG, "<%s>: enter",  __func__);
@@ -325,6 +325,10 @@ rm_rainfo(struct rainfo *rai)
 	while ((rti = TAILQ_FIRST(&rai->rai_route)) != NULL) {
 		TAILQ_REMOVE(&rai->rai_route, rti, rti_next);
 		free(rti);
+	}
+	while ((prf64 = TAILQ_FIRST(&rai->rai_pref64)) != NULL) {
+		TAILQ_REMOVE(&rai->rai_pref64, prf64, p64_next);
+		free(prf64);
 	}
 	free(rai);
 	syslog(LOG_DEBUG, "<%s>: leave",  __func__);
@@ -370,6 +374,7 @@ getconfig(struct ifinfo *ifi)
 	TAILQ_INIT(&rai->rai_route);
 	TAILQ_INIT(&rai->rai_rdnss);
 	TAILQ_INIT(&rai->rai_dnssl);
+	TAILQ_INIT(&rai->rai_pref64);
 	TAILQ_INIT(&rai->rai_soliciter);
 	rai->rai_ifinfo = ifi;
 
@@ -437,10 +442,6 @@ getconfig(struct ifinfo *ifi)
 			}
 			val |= ND_RA_FLAG_RTPREF_LOW;
 		}
-#ifdef DRAFT_IETF_6MAN_IPV6ONLY_FLAG
-		if (strchr(flagstr, 'S'))
-			val |= ND_RA_FLAG_IPV6_ONLY;
-#endif
 	} else
 		MAYHAVE(val, "raflags", 0);
 
@@ -456,9 +457,6 @@ getconfig(struct ifinfo *ifi)
 		    __func__, rai->rai_rtpref, ifi->ifi_ifname);
 		goto getconfig_free_rai;
 	}
-#ifdef DRAFT_IETF_6MAN_IPV6ONLY_FLAG
-	rai->rai_ipv6onlyflg = val & ND_RA_FLAG_IPV6_ONLY;
-#endif
 
 	MAYHAVE(val, "rltime", rai->rai_maxinterval * 3);
 	if ((uint16_t)val && ((uint16_t)val < rai->rai_maxinterval ||
@@ -614,7 +612,7 @@ getconfig_free_pfx:
 		get_prefix(rai);
 
 	MAYHAVE(val64, "mtu", 0);
-	if (val < 0 || val64 > 0xffffffff) {
+	if (val64 < 0 || val64 > 0xffffffff) {
 		syslog(LOG_ERR,
 		    "<%s> mtu (%" PRIu64 ") on %s out of range",
 		    __func__, val64, ifi->ifi_ifname);
@@ -913,6 +911,68 @@ getconfig_free_dns:
 		}
 		free(dns);
 	}
+
+	/*
+	 * handle pref64
+	 */
+	for (i = -1; i < MAXPREF64 ; i++) {
+		struct pref64 *prf64;
+
+		makeentry(entbuf, sizeof(entbuf), i, "pref64");
+		addr = (char *)agetstr(entbuf, &bp);
+		if (addr == NULL)
+			continue;
+		ELM_MALLOC(prf64, exit(1));
+
+		if (inet_pton(AF_INET6, addr, &prf64->p64_prefix) != 1) {
+			syslog(LOG_ERR, "<%s> inet_pton failed for %s",
+			    __func__, addr);
+			goto getconfig_free_prf64;
+		}
+
+		makeentry(entbuf, sizeof(entbuf), i, "pref64len");
+		MAYHAVE(val64, entbuf, 96);
+		switch (val64) {
+		case 96:
+			prf64->p64_plc = 0;
+			break;
+		case 64:
+			prf64->p64_plc = 1;
+			break;
+		case 56:
+			prf64->p64_plc = 2;
+			break;
+		case 48:
+			prf64->p64_plc = 3;
+			break;
+		case 40:
+			prf64->p64_plc = 4;
+			break;
+		case 32:
+			prf64->p64_plc = 5;
+			break;
+		default:
+			syslog(LOG_ERR, "PREF64 prefix length %" PRIi64
+			       "on %s is invalid; skipping",
+			       val64, ifi->ifi_ifname);
+			goto getconfig_free_prf64;
+		}
+
+		makeentry(entbuf, sizeof(entbuf), i, "pref64lifetime");
+		MAYHAVE(val64, entbuf, (rai->rai_lifetime * 3));
+		/* This logic is from RFC 8781 section 4.1. */
+		if (val64 > 65528)
+			val64 = 65528;
+		val64 = (val64 + 7) / 8;
+		prf64->p64_sl = (uint16_t)val64;
+
+		/* link into chain */
+		TAILQ_INSERT_TAIL(&rai->rai_pref64, prf64, p64_next);
+		continue;
+getconfig_free_prf64:
+		free(prf64);
+	}
+
 	/* construct the sending packet */
 	make_packet(rai);
 
@@ -961,12 +1021,15 @@ getconfig_free_dns:
 		} else {
 			struct rdnss *rdn;
 			struct dnssl *dns;
+			struct rtinfo *rti;
 
 			rai_old->rai_lifetime = 0;
 			TAILQ_FOREACH(rdn, &rai_old->rai_rdnss, rd_next)
 			    rdn->rd_ltime = 0;
 			TAILQ_FOREACH(dns, &rai_old->rai_dnssl, dn_next)
 			    dns->dn_ltime = 0;
+			TAILQ_FOREACH(rti, &rai_old->rai_route, rti_next)
+			    rti->rti_ltime = 0;
 
 			ifi->ifi_rainfo_trans = rai_old;
 			ifi->ifi_state = IFI_STATE_TRANSITIVE;
@@ -1044,6 +1107,7 @@ get_prefix(struct rainfo *rai)
 	ifi = rai->rai_ifinfo;
 
 	for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
+		int64_t val64;
 		int plen;
 
 		if (strcmp(ifa->ifa_name, ifi->ifi_ifname) != 0)
@@ -1092,9 +1156,26 @@ get_prefix(struct rainfo *rai)
 		    "<%s> add %s/%d to prefix list on %s",
 		    __func__, ntopbuf, pfx->pfx_prefixlen, ifi->ifi_ifname);
 
+		MAYHAVE(val64, "vltime", DEF_ADVVALIDLIFETIME);
+		if (val64 < 0 || val64 > 0xffffffff) {
+			syslog(LOG_WARNING,
+			    "<%s> vltime (%" PRIu64 ") for %s/%d on %s "
+			    "is out of range, use default value instead.", __func__,
+			    val64, ntopbuf, pfx->pfx_prefixlen, ifi->ifi_ifname);
+			pfx->pfx_validlifetime = DEF_ADVVALIDLIFETIME;
+		} else
+			pfx->pfx_validlifetime = val64;
+		MAYHAVE(val64, "pltime", DEF_ADVPREFERREDLIFETIME);
+		if (val64 < 0 || val64 > 0xffffffff) {
+			syslog(LOG_WARNING,
+			    "<%s> pltime (%" PRIu64 ") for %s/%d on %s "
+			    "is out of range, use default value instead.", __func__,
+			    val64, ntopbuf, pfx->pfx_prefixlen, ifi->ifi_ifname);
+			pfx->pfx_preflifetime = DEF_ADVPREFERREDLIFETIME;
+		} else
+			pfx->pfx_preflifetime = val64;
+
 		/* set other fields with protocol defaults */
-		pfx->pfx_validlifetime = DEF_ADVVALIDLIFETIME;
-		pfx->pfx_preflifetime = DEF_ADVPREFERREDLIFETIME;
 		pfx->pfx_onlinkflg = 1;
 		pfx->pfx_autoconfflg = 1;
 		pfx->pfx_origin = PREFIX_FROM_KERNEL;
@@ -1335,6 +1416,8 @@ make_packet(struct rainfo *rai)
 	struct rdnss *rdn;
 	struct nd_opt_dnssl *ndopt_dnssl;
 	struct dnssl *dns;
+	struct pref64 *prf64;
+	struct nd_opt_pref64 *ndopt_pref64;
 	size_t len;
 	struct prefix *pfx;
 	struct ifinfo *ifi;
@@ -1382,6 +1465,9 @@ make_packet(struct rainfo *rai)
 
 		packlen += len;
 	}
+	TAILQ_FOREACH(prf64, &rai->rai_pref64, p64_next)
+		packlen += sizeof(struct nd_opt_pref64);
+
 	/* allocate memory for the packet */
 	if ((buf = malloc(packlen)) == NULL) {
 		syslog(LOG_ERR,
@@ -1413,10 +1499,6 @@ make_packet(struct rainfo *rai)
 		rai->rai_managedflg ? ND_RA_FLAG_MANAGED : 0;
 	ra->nd_ra_flags_reserved |=
 		rai->rai_otherflg ? ND_RA_FLAG_OTHER : 0;
-#ifdef DRAFT_IETF_6MAN_IPV6ONLY_FLAG
-	ra->nd_ra_flags_reserved |=
-		rai->rai_ipv6onlyflg ? ND_RA_FLAG_IPV6_ONLY : 0;
-#endif
 	ra->nd_ra_router_lifetime = htons(rai->rai_lifetime);
 	ra->nd_ra_reachable = htonl(rai->rai_reachabletime);
 	ra->nd_ra_retransmit = htonl(rai->rai_retranstimer);
@@ -1549,5 +1631,17 @@ make_packet(struct rainfo *rai)
 		syslog(LOG_DEBUG, "<%s>: nd_opt_dnssl_len = %d", __func__,
 		    ndopt_dnssl->nd_opt_dnssl_len);
 	}
-	return;
+
+	TAILQ_FOREACH(prf64, &rai->rai_pref64, p64_next) {
+		ndopt_pref64 = (struct nd_opt_pref64 *)buf;
+		ndopt_pref64->nd_opt_pref64_type = ND_OPT_PREF64;
+		ndopt_pref64->nd_opt_pref64_len = 2;
+		ndopt_pref64->nd_opt_pref64_sl_plc =
+			(htons(prf64->p64_sl << 3)) |
+			htons((prf64->p64_plc & 0x7));
+		memcpy(&ndopt_pref64->nd_opt_prefix[0],
+		       &prf64->p64_prefix,
+		       sizeof(ndopt_pref64->nd_opt_prefix));
+		buf += sizeof(struct nd_opt_pref64);
+	}
 }

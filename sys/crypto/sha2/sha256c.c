@@ -25,8 +25,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/endian.h>
 #include <sys/types.h>
 
@@ -208,12 +206,8 @@ SHA256_Transform_arm64(uint32_t * state, const unsigned char block[64])
 DEFINE_UIFUNC(static, void, SHA256_Transform,
     (uint32_t * state, const unsigned char block[64]))
 {
-	u_long hwcap;
-
-	if (elf_aux_info(AT_HWCAP, &hwcap, sizeof(hwcap)) == 0) {
-		if ((hwcap & HWCAP_SHA2) != 0)
-			return (SHA256_Transform_arm64);
-	}
+	if ((at_hwcap & HWCAP_SHA2) != 0)
+		return (SHA256_Transform_arm64);
 
 	return (SHA256_Transform_c);
 }
@@ -393,8 +387,6 @@ __weak_reference(_libmd_SHA256_Init, SHA256_Init);
 __weak_reference(_libmd_SHA256_Update, SHA256_Update);
 #undef SHA256_Final
 __weak_reference(_libmd_SHA256_Final, SHA256_Final);
-#undef SHA256_Transform
-__weak_reference(_libmd_SHA256_Transform, SHA256_Transform);
 
 #undef SHA224_Init
 __weak_reference(_libmd_SHA224_Init, SHA224_Init);

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2013 Ed Schouten <ed@FreeBSD.org>
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _UCHAR_H_
@@ -33,6 +31,11 @@
 
 #include <sys/cdefs.h>
 #include <sys/_types.h>
+
+#if __ISO_C_VISIBLE >= 2023 && !defined(_CHAR8_T_DECLARED)
+typedef unsigned char	char8_t;
+#define	_CHAR8_T_DECLARED
+#endif
 
 #ifndef _CHAR16_T_DECLARED
 typedef	__char16_t	char16_t;

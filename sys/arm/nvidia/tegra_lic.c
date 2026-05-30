@@ -25,8 +25,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Local interrupt controller driver for Tegra SoCs.
  */
@@ -215,12 +213,12 @@ tegra_lic_attach(device_t dev)
 	}
 	sc->parent = OF_device_from_xref(parent_xref);
 	if (sc->parent == NULL) {
-		device_printf(dev, "Cannott find parent controller\n");
+		device_printf(dev, "Cannot find parent controller\n");
 		goto fail;
 	}
 
 	if (bus_alloc_resources(dev, lic_spec, sc->mem_res)) {
-		device_printf(dev, "Cannott allocate resources\n");
+		device_printf(dev, "Cannot allocate resources\n");
 		goto fail;
 	}
 

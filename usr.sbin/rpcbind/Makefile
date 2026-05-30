@@ -1,5 +1,4 @@
 #	$NetBSD: Makefile,v 1.3 2000/06/20 13:56:43 fvdl Exp $
-# $FreeBSD$
 
 .include <src.opts.mk>
 
@@ -10,6 +9,8 @@ SRCS=	check_bound.c rpcb_stat.c rpcb_svc_4.c rpcbind.c pmap_svc.c \
 CFI_OVERRIDE=	-fno-sanitize=cfi-icall
 
 CFLAGS+= -DPORTMAP
+
+LIBADD=	util
 
 .if ${MK_INET6_SUPPORT} != "no"
 CFLAGS+= -DINET6

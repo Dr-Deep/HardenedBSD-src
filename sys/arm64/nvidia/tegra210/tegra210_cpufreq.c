@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright 2020 Michal Meloun <mmel@FreeBSD.org>
  *
@@ -25,9 +25,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
@@ -40,8 +37,8 @@ __FBSDID("$FreeBSD$");
 #include <machine/bus.h>
 #include <machine/cpu.h>
 
-#include <dev/extres/clk/clk.h>
-#include <dev/extres/regulator/regulator.h>
+#include <dev/clk/clk.h>
+#include <dev/regulator/regulator.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
 #include <arm/nvidia/tegra_efuse.h>
@@ -222,8 +219,15 @@ build_speed_points(struct tegra210_cpufreq_softc *sc) {
 	int i;
 
 	sc->nspeed_points = nitems(cpu_freq_tbl);
+	if (sc->nspeed_points * sizeof(struct cpu_speed_point) <
+	    sc->nspeed_points) {
+		return;
+	}
 	sc->speed_points = malloc(sizeof(struct cpu_speed_point) *
 	    sc->nspeed_points, M_DEVBUF, M_NOWAIT);
+	if (sc->speed_points == NULL) {
+		return;
+	}
 	for (i = 0; i < sc->nspeed_points; i++) {
 		sc->speed_points[i].freq = cpu_freq_tbl[i];
 		sc->speed_points[i].uvolt = freq_to_voltage(sc,
@@ -396,9 +400,9 @@ tegra210_cpufreq_identify(driver_t *driver, device_t parent)
 
 	if (device_get_unit(parent) != 0)
 		return;
-	if (device_find_child(parent, "tegra210_cpufreq", -1) != NULL)
+	if (device_find_child(parent, "tegra210_cpufreq", DEVICE_UNIT_ANY) != NULL)
 		return;
-	if (BUS_ADD_CHILD(parent, 0, "tegra210_cpufreq", -1) == NULL)
+	if (BUS_ADD_CHILD(parent, 0, "tegra210_cpufreq", DEVICE_UNIT_ANY) == NULL)
 		device_printf(parent, "add child failed\n");
 }
 

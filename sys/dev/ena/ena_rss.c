@@ -1,7 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * Copyright (c) 2015-2021 Amazon.com, Inc. or its affiliates.
+ * Copyright (c) 2015-2024 Amazon.com, Inc. or its affiliates.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,13 +27,9 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * $FreeBSD$
- *
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_rss.h"
 
 #include "ena_rss.h"
@@ -129,7 +125,6 @@ ena_rss_init_default(struct ena_adapter *adapter)
 	}
 
 
-#ifdef RSS
 	uint8_t rss_algo = rss_gethashalgo();
 	if (rss_algo == RSS_HASH_TOEPLITZ) {
 		uint8_t hash_key[RSS_KEYSIZE];
@@ -137,7 +132,6 @@ ena_rss_init_default(struct ena_adapter *adapter)
 		rss_getkey(hash_key);
 		rc = ena_rss_set_hash(ena_dev, hash_key);
 	} else
-#endif
 		rc = ena_com_fill_hash_function(ena_dev, ENA_ADMIN_TOEPLITZ,
 		    NULL, ENA_HASH_KEY_SIZE, 0x0);
 	if (unlikely((rc != 0) && (rc != EOPNOTSUPP))) {
@@ -283,12 +277,9 @@ ena_rss_indir_init(struct ena_adapter *adapter)
 	struct ena_indir *indir = adapter->rss_indir;
 	int rc;
 
-	if (indir == NULL) {
+	if (indir == NULL)
 		adapter->rss_indir = indir = malloc(sizeof(struct ena_indir),
 		    M_DEVBUF, M_WAITOK | M_ZERO);
-		if (indir == NULL)
-			return (ENOMEM);
-	}
 
 	rc = ena_rss_indir_get(adapter, indir->table);
 	if (rc != 0) {

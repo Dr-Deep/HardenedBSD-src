@@ -3,13 +3,15 @@ libcbor
 
 Documentation for version |release|, updated on |today|.
 
+Git repo: https://github.com/PJK/libcbor
+
 Overview
 --------
 *libcbor* is a C library for parsing and generating CBOR_, the general-purpose schema-less binary data format.
 
 
 Main features
- - Complete RFC conformance [#]_
+ - Complete `IETF RFC 8949 (STD 94) <https://www.rfc-editor.org/info/std94>`_ conformance [#]_
  - Robust C99 implementation
  - Layered architecture offers both control and convenience
  - Flexible memory management
@@ -19,7 +21,7 @@ Main features
  - Extensive documentation and test suite
  - No runtime dependencies, small footprint
 
-.. [#] See :doc:`rfc_conformance`
+.. [#] See :doc:`standard_conformance`
 
 .. [#] With the exception of custom memory allocators (see :doc:`api/item_reference_counting`)
 
@@ -28,13 +30,12 @@ Contents
 .. toctree::
 
    getting_started
-   using
+   tutorial
    api
-   streaming
    tests
-   rfc_conformance
+   standard_conformance
    internal
    changelog
    development
 
-.. _CBOR: http://tools.ietf.org/html/rfc7049
+.. _CBOR: https://www.rfc-editor.org/info/std94

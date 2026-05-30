@@ -24,8 +24,6 @@
  *  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  *  POSSIBILITY OF SUCH DAMAGE.
  *
- * $FreeBSD$
- *
  */
 
 /*
@@ -321,7 +319,6 @@ typedef struct qlnx_link_output qlnx_link_output_t;
 
 #define QLNX_TPA_MAX_AGG_BUFFERS             (20)
 
-#define QLNX_MAX_NUM_MULTICAST_ADDRS	ECORE_MAX_MC_ADDRS
 typedef struct _qlnx_mcast {
         uint16_t        rsrvd;
         uint8_t         addr[6];
@@ -371,8 +368,7 @@ struct qlnx_host {
 	uint8_t			dev_unit;
 	uint16_t		device_id;
 
-	struct ifnet		*ifp;
-	int			if_flags;
+	if_t			ifp;
 	volatile int		link_up;
 	struct ifmedia		media;
 	uint16_t		max_frame_size;
@@ -393,7 +389,7 @@ struct qlnx_host {
 
 	int			msix_count;
 
-	struct mtx		hw_lock;
+	struct sx		hw_lock;
 
 	/* debug */
 
@@ -445,9 +441,7 @@ struct qlnx_host {
 	qlnx_ivec_t              irq_vec[QLNX_MAX_RSS];
 
 	uint8_t			filter;
-	uint32_t                nmcast;
-	qlnx_mcast_t            mcast[QLNX_MAX_NUM_MULTICAST_ADDRS];
-	struct ecore_filter_mcast ecore_mcast;
+	uint32_t		ecore_mcast_bins[ETH_MULTICAST_MAC_BINS_IN_REGS];
 	uint8_t			primary_mac[ETH_ALEN];
 	uint8_t			prio_to_tc[MAX_NUM_PRI];
 	struct ecore_eth_stats	hw_stats;
@@ -512,7 +506,7 @@ typedef struct qlnx_host qlnx_host_t;
 #define QL_MIN(x, y) ((x < y) ? x : y)
 
 #define QL_RUNNING(ifp) \
-		((ifp->if_drv_flags & (IFF_DRV_RUNNING | IFF_DRV_OACTIVE)) == \
+		((if_getdrvflags(ifp) & (IFF_DRV_RUNNING | IFF_DRV_OACTIVE)) == \
 			IFF_DRV_RUNNING)
 
 #define QLNX_MAX_MTU			9000
@@ -685,7 +679,6 @@ extern int qlnx_grc_dump(qlnx_host_t *ha, uint32_t *num_dumped_dwords,
 		int hwfn_index);
 extern int qlnx_idle_chk(qlnx_host_t *ha, uint32_t *num_dumped_dwords,
 		int hwfn_index);
-extern uint8_t *qlnx_get_mac_addr(qlnx_host_t *ha);
 extern void qlnx_fill_link(qlnx_host_t *ha, struct ecore_hwfn *hwfn,
                           struct qlnx_link_output *if_link);
 extern int qlnx_set_lldp_tlvx(qlnx_host_t *ha, qlnx_lldp_sys_tlvs_t *lldp_tlvs);
@@ -698,33 +691,6 @@ extern int qlnx_alloc_mem_sb(qlnx_host_t *ha, struct ecore_sb_info *sb_info,
  * Some OS specific stuff
  */
 
-#if (defined IFM_100G_SR4)
-#define QLNX_IFM_100G_SR4 IFM_100G_SR4
-#define QLNX_IFM_100G_LR4 IFM_100G_LR4
-#define QLNX_IFM_100G_CR4 IFM_100G_CR4
-#else
-#define QLNX_IFM_100G_SR4 IFM_UNKNOWN
-#define QLNX_IFM_100G_LR4 IFM_UNKNOWN
-#endif /* #if (defined IFM_100G_SR4) */
-
-#if (defined IFM_25G_SR)
-#define QLNX_IFM_25G_SR IFM_25G_SR
-#define QLNX_IFM_25G_CR IFM_25G_CR
-#else
-#define QLNX_IFM_25G_SR IFM_UNKNOWN
-#define QLNX_IFM_25G_CR IFM_UNKNOWN
-#endif /* #if (defined IFM_25G_SR) */
-
-#if __FreeBSD_version < 1100000
-
-#define QLNX_INC_IERRORS(ifp)		ifp->if_ierrors++
-#define QLNX_INC_IQDROPS(ifp)		ifp->if_iqdrops++
-#define QLNX_INC_IPACKETS(ifp)		ifp->if_ipackets++
-#define QLNX_INC_OPACKETS(ifp)		ifp->if_opackets++
-#define QLNX_INC_OBYTES(ifp, len)	ifp->if_obytes += len
-#define QLNX_INC_IBYTES(ifp, len)	ifp->if_ibytes += len
-
-#else
 
 #define QLNX_INC_IERRORS(ifp)	if_inc_counter(ifp, IFCOUNTER_IERRORS, 1)
 #define QLNX_INC_IQDROPS(ifp)	if_inc_counter(ifp, IFCOUNTER_IQDROPS, 1)
@@ -735,8 +701,6 @@ extern int qlnx_alloc_mem_sb(qlnx_host_t *ha, struct ecore_sb_info *sb_info,
 			if_inc_counter(ifp, IFCOUNTER_OBYTES, len)
 #define QLNX_INC_IBYTES(ifp, len)	\
 			if_inc_counter(ha->ifp, IFCOUNTER_IBYTES, len)
-
-#endif /* #if __FreeBSD_version < 1100000 */
 
 #define CQE_L3_PACKET(flags)    \
         ((((flags) & PARSING_AND_ERR_FLAGS_L3TYPE_MASK) == e_l3_type_ipv4) || \

@@ -1,4 +1,4 @@
-//===-- HexagonPeephole.cpp - Hexagon Peephole Optimiztions ---------------===//
+//===-- HexagonPeephole.cpp - Hexagon Peephole Optimizations --------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -44,38 +44,29 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
-#include "llvm/IR/Constants.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
-#include <algorithm>
 
 using namespace llvm;
 
 #define DEBUG_TYPE "hexagon-peephole"
 
-static cl::opt<bool> DisableHexagonPeephole("disable-hexagon-peephole",
-    cl::Hidden, cl::ZeroOrMore, cl::init(false),
-    cl::desc("Disable Peephole Optimization"));
+static cl::opt<bool>
+    DisableHexagonPeephole("disable-hexagon-peephole", cl::Hidden,
+                           cl::desc("Disable Peephole Optimization"));
 
-static cl::opt<bool> DisablePNotP("disable-hexagon-pnotp",
-    cl::Hidden, cl::ZeroOrMore, cl::init(false),
-    cl::desc("Disable Optimization of PNotP"));
+static cl::opt<bool> DisablePNotP("disable-hexagon-pnotp", cl::Hidden,
+                                  cl::desc("Disable Optimization of PNotP"));
 
-static cl::opt<bool> DisableOptSZExt("disable-hexagon-optszext",
-    cl::Hidden, cl::ZeroOrMore, cl::init(true),
-    cl::desc("Disable Optimization of Sign/Zero Extends"));
+static cl::opt<bool>
+    DisableOptSZExt("disable-hexagon-optszext", cl::Hidden, cl::init(true),
+                    cl::desc("Disable Optimization of Sign/Zero Extends"));
 
-static cl::opt<bool> DisableOptExtTo64("disable-hexagon-opt-ext-to-64",
-    cl::Hidden, cl::ZeroOrMore, cl::init(true),
-    cl::desc("Disable Optimization of extensions to i64."));
-
-namespace llvm {
-  FunctionPass *createHexagonPeephole();
-  void initializeHexagonPeepholePass(PassRegistry&);
-}
+static cl::opt<bool>
+    DisableOptExtTo64("disable-hexagon-opt-ext-to-64", cl::Hidden,
+                      cl::init(true),
+                      cl::desc("Disable Optimization of extensions to i64."));
 
 namespace {
   struct HexagonPeephole : public MachineFunctionPass {
@@ -85,9 +76,7 @@ namespace {
 
   public:
     static char ID;
-    HexagonPeephole() : MachineFunctionPass(ID) {
-      initializeHexagonPeepholePass(*PassRegistry::getPassRegistry());
-    }
+    HexagonPeephole() : MachineFunctionPass(ID) {}
 
     bool runOnMachineFunction(MachineFunction &MF) override;
 
@@ -208,14 +197,14 @@ bool HexagonPeephole::runOnMachineFunction(MachineFunction &MF) {
           // Try to find in the map.
           if (unsigned PeepholeSrc = PeepholeMap.lookup(SrcReg)) {
             // Change the 1st operand.
-            MI.RemoveOperand(1);
+            MI.removeOperand(1);
             MI.addOperand(MachineOperand::CreateReg(PeepholeSrc, false));
           } else  {
             DenseMap<unsigned, std::pair<unsigned, unsigned> >::iterator DI =
               PeepholeDoubleRegsMap.find(SrcReg);
             if (DI != PeepholeDoubleRegsMap.end()) {
               std::pair<unsigned,unsigned> PeepholeSrc = DI->second;
-              MI.RemoveOperand(1);
+              MI.removeOperand(1);
               MI.addOperand(MachineOperand::CreateReg(
                   PeepholeSrc.first, false /*isDef*/, false /*isImp*/,
                   false /*isKill*/, false /*isDead*/, false /*isUndef*/,

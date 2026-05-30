@@ -29,9 +29,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)user.h	8.2 (Berkeley) 9/23/93
- * $FreeBSD$
  */
 
 #ifndef _SYS_USER_H_
@@ -41,6 +38,7 @@
 #ifndef _KERNEL
 /* stuff that *used* to be included by user.h, or is now needed */
 #include <sys/errno.h>
+#include <sys/event.h>
 #include <sys/time.h>
 #include <sys/resource.h>
 #include <sys/ucred.h>
@@ -88,7 +86,7 @@
  */
 #define	KI_NSPARE_INT	2
 #define	KI_NSPARE_LONG	12
-#define	KI_NSPARE_PTR	5
+#define	KI_NSPARE_PTR	4
 
 #ifndef _KERNEL
 #ifndef KINFO_PROC_SIZE
@@ -188,8 +186,10 @@ struct kinfo_proc {
 	 * front of ki_sparestrings, and ints from the end of ki_spareints.
 	 * That way the spare room from both arrays will remain contiguous.
 	 */
-	char	ki_sparestrings[46];	/* spare string space */
+	char	ki_sparestrings[38];	/* spare string space */
 	int	ki_spareints[KI_NSPARE_INT];	/* spare room for growth */
+	pid_t	ki_reaper;		/* pid of reaper process */
+	pid_t	ki_reapsubtree;		/* reaper subtree id */
 	uint64_t ki_tdev;		/* controlling tty dev */
 	int	ki_oncpu;		/* Which cpu we are on */
 	int	ki_lastcpu;		/* Last cpu we were on */
@@ -198,8 +198,8 @@ struct kinfo_proc {
 	int	ki_fibnum;		/* Default FIB number */
 	u_int	ki_cr_flags;		/* Credential flags */
 	int	ki_jid;			/* Process jail ID */
-	int	ki_numthreads;		/* XXXKSE number of threads in total */
-	lwpid_t	ki_tid;			/* XXXKSE thread id */
+	int	ki_numthreads;		/* number of threads in total */
+	lwpid_t	ki_tid;			/* thread id */
 	struct	priority ki_pri;	/* process priority */
 	struct	rusage ki_rusage;	/* process rusage statistics */
 	/* XXX - most fields in ki_rusage_ch are not (yet) filled in */
@@ -214,10 +214,11 @@ struct kinfo_proc {
 	 * That way the spare room from both arrays will remain contiguous.
 	 */
 	struct	pwddesc *ki_pd;	/* pointer to process paths info */
+	void	*ki_uerrmsg;		/* address of the ext err msg place */
 	void	*ki_spareptrs[KI_NSPARE_PTR];	/* spare room for growth */
 	long	ki_sparelongs[KI_NSPARE_LONG];	/* spare room for growth */
 	long	ki_sflag;		/* PS_* flags */
-	long	ki_tdflags;		/* XXXKSE kthread flag */
+	long	ki_tdflags;		/* kthread flag */
 };
 void fill_kinfo_proc(struct proc *, struct kinfo_proc *);
 /* XXX - the following two defines are temporary */
@@ -228,7 +229,7 @@ void fill_kinfo_proc(struct proc *, struct kinfo_proc *);
  *  Legacy PS_ flag.  This moved to p_flag but is maintained for
  *  compatibility.
  */
-#define	PS_INMEM	0x00001		/* Loaded into memory. */
+#define	PS_INMEM	0x00001		/* Loaded into memory, always true. */
 
 /* ki_sessflag values */
 #define	KI_CTTY		0x00000001	/* controlling tty vnode active */
@@ -265,6 +266,9 @@ struct user {
 #define	KF_TYPE_PROCDESC	11
 #define	KF_TYPE_DEV	12
 #define	KF_TYPE_EVENTFD	13
+#define	KF_TYPE_TIMERFD	14
+#define	KF_TYPE_INOTIFY	15
+#define	KF_TYPE_JAILDESC	16
 #define	KF_TYPE_UNKNOWN	255
 
 #define	KF_VTYPE_VNON	0
@@ -373,7 +377,7 @@ struct kinfo_file {
 				struct sockaddr_storage	kf_sa_peer;
 				/* Address of so_pcb. */
 				uint64_t	kf_sock_pcb;
-				/* Address of inp_ppcb. */
+				/* Obsolete! May be reused as a spare. */
 				uint64_t	kf_sock_inpcb;
 				/* Address of unp_conn. */
 				uint64_t	kf_sock_unpconn;
@@ -389,7 +393,9 @@ struct kinfo_file {
 				int		kf_file_type;
 				/* Space for future use */
 				int		kf_spareint[3];
-				uint64_t	kf_spareint64[30];
+				uint64_t	kf_spareint64[29];
+				/* Number of references to file. */
+				uint64_t	kf_file_nlink;
 				/* Vnode filesystem id. */
 				uint64_t	kf_file_fsid;
 				/* File device. */
@@ -445,10 +451,22 @@ struct kinfo_file {
 				uint64_t	kf_eventfd_addr;
 			} kf_eventfd;
 			struct {
+				uint32_t	kf_timerfd_clockid;
+				uint32_t	kf_timerfd_flags;
+				uint64_t	kf_timerfd_addr;
+			} kf_timerfd;
+			struct {
+				int32_t		kf_jid;
+			} kf_jail;
+			struct {
 				uint64_t	kf_kqueue_addr;
 				int32_t		kf_kqueue_count;
 				int32_t		kf_kqueue_state;
 			} kf_kqueue;
+			struct {
+				uint64_t	kf_inotify_npending;
+				uint64_t	kf_inotify_nbpending;
+			} kf_inotify;
 		} kf_un;
 	};
 	uint16_t	kf_status;		/* Status flags. */
@@ -501,6 +519,9 @@ struct kinfo_lockf {
 #define	KVME_PROT_READ		0x00000001
 #define	KVME_PROT_WRITE		0x00000002
 #define	KVME_PROT_EXEC		0x00000004
+#define	KVME_MAX_PROT_READ	0x00010000
+#define	KVME_MAX_PROT_WRITE	0x00020000
+#define	KVME_MAX_PROT_EXEC	0x00040000
 
 #define	KVME_FLAG_COW		0x00000001
 #define	KVME_FLAG_NEEDS_COPY	0x00000002
@@ -509,6 +530,8 @@ struct kinfo_lockf {
 #define	KVME_FLAG_GROWS_UP	0x00000010
 #define	KVME_FLAG_GROWS_DOWN	0x00000020
 #define	KVME_FLAG_USER_WIRED	0x00000040
+#define	KVME_FLAG_SYSVSHM	0x00000080
+#define	KVME_FLAG_POSIXSHM	0x00000100
 
 #if defined(__amd64__)
 #define	KINFO_OVMENTRY_SIZE	1168
@@ -571,6 +594,9 @@ struct kinfo_vmentry {
 #define	kve_vn_fsid	kve_type_spec._kve_vn_fsid
 #define	kve_obj		kve_type_spec._kve_obj
 
+#define	KVMO_FLAG_SYSVSHM	0x0001
+#define	KVMO_FLAG_POSIXSHM	0x0002
+
 /*
  * The "vm.objects" sysctl provides a list of all VM objects in the system
  * via an array of these entries.
@@ -592,9 +618,12 @@ struct kinfo_vmobject {
 		uint64_t _kvo_backing_obj;	/* Handle for the backing obj */
 	} kvo_type_spec;			/* Type-specific union */
 	uint64_t kvo_me;			/* Uniq handle for anon obj */
-	uint64_t _kvo_qspare[6];
+	uint64_t kvo_laundry;			/* Number of laundry pages. */
+	uint64_t kvo_wired;			/* Number of wired pages. */
+	uint64_t _kvo_qspare[4];
 	uint32_t kvo_swapped;			/* Number of swapped pages */
-	uint32_t _kvo_ispare[7];
+	uint32_t kvo_flags;
+	uint32_t _kvo_ispare[6];
 	char	kvo_path[PATH_MAX];		/* Pathname, if any. */
 };
 #define	kvo_vn_fsid	kvo_type_spec._kvo_vn_fsid
@@ -608,7 +637,7 @@ struct kinfo_vmobject {
 #define	KKST_MAXLEN	1024
 
 #define	KKST_STATE_STACKOK	0		/* Stack is valid. */
-#define	KKST_STATE_SWAPPED	1		/* Stack swapped out. */
+#define	KKST_STATE_SWAPPED	1		/* Stack swapped out, obsolete. */
 #define	KKST_STATE_RUNNING	2		/* Stack ephemeral. */
 
 #if defined(__amd64__) || defined(__i386__)
@@ -647,6 +676,35 @@ struct kinfo_vm_layout {
 	uintptr_t	kvm_spare[14];
 };
 
+#define	KNOTE_STATUS_ACTIVE		0x00000001
+#define	KNOTE_STATUS_QUEUED		0x00000002
+#define	KNOTE_STATUS_DISABLED		0x00000004
+#define	KNOTE_STATUS_DETACHED		0x00000008
+#define	KNOTE_STATUS_KQUEUE		0x00000010
+
+#define	KNOTE_EXTDATA_NONE		0
+#define	KNOTE_EXTDATA_VNODE		1
+#define	KNOTE_EXTDATA_PIPE		2
+
+struct kinfo_knote {
+	int		knt_kq_fd;
+	struct kevent	knt_event;
+	int		knt_status;
+	int		knt_extdata;
+	uint64_t	knt_spare0[4];
+	union {
+		struct {
+			int		knt_vnode_type;
+			uint64_t	knt_vnode_fsid;
+			uint64_t	knt_vnode_fileid;
+			char		knt_vnode_fullpath[PATH_MAX];
+		} knt_vnode;
+		struct {
+			ino_t		knt_pipe_ino;
+		} knt_pipe;
+	};
+};
+
 #ifdef _KERNEL
 /* Flags for kern_proc_out function. */
 #define KERN_PROC_NOTHREADS	0x1
@@ -674,6 +732,8 @@ int	kern_proc_cwd_out(struct proc *p, struct sbuf *sb, ssize_t maxlen);
 int	kern_proc_out(struct proc *p, struct sbuf *sb, int flags);
 int	kern_proc_vmmap_out(struct proc *p, struct sbuf *sb, ssize_t maxlen,
 	int flags);
+int	kern_proc_kqueues_out(struct proc *p, struct sbuf *s, size_t maxlen,
+	bool compat32);
 
 int	vntype_to_kinfo(int vtype);
 void	pack_kinfo(struct kinfo_file *kif);

@@ -24,7 +24,6 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 #
 
 # Show login failures
@@ -38,24 +37,23 @@ then
     source_periodic_confs
 fi
 
-security_daily_compat_var security_status_logdir
-security_daily_compat_var security_status_loginfail_enable
-
 LOG="${security_status_logdir}"
 
-yesterday=`date -v-1d "+%b %e "`
+# Support both RFC 3164 (traditional) and RFC 5424 syslog timestamps.
+yesterday_3164="$(date -v-1d '+%b %e ')"
+prefix_3164="^${yesterday_3164}"
+
+yesterday_5424="$(date -v-1d -I)"
+prefix_5424="^<[0-9]{1,3}>1 ${yesterday_5424}T"
+
+prefix="(${prefix_3164}|${prefix_5424})"
 
 catmsgs() {
 	find ${LOG} -name 'auth.log.*' -mtime -2 |
 	    sort -t. -r -n -k 2,2 |
 	    while read f
 	    do
-		case $f in
-		    *.gz)	zcat -f $f;;
-		    *.bz2)	bzcat -f $f;;
-		    *.xz)	xzcat -f $f;;
-		    *.zst)	zstdcat -f $f;;
-		esac
+		zcat -f $f
 	    done
 	[ -f ${LOG}/auth.log ] && cat $LOG/auth.log
 }
@@ -66,7 +64,7 @@ if check_yesno_period security_status_loginfail_enable
 then
 	echo ""
 	echo "${host} login failures:"
-	n=$(catmsgs | egrep -ia "^$yesterday.*: .*\b(fail(ures?|ed)?|invalid|bad|illegal|auth.*error)\b" |
+	n=$(catmsgs | egrep -ia "${prefix}.*\b(fail(ures?|ed)?|invalid|bad|illegal|auth.*error)\b" |
 	    tee /dev/stderr | wc -l)
 	[ $n -gt 0 ] && rc=1 || rc=0
 fi

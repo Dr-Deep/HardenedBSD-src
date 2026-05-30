@@ -24,16 +24,22 @@
 .\" (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 .\" THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
-.Dd December 6, 2018
+.Dd November 08, 2023
 .Dt PFSYNC 4
 .Os
 .Sh NAME
 .Nm pfsync
-.Nd packet filter state table sychronisation interface
+.Nd packet filter state table synchronisation interface
 .Sh SYNOPSIS
 .Cd "device pfsync"
+.Pp
+In
+.Xr loader.conf 5 :
+.Cd net.pfsync.pfsync_buckets
+.Pp
+In
+.Xr sysctl.conf 5 :
+.Cd net.pfsync.carp_demotion_factor
 .Sh DESCRIPTION
 The
 .Nm
@@ -115,11 +121,58 @@ dedicated to pfsync messages such as a crossover cable between two firewalls,
 or specify a peer address and protect the traffic with
 .Xr ipsec 4 .
 .Pp
+Support for
 .Nm
-has the following
-.Xr sysctl 8
-tunables:
-.Bl -tag -width ".Va net.pfsync"
+transport over IPv6 was introduced in
+.Fx 14.0 .
+To set up
+.Nm
+using multicast with IPv6 link-local addresses, the
+.Ic syncpeer
+must be set to the
+.Nm
+multicast address and the
+.Ic syncdev
+to the interface where
+.Nm
+traffic is expected.
+.Bd -literal -offset indent
+# ifconfig pfsync0 syncpeer ff12::f0 syncdev vtnet0
+.Ed
+.Pp
+When new features are introduced to
+.Xr pf 4
+the format of messages used by
+.Nm
+might change.
+.Nm
+will by default use the latest format.
+If synchronization with a peer running an older version of FreeBSD is needed the
+.Ar version
+parameter can be used.
+E.g.:
+.Bd -literal -offset indent
+# ifconfig pfsync0 version 1301
+.Ed
+.Pp
+Currently the following versions are supported:
+.Bl -tag -width indent
+.It Cm 1301
+FreeBSD releases 13.2 and older.
+Compatibility with FreeBSD 13.1 has been verified.
+.It Cm 1400
+FreeBSD release 14.0.
+.It Cm 1500
+FreeBSD release 15.0.
+.El
+.Sh SYSCTL VARIABLES
+The following variables can be entered at the
+.Xr loader 8
+prompt, set in
+.Xr loader.conf 5 ,
+or changed at runtime with
+.Xr sysctl 8 :
+.Bl -tag -width indent
 .It Va net.pfsync.carp_demotion_factor
 Value added to
 .Va net.inet.carp.demotion
@@ -130,6 +183,14 @@ See
 .Xr carp 4
 for more information.
 Default value is 240.
+.El
+.Sh LOADER TUNABLES
+The following tunable may be set in
+.Xr loader.conf 5
+or at the
+.Xr loader 8
+prompt:
+.Bl -tag -width indent
 .It Va net.pfsync.pfsync_buckets
 The number of
 .Nm

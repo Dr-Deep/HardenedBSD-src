@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (C) 2018 Marvell International Ltd.
  *
@@ -28,9 +28,6 @@
  */
 
 #include "opt_acpi.h"
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -99,15 +96,15 @@ struct iort_node {
 	u_int			usecount;	/* for bookkeeping */
 	u_int			revision;	/* node revision */
 	union {
+		struct iort_map_entry	*mappings;	/* node mappings  */
+		struct iort_its_entry	*its;		/* ITS IDs array */
+	} entries;
+	union {
 		ACPI_IORT_ROOT_COMPLEX		pci_rc;	/* PCI root complex */
 		ACPI_IORT_SMMU			smmu;
 		ACPI_IORT_SMMU_V3		smmu_v3;
 		struct iort_named_component	named_comp;
 	} data;
-	union {
-		struct iort_map_entry	*mappings;	/* node mappings  */
-		struct iort_its_entry	*its;		/* ITS IDs array */
-	} entries;
 };
 
 /* Lists for each of the types. */
@@ -633,7 +630,7 @@ acpi_iort_map_pci_msi(u_int seg, u_int rid, u_int *xref, u_int *devid)
 }
 
 int
-acpi_iort_map_pci_smmuv3(u_int seg, u_int rid, u_int *xref, u_int *sid)
+acpi_iort_map_pci_smmuv3(u_int seg, u_int rid, uint64_t *xref, u_int *sid)
 {
 	ACPI_IORT_SMMU_V3 *smmu;
 	struct iort_node *node;
@@ -675,7 +672,7 @@ acpi_iort_map_named_msi(const char *devname, u_int rid, u_int *xref,
 }
 
 int
-acpi_iort_map_named_smmuv3(const char *devname, u_int rid, u_int *xref,
+acpi_iort_map_named_smmuv3(const char *devname, u_int rid, uint64_t *xref,
     u_int *devid)
 {
 	ACPI_IORT_SMMU_V3 *smmu;

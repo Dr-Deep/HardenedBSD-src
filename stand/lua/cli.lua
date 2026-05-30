@@ -1,5 +1,5 @@
 --
--- SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+-- SPDX-License-Identifier: BSD-2-Clause
 --
 -- Copyright (c) 2018 Kyle Evans <kevans@FreeBSD.org>
 --
@@ -24,25 +24,11 @@
 -- OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 -- SUCH DAMAGE.
 --
--- $FreeBSD$
---
 
 local config = require("config")
 local core = require("core")
 
 local cli = {}
-
-if not pager then
-	-- shim for the pager module that just doesn't do it.
-	-- XXX Remove after 12.2 goes EoL.
-	pager = {
-		open = function() end,
-		close = function() end,
-		output = function(str)
-			printc(str)
-		end,
-	}
-end
 
 -- Internal function
 -- Parses arguments to boot and returns two values: kernel_name, argstr
@@ -249,9 +235,17 @@ cli["disable-device"] = function(...)
 		return
 	end
 
+	if #argv > 1 then
+		print("Too many arguments")
+		print("usage error: disable-device device")
+		return
+	end
+
 	d, u = string.match(argv[1], "(%w*%a)(%d+)")
-	if d ~= nil then
+	if d ~= nil and u ~= nil then
 		loader.setenv("hint." .. d .. "." .. u .. ".disabled", "1")
+	else
+		print("Cannot parse " .. argv[1] .." into driver and unit number.")
 	end
 end
 

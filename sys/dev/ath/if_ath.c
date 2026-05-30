@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2002-2009 Sam Leffler, Errno Consulting
  * All rights reserved.
@@ -30,8 +30,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Driver for the Atheros Wireless LAN controller.
  *
@@ -181,7 +179,7 @@ static struct ieee80211_node *ath_node_alloc(struct ieee80211vap *,
 static void	ath_node_cleanup(struct ieee80211_node *);
 static void	ath_node_free(struct ieee80211_node *);
 static void	ath_node_getsignal(const struct ieee80211_node *,
-			int8_t *, int8_t *);
+			net80211_rssi_t *, int8_t *);
 static void	ath_txq_init(struct ath_softc *sc, struct ath_txq *, int);
 static struct ath_txq *ath_txq_setup(struct ath_softc*, int qtype, int subtype);
 static int	ath_tx_setup(struct ath_softc *, int, int);
@@ -926,6 +924,9 @@ ath_attach(u_int16_t devid, struct ath_softc *sc)
 		| IEEE80211_C_PMGT		/* Station side power mgmt */
 		| IEEE80211_C_SWSLEEP
 		;
+
+	ic->ic_flags_ext |= IEEE80211_FEXT_SEQNO_OFFLOAD;
+
 	/*
 	 * Query the hal to figure out h/w crypto support.
 	 */
@@ -2448,7 +2449,7 @@ ath_bmiss_vap(struct ieee80211vap *vap)
 	 * against the next beacon.
 	 *
 	 * This handles three common beacon miss cases in STA powersave mode -
-	 * (a) the beacon TBTT isnt a multiple of bintval;
+	 * (a) the beacon TBTT isn't a multiple of bintval;
 	 * (b) the beacon was missed; and
 	 * (c) the beacons are being delayed because the AP is busy and
 	 *     isn't reliably able to meet its TBTT.
@@ -3956,7 +3957,7 @@ ath_node_free(struct ieee80211_node *ni)
 }
 
 static void
-ath_node_getsignal(const struct ieee80211_node *ni, int8_t *rssi, int8_t *noise)
+ath_node_getsignal(const struct ieee80211_node *ni, net80211_rssi_t *rssi, int8_t *noise)
 {
 	struct ieee80211com *ic = ni->ni_ic;
 	struct ath_softc *sc = ic->ic_softc;

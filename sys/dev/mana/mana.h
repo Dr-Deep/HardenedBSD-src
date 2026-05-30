@@ -27,8 +27,6 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * $FreeBSD$
- *
  */
 
 #ifndef _MANA_H
@@ -104,13 +102,24 @@ enum TRI_STATE {
 #define COMP_ENTRY_SIZE			64
 
 #define MIN_FRAME_SIZE			146
-#define ADAPTER_MTU_SIZE		1500
-#define DEFAULT_FRAME_SIZE		(ADAPTER_MTU_SIZE + 14)
-#define MAX_FRAME_SIZE			4096
 
-#define RX_BUFFERS_PER_QUEUE		512
+/* Unit number of RX buffers. Must be power of two
+ * Higher number could fail at allocation.
+ */
+#define MAX_RX_BUFFERS_PER_QUEUE	8192
+#define DEF_RX_BUFFERS_PER_QUEUE	1024
+#define MIN_RX_BUFFERS_PER_QUEUE	128
 
-#define MAX_SEND_BUFFERS_PER_QUEUE	256
+/* Unit number of TX buffers. Must be power of two
+ * Higher number could fail at allocation.
+ * The max value is derived as the maximum
+ * allocatable pages supported on host per guest
+ * through testing. TX buffer size beyond this
+ * value is rejected by the hardware.
+ */
+#define MAX_SEND_BUFFERS_PER_QUEUE	16384
+#define DEF_SEND_BUFFERS_PER_QUEUE	1024
+#define MIN_SEND_BUFFERS_PER_QUEUE	128
 
 #define EQ_SIZE				(8 * PAGE_SIZE)
 #define LOG2_EQ_THROTTLE		3
@@ -137,8 +146,11 @@ struct mana_stats {
 	counter_u64_t			collapse_err;		/* tx */
 	counter_u64_t			dma_mapping_err;	/* rx, tx */
 	counter_u64_t			mbuf_alloc_fail;	/* rx */
+	counter_u64_t			partial_refill;		/* rx */
 	counter_u64_t			alt_chg;		/* tx */
 	counter_u64_t			alt_reset;		/* tx */
+	counter_u64_t			cqe_err;		/* tx */
+	counter_u64_t			cqe_unknown_type;	/* tx */
 };
 
 struct mana_txq {
@@ -155,7 +167,7 @@ struct mana_txq {
 
 	uint16_t		vp_offset;
 
-	struct ifnet		*ndev;
+	if_t			ndev;
 	/* Store index to the array of tx_qp in port structure */
 	int			idx;
 	/* The alternative txq idx when this txq is under heavy load */
@@ -171,6 +183,9 @@ struct mana_txq {
 	struct buf_ring		*txq_br;
 	struct mtx		txq_mtx;
 	char			txq_mtx_name[16];
+
+	uint64_t		tso_pkts;
+	uint64_t		tso_bytes;
 
 	struct task		enqueue_task;
 	struct taskqueue	*enqueue_tq;
@@ -188,6 +203,7 @@ struct mana_txq {
  */
 #define	MAX_MBUF_FRAGS		30
 #define MANA_TSO_MAXSEG_SZ	PAGE_SIZE
+#define MANA_TSO_MAX_SZ		IP_MAXPACKET
 
 /* mbuf data and frags dma mappings */
 struct mana_mbuf_head {
@@ -416,14 +432,18 @@ struct mana_rxq {
 
 	struct mana_cq			rx_cq;
 
-	struct ifnet			*ndev;
+	if_t				ndev;
 	struct lro_ctrl			lro;
 
 	/* Total number of receive buffers to be allocated */
 	uint32_t			num_rx_buf;
 
 	uint32_t			buf_index;
+	uint32_t			next_to_refill;
+	uint32_t			refill_thresh;
 
+	uint64_t			lro_tried;
+	uint64_t			lro_failed;
 	struct mana_stats		stats;
 
 	/* MUST BE THE LAST MEMBER:
@@ -461,12 +481,12 @@ struct mana_context {
 
 	struct mana_eq		*eqs;
 
-	struct ifnet		*ports[MAX_PORTS_IN_MANA_DEV];
+	if_t			ports[MAX_PORTS_IN_MANA_DEV];
 };
 
 struct mana_port_context {
 	struct mana_context	*ac;
-	struct ifnet		*ndev;
+	if_t			ndev;
 	struct ifmedia		media;
 
 	struct sx		apc_lock;
@@ -501,6 +521,9 @@ struct mana_port_context {
 	unsigned int		max_queues;
 	unsigned int		num_queues;
 
+	unsigned int		tx_queue_size;
+	unsigned int		rx_queue_size;
+
 	mana_handle_t		port_handle;
 
 	int			vport_use_count;
@@ -508,6 +531,9 @@ struct mana_port_context {
 	uint16_t		port_idx;
 
 	uint16_t		frame_size;
+	uint16_t		max_mtu;
+	uint16_t		min_mtu;
+	uint16_t		mtu;
 
 	bool			port_is_up;
 	bool			port_st_save; /* Saved port state */
@@ -533,9 +559,9 @@ struct mana_port_context {
 int mana_config_rss(struct mana_port_context *ac, enum TRI_STATE rx,
     bool update_hash, bool update_tab);
 
-int mana_alloc_queues(struct ifnet *ndev);
-int mana_attach(struct ifnet *ndev);
-int mana_detach(struct ifnet *ndev);
+int mana_alloc_queues(if_t ndev);
+int mana_attach(if_t ndev);
+int mana_detach(if_t ndev);
 
 int mana_probe(struct gdma_dev *gd);
 void mana_remove(struct gdma_dev *gd);
@@ -587,6 +613,11 @@ struct mana_query_device_cfg_resp {
 	uint16_t		max_num_vports;
 	uint16_t		reserved;
 	uint32_t		max_num_eqs;
+
+	/* response v2: */
+	uint16_t adapter_mtu;
+	uint16_t reserved2;
+	uint32_t reserved3;
 }; /* HW DATA */
 
 /* Query vPort Configuration */
@@ -687,6 +718,13 @@ struct mana_cfg_rx_steer_resp {
 #define MANA_MAX_NUM_QUEUES		16
 
 #define MANA_SHORT_VPORT_OFFSET_MAX	((1U << 8) - 1)
+
+#define MANA_IDX_NEXT(idx, size)	(((idx) + 1) & ((size) - 1))
+#define MANA_GET_SPACE(start_idx, end_idx, size)			\
+	(((end_idx) >= (start_idx)) ?					\
+	((end_idx) - (start_idx)) : ((size) - (start_idx) + (end_idx)))
+
+#define MANA_RX_REFILL_THRESH		256
 
 struct mana_tx_package {
 	struct gdma_wqe_request		wqe_req;

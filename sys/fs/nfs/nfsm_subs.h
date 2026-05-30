@@ -30,8 +30,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _NFS_NFSM_SUBS_H_
@@ -74,8 +72,7 @@ nfsm_build(struct nfsrv_descript *nd, int siz)
 	} else if ((nd->nd_flag & ND_EXTPG) != 0) {
 		if (siz > nd->nd_bextpgsiz) {
 			mb2 = mb_alloc_ext_plus_pages(PAGE_SIZE, M_WAITOK);
-			nd->nd_bpos = (char *)(void *)
-			    PHYS_TO_DMAP(mb2->m_epg_pa[0]);
+			nd->nd_bpos = PHYS_TO_DMAP(mb2->m_epg_pa[0]);
 			nd->nd_bextpg = 0;
 			nd->nd_bextpgsiz = PAGE_SIZE - siz;
 			nd->nd_mb->m_next = mb2;

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1995, David Greenman
  * Copyright (c) 2001 Jonathan Lemon <jlemon@freebsd.org>
@@ -30,8 +30,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Intel EtherExpress Pro/100B PCI Fast Ethernet driver
  */
@@ -433,7 +431,7 @@ fxp_attach(device_t dev)
 	uint32_t val;
 	uint16_t data;
 	u_char eaddr[ETHER_ADDR_LEN];
-	int error, flags, i, pmc, prefer_iomap;
+	int error, flags, i, prefer_iomap;
 
 	error = 0;
 	sc = device_get_softc(dev);
@@ -445,11 +443,6 @@ fxp_attach(device_t dev)
 	    fxp_serial_ifmedia_sts);
 
 	ifp = sc->ifp = if_gethandle(IFT_ETHER);
-	if (ifp == (void *)NULL) {
-		device_printf(dev, "can not if_alloc()\n");
-		error = ENOSPC;
-		goto fail;
-	}
 
 	/*
 	 * Enable bus mastering.
@@ -525,8 +518,7 @@ fxp_attach(device_t dev)
 	if (sc->revision >= FXP_REV_82558_A4 &&
 	    sc->revision != FXP_REV_82559S_A) {
 		data = sc->eeprom[FXP_EEPROM_MAP_ID];
-		if ((data & 0x20) != 0 &&
-		    pci_find_cap(sc->dev, PCIY_PMG, &pmc) == 0)
+		if ((data & 0x20) != 0 && pci_has_pm(sc->dev))
 			sc->flags |= FXP_FLAG_WOLCAP;
 	}
 
@@ -940,8 +932,6 @@ fxp_release(struct fxp_softc *sc)
 	FXP_LOCK_ASSERT(sc, MA_NOTOWNED);
 	KASSERT(sc->ih == NULL,
 	    ("fxp_release() called with intr handle still active"));
-	if (sc->miibus)
-		device_delete_child(sc->dev, sc->miibus);
 	bus_generic_detach(sc->dev);
 	ifmedia_removeall(&sc->sc_media);
 	if (sc->fxp_desc.cbl_list) {
@@ -1063,24 +1053,17 @@ fxp_suspend(device_t dev)
 {
 	struct fxp_softc *sc = device_get_softc(dev);
 	if_t ifp;
-	int pmc;
-	uint16_t pmstat;
 
 	FXP_LOCK(sc);
 
 	ifp = sc->ifp;
-	if (pci_find_cap(sc->dev, PCIY_PMG, &pmc) == 0) {
-		pmstat = pci_read_config(sc->dev, pmc + PCIR_POWER_STATUS, 2);
-		pmstat &= ~(PCIM_PSTAT_PME | PCIM_PSTAT_PMEENABLE);
-		if ((if_getcapenable(ifp) & IFCAP_WOL_MAGIC) != 0) {
-			/* Request PME. */
-			pmstat |= PCIM_PSTAT_PME | PCIM_PSTAT_PMEENABLE;
-			sc->flags |= FXP_FLAG_WOL;
-			/* Reconfigure hardware to accept magic frames. */
-			if_setdrvflagbits(ifp, 0, IFF_DRV_RUNNING);
-			fxp_init_body(sc, 0);
-		}
-		pci_write_config(sc->dev, pmc + PCIR_POWER_STATUS, pmstat, 2);
+	if ((if_getcapenable(ifp) & IFCAP_WOL_MAGIC) != 0) {
+		/* Request PME. */
+		pci_enable_pme(sc->dev);
+		sc->flags |= FXP_FLAG_WOL;
+		/* Reconfigure hardware to accept magic frames. */
+		if_setdrvflagbits(ifp, 0, IFF_DRV_RUNNING);
+		fxp_init_body(sc, 0);
 	}
 	fxp_stop(sc);
 
@@ -1099,17 +1082,11 @@ fxp_resume(device_t dev)
 {
 	struct fxp_softc *sc = device_get_softc(dev);
 	if_t ifp = sc->ifp;
-	int pmc;
-	uint16_t pmstat;
 
 	FXP_LOCK(sc);
 
-	if (pci_find_cap(sc->dev, PCIY_PMG, &pmc) == 0) {
+	if (pci_has_pm(sc->dev)) {
 		sc->flags &= ~FXP_FLAG_WOL;
-		pmstat = pci_read_config(sc->dev, pmc + PCIR_POWER_STATUS, 2);
-		/* Disable PME and clear PME status. */
-		pmstat &= ~PCIM_PSTAT_PMEENABLE;
-		pci_write_config(sc->dev, pmc + PCIR_POWER_STATUS, pmstat, 2);
 		if ((sc->flags & FXP_FLAG_WOLCAP) != 0)
 			CSR_WRITE_1(sc, FXP_CSR_PMDR,
 			    CSR_READ_1(sc, FXP_CSR_PMDR));
@@ -1379,7 +1356,7 @@ fxp_start_body(if_t ifp)
 		/*
 		 * Pass packet to bpf if there is a listener.
 		 */
-		if_bpfmtap(ifp, mb_head);
+		bpf_mtap_if(ifp, mb_head);
 	}
 
 	/*

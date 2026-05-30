@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1998 - 2008 Søren Schmidt <sos@FreeBSD.org>
  * All rights reserved.
@@ -26,9 +26,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/ata.h>
@@ -40,11 +37,11 @@ __FBSDID("$FreeBSD$");
 #include <sys/bus.h>
 #include <sys/bio.h>
 #include <sys/malloc.h>
+#include <sys/stdarg.h>
 #include <sys/sysctl.h>
 #include <sys/sema.h>
 #include <sys/taskqueue.h>
 #include <vm/uma.h>
-#include <machine/stdarg.h>
 #include <machine/resource.h>
 #include <machine/bus.h>
 #include <sys/rman.h>
@@ -73,7 +70,6 @@ static int ata_str2mode(const char *str);
 
 /* global vars */
 MALLOC_DEFINE(M_ATA, "ata_generic", "ATA driver generic layer");
-int (*ata_raid_ioctl_func)(u_long cmd, caddr_t data) = NULL;
 devclass_t ata_devclass;
 int ata_dma_check_80pin = 1;
 
@@ -430,7 +426,7 @@ void
 ata_udelay(int interval)
 {
     /* for now just use DELAY, the timer/sleep subsystems are not there yet */
-    if (1 || interval < (1000000/hz) || ata_delayed_attach)
+    if (1 || interval < (1000000/hz))
 	DELAY(interval);
     else
 	pause("ataslp", interval/(1000000/hz));
@@ -1180,8 +1176,7 @@ ataaction(struct cam_sim *sim, union ccb *ccb)
 		cpi->protocol = PROTO_ATA;
 		cpi->protocol_version = PROTO_VERSION_UNSPECIFIED;
 		cpi->maxio = ch->dma.max_iosize ? ch->dma.max_iosize : DFLTPHYS;
-		if (device_get_devclass(device_get_parent(parent)) ==
-		    devclass_find("pci")) {
+		if (is_pci_device(parent)) {
 			cpi->hba_vendor = pci_get_vendor(parent);
 			cpi->hba_device = pci_get_device(parent);
 			cpi->hba_subvendor = pci_get_subvendor(parent);

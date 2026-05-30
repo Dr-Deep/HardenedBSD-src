@@ -1,7 +1,4 @@
-#
-# $FreeBSD$
-#
-
+PACKAGE=	pmc
 PROG_CXX=	pmcstat
 MAN=	pmcstat.8
 

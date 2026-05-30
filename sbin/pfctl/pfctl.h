@@ -29,14 +29,20 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
  * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _PFCTL_H_
 #define _PFCTL_H_
 
 #include <libpfctl.h>
+
+#ifdef PFCTL_DEBUG
+#define DBGPRINT(...)	fprintf(stderr, __VA_ARGS__)
+#else
+#define DBGPRINT(...)	(void)(0)
+#endif
+
+extern struct pfctl_handle	*pfh;
 
 struct pfctl;
 
@@ -55,17 +61,56 @@ struct pfr_buffer {
 	    (var) != NULL;				\
 	    (var) = pfr_buf_next((buf), (var)))
 
-int	 pfr_get_fd(void);
-int	 pfr_clr_tables(struct pfr_table *, int *, int);
-int	 pfr_add_tables(struct pfr_table *, int, int *, int);
-int	 pfr_del_tables(struct pfr_table *, int, int *, int);
+RB_HEAD(pfr_ktablehead, pfr_ktable);
+struct pfr_ktable {
+	struct pfr_tstats	 pfrkt_ts;
+	RB_ENTRY(pfr_ktable)	 pfrkt_tree;
+	SLIST_ENTRY(pfr_ktable)	 pfrkt_workq;
+	struct radix_node_head	*pfrkt_ip4;
+	struct radix_node_head	*pfrkt_ip6;
+	struct pfr_ktable	*pfrkt_shadow;
+	struct pfr_ktable	*pfrkt_root;
+	struct pf_kruleset	*pfrkt_rs;
+	long			 pfrkt_larg;
+	int			 pfrkt_nflags;
+};
+#define pfrkt_t		pfrkt_ts.pfrts_t
+#define pfrkt_name	pfrkt_t.pfrt_name
+#define pfrkt_anchor	pfrkt_t.pfrt_anchor
+#define pfrkt_ruleset	pfrkt_t.pfrt_ruleset
+#define pfrkt_flags	pfrkt_t.pfrt_flags
+#define pfrkt_cnt	pfrkt_kts.pfrkts_cnt
+#define pfrkt_refcnt	pfrkt_kts.pfrkts_refcnt
+#define pfrkt_tzero	pfrkt_kts.pfrkts_tzero
+
+struct pfr_uktable {
+	struct pfr_ktable	pfrukt_kt;
+	struct pfr_buffer	pfrukt_addrs;
+	int			pfrukt_init_addr;
+	SLIST_ENTRY(pfr_uktable) pfrukt_entry;
+};
+
+#define pfrukt_t	pfrukt_kt.pfrkt_ts.pfrts_t
+#define pfrukt_name	pfrukt_kt.pfrkt_t.pfrt_name
+#define pfrukt_anchor	pfrukt_kt.pfrkt_t.pfrt_anchor
+
+extern struct pfr_ktablehead pfr_ktables;
+
+struct pfr_anchoritem {
+	SLIST_ENTRY(pfr_anchoritem)	 pfra_sle;
+	char				*pfra_anchorname;
+};
+
+SLIST_HEAD(pfr_anchors, pfr_anchoritem);
+
+int	 pfr_add_table(struct pfr_table *, int *, int);
+int	 pfr_del_table(struct pfr_table *, int *, int);
 int	 pfr_get_tables(struct pfr_table *, struct pfr_table *, int *, int);
-int	 pfr_get_tstats(struct pfr_table *, struct pfr_tstats *, int *, int);
-int	 pfr_clr_tstats(struct pfr_table *, int, int *, int);
+int	 pfr_clr_astats(struct pfr_table *, struct pfr_addr *, int, int *, int);
 int	 pfr_clr_addrs(struct pfr_table *, int *, int);
 int	 pfr_add_addrs(struct pfr_table *, struct pfr_addr *, int, int *, int);
 int	 pfr_del_addrs(struct pfr_table *, struct pfr_addr *, int, int *, int);
-int	 pfr_set_addrs(struct pfr_table *, struct pfr_addr *, int, int *,
+int	 pfr_set_addrs(struct pfr_table *, struct pfr_addr *, int,
 	    int *, int *, int *, int);
 int	 pfr_get_addrs(struct pfr_table *, struct pfr_addr *, int *, int);
 int	 pfr_get_astats(struct pfr_table *, struct pfr_astats *, int *, int);
@@ -77,19 +122,19 @@ int	 pfr_buf_add(struct pfr_buffer *, const void *);
 void	*pfr_buf_next(struct pfr_buffer *, const void *);
 int	 pfr_buf_grow(struct pfr_buffer *, int);
 int	 pfr_buf_load(struct pfr_buffer *, char *, int,
-	    int (*)(struct pfr_buffer *, char *, int));
-char	*pfr_strerror(int);
+	    int (*)(struct pfr_buffer *, char *, int, int), int);
+char	*pf_strerror(int);
 int	 pfi_get_ifaces(const char *, struct pfi_kif *, int *);
-int	 pfi_clr_istats(const char *, int *, int);
 
 void	 pfctl_print_title(char *);
-int	 pfctl_clear_tables(const char *, int);
-int	 pfctl_show_tables(const char *, int);
-int	 pfctl_command_tables(int, char *[], char *, const char *, char *,
+int	 pfctl_do_clear_tables(const char *, int);
+void	 pfctl_show_tables(const char *, int);
+int	 pfctl_table(int, char *[], char *, const char *, char *,
 	    const char *, int);
 int	 pfctl_show_altq(int, const char *, int, int);
-void	 warn_namespace_collision(const char *);
-int	 pfctl_show_ifaces(const char *, int);
+void	 warn_duplicate_tables(const char *, const char *);
+void	 pfctl_show_ifaces(const char *, int);
+void	pfctl_show_creators(int);
 FILE	*pfctl_fopen(const char *, const char *);
 
 #ifdef __FreeBSD__
@@ -121,10 +166,10 @@ void		 pfaltq_store(struct pf_altq *);
 char		*rate2str(double);
 
 void	 print_addr(struct pf_addr_wrap *, sa_family_t, int);
+void	 print_addr_str(sa_family_t, struct pf_addr *);
 void	 print_host(struct pf_addr *, u_int16_t p, sa_family_t, int);
 void	 print_seq(struct pfctl_state_peer *);
 void	 print_state(struct pfctl_state *, int);
-int	 unmask(struct pf_addr *, sa_family_t);
 
 int	 pfctl_cmdline_symset(char *);
 int	 pfctl_add_trans(struct pfr_buffer *, int, const char *);
@@ -150,5 +195,8 @@ void			 pf_remove_if_empty_eth_ruleset(
 void		 expand_label(char *, size_t, struct pfctl_rule *);
 
 const char *pfctl_proto2name(int);
+
+void	 pfctl_err(int, int, const char *, ...);
+void	 pfctl_errx(int, int, const char *, ...);
 
 #endif /* _PFCTL_H_ */

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2007 The DragonFly Project.  All rights reserved.
  *
  * This code is derived from software contributed to The DragonFly Project
@@ -32,7 +34,6 @@
  * SUCH DAMAGE.
  *
  * $DragonFly: src/sys/vfs/hammer/hammer_disk.h,v 1.55 2008/11/13 02:18:43 dillon Exp $
- * $FreeBSD$
  */
 
 #ifndef VFS_HAMMER_DISK_H_
@@ -910,7 +911,7 @@ typedef struct hammer_inode_data {
 } *hammer_inode_data_t;
 
 /*
- * Neither mtime nor atime upates are CRCd by the B-Tree element.
+ * Neither mtime nor atime updates are CRCd by the B-Tree element.
  * mtime updates have UNDO, atime updates do not.
  */
 #define HAMMER_INODE_CRCSIZE	\
@@ -1038,7 +1039,7 @@ typedef struct hammer_pseudofs_data *hammer_pseudofs_data_t;
  * Snapshot meta-data { Objid = HAMMER_OBJID_ROOT, Key = tid, rectype = SNAPSHOT }.
  *
  * Snapshot records replace the old <fs>/snapshots/<softlink> methodology.  Snapshot
- * records are mirrored but may be independantly managed once they are laid down on
+ * records are mirrored but may be independently managed once they are laid down on
  * a slave.
  *
  * NOTE: The b-tree key is signed, the tid is not, so callers must still sort the

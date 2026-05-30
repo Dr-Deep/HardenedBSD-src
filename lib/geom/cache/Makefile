@@ -1,7 +1,4 @@
-# $FreeBSD$
-
-PACKAGE=runtime
-.PATH: ${.CURDIR:H:H}/misc
+PACKAGE=geom
 
 GEOM_CLASS=	cache
 

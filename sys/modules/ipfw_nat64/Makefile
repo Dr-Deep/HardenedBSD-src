@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 .PATH: ${SRCTOP}/sys/netpfil/ipfw/nat64
 
 KMOD=	ipfw_nat64
@@ -10,5 +8,7 @@ SRCS+=	nat64stl.c nat64stl_control.c
 SRCS+=	opt_ipstealth.h
 
 CFLAGS+= -I${SRCTOP}/sys/contrib/ck/include
+
+TRIVIAL_VAR_AUTO_INIT_ZERO_SAFE=	yes
 
 .include <bsd.kmod.mk>

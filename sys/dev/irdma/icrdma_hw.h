@@ -1,7 +1,7 @@
 /*-
  * SPDX-License-Identifier: GPL-2.0 or Linux-OpenIB
  *
- * Copyright (c) 2019 - 2020 Intel Corporation
+ * Copyright (c) 2017 - 2026 Intel Corporation
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -31,7 +31,6 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-/*$FreeBSD$*/
 
 #ifndef ICRDMA_HW_H
 #define ICRDMA_HW_H
@@ -84,6 +83,16 @@
 #define PRTMAC_HSEC_CTL_TX_PAUSE_ENABLE_2	0x001e31a8
 #define PRTMAC_HSEC_CTL_TX_PAUSE_ENABLE_3	0x001e31aC
 
+#define CNV_PRTMAC_HSEC_CTL_RX_PAUSE_ENABLE_0	0x001e2180
+#define CNV_PRTMAC_HSEC_CTL_RX_PAUSE_ENABLE_1	0x001e2184
+#define CNV_PRTMAC_HSEC_CTL_RX_PAUSE_ENABLE_2	0x001e2188
+#define CNV_PRTMAC_HSEC_CTL_RX_PAUSE_ENABLE_3	0x001e218c
+
+#define CNV_PRTMAC_HSEC_CTL_TX_PAUSE_ENABLE_0	0x001e21a0
+#define CNV_PRTMAC_HSEC_CTL_TX_PAUSE_ENABLE_1	0x001e21a4
+#define CNV_PRTMAC_HSEC_CTL_TX_PAUSE_ENABLE_2	0x001e21a8
+#define CVN_PRTMAC_HSEC_CTL_TX_PAUSE_ENABLE_3	0x001e21ac
+
 #define PRTMAC_HSEC_CTL_RX_ENABLE_GPP_0		0x001e34c0
 #define PRTMAC_HSEC_CTL_RX_ENABLE_GPP_1		0x001e34c4
 #define PRTMAC_HSEC_CTL_RX_ENABLE_GPP_2		0x001e34c8
@@ -101,34 +110,37 @@
 
 #define ICRDMA_VF_DB_ADDR_OFFSET	(64 * 1024)
 
-/* CCQSTATUS */
-#define ICRDMA_CCQPSTATUS_CCQP_DONE_S	0
-#define ICRDMA_CCQPSTATUS_CCQP_DONE_M	(0x1ULL << ICRDMA_CCQPSTATUS_CCQP_DONE_S)
-#define ICRDMA_CCQPSTATUS_CCQP_ERR_S	31
-#define ICRDMA_CCQPSTATUS_CCQP_ERR_M	(0x1ULL << ICRDMA_CCQPSTATUS_CCQP_ERR_S)
-#define ICRDMA_CQPSQ_STAG_PDID_S	46
-#define ICRDMA_CQPSQ_STAG_PDID_M	(0x3ffffULL << ICRDMA_CQPSQ_STAG_PDID_S)
-#define ICRDMA_CQPSQ_CQ_CEQID_S		22
-#define ICRDMA_CQPSQ_CQ_CEQID_M		(0x3ffULL << ICRDMA_CQPSQ_CQ_CEQID_S)
-#define ICRDMA_CQPSQ_CQ_CQID_S		0
-#define ICRDMA_CQPSQ_CQ_CQID_M		(0x7ffffULL << ICRDMA_CQPSQ_CQ_CQID_S)
-#define ICRDMA_COMMIT_FPM_CQCNT_S	0
-#define ICRDMA_COMMIT_FPM_CQCNT_M	(0xfffffULL << ICRDMA_COMMIT_FPM_CQCNT_S)
+#define ICRDMA_CCQPSTATUS_CCQP_DONE_S 0
+#define ICRDMA_CCQPSTATUS_CCQP_DONE BIT_ULL(0)
+#define ICRDMA_CCQPSTATUS_CCQP_ERR_S 31
+#define ICRDMA_CCQPSTATUS_CCQP_ERR BIT_ULL(31)
+#define ICRDMA_CQPSQ_STAG_PDID_S 46
+#define ICRDMA_CQPSQ_STAG_PDID GENMASK_ULL(63, 46)
+#define ICRDMA_CQPSQ_CQ_CEQID_S 22
+#define ICRDMA_CQPSQ_CQ_CEQID GENMASK_ULL(31, 22)
+#define ICRDMA_CQPSQ_CQ_CQID_S 0
+#define ICRDMA_CQPSQ_CQ_CQID GENMASK_ULL(18, 0)
+#define ICRDMA_COMMIT_FPM_CQCNT_S 0
+#define ICRDMA_COMMIT_FPM_CQCNT GENMASK_ULL(19, 0)
+#define ICRDMA_CQPSQ_UPESD_HMCFNID_S 0
+#define ICRDMA_CQPSQ_UPESD_HMCFNID GENMASK_ULL(5, 0)
 
 enum icrdma_device_caps_const {
 	ICRDMA_MAX_WQ_FRAGMENT_COUNT		= 13,
 	ICRDMA_MAX_SGE_RD			= 13,
-
 	ICRDMA_MAX_STATS_COUNT = 128,
 
-	ICRDMA_MAX_IRD_SIZE			= 127,
-	ICRDMA_MAX_ORD_SIZE			= 255,
+	ICRDMA_MAX_IRD_SIZE			= 8,
+	ICRDMA_MAX_ORD_SIZE			= 8,
+	ICRDMA_MIN_WQ_SIZE			= 8 /* WQEs */,
+	ICRDMA_MAX_PUSH_PAGE_COUNT		= 256,
 
 };
 
 void icrdma_init_hw(struct irdma_sc_dev *dev);
 void irdma_init_config_check(struct irdma_config_check *cc,
 			     u8 traffic_class,
+			     u8 prio,
 			     u16 qs_handle);
 bool irdma_is_config_ok(struct irdma_config_check *cc, struct irdma_sc_vsi *vsi);
 void irdma_check_fc_for_tc_update(struct irdma_sc_vsi *vsi,

@@ -1,7 +1,7 @@
 /*-
  * Copyright (c) 2006 Elad Efrat <elad@NetBSD.org>
  * Copyright (c) 2013-2017, by Oliver Pinter <oliver.pinter@hardenedbsd.org>
- * Copyright (c) 2014-2022 by Shawn Webb <shawn.webb@hardenedbsd.org>
+ * Copyright (c) 2014-2025, by Shawn Webb <shawn.webb@hardenedbsd.org>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -32,7 +32,7 @@
 #ifndef	_SYS_PAX_H
 #define	_SYS_PAX_H
 
-#define	__HardenedBSD_version	1400003UL
+#define	__HardenedBSD_version	1600000UL
 
 #if defined(_KERNEL) || defined(_WANT_PRISON)
 typedef	uint32_t	pax_state_t;
@@ -56,15 +56,17 @@ struct hbsd_features {
 	struct hbsd_hardening {
 		pax_state_t	 procfs_harden;		/* (p) Harden procfs */
 		pax_state_t	 tpe;			/* (p) Trusted Path Execution */
-		/*
-		 * tpe_gid, tpe_all, tpe_negate, and tpe_root_owned are
-		 * unused, but planned.
-		 */
 		int		 tpe_gid;
 		int		 tpe_all;
 		int		 tpe_negate;
 		int		 tpe_root_owned;
+		int		 tpe_user_owned;
 		pax_state_t	 harden_rtld;
+		pax_state_t	 prohibit_ptrace_capsicum;
+		pax_state_t	 prohibit_ptrace_syscall;
+		pax_state_t	 harden_tty;
+		pax_state_t	 harden_shm;
+		pax_state_t	 elf_pie_only;
 	} hardening;
 	struct hbsd_log {
 		pax_state_t	log;		/* (p) Per-jail logging status */
@@ -235,11 +237,27 @@ int pax_hardening_init_prison(struct prison *pr, struct vfsoptlist *opts);
 #define	pax_hardening_init_prison(pr, opts)	({ 0; })
 #endif
 int pax_procfs_harden(struct thread *td);
-int pax_enforce_tpe(struct thread *, struct vnode *, const char *);
+bool pax_ptrace_capsicum_prohibit(struct proc *p);
+int pax_ptrace_syscall_prohibit(struct thread *td);
+int pax_harden_tty(struct thread *td);
+int pax_harden_shm(struct thread *td);
 pax_flag_t pax_hardening_setup_flags(struct image_params *, struct thread *,
     pax_flag_t);
 
 bool pax_insecure_kmod(void);
+bool pax_kmod_load_disabled(void);
+
+/*
+ * Trusted Path Execution (TPE)
+ */
+#ifdef PAX_HARDENING
+int pax_tpe_init_prison(struct prison *pr, struct vfsoptlist *opts);
+#else
+#define	pax_tpe_init_prison(pr, opts)	({ 0; })
+#endif
+int pax_enforce_tpe(struct thread *, struct vnode *, const char *);
+pax_flag_t pax_tpe_setup_flags(struct image_params *, struct thread *,
+    pax_flag_t);
 
 #endif /* _KERNEL */
 
@@ -259,6 +277,10 @@ bool pax_insecure_kmod(void);
 #define PAX_NOTE_FORBIDKMOD	0x00002000
 #define PAX_NOTE_TPE		0x00004000
 #define PAX_NOTE_NOTPE		0x00008000
+#define PAX_NOTE_HARDEN_SHM	0x00010000
+#define PAX_NOTE_NOHARDEN_SHM	0x00020000
+#define PAX_NOTE_PROHIBIT_PTRACE_CAPSICUM	0x00040000
+#define PAX_NOTE_NOPROHIBIT_PTRACE_CAPSICUM	0x00080000
 
 #define	PAX_NOTE_RESERVED0	0x40000000
 #define	PAX_NOTE_PREFER_ACL	0x80000000
@@ -266,12 +288,15 @@ bool pax_insecure_kmod(void);
 #define PAX_NOTE_ALL_ENABLED	\
     (PAX_NOTE_PAGEEXEC | PAX_NOTE_MPROTECT | PAX_NOTE_SEGVGUARD | \
     PAX_NOTE_ASLR | PAX_NOTE_SHLIBRANDOM | PAX_NOTE_DISALLOWMAP32BIT | \
-    PAX_NOTE_PERMITKMOD | PAX_NOTE_TPE)
+    PAX_NOTE_PERMITKMOD | PAX_NOTE_TPE | PAX_NOTE_HARDEN_SHM | \
+    PAX_NOTE_PROHIBIT_PTRACE_CAPSICUM)
 #define PAX_NOTE_ALL_DISABLED	\
     (PAX_NOTE_NOPAGEEXEC | PAX_NOTE_NOMPROTECT | \
     PAX_NOTE_NOSEGVGUARD | PAX_NOTE_NOASLR | PAX_NOTE_NOSHLIBRANDOM | \
-    PAX_NOTE_NODISALLOWMAP32BIT | PAX_NOTE_FORBIDKMOD | PAX_NOTE_NOTPE)
-#define PAX_NOTE_ALL	(PAX_NOTE_ALL_ENABLED | PAX_NOTE_ALL_DISABLED | PAX_NOTE_PREFER_ACL)
+    PAX_NOTE_NODISALLOWMAP32BIT | PAX_NOTE_FORBIDKMOD | PAX_NOTE_NOTPE | \
+    PAX_NOTE_NOHARDEN_SHM | PAX_NOTE_NOPROHIBIT_PTRACE_CAPSICUM)
+#define PAX_NOTE_ALL	(PAX_NOTE_ALL_ENABLED | PAX_NOTE_ALL_DISABLED | \
+    PAX_NOTE_PREFER_ACL)
 
 #define	PAX_HARDENING_SHLIBRANDOM	0x00000100
 #define	PAX_HARDENING_NOSHLIBRANDOM	0x00000200

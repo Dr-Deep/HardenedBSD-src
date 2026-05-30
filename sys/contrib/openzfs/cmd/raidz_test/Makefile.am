@@ -1,5 +1,6 @@
+# SPDX-License-Identifier: CDDL-1.0
 raidz_test_CFLAGS   = $(AM_CFLAGS)   $(KERNEL_CFLAGS)
-raidz_test_CPPFLAGS = $(AM_CPPFLAGS) $(FORCEDEBUG_CPPFLAGS)
+raidz_test_CPPFLAGS = $(AM_CPPFLAGS) $(LIBZPOOL_CPPFLAGS)
 
 bin_PROGRAMS    += raidz_test
 CPPCHECKTARGETS += raidz_test

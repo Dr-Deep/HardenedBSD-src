@@ -1,4 +1,5 @@
 #!/bin/ksh -p
+# SPDX-License-Identifier: CDDL-1.0
 #
 # CDDL HEADER START
 #
@@ -33,6 +34,6 @@
 #	This option should make raidz_test to return non 0.
 #
 
-log_mustnot raidz_test -T
+log_mustnot raidz_test -Tv
 
 log_pass "raidz_test detects errors as expected."

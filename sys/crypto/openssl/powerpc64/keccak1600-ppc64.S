@@ -1,4 +1,3 @@
-/* $FreeBSD$ */
 /* Do not modify. This file is auto-generated from keccak1600-ppc64.pl. */
 .abiversion	2
 .text
@@ -299,25 +298,24 @@ KeccakF1600:
 .byte	0,12,4,1,0x80,18,1,0
 .long	0
 .size	KeccakF1600,.-KeccakF1600
-
 .type	dword_le_load,@function
 .align	5
 dword_le_load:
 .localentry	dword_le_load,0
 
-	lbzu	0,1(3)
-	lbzu	4,1(3)
-	lbzu	5,1(3)
+	lbz	0,1(3)
+	lbz	4,2(3)
+	lbz	5,3(3)
 	insrdi	0,4,8,48
-	lbzu	4,1(3)
+	lbz	4,4(3)
 	insrdi	0,5,8,40
-	lbzu	5,1(3)
+	lbz	5,5(3)
 	insrdi	0,4,8,32
-	lbzu	4,1(3)
+	lbz	4,6(3)
 	insrdi	0,5,8,24
-	lbzu	5,1(3)
+	lbz	5,7(3)
 	insrdi	0,4,8,16
-	lbzu	4,1(3)
+	lbzu	4,8(3)
 	insrdi	0,5,8,8
 	insrdi	0,4,8,0
 	blr	
@@ -325,7 +323,6 @@ dword_le_load:
 .byte	0,12,0x14,0,0,0,1,0
 .long	0
 .size	dword_le_load,.-dword_le_load
-
 .globl	SHA3_absorb
 .type	SHA3_absorb,@function
 .type	SHA3_absorb,@function
@@ -572,6 +569,8 @@ SHA3_squeeze:
 	subi	29,4,1
 	mr	30,5
 	mr	31,6
+	cmplwi	7,0
+	bne	.Lnext_block
 	b	.Loop_squeeze
 
 .align	4
@@ -580,21 +579,21 @@ SHA3_squeeze:
 	cmpldi	30,8
 	blt	.Lsqueeze_tail
 
-	stbu	0,1(29)
+	stb	0,1(29)
 	srdi	0,0,8
-	stbu	0,1(29)
+	stb	0,2(29)
 	srdi	0,0,8
-	stbu	0,1(29)
+	stb	0,3(29)
 	srdi	0,0,8
-	stbu	0,1(29)
+	stb	0,4(29)
 	srdi	0,0,8
-	stbu	0,1(29)
+	stb	0,5(29)
 	srdi	0,0,8
-	stbu	0,1(29)
+	stb	0,6(29)
 	srdi	0,0,8
-	stbu	0,1(29)
+	stb	0,7(29)
 	srdi	0,0,8
-	stbu	0,1(29)
+	stbu	0,8(29)
 
 	subic.	30,30,8
 	beq	.Lsqueeze_done
@@ -602,6 +601,7 @@ SHA3_squeeze:
 	subic.	6,6,8
 	bgt	.Loop_squeeze
 
+.Lnext_block:
 	mr	3,28
 	bl	KeccakF1600
 	subi	3,28,8

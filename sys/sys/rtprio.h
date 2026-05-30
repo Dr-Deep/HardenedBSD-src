@@ -29,13 +29,12 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _SYS_RTPRIO_H_
 #define _SYS_RTPRIO_H_
 
+#include <sys/_types.h>
 #include <sys/priority.h>
 
 /*
@@ -73,8 +72,8 @@
  * Scheduling class information.
  */
 struct rtprio {
-	u_short type;			/* scheduling class */
-	u_short prio;
+	unsigned short type;	/* scheduling class */
+	unsigned short prio;
 };
 
 #ifdef _KERNEL
@@ -88,8 +87,8 @@ void	pri_to_rtp(struct thread *, struct rtprio *);
 #include <sys/cdefs.h>
 
 __BEGIN_DECLS
-int	rtprio(int, pid_t, struct rtprio *);
-int	rtprio_thread(int, lwpid_t, struct rtprio *);
+int	rtprio(int, __pid_t, struct rtprio *);
+int	rtprio_thread(int, __lwpid_t, struct rtprio *);
 __END_DECLS
 #endif	/* !_KERNEL */
 #endif	/* !_SYS_RTPRIO_H_ */

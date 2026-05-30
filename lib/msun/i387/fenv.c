@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2004-2005 David Schultz <das@FreeBSD.ORG>
  * All rights reserved.
@@ -24,20 +24,12 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
-#include <sys/cdefs.h>
 #include <sys/types.h>
 #include <machine/npx.h>
 
-#define	__fenv_static
 #include "fenv.h"
-
-#ifdef __GNUC_GNU_INLINE__
-#error "This file must be compiled with C99 'inline' semantics"
-#endif
 
 const fenv_t __fe_dfl_env = {
 	__INITIAL_NPXCW__,
@@ -91,8 +83,17 @@ __test_sse(void)
 	return (0);
 }
 
-extern inline int feclearexcept(int __excepts);
-extern inline int fegetexceptflag(fexcept_t *__flagp, int __excepts);
+int
+(feclearexcept)(int excepts)
+{
+	return (__feclearexcept_int(excepts));
+}
+
+int
+(fegetexceptflag)(fexcept_t *flagp, int excepts)
+{
+	return (__fegetexceptflag_int(flagp, excepts));
+}
 
 int
 fesetexceptflag(const fexcept_t *flagp, int excepts)
@@ -125,9 +126,23 @@ feraiseexcept(int excepts)
 	return (0);
 }
 
-extern inline int fetestexcept(int __excepts);
-extern inline int fegetround(void);
-extern inline int fesetround(int __round);
+int
+(fetestexcept)(int excepts)
+{
+	return (__fetestexcept_int(excepts));
+}
+
+int
+(fegetround)(void)
+{
+	return (__fegetround_int());
+}
+
+int
+(fesetround)(int round)
+{
+	return (__fesetround_int(round));
+}
 
 int
 fegetenv(fenv_t *envp)
@@ -164,7 +179,11 @@ feholdexcept(fenv_t *envp)
 	return (0);
 }
 
-extern inline int fesetenv(const fenv_t *__envp);
+int
+(fesetenv)(const fenv_t *envp)
+{
+	return (__fesetenv_int(envp));
+}
 
 int
 feupdateenv(const fenv_t *envp)

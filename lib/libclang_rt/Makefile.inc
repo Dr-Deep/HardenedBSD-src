@@ -1,7 +1,6 @@
-# $FreeBSD$
-
 .include <bsd.compiler.mk>
 
+PACKAGE=	clang
 CRTSRC=		${SRCTOP}/contrib/llvm-project/compiler-rt
 .include "compiler-rt-vars.mk"
 
@@ -11,7 +10,6 @@ LIBDIR=		${SANITIZER_LIBDIR}
 SHLIBDIR=	${LIBDIR}
 
 NO_PIC=
-MK_PROFILE=	no
 MK_LTOLIB=	no
 MK_ASAN:=	no
 MK_SSP=		no
@@ -36,4 +34,4 @@ CXXFLAGS+=	-fvisibility-inlines-hidden
 CXXFLAGS+=	-fvisibility=hidden
 CFLAGS+=	-I${CRTSRC}/include
 CFLAGS+=	-I${CRTSRC}/lib
-CXXSTD=		c++14
+CXXSTD=		c++17

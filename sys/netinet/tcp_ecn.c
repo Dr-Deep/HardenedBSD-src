@@ -46,8 +46,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *      @(#)tcp_ecn.c 8.12 (Berkeley) 5/24/95
  */
 
 /*
@@ -56,12 +54,8 @@
  * https://tools.ietf.org/html/draft-ietf-tcpm-accurate-ecn-09
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_inet.h"
 #include "opt_inet6.h"
-#include "opt_tcpdebug.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -98,10 +92,25 @@ __FBSDID("$FreeBSD$");
 #include <netinet/tcp_var.h>
 #include <netinet/tcp_syncache.h>
 #include <netinet/tcp_timer.h>
-#include <netinet6/tcp6_var.h>
 #include <netinet/tcpip.h>
 #include <netinet/tcp_ecn.h>
 
+static inline int  tcp_ecn_get_ace(uint16_t);
+static inline void tcp_ecn_set_ace(uint16_t *, uint32_t);
+
+static SYSCTL_NODE(_net_inet_tcp, OID_AUTO, ecn,
+    CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "TCP ECN");
+
+VNET_DEFINE(int, tcp_do_ecn) = 2;
+SYSCTL_INT(_net_inet_tcp_ecn, OID_AUTO, enable,
+    CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(tcp_do_ecn), 0,
+    "TCP ECN support");
+
+VNET_DEFINE(int, tcp_ecn_maxretries) = 1;
+SYSCTL_INT(_net_inet_tcp_ecn, OID_AUTO, maxretries,
+    CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(tcp_ecn_maxretries), 0,
+    "Max retries before giving up on ECN");
 
 /*
  * Process incoming SYN,ACK packet
@@ -109,22 +118,27 @@ __FBSDID("$FreeBSD$");
 void
 tcp_ecn_input_syn_sent(struct tcpcb *tp, uint16_t thflags, int iptos)
 {
-
-	if (V_tcp_do_ecn == 0)
+	switch (V_tcp_do_ecn) {
+	case 0:
 		return;
-	if ((V_tcp_do_ecn == 1) ||
-	    (V_tcp_do_ecn == 2)) {
+	case 1:
+		/* FALLTHROUGH */
+	case 2:
 		/* RFC3168 ECN handling */
 		if ((thflags & (TH_CWR | TH_ECE)) == (0 | TH_ECE)) {
 			tp->t_flags2 |= TF2_ECN_PERMIT;
+			tp->t_flags2 &= ~TF2_ACE_PERMIT;
 			TCPSTAT_INC(tcps_ecn_shs);
 		}
-	} else
-	/* decoding Accurate ECN according to table in section 3.1.1 */
-	if ((V_tcp_do_ecn == 3) ||
-	    (V_tcp_do_ecn == 4)) {
+		break;
+	case 3:
+		/* FALLTHROUGH */
+	case 4:
 		/*
-		 * on the SYN,ACK, process the AccECN
+		 * Decoding Accurate ECN according to
+		 * table in section 3.1.1
+		 *
+		 * On the SYN,ACK, process the AccECN
 		 * flags indicating the state the SYN
 		 * was delivered.
 		 * Reactions to Path ECN mangling can
@@ -134,11 +148,13 @@ tcp_ecn_input_syn_sent(struct tcpcb *tp, uint16_t thflags, int iptos)
 		/* RFC3168 SYN */
 		case (0|0|TH_ECE):
 			tp->t_flags2 |= TF2_ECN_PERMIT;
+			tp->t_flags2 &= ~TF2_ACE_PERMIT;
 			TCPSTAT_INC(tcps_ecn_shs);
 			break;
 		/* non-ECT SYN */
 		case (0|TH_CWR|0):
 			tp->t_flags2 |= TF2_ACE_PERMIT;
+			tp->t_flags2 &= ~TF2_ECN_PERMIT;
 			tp->t_scep = 5;
 			TCPSTAT_INC(tcps_ecn_shs);
 			TCPSTAT_INC(tcps_ace_nect);
@@ -146,6 +162,7 @@ tcp_ecn_input_syn_sent(struct tcpcb *tp, uint16_t thflags, int iptos)
 		/* ECT0 SYN */
 		case (TH_AE|0|0):
 			tp->t_flags2 |= TF2_ACE_PERMIT;
+			tp->t_flags2 &= ~TF2_ECN_PERMIT;
 			tp->t_scep = 5;
 			TCPSTAT_INC(tcps_ecn_shs);
 			TCPSTAT_INC(tcps_ace_ect0);
@@ -153,6 +170,7 @@ tcp_ecn_input_syn_sent(struct tcpcb *tp, uint16_t thflags, int iptos)
 		/* ECT1 SYN */
 		case (0|TH_CWR|TH_ECE):
 			tp->t_flags2 |= TF2_ACE_PERMIT;
+			tp->t_flags2 &= ~TF2_ECN_PERMIT;
 			tp->t_scep = 5;
 			TCPSTAT_INC(tcps_ecn_shs);
 			TCPSTAT_INC(tcps_ace_ect1);
@@ -160,6 +178,7 @@ tcp_ecn_input_syn_sent(struct tcpcb *tp, uint16_t thflags, int iptos)
 		/* CE SYN */
 		case (TH_AE|TH_CWR|0):
 			tp->t_flags2 |= TF2_ACE_PERMIT;
+			tp->t_flags2 &= ~TF2_ECN_PERMIT;
 			tp->t_scep = 6;
 			/*
 			 * reduce the IW to 2 MSS (to
@@ -171,6 +190,7 @@ tcp_ecn_input_syn_sent(struct tcpcb *tp, uint16_t thflags, int iptos)
 			TCPSTAT_INC(tcps_ace_nect);
 			break;
 		default:
+			tp->t_flags2 &= ~(TF2_ECN_PERMIT | TF2_ACE_PERMIT);
 			break;
 		}
 		/*
@@ -194,6 +214,7 @@ tcp_ecn_input_syn_sent(struct tcpcb *tp, uint16_t thflags, int iptos)
 			tp->t_rcep = 0b110;
 			break;
 		}
+		break;
 	}
 }
 
@@ -205,31 +226,38 @@ tcp_ecn_input_parallel_syn(struct tcpcb *tp, uint16_t thflags, int iptos)
 {
 	if (thflags & TH_ACK)
 		return;
-	if (V_tcp_do_ecn == 0)
+	switch (V_tcp_do_ecn) {
+	case 0:
 		return;
-	if ((V_tcp_do_ecn == 1) ||
-	    (V_tcp_do_ecn == 2)) {
+	case 1:
+		/* FALLTHROUGH */
+	case 2:
 		/* RFC3168 ECN handling */
 		if ((thflags & (TH_CWR | TH_ECE)) == (TH_CWR | TH_ECE)) {
 			tp->t_flags2 |= TF2_ECN_PERMIT;
+			tp->t_flags2 &= ~TF2_ACE_PERMIT;
 			tp->t_flags2 |= TF2_ECN_SND_ECE;
 			TCPSTAT_INC(tcps_ecn_shs);
 		}
-	} else
-	if ((V_tcp_do_ecn == 3) ||
-	    (V_tcp_do_ecn == 4)) {
+		break;
+	case 3:
+		/* FALLTHROUGH */
+	case 4:
 		/* AccECN handling */
 		switch (thflags & (TH_AE | TH_CWR | TH_ECE)) {
 		default:
 		case (0|0|0):
+			tp->t_flags2 &= ~(TF2_ECN_PERMIT | TF2_ACE_PERMIT);
 			break;
 		case (0|TH_CWR|TH_ECE):
 			tp->t_flags2 |= TF2_ECN_PERMIT;
+			tp->t_flags2 &= ~TF2_ACE_PERMIT;
 			tp->t_flags2 |= TF2_ECN_SND_ECE;
 			TCPSTAT_INC(tcps_ecn_shs);
 			break;
 		case (TH_AE|TH_CWR|TH_ECE):
 			tp->t_flags2 |= TF2_ACE_PERMIT;
+			tp->t_flags2 &= ~TF2_ECN_PERMIT;
 			TCPSTAT_INC(tcps_ecn_shs);
 			/*
 			 * Set the AccECN Codepoints on
@@ -254,6 +282,7 @@ tcp_ecn_input_parallel_syn(struct tcpcb *tp, uint16_t thflags, int iptos)
 			}
 			break;
 		}
+		break;
 	}
 }
 
@@ -261,30 +290,33 @@ tcp_ecn_input_parallel_syn(struct tcpcb *tp, uint16_t thflags, int iptos)
  * TCP ECN processing.
  */
 int
-tcp_ecn_input_segment(struct tcpcb *tp, uint16_t thflags, int iptos)
+tcp_ecn_input_segment(struct tcpcb *tp, uint16_t thflags, int tlen, int pkts, int iptos)
 {
-	int delta_ace = 0;
+	int delta_cep = 0;
+
+	switch (iptos & IPTOS_ECN_MASK) {
+	case IPTOS_ECN_CE:
+		TCPSTAT_INC(tcps_ecn_rcvce);
+		break;
+	case IPTOS_ECN_ECT0:
+		TCPSTAT_INC(tcps_ecn_rcvect0);
+		break;
+	case IPTOS_ECN_ECT1:
+		TCPSTAT_INC(tcps_ecn_rcvect1);
+		break;
+	}
 
 	if (tp->t_flags2 & (TF2_ECN_PERMIT | TF2_ACE_PERMIT)) {
-		switch (iptos & IPTOS_ECN_MASK) {
-		case IPTOS_ECN_CE:
-			TCPSTAT_INC(tcps_ecn_ce);
-			break;
-		case IPTOS_ECN_ECT0:
-			TCPSTAT_INC(tcps_ecn_ect0);
-			break;
-		case IPTOS_ECN_ECT1:
-			TCPSTAT_INC(tcps_ecn_ect1);
-			break;
-		}
-
 		if (tp->t_flags2 & TF2_ACE_PERMIT) {
 			if ((iptos & IPTOS_ECN_MASK) == IPTOS_ECN_CE)
 				tp->t_rcep += 1;
 			if (tp->t_flags2 & TF2_ECN_PERMIT) {
-				delta_ace = (tcp_ecn_get_ace(thflags) + 8 -
-					    (tp->t_scep & 0x07)) & 0x07;
-				tp->t_scep += delta_ace;
+				delta_cep = (tcp_ecn_get_ace(thflags) + 8 -
+					    (tp->t_scep & 7)) & 7;
+				if (delta_cep < pkts)
+					delta_cep = pkts -
+					    ((pkts - delta_cep) & 7);
+				tp->t_scep += delta_cep;
 			} else {
 				/*
 				 * process the final ACK of the 3WHS
@@ -293,10 +325,10 @@ tcp_ecn_input_segment(struct tcpcb *tp, uint16_t thflags, int iptos)
 				switch (tcp_ecn_get_ace(thflags)) {
 				case 0b010:
 					/* nonECT SYN or SYN,ACK */
-					/* Fallthrough */
+					/* FALLTHROUGH */
 				case 0b011:
 					/* ECT1 SYN or SYN,ACK */
-					/* Fallthrough */
+					/* FALLTHROUGH */
 				case 0b100:
 					/* ECT0 SYN or SYN,ACK */
 					tp->t_scep = 5;
@@ -315,11 +347,16 @@ tcp_ecn_input_segment(struct tcpcb *tp, uint16_t thflags, int iptos)
 			}
 		} else {
 			/* RFC3168 ECN handling */
-			if (thflags & TH_ECE)
-				delta_ace = 1;
+			if ((thflags & (TH_SYN | TH_ECE)) == TH_ECE) {
+				delta_cep = 1;
+				tp->t_scep++;
+			}
 			if (thflags & TH_CWR) {
 				tp->t_flags2 &= ~TF2_ECN_SND_ECE;
-				tp->t_flags |= TF_ACKNOW;
+				if ((tp->t_state == TCPS_ESTABLISHED) ||
+				    (tp->t_state == TCPS_FIN_WAIT_1) ||
+				    (tp->t_state == TCPS_FIN_WAIT_2))
+					tp->t_flags |= TF_ACKNOW;
 			}
 			if ((iptos & IPTOS_ECN_MASK) == IPTOS_ECN_CE)
 				tp->t_flags2 |= TF2_ECN_SND_ECE;
@@ -329,7 +366,7 @@ tcp_ecn_input_segment(struct tcpcb *tp, uint16_t thflags, int iptos)
 		cc_ecnpkt_handler_flags(tp, thflags, iptos);
 	}
 
-	return delta_ace;
+	return delta_cep;
 }
 
 /*
@@ -349,8 +386,7 @@ tcp_ecn_output_syn_sent(struct tcpcb *tp)
 				thflags = TH_ECE|TH_CWR;
 		} else
 			thflags = TH_ECE|TH_CWR;
-	} else
-	if (V_tcp_do_ecn == 3) {
+	} else if (V_tcp_do_ecn == 3) {
 		/* Send an Accurate ECN setup <SYN> packet */
 		if (tp->t_rxtshift >= 1) {
 			if (tp->t_rxtshift <= V_tcp_ecn_maxretries)
@@ -383,20 +419,19 @@ tcp_ecn_output_established(struct tcpcb *tp, uint16_t *thflags, int len, bool rx
 		    !((tp->t_flags & TF_FORCEDATA) && len == 1));
 	/* RFC3168 ECN marking, only new data segments */
 	if (newdata) {
-		ipecn = IPTOS_ECN_ECT0;
-		TCPSTAT_INC(tcps_ecn_ect0);
+		if (tp->t_flags2 & TF2_ECN_USE_ECT1) {
+			ipecn = IPTOS_ECN_ECT1;
+			TCPSTAT_INC(tcps_ecn_sndect1);
+		} else {
+			ipecn = IPTOS_ECN_ECT0;
+			TCPSTAT_INC(tcps_ecn_sndect0);
+		}
 	}
 	/*
 	 * Reply with proper ECN notifications.
 	 */
 	if (tp->t_flags2 & TF2_ACE_PERMIT) {
-		*thflags &= ~(TH_AE|TH_CWR|TH_ECE);
-		if (tp->t_rcep & 0x01)
-			*thflags |= TH_ECE;
-		if (tp->t_rcep & 0x02)
-			*thflags |= TH_CWR;
-		if (tp->t_rcep & 0x04)
-			*thflags |= TH_AE;
+		tcp_ecn_set_ace(thflags, tp->t_rcep);
 		if (!(tp->t_flags2 & TF2_ECN_PERMIT)) {
 			/*
 			 * here we process the final
@@ -435,9 +470,9 @@ tcp_ecn_syncache_socket(struct tcpcb *tp, struct syncache *sc)
 			tp->t_flags2 |= TF2_ECN_PERMIT;
 			break;
 		case SCF_ACE_N:
-			/* Fallthrough */
+			/* FALLTHROUGH */
 		case SCF_ACE_0:
-			/* Fallthrough */
+			/* FALLTHROUGH */
 		case SCF_ACE_1:
 			tp->t_flags2 |= TF2_ACE_PERMIT;
 			tp->t_scep = 5;
@@ -447,9 +482,6 @@ tcp_ecn_syncache_socket(struct tcpcb *tp, struct syncache *sc)
 			tp->t_flags2 |= TF2_ACE_PERMIT;
 			tp->t_scep = 6;
 			tp->t_rcep = 6;
-			break;
-		/* undefined SCF codepoint */
-		default:
 			break;
 		}
 	}
@@ -463,6 +495,18 @@ int
 tcp_ecn_syncache_add(uint16_t thflags, int iptos)
 {
 	int scflags = 0;
+
+	switch (iptos & IPTOS_ECN_MASK) {
+	case IPTOS_ECN_CE:
+		TCPSTAT_INC(tcps_ecn_rcvce);
+		break;
+	case IPTOS_ECN_ECT0:
+		TCPSTAT_INC(tcps_ecn_rcvect0);
+		break;
+	case IPTOS_ECN_ECT1:
+		TCPSTAT_INC(tcps_ecn_rcvect1);
+		break;
+	}
 
 	switch (thflags & (TH_AE|TH_CWR|TH_ECE)) {
 	/* no ECN */
@@ -551,24 +595,20 @@ tcp_ecn_syncache_respond(uint16_t thflags, struct syncache *sc)
 			TCPSTAT_INC(tcps_ecn_shs);
 			TCPSTAT_INC(tcps_ace_ce);
 			break;
-		/* undefined SCF codepoint */
-		default:
-			break;
 		}
 	}
 	return thflags;
 }
 
-int
+static inline int
 tcp_ecn_get_ace(uint16_t thflags)
 {
-	int ace = 0;
+	return ((thflags & (TH_AE|TH_CWR|TH_ECE)) >> TH_ACE_SHIFT);
+}
 
-	if (thflags & TH_ECE)
-		ace += 1;
-	if (thflags & TH_CWR)
-		ace += 2;
-	if (thflags & TH_AE)
-		ace += 4;
-	return ace;
+static inline void
+tcp_ecn_set_ace(uint16_t *thflags, uint32_t t_rcep)
+{
+	*thflags &= ~(TH_AE|TH_CWR|TH_ECE);
+	*thflags |= ((t_rcep << TH_ACE_SHIFT) & (TH_AE|TH_CWR|TH_ECE));
 }

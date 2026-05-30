@@ -24,9 +24,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/gpio.h>
 #include <sys/kernel.h>
@@ -163,7 +160,7 @@ gpiopps_detach(device_t dev)
 	if (sc->ires != NULL)
 		bus_release_resource(dev, SYS_RES_IRQ, sc->irid, sc->ires);
 	if (sc->gpin != NULL)
-		gpiobus_release_pin(GPIO_GET_BUS(sc->gpin->dev), sc->gpin->pin);
+		gpio_pin_release(sc->gpin);
 	return (0);
 }
 
@@ -221,7 +218,7 @@ gpiopps_fdt_attach(device_t dev)
 	 * Transform our 'gpios' property into an interrupt resource and set up
 	 * the interrupt.
 	 */
-	if ((sc->ires = gpio_alloc_intr_resource(dev, &sc->irid, RF_ACTIVE,
+	if ((sc->ires = gpio_alloc_intr_resource(dev, sc->irid, RF_ACTIVE,
 	    sc->gpin, edge)) == NULL) {
 		device_printf(dev, "Cannot allocate an IRQ for the GPIO\n");
 		gpiopps_detach(dev);

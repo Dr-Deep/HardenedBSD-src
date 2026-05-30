@@ -53,8 +53,6 @@
  * or the SD Card Association to disclose or distribute any technical
  * information, know-how or other confidential information to any third party.
  *
- *
- * $FreeBSD$
  */
 
 #ifndef _SDIO_SUBR_H_
@@ -97,6 +95,8 @@ int sdio_set_block_size(struct sdio_func *, uint16_t);
 
 uint8_t sdio_read_1(struct sdio_func *, uint32_t, int *);
 void sdio_write_1(struct sdio_func *, uint32_t, uint8_t, int *);
+uint16_t sdio_read_2(struct sdio_func *, uint32_t, int *);
+void sdio_write_2(struct sdio_func *, uint32_t, uint16_t, int *);
 uint32_t sdio_read_4(struct sdio_func *, uint32_t, int *);
 void sdio_write_4(struct sdio_func *, uint32_t, uint32_t, int *);
 

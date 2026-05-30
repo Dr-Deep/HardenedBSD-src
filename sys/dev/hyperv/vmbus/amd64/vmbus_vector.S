@@ -22,8 +22,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include "assym.inc"
@@ -42,3 +40,5 @@
 	movq	%rsp, %rdi
 	call	vmbus_handle_intr
 	jmp	doreti
+
+	.section .note.GNU-stack,"",%progbits

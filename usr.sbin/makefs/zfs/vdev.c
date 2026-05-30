@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2022 The FreeBSD Foundation
  *
@@ -28,6 +28,7 @@
  * SUCH DAMAGE.
  */
 
+#include <sys/param.h>
 #include <assert.h>
 #include <fcntl.h>
 #include <stdlib.h>
@@ -38,11 +39,11 @@
 
 #include "zfs.h"
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wunused-function"
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 #include "zfs/fletcher.c"
 #include "zfs/sha256.c"
-#pragma clang diagnostic pop
+#pragma GCC diagnostic pop
 
 static void
 blkptr_set(blkptr_t *bp, off_t off, off_t size, uint8_t dntype, uint8_t level,
@@ -199,7 +200,7 @@ vdev_label_write(zfs_opt_t *zfs, int ind, const vdev_label_t *labelp)
 	 * per sector; for example, with an ashift of 12 we end up with
 	 * 128KB/4KB=32 copies of the uberblock in the ring.
 	 */
-	blksz = 1 << zfs->ashift;
+	blksz = ASHIFT_UBERBLOCK_SIZE(zfs->ashift);
 	assert(sizeof(label->vl_uberblock) % blksz == 0);
 	for (size_t roff = 0; roff < sizeof(label->vl_uberblock);
 	    roff += blksz) {

@@ -1,4 +1,3 @@
-/* @(#)s_nextafter.c 5.1 93/09/24 */
 /*
  * ====================================================
  * Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
@@ -9,9 +8,6 @@
  * is preserved.
  * ====================================================
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 /* IEEE functions
  *	nextafter(x,y)
@@ -36,15 +32,13 @@ nextafterl(long double x, long double y)
 	volatile long double t;
 	union IEEEl2bits ux, uy;
 
+	if (isnan(x) || isnan(y))
+	   return x+y;	/* x or y is nan */
+	if(x==y) return y;		/* x=y, return y */
+
 	ux.e = x;
 	uy.e = y;
 
-	if ((ux.bits.exp == 0x7fff &&
-	     ((ux.bits.manh&~LDBL_NBIT)|ux.bits.manl) != 0) ||
-	    (uy.bits.exp == 0x7fff &&
-	     ((uy.bits.manh&~LDBL_NBIT)|uy.bits.manl) != 0))
-	   return x+y;	/* x or y is nan */
-	if(x==y) return y;		/* x=y, return y */
 	if(x==0.0) {
 	    ux.bits.manh = 0;			/* return +-minsubnormal */
 	    ux.bits.manl = 1;

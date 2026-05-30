@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1999-2002 Poul-Henning Kamp
  * All rights reserved.
@@ -26,9 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/systm.h>
@@ -44,9 +41,9 @@ __FBSDID("$FreeBSD$");
 #include <sys/poll.h>
 #include <sys/sx.h>
 #include <sys/ctype.h>
+#include <sys/stdarg.h>
 #include <sys/ucred.h>
 #include <sys/taskqueue.h>
-#include <machine/stdarg.h>
 
 #include <fs/devfs/devfs_int.h>
 #include <vm/vm.h>
@@ -121,6 +118,8 @@ dev_free_devlocked(struct cdev *cdev)
 	cdp = cdev2priv(cdev);
 	KASSERT((cdp->cdp_flags & CDP_UNREF_DTR) == 0,
 	    ("destroy_dev() was not called after delist_dev(%p)", cdev));
+	KASSERT((cdp->cdp_flags & CDP_ON_ACTIVE_LIST) == 0,
+	    ("%s: cdp %p (%s) on active list", __func__, cdp, cdev->si_name));
 	TAILQ_INSERT_HEAD(&cdevp_free_list, cdp, cdp_list);
 }
 
@@ -665,7 +664,7 @@ prep_cdevsw(struct cdevsw *devsw, int flags)
 		if ((devsw->d_flags & D_GIANTOK) == 0) {
 			printf(
 			    "WARNING: Device \"%s\" is Giant locked and may be "
-			    "deleted before FreeBSD 14.0.\n",
+			    "deleted before FreeBSD 16.0.\n",
 			    devsw->d_name == NULL ? "???" : devsw->d_name);
 		}
 		if (devsw->d_gianttrick == NULL) {
@@ -1164,6 +1163,9 @@ destroy_devl(struct cdev *dev)
 		devfs_destroy_cdevpriv(p);
 		mtx_lock(&cdevpriv_mtx);
 	}
+	while (cdp->cdp_fdpriv_dtrc != 0) {
+		msleep(&cdp->cdp_fdpriv_dtrc, &cdevpriv_mtx, 0, "cdfdpc", 0);
+	}
 	mtx_unlock(&cdevpriv_mtx);
 	dev_lock();
 
@@ -1244,6 +1246,19 @@ devtoname(struct cdev *dev)
 {
 
 	return (dev->si_name);
+}
+
+void
+dev_copyname(struct cdev *dev, char *path, size_t len)
+{
+	struct cdevsw *csw;
+	int ref;
+
+	csw = dev_refthread(dev, &ref);
+	if (csw != NULL) {
+		strlcpy(path, dev->si_name, len);
+		dev_relthread(dev, ref);
+	}
 }
 
 int

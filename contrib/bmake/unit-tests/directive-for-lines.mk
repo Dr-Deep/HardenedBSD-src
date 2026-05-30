@@ -1,4 +1,4 @@
-# $NetBSD: directive-for-lines.mk,v 1.4 2022/05/08 06:51:27 rillig Exp $
+# $NetBSD: directive-for-lines.mk,v 1.6 2025/06/30 21:44:39 rillig Exp $
 #
 # Tests for the line numbers that are reported in .for loops.
 #
@@ -6,6 +6,14 @@
 # 2020-12-19, the line numbers for the .info directives and error
 # messages inside .for loops had been wrong since ParseGetLine skipped empty
 # lines, even when collecting the lines for the .for loop body.
+
+# expect+21: This is line 31.
+# expect+20: This is line 31.
+# expect+26: This is line 38.
+
+# expect+17: This is line 31.
+# expect+16: This is line 31.
+# expect+22: This is line 38.
 
 .for outer in a b
 
@@ -20,13 +28,13 @@
 VAR= \
 	multi-line
 
-.info expect 23
+.info This is line 31.
 
 .endfor
 
 # comment \
 # continued comment
 
-.info expect 30
+.info This is line 38.
 
 .endfor

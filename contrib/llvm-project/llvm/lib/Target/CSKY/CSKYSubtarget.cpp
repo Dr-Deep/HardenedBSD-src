@@ -11,6 +11,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "CSKYSubtarget.h"
+#include "CSKYSelectionDAGInfo.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 
 using namespace llvm;
 
@@ -33,14 +35,42 @@ CSKYSubtarget &CSKYSubtarget::initializeSubtargetDependencies(
   UseHardFloatABI = false;
   HasFPUv2SingleFloat = false;
   HasFPUv2DoubleFloat = false;
+  HasFPUv3HalfWord = false;
+  HasFPUv3HalfFloat = false;
   HasFPUv3SingleFloat = false;
   HasFPUv3DoubleFloat = false;
-
-  HasBTST16 = false;
-  HasJAVA = false;
+  HasFdivdu = false;
+  HasFLOATE1 = false;
+  HasFLOAT1E2 = false;
+  HasFLOAT1E3 = false;
+  HasFLOAT3E4 = false;
+  HasFLOAT7E60 = false;
   HasExtendLrw = false;
+  HasBTST16 = false;
+  HasTrust = false;
+  HasJAVA = false;
+  HasCache = false;
+  HasNVIC = false;
+  HasDSP = false;
+  HasDSP1E2 = false;
+  HasDSPE60 = false;
+  HasDSPV2 = false;
+  HasDSP_Silan = false;
   HasDoloop = false;
+  HasHardwareDivide = false;
   HasHighRegisters = false;
+  HasVDSPV2 = false;
+  HasVDSP2E3 = false;
+  HasVDSP2E60F = false;
+  ReadTPHard = false;
+  HasVDSPV1_128 = false;
+  UseCCRT = false;
+  DumpConstPool = false;
+  EnableInterruptAttribute = false;
+  HasPushPop = false;
+  HasSTM = false;
+  SmartMode = false;
+  EnableStackSize = false;
 
   HasE1 = false;
   HasE2 = false;
@@ -62,7 +92,15 @@ CSKYSubtarget::CSKYSubtarget(const Triple &TT, StringRef CPU, StringRef TuneCPU,
                              StringRef FS, const TargetMachine &TM)
     : CSKYGenSubtargetInfo(TT, CPU, TuneCPU, FS),
       FrameLowering(initializeSubtargetDependencies(TT, CPU, TuneCPU, FS)),
-      InstrInfo(*this), RegInfo(), TLInfo(TM, *this) {}
+      InstrInfo(*this), RegInfo(), TLInfo(TM, *this) {
+  TSInfo = std::make_unique<CSKYSelectionDAGInfo>();
+}
+
+CSKYSubtarget::~CSKYSubtarget() = default;
+
+const SelectionDAGTargetInfo *CSKYSubtarget::getSelectionDAGInfo() const {
+  return TSInfo.get();
+}
 
 bool CSKYSubtarget::useHardFloatABI() const {
   auto FloatABI = getTargetLowering()->getTargetMachine().Options.FloatABIType;

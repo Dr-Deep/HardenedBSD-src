@@ -27,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Driver for extra ACPI-controlled gadgets found on ThinkPad laptops.
  * Inspired by the ibm-acpi and tpb projects which implement these features
@@ -39,6 +37,7 @@ __FBSDID("$FreeBSD$");
  */
 
 #include "opt_acpi.h"
+#include "opt_evdev.h"
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
@@ -56,6 +55,11 @@ __FBSDID("$FreeBSD$");
 #include <sys/sbuf.h>
 #include <sys/sysctl.h>
 #include <isa/rtc.h>
+
+#ifdef EVDEV_SUPPORT
+#include <dev/evdev/input.h>
+#include <dev/evdev/evdev.h>
+#endif
 
 #define _COMPONENT	ACPI_OEM
 ACPI_MODULE_NAME("IBM")
@@ -200,6 +204,9 @@ struct acpi_ibm_softc {
 
 	struct sysctl_ctx_list	*sysctl_ctx;
 	struct sysctl_oid	*sysctl_tree;
+#ifdef EVDEV_SUPPORT
+	struct evdev_dev	*evdev;
+#endif
 };
 
 static struct {
@@ -365,6 +372,9 @@ static driver_t	acpi_ibm_driver = {
 
 DRIVER_MODULE(acpi_ibm, acpi, acpi_ibm_driver, 0, 0);
 MODULE_DEPEND(acpi_ibm, acpi, 1, 1, 1);
+#ifdef EVDEV_SUPPORT
+MODULE_DEPEND(acpi_ibm, evdev, 1, 1, 1);
+#endif
 static char    *ibm_ids[] = {"IBM0068", "LEN0068", "LEN0268", NULL};
 
 static int
@@ -484,6 +494,20 @@ acpi_ibm_attach(device_t dev)
 	}
 	sc->ec_handle = acpi_get_handle(sc->ec_dev);
 
+#ifdef EVDEV_SUPPORT
+	sc->evdev = evdev_alloc();
+	evdev_set_name(sc->evdev, device_get_desc(dev));
+	evdev_set_phys(sc->evdev, device_get_nameunit(dev));
+	evdev_set_id(sc->evdev, BUS_HOST, 0, 0, 1);
+	evdev_support_event(sc->evdev, EV_SYN);
+	evdev_support_event(sc->evdev, EV_KEY);
+	evdev_support_key(sc->evdev, KEY_BRIGHTNESSUP);
+	evdev_support_key(sc->evdev, KEY_BRIGHTNESSDOWN);
+
+	if (evdev_register(sc->evdev) != 0)
+		return (ENXIO);
+#endif
+
 	/* Get the sysctl tree */
 	sc->sysctl_ctx = device_get_sysctl_ctx(dev);
 	sc->sysctl_tree = device_get_sysctl_tree(dev);
@@ -544,14 +568,14 @@ acpi_ibm_attach(device_t dev)
 			SYSCTL_ADD_PROC(sc->sysctl_ctx,
 			    SYSCTL_CHILDREN(sc->sysctl_tree), OID_AUTO,
 			    acpi_ibm_sysctls[i].name,
-			    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE,
+			    CTLTYPE_UINT | CTLFLAG_RD | CTLFLAG_MPSAFE,
 			    sc, i, acpi_ibm_sysctl, "I",
 			    acpi_ibm_sysctls[i].description);
 		} else {
 			SYSCTL_ADD_PROC(sc->sysctl_ctx,
 			    SYSCTL_CHILDREN(sc->sysctl_tree), OID_AUTO,
 			    acpi_ibm_sysctls[i].name,
-			    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+			    CTLTYPE_UINT | CTLFLAG_RW | CTLFLAG_MPSAFE,
 			    sc, i, acpi_ibm_sysctl, "I",
 			    acpi_ibm_sysctls[i].description);
 		}
@@ -628,6 +652,10 @@ acpi_ibm_detach(device_t dev)
 
 	if (sc->led_dev != NULL)
 		led_destroy(sc->led_dev);
+
+#ifdef EVDEV_SUPPORT
+	evdev_free(sc->evdev);
+#endif
 
 	return (0);
 }
@@ -1419,8 +1447,13 @@ acpi_ibm_eventhandler(struct acpi_ibm_softc *sc, int arg)
 
 	ACPI_SERIAL_BEGIN(ibm);
 	switch (arg) {
+	/*
+	 * XXX "Suspend-to-RAM" here is as opposed to suspend-to-disk, but it is
+	 * fine if our suspend sleep state transition request puts us in
+	 * suspend-to-idle instead of actual suspend-to-RAM.
+	 */
 	case IBM_EVENT_SUSPEND_TO_RAM:
-		power_pm_suspend(POWER_SLEEP_STATE_SUSPEND);
+		(void)power_pm_suspend(POWER_TRANSITION_SUSPEND);
 		break;
 
 	case IBM_EVENT_BLUETOOTH:
@@ -1501,6 +1534,19 @@ acpi_ibm_notify(ACPI_HANDLE h, UINT32 notify, void *context)
 			/* Execute event handler */
 			if (sc->handler_events & (1 << (arg - 1)))
 				acpi_ibm_eventhandler(sc, (arg & 0xff));
+#ifdef EVDEV_SUPPORT
+			else if ((arg & 0xff) == IBM_EVENT_BRIGHTNESS_UP ||
+			    (arg & 0xff) == IBM_EVENT_BRIGHTNESS_DOWN) {
+				uint16_t key;
+
+				key = arg == IBM_EVENT_BRIGHTNESS_UP ?
+				    KEY_BRIGHTNESSUP : KEY_BRIGHTNESSDOWN;
+				evdev_push_key(sc->evdev, key, 1);
+				evdev_sync(sc->evdev);
+				evdev_push_key(sc->evdev, key, 0);
+				evdev_sync(sc->evdev);
+			}
+#endif
 
 			/* Notify devd(8) */
 			acpi_UserNotify("IBM", h, (arg & 0xff));

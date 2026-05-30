@@ -35,9 +35,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/vnode.h>
 #include <sys/ipc.h>
@@ -545,6 +542,11 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			kau_write(rec, tok);
 			UPATH1_TOKENS;
 		}
+		if (ARG_IS_VALID(kar, ARG_SADDRINET6)) {
+			tok = au_to_sock_inet128((struct sockaddr_in6 *)
+			    &ar->ar_arg_sockaddr);
+			kau_write(rec, tok);
+		}
 		break;
 
 	case AUE_BIND:
@@ -574,7 +576,11 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			kau_write(rec, tok);
 			UPATH1_TOKENS;
 		}
-		/* XXX Need to handle ARG_SADDRINET6 */
+		if (ARG_IS_VALID(kar, ARG_SADDRINET6)) {
+			tok = au_to_sock_inet128((struct sockaddr_in6 *)
+			    &ar->ar_arg_sockaddr);
+			kau_write(rec, tok);
+		}
 		break;
 
 	case AUE_BINDAT:
@@ -605,7 +611,11 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			kau_write(rec, tok);
 			UPATH1_TOKENS;
 		}
-		/* XXX Need to handle ARG_SADDRINET6 */
+		if (ARG_IS_VALID(kar, ARG_SADDRINET6)) {
+			tok = au_to_sock_inet128((struct sockaddr_in6 *)
+			    &ar->ar_arg_sockaddr);
+			kau_write(rec, tok);
+		}
 		break;
 
 	case AUE_SOCKET:
@@ -1118,6 +1128,16 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		}
 		break;
 
+	case AUE_PDWAIT:
+		if (ARG_IS_VALID(kar, ARG_FFLAGS)) {
+			tok = au_to_arg32(1, "flags", ar->ar_arg_fflags);
+			kau_write(rec, tok);
+		}
+		if (ARG_IS_VALID(kar, ARG_FD)) {
+			tok = au_to_arg32(1, "fd", ar->ar_arg_fd);
+			kau_write(rec, tok);
+		}
+
 	case AUE_IOCTL:
 		if (ARG_IS_VALID(kar, ARG_CMD)) {
 			tok = au_to_arg32(2, "cmd", ar->ar_arg_cmd);
@@ -1357,6 +1377,24 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 	case AUE_PDFORK:
 		if (ARG_IS_VALID(kar, ARG_PID)) {
 			tok = au_to_arg32(0, "child PID", ar->ar_arg_pid);
+			kau_write(rec, tok);
+		}
+		if (ARG_IS_VALID(kar, ARG_FFLAGS)) {
+			tok = au_to_arg32(2, "flags", ar->ar_arg_fflags);
+			kau_write(rec, tok);
+		}
+		if (ARG_IS_VALID(kar, ARG_FD)) {
+			tok = au_to_arg32(1, "fd", ar->ar_arg_fd);
+			kau_write(rec, tok);
+		}
+		break;
+	case AUE_PDRFORK:
+		if (ARG_IS_VALID(kar, ARG_PID)) {
+			tok = au_to_arg32(0, "child PID", ar->ar_arg_pid);
+			kau_write(rec, tok);
+		}
+		if (ARG_IS_VALID(kar, ARG_CMD)) {
+			tok = au_to_arg32(2, "fflags", ar->ar_arg_cmd);
 			kau_write(rec, tok);
 		}
 		if (ARG_IS_VALID(kar, ARG_FFLAGS)) {

@@ -1,9 +1,12 @@
+#
 # FreeBSD system call object files.
+#
 # DO NOT EDIT-- this file is automatically @generated.
-# $FreeBSD$
+#
+
 MIASM =  \
 	syscall.o \
-	exit.o \
+	_exit.o \
 	fork.o \
 	read.o \
 	write.o \
@@ -57,15 +60,13 @@ MIASM =  \
 	chroot.o \
 	msync.o \
 	vfork.o \
-	sbrk.o \
-	sstk.o \
 	freebsd11_vadvise.o \
 	munmap.o \
 	mprotect.o \
 	madvise.o \
 	mincore.o \
-	getgroups.o \
-	setgroups.o \
+	freebsd14_getgroups.o \
+	freebsd14_setgroups.o \
 	getpgrp.o \
 	setpgid.o \
 	setitimer.o \
@@ -195,7 +196,6 @@ MIASM =  \
 	aio_suspend.o \
 	aio_cancel.o \
 	aio_error.o \
-	yield.o \
 	mlockall.o \
 	munlockall.o \
 	__getcwd.o \
@@ -352,7 +352,6 @@ MIASM =  \
 	symlinkat.o \
 	unlinkat.o \
 	posix_openpt.o \
-	gssd_syscall.o \
 	jail_get.o \
 	jail_set.o \
 	jail_remove.o \
@@ -425,4 +424,24 @@ MIASM =  \
 	aio_readv.o \
 	fspacectl.o \
 	sched_getcpu.o \
-	swapoff.o
+	swapoff.o \
+	kqueuex.o \
+	membarrier.o \
+	timerfd_create.o \
+	timerfd_gettime.o \
+	timerfd_settime.o \
+	kcmp.o \
+	getrlimitusage.o \
+	fchroot.o \
+	setcred.o \
+	exterrctl.o \
+	inotify_add_watch_at.o \
+	inotify_rm_watch.o \
+	getgroups.o \
+	setgroups.o \
+	jail_attach_jd.o \
+	jail_remove_jd.o \
+	kexec_load.o \
+	pdrfork.o \
+	pdwait.o \
+	renameat2.o

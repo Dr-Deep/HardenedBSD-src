@@ -24,9 +24,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/conf.h>
@@ -518,7 +515,7 @@ static device_method_t kbd_methods[] = {
 	DEVMETHOD(device_probe, hv_kbd_probe),
 	DEVMETHOD(device_attach, hv_kbd_attach),
 	DEVMETHOD(device_detach, hv_kbd_detach),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t kbd_driver = {HVKBD_DRIVER_NAME , kbd_methods, sizeof(hv_kbd_sc)};

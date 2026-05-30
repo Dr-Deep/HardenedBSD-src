@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -41,7 +42,6 @@
  * mech_index  is the index for that mechanism in the table.
  * A mechanism belongs to exactly 1 table.
  * The tables are:
- * . digest_mechs_tab[] for the msg digest mechs.
  * . cipher_mechs_tab[] for encrypt/decrypt and wrap/unwrap mechs.
  * . mac_mechs_tab[] for MAC mechs.
  * . sign_mechs_tab[] for sign & verify mechs.
@@ -75,13 +75,11 @@
 
 /* RFE 4687834 Will deal with the extensibility of these tables later */
 
-static kcf_mech_entry_t kcf_digest_mechs_tab[KCF_MAXDIGEST];
 static kcf_mech_entry_t kcf_cipher_mechs_tab[KCF_MAXCIPHER];
 static kcf_mech_entry_t kcf_mac_mechs_tab[KCF_MAXMAC];
 
 const kcf_mech_entry_tab_t kcf_mech_tabs_tab[KCF_LAST_OPSCLASS + 1] = {
 	{0, NULL},				/* No class zero */
-	{KCF_MAXDIGEST, kcf_digest_mechs_tab},
 	{KCF_MAXCIPHER, kcf_cipher_mechs_tab},
 	{KCF_MAXMAC, kcf_mac_mechs_tab},
 };
@@ -92,8 +90,8 @@ static int
 kcf_mech_hash_compar(const void *lhs, const void *rhs)
 {
 	const kcf_mech_entry_t *l = lhs, *r = rhs;
-	int cmp = strncmp(l->me_name, r->me_name, CRYPTO_MAX_MECH_NAME);
-	return ((0 < cmp) - (cmp < 0));
+	return (TREE_ISIGN(strncmp(l->me_name, r->me_name,
+	    CRYPTO_MAX_MECH_NAME)));
 }
 
 void
@@ -220,10 +218,7 @@ kcf_add_mech_provider(short mech_indx,
 		crypto_func_group_t fg = mech_info->cm_func_group_mask;
 		kcf_ops_class_t class;
 
-		if (fg & CRYPTO_FG_DIGEST || fg & CRYPTO_FG_DIGEST_ATOMIC)
-			class = KCF_DIGEST_CLASS;
-		else if (fg & CRYPTO_FG_ENCRYPT || fg & CRYPTO_FG_DECRYPT ||
-		    fg & CRYPTO_FG_ENCRYPT_ATOMIC ||
+		if (fg & CRYPTO_FG_ENCRYPT_ATOMIC ||
 		    fg & CRYPTO_FG_DECRYPT_ATOMIC)
 			class = KCF_CIPHER_CLASS;
 		else if (fg & CRYPTO_FG_MAC || fg & CRYPTO_FG_MAC_ATOMIC)
@@ -342,8 +337,8 @@ kcf_remove_mech_provider(const char *mech_name, kcf_provider_desc_t *prov_desc)
 	mech_entry->me_sw_prov = NULL;
 
 	/* free entry  */
-	KCF_PROV_REFRELE(prov_mech->pm_prov_desc);
 	KCF_PROV_IREFRELE(prov_mech->pm_prov_desc);
+	KCF_PROV_REFRELE(prov_mech->pm_prov_desc);
 	kmem_free(prov_mech, sizeof (kcf_prov_mech_desc_t));
 }
 

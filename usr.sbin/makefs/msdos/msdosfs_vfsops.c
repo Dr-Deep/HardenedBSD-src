@@ -49,8 +49,6 @@
 
 #include <sys/cdefs.h>
 /* $NetBSD: msdosfs_vfsops.c,v 1.10 2016/01/30 09:59:27 mlelstv Exp $ */
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/mount.h>
 
@@ -165,7 +163,7 @@ m_msdosfs_mount(struct m_vnode *devvp)
 		pmp->pm_fatdiv = 1;
 		pmp->pm_FATsecs = getulong(b710->bpbBigFATsecs);
 
-		/* mirrorring is enabled if the FATMIRROR bit is not set */
+		/* mirroring is enabled if the FATMIRROR bit is not set */
 		if ((getushort(b710->bpbExtFlags) & FATMIRROR) == 0)
 			pmp->pm_flags |= MSDOSFS_FATMIRROR;
 		else

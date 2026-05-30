@@ -27,9 +27,6 @@
  */
 #include "opt_platform.h"
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/malloc.h>
@@ -58,9 +55,9 @@ __FBSDID("$FreeBSD$");
 
 #ifdef THUNDERX_PASS_1_1_ERRATA
 static struct resource * thunder_pcie_fdt_alloc_resource(device_t, device_t,
-    int, int *, rman_res_t, rman_res_t, rman_res_t, u_int);
+    int, int, rman_res_t, rman_res_t, rman_res_t, u_int);
 static int thunder_pcie_fdt_release_resource(device_t, device_t,
-    int, int, struct resource*);
+    struct resource*);
 #endif
 static int thunder_pcie_fdt_attach(device_t);
 static int thunder_pcie_fdt_probe(device_t);
@@ -155,7 +152,7 @@ thunder_pcie_ofw_bus_attach(device_t dev)
 			ofw_bus_intr_to_rl(dev, node, &di->di_rl, NULL);
 
 			/* Add newbus device for this FDT node */
-			child = device_add_child(dev, NULL, -1);
+			child = device_add_child(dev, NULL, DEVICE_UNIT_ANY);
 			if (child == NULL) {
 				resource_list_free(&di->di_rl);
 				ofw_bus_gen_destroy_devinfo(&di->di_dinfo);
@@ -231,7 +228,7 @@ thunder_pcie_fdt_get_id(device_t pci, device_t child, enum pci_id_type type,
 #ifdef THUNDERX_PASS_1_1_ERRATA
 struct resource *
 thunder_pcie_fdt_alloc_resource(device_t dev, device_t child, int type,
-    int *rid, rman_res_t start, rman_res_t end, rman_res_t count, u_int flags)
+    int rid, rman_res_t start, rman_res_t end, rman_res_t count, u_int flags)
 {
 	struct generic_pcie_fdt_softc *sc;
 	struct thunder_pcie_ofw_devinfo *di;
@@ -256,7 +253,7 @@ thunder_pcie_fdt_alloc_resource(device_t dev, device_t child, int type,
 		    type = SYS_RES_MEMORY;
 
 		/* Find defaults for this rid */
-		rle = resource_list_find(&di->di_rl, type, *rid);
+		rle = resource_list_find(&di->di_rl, type, rid);
 		if (rle == NULL)
 			return (NULL);
 
@@ -291,14 +288,14 @@ thunder_pcie_fdt_alloc_resource(device_t dev, device_t child, int type,
 }
 
 static int
-thunder_pcie_fdt_release_resource(device_t dev, device_t child, int type,
-    int rid, struct resource *res)
+thunder_pcie_fdt_release_resource(device_t dev, device_t child,
+    struct resource *res)
 {
 
 	if ((int)ofw_bus_get_node(child) <= 0)
-		return (pci_host_generic_core_release_resource(dev, child, type,
-		    rid, res));
+		return (pci_host_generic_core_release_resource(dev, child,
+		    res));
 
-	return (bus_generic_release_resource(dev, child, type, rid, res));
+	return (bus_generic_release_resource(dev, child, res));
 }
 #endif

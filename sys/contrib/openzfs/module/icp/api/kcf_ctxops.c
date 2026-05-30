@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -88,7 +89,7 @@ crypto_create_ctx_template(crypto_mechanism_t *mech, crypto_key_t *key,
 	if (error != CRYPTO_SUCCESS)
 		return (error);
 
-	if ((ctx_tmpl = (kcf_ctx_template_t *)kmem_alloc(
+	if ((ctx_tmpl = kmem_alloc(
 	    sizeof (kcf_ctx_template_t), KM_SLEEP)) == NULL) {
 		KCF_PROV_REFRELE(pd);
 		return (CRYPTO_HOST_MEMORY);

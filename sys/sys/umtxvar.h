@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2002, Jeffrey Roberson <jeff@freebsd.org>
  * All rights reserved.
@@ -25,14 +25,14 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * $FreeBSD$
- *
  */
 
 #ifndef _SYS_UMTXVAR_H_
 #define	_SYS_UMTXVAR_H_
 
 #ifdef _KERNEL
+
+#include <sys/_timespec.h>
 
 /*
  * The umtx_key structure is used by both the Linux futex code and the
@@ -206,6 +206,7 @@ int umtx_key_get(const void *, int, int, struct umtx_key *);
 void umtx_key_release(struct umtx_key *);
 struct umtx_q *umtxq_alloc(void);
 void umtxq_busy(struct umtx_key *);
+void umtxq_busy_unlocked(struct umtx_key *);
 int umtxq_count(struct umtx_key *);
 void umtxq_free(struct umtx_q *);
 struct umtxq_chain *umtxq_getchain(struct umtx_key *);

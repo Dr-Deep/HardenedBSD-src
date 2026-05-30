@@ -15,8 +15,6 @@
  * AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT
  * OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -70,7 +68,7 @@ static device_method_t tpm_acpi_methods[] = {
 	DEVMETHOD(device_detach,	tpm_detach),
 	DEVMETHOD(device_suspend,	tpm_suspend),
 	DEVMETHOD(device_resume,	tpm_resume),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t tpm_acpi_driver = {

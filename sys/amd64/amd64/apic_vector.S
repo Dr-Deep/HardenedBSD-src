@@ -34,7 +34,6 @@
  * SUCH DAMAGE.
  *
  *	from: vector.s, 386BSD 0.1 unknown origin
- * $FreeBSD$
  */
 
 /*
@@ -49,12 +48,6 @@
 #include <machine/asmacros.h>
 #include <machine/specialreg.h>
 #include <x86/apicreg.h>
-
-#ifdef SMP
-#define LK	lock ;
-#else
-#define LK
-#endif
 
 	.text
 	SUPERALIGN_TEXT
@@ -159,12 +152,11 @@ IDTVEC(spuriousint)
 	INTR_HANDLER xen_intr_upcall
 	KMSAN_ENTER
 	movq	%rsp, %rdi
-	call	xen_intr_handle_upcall
+	call	xen_arch_intr_handle_upcall
 	KMSAN_LEAVE
 	jmp	doreti
 #endif
 
-#ifdef SMP
 /*
  * Global address space TLB shootdown.
  */
@@ -187,6 +179,7 @@ IDTVEC(spuriousint)
 	INTR_HANDLER ipi_intr_bitmap_handler
 	call	as_lapic_eoi
 	KMSAN_ENTER
+	movq	%rsp,%rdi
 	call	ipi_bitmap_handler
 	KMSAN_LEAVE
 	jmp	doreti
@@ -212,11 +205,23 @@ IDTVEC(spuriousint)
 	jmp	doreti
 
 /*
+ * Executed by a CPU when it receives an IPI_OFF from another CPU.
+ * Should never return
+ */
+	INTR_HANDLER cpuoff
+	KMSAN_ENTER
+	call	cpuoff_handler
+	call	as_lapic_eoi
+	KMSAN_LEAVE
+	jmp	doreti
+
+/*
  * Executed by a CPU when it receives an IPI_SWI.
  */
 	INTR_HANDLER ipi_swi
 	call	as_lapic_eoi
 	KMSAN_ENTER
+	movq	%rsp,%rdi
 	call	ipi_swi_handler
 	KMSAN_LEAVE
 	jmp	doreti
@@ -271,5 +276,3 @@ IDTVEC(justreturn)
 	INTR_HANDLER	justreturn1
 	call	as_lapic_eoi
 	jmp	doreti
-
-#endif /* SMP */

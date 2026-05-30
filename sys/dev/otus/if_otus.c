@@ -22,8 +22,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_wlan.h"
 
 #include <sys/param.h>
@@ -174,7 +172,7 @@ void		otus_sub_rxeof(struct otus_softc *, uint8_t *, int,
 static int	otus_tx(struct otus_softc *, struct ieee80211_node *,
 		    struct mbuf *, struct otus_data *,
 		    const struct ieee80211_bpf_params *);
-int		otus_ioctl(struct ifnet *, u_long, caddr_t);
+int		otus_ioctl(if_t, u_long, caddr_t);
 int		otus_set_multi(struct otus_softc *);
 static int	otus_updateedca(struct ieee80211com *);
 static void	otus_updateedca_locked(struct otus_softc *);
@@ -730,6 +728,12 @@ otus_attachhook(struct otus_softc *sc)
 	    IEEE80211_C_SWAMSDUTX |	/* Do software A-MSDU TX */
 	    IEEE80211_C_WPA;		/* WPA/RSN. */
 
+	/*
+	 * Although A-MPDU RX is fine, A-MPDU TX apparently has some
+	 * hardware bugs.  Looking at Linux carl9170, it has a work-around
+	 * that forces all frames into the AC_BE queue regardless of
+	 * the actual QoS queue.
+	 */
 	ic->ic_htcaps =
 	    IEEE80211_HTC_HT |
 #if 0
@@ -738,6 +742,8 @@ otus_attachhook(struct otus_softc *sc)
 	    IEEE80211_HTC_AMSDU |
 	    IEEE80211_HTCAP_MAXAMSDU_3839 |
 	    IEEE80211_HTCAP_SMPS_OFF;
+
+	ic->ic_flags_ext |= IEEE80211_FEXT_SEQNO_OFFLOAD;
 
 	otus_getradiocaps(ic, IEEE80211_CHAN_MAX, &ic->ic_nchans,
 	    ic->ic_channels);
@@ -1688,8 +1694,7 @@ otus_sub_rxeof(struct otus_softc *sc, uint8_t *buf, int len, struct mbufq *rxq)
 	 * with invalid frame control values here.  Just toss them
 	 * rather than letting net80211 get angry and log.
 	 */
-	if ((wh->i_fc[0] & IEEE80211_FC0_VERSION_MASK) !=
-	    IEEE80211_FC0_VERSION_0) {
+	if (!IEEE80211_IS_FC0_CHECK_VER(wh, IEEE80211_FC0_VERSION_0)) {
 		OTUS_DPRINTF(sc, OTUS_DEBUG_RXDONE,
 		    "%s: invalid 802.11 fc version (firmware bug?)\n",
 		        __func__);
@@ -1804,7 +1809,6 @@ otus_rxeof(struct usb_xfer *xfer, struct otus_data *data, struct mbufq *rxq)
 static void
 otus_bulk_rx_callback(struct usb_xfer *xfer, usb_error_t error)
 {
-	struct epoch_tracker et;
 	struct otus_softc *sc = usbd_xfer_softc(xfer);
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct ieee80211_frame *wh;
@@ -1855,7 +1859,6 @@ tr_setup:
 		 * callback and safe to unlock.
 		 */
 		OTUS_UNLOCK(sc);
-		NET_EPOCH_ENTER(et);
 		while ((m = mbufq_dequeue(&scrx)) != NULL) {
 			wh = mtod(m, struct ieee80211_frame *);
 			ni = ieee80211_find_rxnode(ic,
@@ -1868,7 +1871,6 @@ tr_setup:
 			} else
 				(void)ieee80211_input_mimo_all(ic, m);
 		}
-		NET_EPOCH_EXIT(et);
 #ifdef	IEEE80211_SUPPORT_SUPERG
 		ieee80211_ff_age_all(ic, 100);
 #endif
@@ -2238,6 +2240,9 @@ otus_tx(struct otus_softc *sc, struct ieee80211_node *ni, struct mbuf *m,
 	int hasqos, xferlen, type, ismcast;
 
 	wh = mtod(m, struct ieee80211_frame *);
+
+	ieee80211_output_seqno_assign(ni, -1, m);
+
 	if (wh->i_fc[1] & IEEE80211_FC1_PROTECTED) {
 		k = ieee80211_crypto_encap(ni, m);
 		if (k == NULL) {
@@ -2287,7 +2292,8 @@ otus_tx(struct otus_softc *sc, struct ieee80211_node *ni, struct mbuf *m,
 		rate = otus_rate_to_hw_rate(sc, tp->ucastrate);
 	else {
 		(void) ieee80211_ratectl_rate(ni, NULL, 0);
-		rate = otus_rate_to_hw_rate(sc, ni->ni_txrate);
+		rate = otus_rate_to_hw_rate(sc,
+		    ieee80211_node_get_txrate_dot11rate(ni));
 	}
 
 	phyctl = 0;
@@ -2352,9 +2358,11 @@ otus_tx(struct otus_softc *sc, struct ieee80211_node *ni, struct mbuf *m,
 	data->m = m;
 
 	OTUS_DPRINTF(sc, OTUS_DEBUG_XMIT,
-	    "%s: tx: m=%p; data=%p; len=%d mac=0x%04x phy=0x%08x rate=0x%02x, ni_txrate=%d\n",
+	    "%s: tx: m=%p; data=%p; len=%d mac=0x%04x phy=0x%08x "
+	    "rate=0x%02x, dot11rate=%d\n",
 	    __func__, m, data, le16toh(head->len), macctl, phyctl,
-	    (int) rate, (int) ni->ni_txrate);
+	    (int) rate,
+	    (int) ieee80211_node_get_txrate_dot11rate(ni));
 
 	/* Submit transfer */
 	STAILQ_INSERT_TAIL(&sc->sc_tx_pending[OTUS_BULK_TX], data, next);
@@ -3061,17 +3069,14 @@ otus_calibrate_to(void *arg, int pending)
 	device_printf(sc->sc_dev, "%s: called\n", __func__);
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct ieee80211_node *ni;
-	int s;
 
 	if (usbd_is_dying(sc->sc_udev))
 		return;
 
 	usbd_ref_incr(sc->sc_udev);
 
-	s = splnet();
 	ni = ic->ic_bss;
 	ieee80211_amrr_choose(&sc->amrr, ni, &((struct otus_node *)ni)->amn);
-	splx(s);
 
 	if (!usbd_is_dying(sc->sc_udev))
 		timeout_add_sec(&sc->calib_to, 1);

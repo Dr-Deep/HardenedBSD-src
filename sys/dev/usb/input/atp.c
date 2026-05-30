@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2014 Rohit Grover
  * All rights reserved.
@@ -57,9 +57,6 @@
  * for helping me with access to hardware. Thanks also go to Nokia for
  * giving me an opportunity to do this work.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/stdint.h>
 #include <sys/stddef.h>
@@ -1635,7 +1632,8 @@ fg_update_strokes(struct atp_softc *sc, fg_pspan *pspans_x,
  * Return true if any movement is detected.
  */
 static boolean_t
-wsp_update_strokes(struct atp_softc *sc, wsp_finger_t *fingers, u_int n_fingers)
+wsp_update_strokes(struct atp_softc *sc, wsp_finger_t fingers[WSP_MAX_FINGERS],
+    u_int n_fingers)
 {
 	boolean_t movement = false;
 	atp_stroke_t *strokep_next;

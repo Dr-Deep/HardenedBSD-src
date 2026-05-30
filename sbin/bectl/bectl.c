@@ -1,35 +1,12 @@
-/*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
- *
+/*
  * Copyright (c) 2017 Kyle J. Kneitinger <kyle@kneit.in>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/mount.h>
+#include <err.h>
 #include <errno.h>
 #include <libutil.h>
 #include <stdbool.h>
@@ -67,25 +44,26 @@ usage(bool explicit)
 
 	fp =  explicit ? stdout : stderr;
 	fprintf(fp, "%s",
-	    "Usage:\tbectl {-h | -? | subcommand [args...]}\n"
+	    "Usage:\tbectl {-h | subcommand [args...]}\n"
 #if SOON
-	    "\tbectl add (path)*\n"
+	    "\tbectl [-r beroot] add (path)*\n"
 #endif
-	    "\tbectl activate [-t] beName\n"
-	    "\tbectl activate [-T]\n"
-	    "\tbectl check\n"
-	    "\tbectl create [-r] [-e {nonActiveBe | beName@snapshot}] beName\n"
-	    "\tbectl create [-r] beName@snapshot\n"
-	    "\tbectl destroy [-Fo] {beName | beName@snapshot}\n"
-	    "\tbectl export sourceBe\n"
-	    "\tbectl import targetBe\n"
-	    "\tbectl jail [-bU] [{-o key=value | -u key}]... beName\n"
+	    "\tbectl [-r beroot] activate [-t] beName\n"
+	    "\tbectl [-r beroot] activate [-T]\n"
+	    "\tbectl [-r beroot] check\n"
+	    "\tbectl [-r beroot] create [-r] [-e {nonActiveBe | beName@snapshot}] beName\n"
+	    "\tbectl [-r beroot] create [-r] beName@snapshot\n"
+	    "\tbectl [-r beroot] create -E beName\n"
+	    "\tbectl [-r beroot] destroy [-Fo] {beName | beName@snapshot}\n"
+	    "\tbectl [-r beroot] export sourceBe\n"
+	    "\tbectl [-r beroot] import targetBe\n"
+	    "\tbectl [-r beroot] jail [-bU] [{-o key=value | -u key}]... beName\n"
 	    "\t      [utility [argument ...]]\n"
-	    "\tbectl list [-aDHs] [{-c property | -C property}]\n"
-	    "\tbectl mount beName [mountpoint]\n"
-	    "\tbectl rename origBeName newBeName\n"
-	    "\tbectl {ujail | unjail} {jailID | jailName | beName}\n"
-	    "\tbectl {umount | unmount} [-f] beName\n");
+	    "\tbectl [-r beroot] list [-aDHs] [{-c property | -C property}]\n"
+	    "\tbectl [-r beroot] mount beName [mountpoint]\n"
+	    "\tbectl [-r beroot] rename origBeName newBeName\n"
+	    "\tbectl [-r beroot] {ujail | unjail} {jailID | jailName | beName}\n"
+	    "\tbectl [-r beroot] {umount | unmount} [-f] beName\n");
 
 	return (explicit ? 0 : EX_USAGE);
 }
@@ -100,25 +78,28 @@ struct command_map_entry {
 	int (*fn)(int argc, char *argv[]);
 	/* True if libbe_print_on_error should be disabled */
 	bool silent;
+	bool save_history;
 };
 
 static struct command_map_entry command_map[] =
 {
-	{ "activate", bectl_cmd_activate,false   },
-	{ "create",   bectl_cmd_create,  false   },
-	{ "destroy",  bectl_cmd_destroy, false   },
-	{ "export",   bectl_cmd_export,  false   },
-	{ "import",   bectl_cmd_import,  false   },
+	{ "activate", bectl_cmd_activate,false, true    },
+	{ "create",   bectl_cmd_create,  false, true    },
+	{ "destroy",  bectl_cmd_destroy, false, true    },
+	{ "export",   bectl_cmd_export,  false, true    },
+	{ "import",   bectl_cmd_import,  false, true    },
 #if SOON
-	{ "add",      bectl_cmd_add,     false   },
+	{ "add",      bectl_cmd_add,     false, true    },
 #endif
-	{ "jail",     bectl_cmd_jail,    false   },
-	{ "list",     bectl_cmd_list,    false   },
-	{ "mount",    bectl_cmd_mount,   false   },
-	{ "rename",   bectl_cmd_rename,  false   },
-	{ "unjail",   bectl_cmd_unjail,  false   },
-	{ "unmount",  bectl_cmd_unmount, false   },
-	{ "check",    bectl_cmd_check,   true    },
+	{ "jail",     bectl_cmd_jail,    false, false   },
+	{ "list",     bectl_cmd_list,    false, false   },
+	{ "mount",    bectl_cmd_mount,   false, false   },
+	{ "rename",   bectl_cmd_rename,  false, true    },
+	{ "unjail",   bectl_cmd_unjail,  false, false   },
+	{ "ujail",    bectl_cmd_unjail,  false, false   },
+	{ "unmount",  bectl_cmd_unmount, false, false   },
+	{ "umount",   bectl_cmd_unmount, false, false   },
+	{ "check",    bectl_cmd_check,   true,  false   },
 };
 
 static struct command_map_entry *
@@ -180,13 +161,15 @@ bectl_cmd_activate(int argc, char *argv[])
 	/* activate logic goes here */
 	if ((err = be_activate(be, argv[0], temp)) != 0)
 		/* XXX TODO: more specific error msg based on err */
-		printf("Did not successfully activate boot environment %s\n",
+		printf("Did not successfully activate boot environment %s",
 		    argv[0]);
 	else
-		printf("Successfully activated boot environment %s\n", argv[0]);
+		printf("Successfully activated boot environment %s", argv[0]);
 
 	if (temp)
-		printf("for next boot\n");
+		printf(" for next boot");
+
+	printf("\n");
 
 	return (err);
 }
@@ -202,14 +185,18 @@ bectl_cmd_create(int argc, char *argv[])
 	char snapshot[BE_MAXPATHLEN];
 	char *atpos, *bootenv, *snapname;
 	int err, opt;
-	bool recursive;
+	bool empty, recursive;
 
 	snapname = NULL;
+	empty = false;
 	recursive = false;
-	while ((opt = getopt(argc, argv, "e:r")) != -1) {
+	while ((opt = getopt(argc, argv, "e:Er")) != -1) {
 		switch (opt) {
 		case 'e':
 			snapname = optarg;
+			break;
+		case 'E':
+			empty = true;
 			break;
 		case 'r':
 			recursive = true;
@@ -239,6 +226,13 @@ bectl_cmd_create(int argc, char *argv[])
 		 */
 		*atpos++ = '\0';
 		err = be_snapshot(be, bootenv, atpos, recursive, NULL);
+	} else if (empty) {
+		if (snapname || recursive) {
+			fprintf(stderr,
+			    "bectl create: -E cannot be combined with -e or -r\n");
+			return (usage(false));
+		}
+		err = be_create_empty(be, bootenv);
 	} else {
 		if (snapname == NULL)
 			/* Create from currently booted BE */
@@ -362,7 +356,8 @@ static int
 bectl_cmd_destroy(int argc, char *argv[])
 {
 	nvlist_t *props;
-	char *origin, *target, targetds[BE_MAXPATHLEN];
+	char *target, targetds[BE_MAXPATHLEN];
+	const char *origin;
 	int err, flags, opt;
 
 	flags = 0;
@@ -441,7 +436,7 @@ bectl_cmd_mount(int argc, char *argv[])
 
 	switch (err) {
 	case BE_ERR_SUCCESS:
-		printf("Successfully mounted %s at %s\n", bootenv, result_loc);
+		printf("%s\n", result_loc);
 		break;
 	default:
 		fprintf(stderr,
@@ -542,41 +537,65 @@ bectl_cmd_check(int argc, char *argv[] __unused)
 	return (0);
 }
 
+static char *
+save_cmdline(int argc, char *argv[])
+{
+	char *cmdline, *basename, *p;
+	int len, n, i;
+
+	len = MAXPATHLEN * 2 + 1; /* HIS_MAX_RECORD_LEN from zfs.h */
+	cmdline = p = malloc(len);
+	if (cmdline == NULL)
+		err(2, "malloc");
+
+	basename = strrchr(argv[0], '/');
+	if (basename == NULL)
+		basename = argv[0];
+	else
+		basename++;
+
+	n = strlcpy(p, basename, len);
+	for (i = 1; i < argc; i++) {
+		if (n >= len)
+			break;
+		p += n;
+		*p++ = ' ';
+		len -= (n + 1);
+		n = strlcpy(p, argv[i], len);
+	}
+
+	return (cmdline);
+}
+
 int
 main(int argc, char *argv[])
 {
 	struct command_map_entry *cmd;
 	const char *command;
-	char *root;
-	int rc;
+	char *root = NULL, *cmdline = NULL;
+	int opt, rc;
 
-	cmd = NULL;
-	root = NULL;
-	if (argc < 2)
-		return (usage(false));
-
-	if (strcmp(argv[1], "-r") == 0) {
-		if (argc < 4)
-			return (usage(false));
-		root = strdup(argv[2]);
-		command = argv[3];
-		argc -= 3;
-		argv += 3;
-	} else {
-		command = argv[1];
-		argc -= 1;
-		argv += 1;
+	while ((opt = getopt(argc, argv, "hr:")) != -1) {
+		switch (opt) {
+		case 'h':
+			exit(usage(true));
+		case 'r':
+			root = strdup(optarg);
+			break;
+		default:
+			exit(usage(false));
+		}
 	}
 
-	/* Handle command aliases */
-	if (strcmp(command, "umount") == 0)
-		command = "unmount";
+	argc -= optind;
+	argv += optind;
 
-	if (strcmp(command, "ujail") == 0)
-		command = "unjail";
+	if (argc == 0)
+		exit(usage(false));
 
-	if ((strcmp(command, "-?") == 0) || (strcmp(command, "-h") == 0))
-		return (usage(true));
+	command = *argv;
+	optreset = 1;
+	optind = 1;
 
 	if ((cmd = get_cmd_info(command)) == NULL) {
 		fprintf(stderr, "Unknown command: %s\n", command);
@@ -590,9 +609,18 @@ main(int argc, char *argv[])
 		return (-1);
 	}
 
+	if (cmd->save_history)
+		cmdline = save_cmdline(argc+optind, argv-optind);
+
 	libbe_print_on_error(be, !cmd->silent);
 
 	rc = cmd->fn(argc, argv);
+
+	if (cmd->save_history) {
+		if (rc == 0)
+			be_log_history(be, cmdline);
+		free(cmdline);
+	}
 
 	libbe_close(be);
 	return (rc);

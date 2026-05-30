@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2005 Marius Strobl <marius@FreeBSD.org>
  * All rights reserved.
@@ -26,8 +26,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef	_DEV_OFW_OFW_BUS_SUBR_H_
@@ -84,6 +82,7 @@ ofw_bus_get_type_t	ofw_bus_gen_get_type;
 
 /* Helper method to report interesting OF properties in pnpinfo */
 bus_child_pnpinfo_t	ofw_bus_gen_child_pnpinfo;
+bus_get_device_path_t	ofw_bus_gen_get_device_path;
 
 /* Routines for processing firmware interrupt maps */
 void	ofw_bus_setup_iinfo(phandle_t, struct ofw_bus_iinfo *, int);
@@ -117,6 +116,9 @@ phandle_t ofw_bus_find_iparent(phandle_t);
 int ofw_bus_is_compatible(device_t, const char *);
 int ofw_bus_is_compatible_strict(device_t, const char *);
 int ofw_bus_node_is_compatible(phandle_t, const char *);
+
+/* Check if machine (root node) is  compatible */
+bool ofw_bus_is_machine_compatible(const char *);
 
 /* 
  * Helper routine to search a list of compat properties.  The table is

@@ -55,8 +55,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_ddb.h"
 #include "opt_kstack_pages.h"
 #include "opt_platform.h"
@@ -419,6 +417,7 @@ aim_cpu_init(vm_offset_t toc)
 	bcopy(&hypertrapcode, (void *)(EXC_HEA + trap_offset), trapsize);
 	bcopy(&hypertrapcode, (void *)(EXC_HMI + trap_offset), trapsize);
 	bcopy(&hypertrapcode, (void *)(EXC_HVI + trap_offset), trapsize);
+	bcopy(&hypertrapcode, (void *)(EXC_HFAC + trap_offset), trapsize);
 	bcopy(&hypertrapcode, (void *)(EXC_SOFT_PATCH + trap_offset), trapsize);
 	#endif
 

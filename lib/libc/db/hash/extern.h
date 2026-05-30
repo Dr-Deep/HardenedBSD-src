@@ -27,9 +27,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)extern.h	8.4 (Berkeley) 6/16/94
- * $FreeBSD$
  */
 
 BUFHEAD	*__add_ovflpage(HTAB *, BUFHEAD *);
@@ -57,7 +54,7 @@ void	 __reclaim_buf(HTAB *, BUFHEAD *);
 int	 __split_page(HTAB *, u_int32_t, u_int32_t);
 
 /* Default hash routine. */
-extern u_int32_t (*__default_hash)(const void *, size_t);
+u_int32_t __default_hash(const void *, size_t);
 
 #ifdef HASH_STATISTICS
 extern int hash_accesses, hash_collisions, hash_expansions, hash_overflows;

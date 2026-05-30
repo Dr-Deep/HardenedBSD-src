@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2011 NetApp, Inc.
  * All rights reserved.
@@ -24,12 +24,7 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -117,7 +112,7 @@ struct domain {
 
 static SLIST_HEAD(, domain) domhead;
 
-#define	DRHD_MAX_UNITS	8
+#define	DRHD_MAX_UNITS	16
 static ACPI_DMAR_HARDWARE_UNIT	*drhds[DRHD_MAX_UNITS];
 static int			drhd_num;
 static struct vtdmap		*vtdmaps[DRHD_MAX_UNITS];
@@ -329,7 +324,7 @@ vtd_init(void)
 		snprintf(envname, sizeof(envname), "vtd.regmap.%d.addr", units);
 		if (getenv_ulong(envname, &mapaddr) == 0)
 			break;
-		vtdmaps[units] = (struct vtdmap *)PHYS_TO_DMAP(mapaddr);
+		vtdmaps[units] = PHYS_TO_DMAP(mapaddr);
 	}
 
 	if (units > 0)
@@ -358,7 +353,7 @@ vtd_init(void)
 
 		drhd = (ACPI_DMAR_HARDWARE_UNIT *)hdr;
 		drhds[units] = drhd;
-		vtdmaps[units] = (struct vtdmap *)PHYS_TO_DMAP(drhd->Address);
+		vtdmaps[units] = PHYS_TO_DMAP(drhd->Address);
 		if (++units >= DRHD_MAX_UNITS)
 			break;
 		remaining -= hdr->Length;
@@ -436,8 +431,8 @@ vtd_disable(void)
 	}
 }
 
-static void
-vtd_add_device(void *arg, uint16_t rid)
+static int
+vtd_add_device(void *arg, device_t dev __unused, uint16_t rid)
 {
 	int idx;
 	uint64_t *ctxp;
@@ -445,6 +440,8 @@ vtd_add_device(void *arg, uint16_t rid)
 	vm_paddr_t pt_paddr;
 	struct vtdmap *vtdmap;
 	uint8_t bus;
+
+	KASSERT(dom != NULL, ("domain is NULL"));
 
 	bus = PCI_RID2BUS(rid);
 	ctxp = ctx_tables[bus];
@@ -478,10 +475,11 @@ vtd_add_device(void *arg, uint16_t rid)
 	 * 'Not Present' entries are not cached in either the Context Cache
 	 * or in the IOTLB, so there is no need to invalidate either of them.
 	 */
+	return (0);
 }
 
-static void
-vtd_remove_device(void *arg, uint16_t rid)
+static int
+vtd_remove_device(void *arg, device_t dev __unused, uint16_t rid)
 {
 	int i, idx;
 	uint64_t *ctxp;
@@ -509,6 +507,7 @@ vtd_remove_device(void *arg, uint16_t rid)
 		vtd_ctx_global_invalidate(vtdmap);
 		vtd_iotlb_global_invalidate(vtdmap);
 	}
+	return (0);
 }
 
 #define	CREATE_MAPPING	0
@@ -582,7 +581,7 @@ vtd_update_mapping(void *arg, vm_paddr_t gpa, vm_paddr_t hpa, uint64_t len,
 			ptp[ptpindex] = vtophys(nlp)| VTD_PTE_RD | VTD_PTE_WR;
 		}
 
-		ptp = (uint64_t *)PHYS_TO_DMAP(ptp[ptpindex] & VTD_PTE_ADDR_M);
+		ptp = PHYS_TO_DMAP(ptp[ptpindex] & VTD_PTE_ADDR_M);
 	}
 
 	if ((gpa & ((1UL << ptpshift) - 1)) != 0)
@@ -603,21 +602,24 @@ vtd_update_mapping(void *arg, vm_paddr_t gpa, vm_paddr_t hpa, uint64_t len,
 	return (1UL << ptpshift);
 }
 
-static uint64_t
-vtd_create_mapping(void *arg, vm_paddr_t gpa, vm_paddr_t hpa, uint64_t len)
+static int
+vtd_create_mapping(void *arg, vm_paddr_t gpa, vm_paddr_t hpa, uint64_t len,
+    uint64_t *res_len)
 {
 
-	return (vtd_update_mapping(arg, gpa, hpa, len, CREATE_MAPPING));
+	*res_len = vtd_update_mapping(arg, gpa, hpa, len, CREATE_MAPPING);
+	return (0);
 }
 
-static uint64_t
-vtd_remove_mapping(void *arg, vm_paddr_t gpa, uint64_t len)
+static int
+vtd_remove_mapping(void *arg, vm_paddr_t gpa, uint64_t len, uint64_t *res_len)
 {
 
-	return (vtd_update_mapping(arg, gpa, 0, len, REMOVE_MAPPING));
+	*res_len = vtd_update_mapping(arg, gpa, 0, len, REMOVE_MAPPING);
+	return (0);
 }
 
-static void
+static int
 vtd_invalidate_tlb(void *dom)
 {
 	int i;
@@ -631,6 +633,7 @@ vtd_invalidate_tlb(void *dom)
 		vtdmap = vtdmaps[i];
 		vtd_iotlb_global_invalidate(vtdmap);
 	}
+	return (0);
 }
 
 static void *
@@ -740,7 +743,7 @@ vtd_free_ptp(uint64_t *ptp, int level)
 				continue;
 			if ((ptp[i] & VTD_PTE_SUPERPAGE) != 0)
 				continue;
-			nlp = (uint64_t *)PHYS_TO_DMAP(ptp[i] & VTD_PTE_ADDR_M);
+			nlp = PHYS_TO_DMAP(ptp[i] & VTD_PTE_ADDR_M);
 			vtd_free_ptp(nlp, level - 1);
 		}
 	}

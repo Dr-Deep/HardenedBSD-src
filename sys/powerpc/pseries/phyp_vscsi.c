@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright 2013 Nathan Whitehorn
  * All rights reserved.
@@ -26,9 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
@@ -39,7 +36,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/conf.h>
 #include <sys/eventhandler.h>
 #include <sys/rman.h>
-#include <sys/bus_dma.h>
 #include <sys/bio.h>
 #include <sys/ioccom.h>
 #include <sys/uio.h>
@@ -339,6 +335,10 @@ vscsi_attach(device_t dev)
 	vscsi_setup_bus(sc);
 	sc->xfer = malloc(sizeof(sc->xfer[0])*sc->max_transactions, M_VSCSI,
 	    M_NOWAIT);
+	if (sc->xfer == NULL) {
+		device_printf(dev, "Could not allocate buffer\n");
+		return (ENOMEM)
+	}
 	for (i = 0; i < sc->max_transactions; i++) {
 		xp = &sc->xfer[i];
 		xp->sc = sc;

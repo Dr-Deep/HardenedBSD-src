@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2017 Dell EMC
  * Copyright (c) 2007 Sandvine Incorporated
@@ -29,8 +29,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/endian.h>
 #include <sys/param.h>
 #include <sys/procfs.h>
@@ -107,6 +105,7 @@ static void *elf_note_powerpc_vsx(void *, size_t *);
 static void *elf_note_procstat_auxv(void *, size_t *);
 static void *elf_note_procstat_files(void *, size_t *);
 static void *elf_note_procstat_groups(void *, size_t *);
+static void *elf_note_procstat_kqueues(void *, size_t *);
 static void *elf_note_procstat_osrel(void *, size_t *);
 static void *elf_note_procstat_proc(void *, size_t *);
 static void *elf_note_procstat_psstrings(void *, size_t *);
@@ -373,9 +372,7 @@ elf_putnotes(pid_t pid, struct sbuf *sb, size_t *sizep)
 #endif
 #if defined(__powerpc__)
 		elf_putnote(NT_PPC_VMX, elf_note_powerpc_vmx, tids + i, sb);
-#ifndef __SPE__
 		elf_putnote(NT_PPC_VSX, elf_note_powerpc_vsx, tids + i, sb);
-#endif
 #endif
 	}
 
@@ -390,6 +387,7 @@ elf_putnotes(pid_t pid, struct sbuf *sb, size_t *sizep)
 	elf_putnote(NT_PROCSTAT_PSSTRINGS, elf_note_procstat_psstrings, &pid,
 	    sb);
 	elf_putnote(NT_PROCSTAT_AUXV, elf_note_procstat_auxv, &pid, sb);
+	elf_putnote(NT_PROCSTAT_KQUEUES, elf_note_procstat_kqueues, &pid, sb);
 #endif
 
 	size = sbuf_end_section(sb, old_len, 1, 0);
@@ -758,7 +756,7 @@ procstat_sysctl(void *arg, int what, size_t structsz, size_t *sizep)
 {
 	size_t len;
 	pid_t pid;
-	int name[4], structsize;
+	int name[5], structsize;
 	void *buf, *p;
 
 	pid = *(pid_t *)arg;
@@ -841,6 +839,14 @@ elf_note_procstat_auxv(void *arg, size_t *sizep)
 
 	return (procstat_sysctl(arg, KERN_PROC_AUXV,
 	    sizeof(Elf_Auxinfo), sizep));
+}
+
+static void *
+elf_note_procstat_kqueues(void *arg, size_t *sizep)
+{
+
+	return (procstat_sysctl(arg, KERN_PROC_KQUEUE,
+	    sizeof(struct kinfo_knote), sizep));
 }
 
 static void *

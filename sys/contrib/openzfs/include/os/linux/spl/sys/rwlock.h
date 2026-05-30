@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Copyright (C) 2007-2010 Lawrence Livermore National Security, LLC.
  *  Copyright (C) 2007 The Regents of the University of California.
@@ -129,7 +130,7 @@ RW_READ_HELD(krwlock_t *rwp)
 /*
  * The Linux rwsem implementation does not require a matching destroy.
  */
-#define	rw_destroy(rwp)		((void) 0)
+#define	rw_destroy(rwp)		ASSERT(!(RW_LOCK_HELD(rwp)))
 
 /*
  * Upgrading a rwsem from a reader to a writer is not supported by the

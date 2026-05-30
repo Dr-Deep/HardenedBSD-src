@@ -23,18 +23,15 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
-#include <opt_inet6.h>
+#include "opt_inet6.h"
 
 #include <sys/param.h>
-#include <sys/systm.h>
 #include <sys/conf.h>
 #include <sys/ctype.h>
 #include <sys/file.h>
 #include <sys/filedesc.h>
 #include <sys/jail.h>
+#include <sys/limits.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/poll.h>
@@ -43,11 +40,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 
-#include <net/if.h>
-#include <net/if_var.h>
-#include <net/if_dl.h>
-#include <net/if_types.h>
-
+#include <netlink/netlink.h>
 #include <sys/un.h>
 #include <netinet/in.h>
 
@@ -56,7 +49,10 @@ __FBSDID("$FreeBSD$");
 #include <compat/linux/linux_mib.h>
 #include <compat/linux/linux_util.h>
 
-CTASSERT(LINUX_IFNAMSIZ == IFNAMSIZ);
+_Static_assert(sizeof(struct sockaddr) == sizeof(struct l_sockaddr),
+    "Linux struct sockaddr size");
+_Static_assert(offsetof(struct sockaddr, sa_data) ==
+    offsetof(struct l_sockaddr, sa_data), "Linux struct sockaddr layout");
 
 static int bsd_to_linux_sigtbl[LINUX_SIGTBLSZ] = {
 	LINUX_SIGHUP,	/* SIGHUP */
@@ -236,117 +232,8 @@ bsd_to_linux_sigset(sigset_t *bss, l_sigset_t *lss)
 	}
 }
 
-/*
- * Translate a Linux interface name to a FreeBSD interface name,
- * and return the associated ifnet structure
- * bsdname and lxname need to be least IFNAMSIZ bytes long, but
- * can point to the same buffer.
- */
-struct ifnet *
-ifname_linux_to_bsd(struct thread *td, const char *lxname, char *bsdname)
-{
-	struct ifnet *ifp;
-	int len, unit;
-	char *ep;
-	int index;
-	bool is_eth, is_lo;
-
-	for (len = 0; len < LINUX_IFNAMSIZ; ++len)
-		if (!isalpha(lxname[len]) || lxname[len] == '\0')
-			break;
-	if (len == 0 || len == LINUX_IFNAMSIZ)
-		return (NULL);
-	/* Linux loopback interface name is lo (not lo0) */
-	is_lo = (len == 2 && strncmp(lxname, "lo", len) == 0);
-	unit = (int)strtoul(lxname + len, &ep, 10);
-	if ((ep == NULL || ep == lxname + len || ep >= lxname + LINUX_IFNAMSIZ) &&
-	    is_lo == 0)
-		return (NULL);
-	index = 0;
-	is_eth = (len == 3 && strncmp(lxname, "eth", len) == 0);
-
-	CURVNET_SET(TD_TO_VNET(td));
-	IFNET_RLOCK();
-	CK_STAILQ_FOREACH(ifp, &V_ifnet, if_link) {
-		/*
-		 * Allow Linux programs to use FreeBSD names. Don't presume
-		 * we never have an interface named "eth", so don't make
-		 * the test optional based on is_eth.
-		 */
-		if (strncmp(ifp->if_xname, lxname, LINUX_IFNAMSIZ) == 0)
-			break;
-		if (is_eth && IFP_IS_ETH(ifp) && unit == index++)
-			break;
-		if (is_lo && IFP_IS_LOOP(ifp))
-			break;
-	}
-	IFNET_RUNLOCK();
-	CURVNET_RESTORE();
-	if (ifp != NULL && bsdname != NULL)
-		strlcpy(bsdname, ifp->if_xname, IFNAMSIZ);
-	return (ifp);
-}
-
-void
-linux_ifflags(struct ifnet *ifp, short *flags)
-{
-	unsigned short fl;
-
-	fl = (ifp->if_flags | ifp->if_drv_flags) & 0xffff;
-	*flags = 0;
-	if (fl & IFF_UP)
-		*flags |= LINUX_IFF_UP;
-	if (fl & IFF_BROADCAST)
-		*flags |= LINUX_IFF_BROADCAST;
-	if (fl & IFF_DEBUG)
-		*flags |= LINUX_IFF_DEBUG;
-	if (fl & IFF_LOOPBACK)
-		*flags |= LINUX_IFF_LOOPBACK;
-	if (fl & IFF_POINTOPOINT)
-		*flags |= LINUX_IFF_POINTOPOINT;
-	if (fl & IFF_DRV_RUNNING)
-		*flags |= LINUX_IFF_RUNNING;
-	if (fl & IFF_NOARP)
-		*flags |= LINUX_IFF_NOARP;
-	if (fl & IFF_PROMISC)
-		*flags |= LINUX_IFF_PROMISC;
-	if (fl & IFF_ALLMULTI)
-		*flags |= LINUX_IFF_ALLMULTI;
-	if (fl & IFF_MULTICAST)
-		*flags |= LINUX_IFF_MULTICAST;
-}
-
-int
-linux_ifhwaddr(struct ifnet *ifp, struct l_sockaddr *lsa)
-{
-	struct ifaddr *ifa;
-	struct sockaddr_dl *sdl;
-
-	if (IFP_IS_LOOP(ifp)) {
-		bzero(lsa, sizeof(*lsa));
-		lsa->sa_family = LINUX_ARPHRD_LOOPBACK;
-		return (0);
-	}
-
-	if (!IFP_IS_ETH(ifp))
-		return (ENOENT);
-
-	CK_STAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
-		sdl = (struct sockaddr_dl*)ifa->ifa_addr;
-		if (sdl != NULL && (sdl->sdl_family == AF_LINK) &&
-		    (sdl->sdl_type == IFT_ETHER)) {
-			bzero(lsa, sizeof(*lsa));
-			lsa->sa_family = LINUX_ARPHRD_ETHER;
-			bcopy(LLADDR(sdl), lsa->sa_data, LINUX_IFHWADDRLEN);
-			return (0);
-		}
-	}
-
-	return (ENOENT);
-}
-
-int
-linux_to_bsd_domain(int domain)
+sa_family_t
+linux_to_bsd_domain(sa_family_t domain)
 {
 
 	switch (domain) {
@@ -364,12 +251,14 @@ linux_to_bsd_domain(int domain)
 		return (AF_IPX);
 	case LINUX_AF_APPLETALK:
 		return (AF_APPLETALK);
+	case LINUX_AF_NETLINK:
+		return (AF_NETLINK);
 	}
-	return (-1);
+	return (AF_UNKNOWN);
 }
 
-int
-bsd_to_linux_domain(int domain)
+sa_family_t
+bsd_to_linux_domain(sa_family_t domain)
 {
 
 	switch (domain) {
@@ -387,8 +276,10 @@ bsd_to_linux_domain(int domain)
 		return (LINUX_AF_IPX);
 	case AF_APPLETALK:
 		return (LINUX_AF_APPLETALK);
+	case AF_NETLINK:
+		return (LINUX_AF_NETLINK);
 	}
-	return (-1);
+	return (AF_UNKNOWN);
 }
 
 /*
@@ -402,13 +293,13 @@ bsd_to_linux_sockaddr(const struct sockaddr *sa, struct l_sockaddr **lsa,
     socklen_t len)
 {
 	struct l_sockaddr *kosa;
-	int bdom;
+	sa_family_t bdom;
 
 	*lsa = NULL;
 	if (len < 2 || len > UCHAR_MAX)
 		return (EINVAL);
 	bdom = bsd_to_linux_domain(sa->sa_family);
-	if (bdom == -1)
+	if (bdom == AF_UNKNOWN)
 		return (EAFNOSUPPORT);
 
 	kosa = malloc(len, M_LINUX, M_WAITOK);
@@ -418,8 +309,13 @@ bsd_to_linux_sockaddr(const struct sockaddr *sa, struct l_sockaddr **lsa,
 	return (0);
 }
 
+/*
+ * If sap is NULL, then osa points at already copied in linux sockaddr that
+ * should be edited in place.  Otherwise memory is allocated, sockaddr
+ * copied in and returned in *sap.
+ */
 int
-linux_to_bsd_sockaddr(const struct l_sockaddr *osa, struct sockaddr **sap,
+linux_to_bsd_sockaddr(struct l_sockaddr *osa, struct sockaddr **sap,
     socklen_t *len)
 {
 	struct sockaddr *sa;
@@ -449,13 +345,15 @@ linux_to_bsd_sockaddr(const struct l_sockaddr *osa, struct sockaddr **sap,
 	}
 #endif
 
-	kosa = malloc(salen, M_SONAME, M_WAITOK);
-
-	if ((error = copyin(osa, kosa, *len)))
-		goto out;
+	if (sap != NULL) {
+		kosa = malloc(salen, M_SONAME, M_WAITOK);
+		if ((error = copyin(osa, kosa, *len)))
+			goto out;
+	} else
+		kosa = osa;
 
 	bdom = linux_to_bsd_domain(kosa->sa_family);
-	if (bdom == -1) {
+	if (bdom == AF_UNKNOWN) {
 		error = EAFNOSUPPORT;
 		goto out;
 	}
@@ -514,16 +412,27 @@ linux_to_bsd_sockaddr(const struct l_sockaddr *osa, struct sockaddr **sap,
 		}
 	}
 
+	if (bdom == AF_NETLINK) {
+		if (salen < sizeof(struct sockaddr_nl)) {
+			error = EINVAL;
+			goto out;
+		}
+		salen = sizeof(struct sockaddr_nl);
+	}
+
 	sa = (struct sockaddr *)kosa;
 	sa->sa_family = bdom;
 	sa->sa_len = salen;
 
-	*sap = sa;
-	*len = salen;
+	if (sap != NULL) {
+		*sap = sa;
+		*len = salen;
+	}
 	return (0);
 
 out:
-	free(kosa, M_SONAME);
+	if (sap != NULL)
+		free(kosa, M_SONAME);
 	return (error);
 }
 

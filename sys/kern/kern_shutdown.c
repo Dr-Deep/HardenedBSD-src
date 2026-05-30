@@ -32,13 +32,9 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)kern_shutdown.c	8.3 (Berkeley) 1/21/94
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_ddb.h"
 #include "opt_ekcd.h"
 #include "opt_kdb.h"
@@ -77,6 +73,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/sbuf.h>
 #include <sys/sched.h>
 #include <sys/smp.h>
+#include <sys/stdarg.h>
 #include <sys/sysctl.h>
 #include <sys/sysproto.h>
 #include <sys/taskqueue.h>
@@ -118,12 +115,6 @@ SYSCTL_INT(_kern, OID_AUTO, reboot_wait_time, CTLFLAG_RWTUN,
     &reboot_wait_time, 0,
     "Seconds to wait before rebooting");
 
-/*
- * Note that stdarg.h and the ANSI style va_start macro is used for both
- * ANSI and traditional C compilers.
- */
-#include <machine/stdarg.h>
-
 #ifdef KDB
 #ifdef KDB_UNATTENDED
 int debugger_on_panic = 0;
@@ -131,18 +122,18 @@ int debugger_on_panic = 0;
 int debugger_on_panic = 1;
 #endif
 SYSCTL_INT(_debug, OID_AUTO, debugger_on_panic,
-    CTLFLAG_RWTUN | CTLFLAG_SECURE,
-    &debugger_on_panic, 0, "Run debugger on kernel panic");
+    CTLFLAG_RWTUN, &debugger_on_panic, 0,
+    "Run debugger on kernel panic");
 
 static bool debugger_on_recursive_panic = false;
 SYSCTL_BOOL(_debug, OID_AUTO, debugger_on_recursive_panic,
-    CTLFLAG_RWTUN | CTLFLAG_SECURE,
-    &debugger_on_recursive_panic, 0, "Run debugger on recursive kernel panic");
+    CTLFLAG_RWTUN, &debugger_on_recursive_panic, 0,
+    "Run debugger on recursive kernel panic");
 
 int debugger_on_trap = 0;
 SYSCTL_INT(_debug, OID_AUTO, debugger_on_trap,
-    CTLFLAG_RWTUN | CTLFLAG_SECURE,
-    &debugger_on_trap, 0, "Run debugger on kernel trap before panic");
+    CTLFLAG_RWTUN, &debugger_on_trap, 0,
+    "Run debugger on kernel trap before panic");
 
 #ifdef KDB_TRACE
 static int trace_on_panic = 1;
@@ -230,11 +221,12 @@ SYSCTL_INT(_kern, OID_AUTO, kerneldump_gzlevel, CTLFLAG_RWTUN,
  * Variable panicstr contains argument to first call to panic; used as flag
  * to indicate that the kernel has already called panic.
  */
-const char *panicstr;
-bool __read_frequently panicked;
+const char *panicstr __read_mostly;
+bool scheduler_stopped __read_frequently;
 
-int __read_mostly dumping;		/* system is dumping */
-int rebooting;				/* system is rebooting */
+int dumping __read_mostly;		/* system is dumping */
+int rebooting __read_mostly;		/* system is rebooting */
+bool dumped_core __read_mostly;		/* system successfully dumped core */
 /*
  * Used to serialize between sysctl kern.shutdown.dumpdevname and list
  * modifications via ioctl.
@@ -246,8 +238,8 @@ MTX_SYSINIT(dumper_configs, &dumpconf_list_lk, "dumper config list", MTX_DEF);
 static TAILQ_HEAD(dumpconflist, dumperinfo) dumper_configs =
     TAILQ_HEAD_INITIALIZER(dumper_configs);
 
-/* Context information for dump-debuggers. */
-static struct pcb dumppcb;		/* Registers. */
+/* Context information for dump-debuggers, saved by the dump_savectx() macro. */
+struct pcb dumppcb;			/* Registers. */
 lwpid_t dumptid;			/* Thread ID. */
 
 static struct cdevsw reroot_cdevsw = {
@@ -268,11 +260,9 @@ shutdown_conf(void *unused)
 
 	EVENTHANDLER_REGISTER(shutdown_final, poweroff_wait, NULL,
 	    SHUTDOWN_PRI_FIRST);
-	EVENTHANDLER_REGISTER(shutdown_final, shutdown_halt, NULL,
-	    SHUTDOWN_PRI_LAST + 100);
 	EVENTHANDLER_REGISTER(shutdown_final, shutdown_panic, NULL,
 	    SHUTDOWN_PRI_LAST + 100);
-	EVENTHANDLER_REGISTER(shutdown_final, shutdown_reset, NULL,
+	EVENTHANDLER_REGISTER(shutdown_final, shutdown_halt, NULL,
 	    SHUTDOWN_PRI_LAST + 200);
 }
 
@@ -396,17 +386,6 @@ print_uptime(void)
 	printf("%lds\n", (long)ts.tv_sec);
 }
 
-/*
- * Set up a context that can be extracted from the dump.
- */
-void
-dump_savectx(void)
-{
-
-	savectx(&dumppcb);
-	dumptid = curthread->td_tid;
-}
-
 int
 doadump(boolean_t textdump)
 {
@@ -434,8 +413,10 @@ doadump(boolean_t textdump)
 
 		TAILQ_FOREACH(di, &dumper_configs, di_next) {
 			error = dumpsys(di);
-			if (error == 0)
+			if (error == 0) {
+				dumped_core = true;
 				break;
+			}
 		}
 	}
 
@@ -488,7 +469,7 @@ kern_reboot(int howto)
 	 * deadlock than to lock against code that won't ever
 	 * continue.
 	 */
-	while (mtx_owned(&Giant))
+	while (!SCHEDULER_STOPPED() && mtx_owned(&Giant))
 		mtx_unlock(&Giant);
 
 #if defined(SMP)
@@ -508,9 +489,6 @@ kern_reboot(int howto)
 	/* We're in the process of rebooting. */
 	rebooting = 1;
 	reboottrace(howto);
-
-	/* We are out of the debugger now. */
-	kdb_active = 0;
 
 	/*
 	 * Do any callouts that should be done BEFORE syncing the filesystems.
@@ -549,6 +527,12 @@ kern_reboot(int howto)
 		boottrace_dump_console();
 
 	EVENTHANDLER_INVOKE(shutdown_final, howto);
+
+	/*
+	 * Call this directly so that reset is attempted even if shutdown
+	 * handlers are not yet registered.
+	 */
+	shutdown_reset(NULL, howto);
 
 	for(;;) ;	/* safety against shutdown_reset not working */
 	/* NOTREACHED */
@@ -915,6 +899,15 @@ vpanic(const char *fmt, va_list ap)
 	int bootopt, newpanic;
 	static char buf[256];
 
+	/*
+	 * 'fmt' must not be NULL as it is put into 'panicstr' which is then
+	 * used as a flag to detect if the kernel has panicked.  Also, although
+	 * vsnprintf() supports a NULL 'fmt' argument, use a more informative
+	 * message.
+	 */
+	if (fmt == NULL)
+		fmt = "<no panic string!>";
+
 	spinlock_enter();
 
 #ifdef SMP
@@ -923,7 +916,7 @@ vpanic(const char *fmt, va_list ap)
 	 * concurrently entering panic.  Only the winner will proceed
 	 * further.
 	 */
-	if (panicstr == NULL && !kdb_active) {
+	if (!KERNEL_PANICKED() && !kdb_active) {
 		other_cpus = all_cpus;
 		CPU_CLR(PCPU_GET(cpuid), &other_cpus);
 		stop_cpus_hard(other_cpus);
@@ -934,7 +927,7 @@ vpanic(const char *fmt, va_list ap)
 	 * Ensure that the scheduler is stopped while panicking, even if panic
 	 * has been entered from kdb.
 	 */
-	td->td_stopsched = 1;
+	scheduler_stopped = true;
 
 	bootopt = RB_AUTOBOOT;
 	newpanic = 0;
@@ -943,9 +936,11 @@ vpanic(const char *fmt, va_list ap)
 	else {
 		bootopt |= RB_DUMP;
 		panicstr = fmt;
-		panicked = true;
 		newpanic = 1;
 	}
+
+	/* Unmute when panic */
+	cn_mute = 0;
 
 	if (newpanic) {
 		(void)vsnprintf(buf, sizeof(buf), fmt, ap);
@@ -1025,7 +1020,7 @@ kproc_shutdown(void *arg, int howto)
 	struct proc *p;
 	int error;
 
-	if (KERNEL_PANICKED())
+	if (SCHEDULER_STOPPED())
 		return;
 
 	p = (struct proc *)arg;
@@ -1045,7 +1040,7 @@ kthread_shutdown(void *arg, int howto)
 	struct thread *td;
 	int error;
 
-	if (KERNEL_PANICKED())
+	if (SCHEDULER_STOPPED())
 		return;
 
 	td = (struct thread *)arg;
@@ -1086,7 +1081,7 @@ dumpdevname_sysctl_handler(SYSCTL_HANDLER_ARGS)
 	return (error);
 }
 SYSCTL_PROC(_kern_shutdown, OID_AUTO, dumpdevname,
-    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, &dumper_configs, 0,
+    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE | CTLFLAG_ROOTONLY, &dumper_configs, 0,
     dumpdevname_sysctl_handler, "A",
     "Device(s) for kernel dumps");
 

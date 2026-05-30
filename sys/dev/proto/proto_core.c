@@ -24,9 +24,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
@@ -41,11 +38,11 @@ __FBSDID("$FreeBSD$");
 #include <sys/proc.h>
 #include <sys/queue.h>
 #include <sys/reboot.h>
+#include <sys/stdarg.h>
 #include <machine/bus.h>
 #include <sys/rman.h>
 #include <sys/uio.h>
 #include <machine/resource.h>
-#include <machine/stdarg.h>
 
 #include <dev/pci/pcivar.h>
 

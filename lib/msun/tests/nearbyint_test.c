@@ -32,9 +32,6 @@
  * - tests for harder values (more mantissa bits than float)
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <fenv.h>
 #include <math.h>
@@ -155,6 +152,9 @@ test_modf(int testindex)
 ATF_TC_WITHOUT_HEAD(nearbyint);
 ATF_TC_BODY(nearbyint, tc)
 {
+#if defined(__aarch64__) || defined(__riscv)
+	atf_tc_expect_fail("https://bugs.freebsd.org/290099");
+#endif
 	unsigned i;
 
 	for (i = 0; i < nitems(tests); i++) {

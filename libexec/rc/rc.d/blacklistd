@@ -1,7 +1,6 @@
 #!/bin/sh
 #
 # Copyright (c) 2016 The FreeBSD Foundation
-# All rights reserved.
 #
 # This software was developed by Kurt Lidl under sponsorship from the
 # FreeBSD Foundation.
@@ -27,19 +26,29 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 # 
-# $FreeBSD$
 #
 
 # PROVIDE: blacklistd
-# REQUIRE: netif pf
+# REQUIRE: netif ipfilter ipfw pf
 
 . /etc/rc.subr
 
 name="blacklistd"
-desc="System blacklist daemon"
+desc="The blacklist daemon has been renamed to blocklist"
 rcvar="blacklistd_enable"
 command="/usr/sbin/${name}"
 required_files="/etc/blacklistd.conf"
+start_precmd="blacklistd_prestart"
+
+# no svcj options needed
+: ${blacklistd_svcj_options:=""}
+
+blacklistd_prestart()
+{
+	echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
+	echo "@  WARNING: blacklistd has been renamed to blocklistd      @"
+	echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
+}
 
 load_rc_config $name
 run_rc_command "$1"

@@ -32,20 +32,6 @@
  * SUCH DAMAGE.
  */
 
-#ifndef lint
-static char const copyright[] =
-"@(#) Copyright (c) 1991, 1993\n\
-	The Regents of the University of California.  All rights reserved.\n";
-#endif /* not lint */
-
-#ifndef lint
-#if 0
-static char sccsid[] = "@(#)main.c	8.6 (Berkeley) 5/28/95";
-#endif
-#endif /* not lint */
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <stdio.h>
 #include <signal.h>
 #include <sys/stat.h>
@@ -53,6 +39,9 @@ __FBSDID("$FreeBSD$");
 #include <fcntl.h>
 #include <locale.h>
 #include <errno.h>
+#include <termios.h>
+#include <paths.h>
+#include <unistd.h>
 
 #include "shell.h"
 #include "main.h"
@@ -100,9 +89,16 @@ static char *find_dot_file(char *);
 int
 main(int argc, char *argv[])
 {
-	struct stackmark smark, smark2;
+	/*
+	 * As smark is accessed after a longjmp, it cannot be a local in main().
+	 * The C standard specifies that the values of non-volatile local
+	 * variables are unspecified after a jump if modified between the
+	 * setjmp and longjmp.
+	 */
+	static struct stackmark smark, smark2;
 	volatile int state;
 	char *shinit;
+	int login;
 
 	(void) setlocale(LC_ALL, "");
 	initcharset();
@@ -131,18 +127,34 @@ main(int argc, char *argv[])
 	trputs("Shell args:  ");  trargs(argv);
 #endif
 	rootpid = getpid();
+	if (rootpid == 1) {
+		/*
+		 * Make sh usable for invocation as interactive init
+		 * substitute with init_path=/bin/sh, by opening
+		 * file descriptors 0, 1, and 2 on /dev/console.
+		 */
+		if (fcntl(STDIN_FILENO, F_GETFL, NULL) == -1 && errno == EBADF) {
+			(void)open(_PATH_CONSOLE, O_RDWR);
+			(void)setsid();
+			(void)tcsetsid(STDIN_FILENO, rootpid);
+		}
+		if (fcntl(STDOUT_FILENO, F_GETFL, NULL) == -1 && errno == EBADF)
+			(void)dup2(STDIN_FILENO, STDOUT_FILENO);
+		if (fcntl(STDERR_FILENO, F_GETFL, NULL) == -1 && errno == EBADF)
+			(void)dup2(STDIN_FILENO, STDERR_FILENO);
+	}
 	rootshell = 1;
 	INTOFF;
 	initvar();
 	setstackmark(&smark);
 	setstackmark(&smark2);
-	procargs(argc, argv);
+	login = procargs(argc, argv);
 	trap_init();
 	pwd_init(iflag);
 	INTON;
 	if (iflag)
 		chkmail(1);
-	if (argv[0] && argv[0][0] == '-') {
+	if (login) {
 		state = 1;
 		read_profile("/etc/profile");
 state1:

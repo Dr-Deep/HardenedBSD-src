@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -312,6 +313,13 @@ extern void membar_enter(void);
  * will be resolved before the subsequent lock update reaches visibility.
  */
 extern void membar_exit(void);
+
+/*
+ * Make all stores and loads emitted prior to the the barrier complete before
+ * crossing it, while also making sure stores and loads emitted after the
+ * barrier only start being executed after crossing it.
+ */
+extern void membar_sync(void);
 
 /*
  * Arrange that all stores issued before this point in the code reach

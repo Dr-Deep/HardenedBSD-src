@@ -25,9 +25,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/bus.h>
 #include <sys/time.h>
@@ -44,7 +41,7 @@ __FBSDID("$FreeBSD$");
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
-#include <dev/extres/clk/clk_fixed.h>
+#include <dev/clk/clk_fixed.h>
 
 #include <arm/allwinner/aw_machdep.h>
 
@@ -90,7 +87,7 @@ __FBSDID("$FreeBSD$");
 
 #define	HALF_OF_SEC_NS			500000000
 #define	RTC_RES_US			1000000
-#define	RTC_TIMEOUT			70
+#define	RTC_TIMEOUT			150
 
 #define	RTC_READ(sc, reg) 		bus_read_4((sc)->res, (reg))
 #define	RTC_WRITE(sc, reg, val)		bus_write_4((sc)->res, (reg), (val))
@@ -137,8 +134,10 @@ static struct ofw_compat_data compat_data[] = {
 	{ "allwinner,sun7i-a20-rtc", (uintptr_t) &a20_conf },
 	{ "allwinner,sun6i-a31-rtc", (uintptr_t) &a31_conf },
 	{ "allwinner,sun8i-h3-rtc", (uintptr_t) &h3_conf },
+	{ "allwinner,sun20i-d1-rtc", (uintptr_t) &h3_conf },
 	{ "allwinner,sun50i-h5-rtc", (uintptr_t) &h3_conf },
 	{ "allwinner,sun50i-h6-rtc", (uintptr_t) &h3_conf },
+	{ "allwinner,sun50i-h616-rtc", (uintptr_t) &h3_conf },
 	{ NULL, 0 }
 };
 
@@ -150,11 +149,13 @@ struct aw_rtc_softc {
 
 static struct clk_fixed_def aw_rtc_osc32k = {
 	.clkdef.id = 0,
+	.clkdef.name = "osc32k",
 	.freq = 32768,
 };
 
 static struct clk_fixed_def aw_rtc_iosc = {
 	.clkdef.id = 2,
+	.clkdef.name = "iosc",
 };
 
 static void	aw_rtc_install_clocks(struct aw_rtc_softc *sc, device_t dev);
@@ -253,23 +254,33 @@ aw_rtc_install_clocks(struct aw_rtc_softc *sc, device_t dev) {
 	int nclocks;
 
 	node = ofw_bus_get_node(dev);
-	nclocks = ofw_bus_string_list_to_array(node, "clock-output-names", &clknames);
-	/* No clocks to export */
-	if (nclocks <= 0)
+
+	/* Nothing to do. */
+	if (!OF_hasprop(node, "clocks"))
 		return;
 
-	if (nclocks != 3) {
-		device_printf(dev, "Having only %d clocks instead of 3, aborting\n", nclocks);
-		return;
+	/*
+	 * If the device tree gives us specific output names for the clocks,
+	 * use them.
+	 */
+	nclocks = ofw_bus_string_list_to_array(node, "clock-output-names", &clknames);
+	if (nclocks > 0) {
+		if (nclocks != 3) {
+			device_printf(dev,
+			    "Found %d clocks names instead of 3, aborting\n",
+			    nclocks);
+			return;
+		}
+
+		aw_rtc_osc32k.clkdef.name = clknames[0];
+		aw_rtc_iosc.clkdef.name = clknames[2];
 	}
 
 	clkdom = clkdom_create(dev);
 
-	aw_rtc_osc32k.clkdef.name = clknames[0];
 	if (clknode_fixed_register(clkdom, &aw_rtc_osc32k) != 0)
 		device_printf(dev, "Cannot register osc32k clock\n");
 
-	aw_rtc_iosc.clkdef.name = clknames[2];
 	aw_rtc_iosc.freq = sc->conf->iosc_freq;
 	if (clknode_fixed_register(clkdom, &aw_rtc_iosc) != 0)
 		device_printf(dev, "Cannot register iosc clock\n");
@@ -311,7 +322,8 @@ aw_rtc_settime(device_t dev, struct timespec *ts)
 {
 	struct aw_rtc_softc *sc  = device_get_softc(dev);
 	struct clocktime ct;
-	uint32_t clk, rdate, rtime;
+	uint32_t rdate, rtime;
+	u_int i;
 
 	/* RTC resolution is 1 sec */
 	if (ts->tv_nsec >= HALF_OF_SEC_NS)
@@ -325,12 +337,12 @@ aw_rtc_settime(device_t dev, struct timespec *ts)
 		return (EINVAL);
 	}
 
-	for (clk = 0; RTC_READ(sc, LOSC_CTRL_REG) & LOSC_BUSY_MASK; clk++) {
-		if (clk > RTC_TIMEOUT) {
+	for (i = 0; RTC_READ(sc, LOSC_CTRL_REG) & LOSC_BUSY_MASK; i++) {
+		if (i > RTC_TIMEOUT) {
 			device_printf(dev, "could not set time, RTC busy\n");
 			return (EINVAL);
 		}
-		DELAY(1);
+		DELAY(10);
 	}
 	/* reset time register to avoid unexpected date increment */
 	RTC_WRITE(sc, sc->conf->rtc_time, 0);
@@ -342,21 +354,21 @@ aw_rtc_settime(device_t dev, struct timespec *ts)
 	rtime = SET_SEC_VALUE(ct.sec) | SET_MIN_VALUE(ct.min) |
 		SET_HOUR_VALUE(ct.hour);
 
-	for (clk = 0; RTC_READ(sc, LOSC_CTRL_REG) & LOSC_BUSY_MASK; clk++) {
-		if (clk > RTC_TIMEOUT) {
+	for (i = 0; RTC_READ(sc, LOSC_CTRL_REG) & LOSC_BUSY_MASK; i++) {
+		if (i > RTC_TIMEOUT) {
 			device_printf(dev, "could not set date, RTC busy\n");
 			return (EINVAL);
 		}
-		DELAY(1);
+		DELAY(10);
 	}
 	RTC_WRITE(sc, sc->conf->rtc_date, rdate);
 
-	for (clk = 0; RTC_READ(sc, LOSC_CTRL_REG) & LOSC_BUSY_MASK; clk++) {
-		if (clk > RTC_TIMEOUT) {
+	for (i = 0; RTC_READ(sc, LOSC_CTRL_REG) & LOSC_BUSY_MASK; i++) {
+		if (i > RTC_TIMEOUT) {
 			device_printf(dev, "could not set time, RTC busy\n");
 			return (EINVAL);
 		}
-		DELAY(1);
+		DELAY(10);
 	}
 	RTC_WRITE(sc, sc->conf->rtc_time, rtime);
 

@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 .PATH: ${SRCTOP}/libexec/ypxfr ${SRCTOP}/usr.sbin/ypserv
 
 PACKAGE=	yp
@@ -11,5 +9,7 @@ CFLAGS+= -Dyp_error=warnx
 CFLAGS+= -I${SRCTOP}/libexec/ypxfr -I${SRCTOP}/usr.sbin/ypserv
 
 WARNS?=	1
+
+CFI_OVERRIDE=	-fno-sanitize=cfi-icall
 
 .include <bsd.prog.mk>

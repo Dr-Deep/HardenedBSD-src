@@ -1,8 +1,8 @@
 /*
  * strchr - find a character in a string
  *
- * Copyright (c) 2014-2020, Arm Limited.
- * SPDX-License-Identifier: MIT
+ * Copyright (c) 2014-2022, Arm Limited.
+ * SPDX-License-Identifier: MIT OR Apache-2.0 WITH LLVM-exception
  */
 
 /* Assumptions:
@@ -11,7 +11,7 @@
  * Neon Available.
  */
 
-#include "../asmdefs.h"
+#include "asmdefs.h"
 
 /* Arguments and results.  */
 #define srcin		x0
@@ -51,7 +51,6 @@
 /* Locals and temporaries.  */
 
 ENTRY (__strchr_aarch64)
-	PTR_ARG (0)
 	/* Magic constant 0xc0300c03 to allow us to identify which lane
 	   matches the requested byte.  Even bits are set if the character
 	   matches, odd bits if either the char is NUL or matches.  */

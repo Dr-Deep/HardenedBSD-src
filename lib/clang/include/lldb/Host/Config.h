@@ -1,4 +1,3 @@
-// $FreeBSD$
 //===-- Config.h -----------------------------------------------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -24,15 +23,15 @@
 
 #define HAVE_NR_PROCESS_VM_READV 0
 
-#ifndef HAVE_LIBCOMPRESSION
-/* #undef HAVE_LIBCOMPRESSION */
-#endif
+#define HAVE_LIBCOMPRESSION 0
 
 #define LLDB_ENABLE_POSIX 1
 
 #define LLDB_ENABLE_TERMIOS 1
 
 #define LLDB_ENABLE_LZMA 1
+
+#define LLVM_ENABLE_CURL 0
 
 #define LLDB_ENABLE_CURSES 1
 
@@ -52,6 +51,10 @@
 
 /* #undef LLDB_PYTHON_HOME */
 
-#define LLDB_LIBDIR_SUFFIX ""
+#define LLDB_INSTALL_LIBDIR_BASENAME "lib"
+
+/* #undef LLDB_GLOBAL_INIT_DIRECTORY */
+
+#define LLDB_BUG_REPORT_URL "https://bugs.freebsd.org/submit/"
 
 #endif // #ifndef LLDB_HOST_CONFIG_H

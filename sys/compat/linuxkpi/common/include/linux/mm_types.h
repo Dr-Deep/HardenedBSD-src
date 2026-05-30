@@ -22,8 +22,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _LINUXKPI_LINUX_MM_TYPES_H_
@@ -31,6 +29,7 @@
 
 #include <linux/types.h>
 #include <linux/page.h>
+#include <linux/rbtree.h>
 #include <linux/rwsem.h>
 
 #include <asm/atomic.h>
@@ -79,5 +78,16 @@ mmgrab(struct mm_struct *mm)
 
 extern struct mm_struct *linux_get_task_mm(struct task_struct *);
 #define	get_task_mm(task) linux_get_task_mm(task)
+
+struct folio {
+	/*
+	 * The page member must be at the beginning because `page_folio(p)`
+	 * casts from a `struct page` to a `struct folio`.
+	 *
+	 * `release_pages()` also relies on this to be able to accept either a
+	 * list of `struct page` or a list of `struct folio`.
+	 */
+	struct page page;
+};
 
 #endif					/* _LINUXKPI_LINUX_MM_TYPES_H_ */

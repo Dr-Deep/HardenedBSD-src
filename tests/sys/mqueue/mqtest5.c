@@ -1,4 +1,3 @@
-/* $FreeBSD$ */
 
 #include <sys/types.h>
 #include <sys/event.h>
@@ -11,8 +10,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-
-#include "freebsd_test_suite/macros.h"
 
 #define MQNAME	"/mytstqueue5"
 #define LOOPS	1000
@@ -35,8 +32,6 @@ main(void)
 	siginfo_t info;
 	mqd_t mq;
 	pid_t pid;
-
-	PLAIN_REQUIRE_KERNEL_MODULE("mqueuefs", 0);
 
 	mq_unlink(MQNAME);
 

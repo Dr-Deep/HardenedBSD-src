@@ -1,8 +1,8 @@
 /*
  * memcpy - copy memory area
  *
- * Copyright (c) 2012-2020, Arm Limited.
- * SPDX-License-Identifier: MIT
+ * Copyright (c) 2012-2022, Arm Limited.
+ * SPDX-License-Identifier: MIT OR Apache-2.0 WITH LLVM-exception
  */
 
 /* Assumptions:
@@ -11,7 +11,7 @@
  *
  */
 
-#include "../asmdefs.h"
+#include "asmdefs.h"
 
 #define dstin	x0
 #define src	x1
@@ -55,9 +55,6 @@
 
 ENTRY_ALIAS (__memmove_aarch64)
 ENTRY (__memcpy_aarch64)
-	PTR_ARG (0)
-	PTR_ARG (1)
-	SIZE_ARG (2)
 	add	srcend, src, count
 	add	dstend, dstin, count
 	cmp	count, 128

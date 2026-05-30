@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2005-2007 Joseph Koshy
  * Copyright (c) 2007 The FreeBSD Foundation
@@ -28,8 +28,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef	_PMCLOG_H_
@@ -132,7 +130,8 @@ struct pmclog_ev_proccreate {
 struct pmclog_ev_procexec {
 	pid_t		pl_pid;
 	pmc_id_t	pl_pmcid;
-	uintfptr_t	pl_entryaddr;
+	uintptr_t	pl_baseaddr;
+	uintptr_t	pl_dynaddr;
 	char		pl_pathname[PATH_MAX];
 };
 
@@ -170,7 +169,10 @@ struct pmclog_ev {
 	enum pmclog_state pl_state;	/* state after 'get_event()' */
 	off_t		  pl_offset;	/* byte offset in stream */
 	size_t		  pl_count;	/* count of records so far */
-	struct timespec   pl_ts;	/* log entry timestamp */
+	union {
+		uint64_t	  pl_tsc;	/* TSC timestamp */
+		struct timespec pl_ts;		/* log entry timestamp (legacy) */
+	};
 	enum pmclog_type  pl_type;	/* type of log entry */
 	void		 *pl_data;
 	int		  pl_len;
@@ -230,4 +232,3 @@ void	pmclog_close(void *_cookie);
 __END_DECLS
 
 #endif
-

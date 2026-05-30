@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/* Copyright(c) 2007-2022 Intel Corporation */
-/* $FreeBSD$ */
+/* Copyright(c) 2007-2025 Intel Corporation */
 #include "qat_freebsd.h"
 #include "adf_cfg.h"
 #include "adf_common_drv.h"
@@ -15,27 +14,32 @@
 #include <sys/sbuf.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
+#include <sys/priv.h>
 
 static int adf_ring_show(SYSCTL_HANDLER_ARGS)
 {
 	struct adf_etr_ring_data *ring = arg1;
 	struct adf_etr_bank_data *bank = ring->bank;
+	struct adf_hw_csr_ops *csr_ops = GET_CSR_OPS(bank->accel_dev);
 	struct resource *csr = ring->bank->csr_addr;
 	struct sbuf sb;
 	int error, word;
 	uint32_t *wp, *end;
 
+	if (priv_check(curthread, PRIV_DRIVER) != 0)
+		return EPERM;
+
 	sbuf_new_for_sysctl(&sb, NULL, 128, req);
 	{
 		int head, tail, empty;
 
-		head = READ_CSR_RING_HEAD(csr,
-					  bank->bank_number,
-					  ring->ring_number);
-		tail = READ_CSR_RING_TAIL(csr,
-					  bank->bank_number,
-					  ring->ring_number);
-		empty = READ_CSR_E_STAT(csr, bank->bank_number);
+		head = csr_ops->read_csr_ring_head(csr,
+						   bank->bank_number,
+						   ring->ring_number);
+		tail = csr_ops->read_csr_ring_tail(csr,
+						   bank->bank_number,
+						   ring->ring_number);
+		empty = csr_ops->read_csr_e_stat(csr, bank->bank_number);
 
 		sbuf_cat(&sb, "\n------- Ring configuration -------\n");
 		sbuf_printf(&sb,
@@ -119,14 +123,19 @@ static int adf_bank_show(SYSCTL_HANDLER_ARGS)
 {
 	struct adf_etr_bank_data *bank;
 	struct adf_accel_dev *accel_dev = NULL;
+	struct adf_hw_csr_ops *csr_ops = NULL;
 	struct adf_hw_device_data *hw_data = NULL;
 	u8 num_rings_per_bank = 0;
 	struct sbuf sb;
 	int error, ring_id;
 
+	if (priv_check(curthread, PRIV_DRIVER) != 0)
+		return EPERM;
+
 	sbuf_new_for_sysctl(&sb, NULL, 128, req);
 	bank = arg1;
 	accel_dev = bank->accel_dev;
+	csr_ops = GET_CSR_OPS(bank->accel_dev);
 	hw_data = accel_dev->hw_device;
 	num_rings_per_bank = hw_data->num_rings_per_bank;
 	sbuf_printf(&sb,
@@ -140,13 +149,13 @@ static int adf_bank_show(SYSCTL_HANDLER_ARGS)
 		if (!(bank->ring_mask & 1 << ring_id))
 			continue;
 
-		head = READ_CSR_RING_HEAD(csr,
-					  bank->bank_number,
-					  ring->ring_number);
-		tail = READ_CSR_RING_TAIL(csr,
-					  bank->bank_number,
-					  ring->ring_number);
-		empty = READ_CSR_E_STAT(csr, bank->bank_number);
+		head = csr_ops->read_csr_ring_head(csr,
+						   bank->bank_number,
+						   ring->ring_number);
+		tail = csr_ops->read_csr_ring_tail(csr,
+						   bank->bank_number,
+						   ring->ring_number);
+		empty = csr_ops->read_csr_e_stat(csr, bank->bank_number);
 
 		sbuf_printf(&sb,
 			    "ring num %02d, head %04x, tail %04x, empty: %d\n",

@@ -29,15 +29,6 @@
  * SUCH DAMAGE.
  */
 
-#if 0
-#ifndef lint
-static char sccsid[] = "@(#)print.c	8.6 (Berkeley) 4/16/94";
-#endif /* not lint */
-#endif
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -49,7 +40,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysctl.h>
 #include <sys/vmmeter.h>
 
-#include <err.h>
 #include <grp.h>
 #include <jail.h>
 #include <langinfo.h>
@@ -76,7 +66,7 @@ __FBSDID("$FreeBSD$");
 void
 printheader(void)
 {
-	VAR *v;
+	const VAR *v;
 	struct varent *vent;
 
 	STAILQ_FOREACH(vent, &varlist, next_ve)
@@ -91,9 +81,9 @@ printheader(void)
 			if (STAILQ_NEXT(vent, next_ve) == NULL)	/* last one */
 				xo_emit("{T:/%hs}", vent->header);
 			else
-				xo_emit("{T:/%-*hs}", v->width, vent->header);
+				xo_emit("{T:/%-*hs}", vent->width, vent->header);
 		} else
-			xo_emit("{T:/%*hs}", v->width, vent->header);
+			xo_emit("{T:/%*hs}", vent->width, vent->header);
 		if (STAILQ_NEXT(vent, next_ve) != NULL)
 			xo_emit("{P: }");
 	}
@@ -263,8 +253,6 @@ state(KINFO *k, VARENT *ve __unused)
 		*cp = '?';
 	}
 	cp++;
-	if (!(flag & P_INMEM))
-		*cp++ = 'W';
 	if (k->ki_p->ki_nice < NZERO || k->ki_p->ki_pri.pri_class == PRI_REALTIME)
 		*cp++ = '<';
 	else if (k->ki_p->ki_nice > NZERO || k->ki_p->ki_pri.pri_class == PRI_IDLE)
@@ -277,7 +265,7 @@ state(KINFO *k, VARENT *ve __unused)
 		*cp++ = 'V';
 	if ((flag & P_SYSTEM) || k->ki_p->ki_lock > 0)
 		*cp++ = 'L';
-	if ((k->ki_p->ki_cr_flags & CRED_FLAG_CAPMODE) != 0)
+	if ((k->ki_p->ki_cr_flags & KI_CRF_CAPABILITY_MODE) != 0)
 		*cp++ = 'C';
 	if (k->ki_p->ki_kiflag & KI_SLEADER)
 		*cp++ = 's';
@@ -289,7 +277,7 @@ state(KINFO *k, VARENT *ve __unused)
 	return (buf);
 }
 
-#define	scalepri(x)	((x) - PZERO)
+#define	scalepri(x)	((x) - PUSER)
 
 char *
 pri(KINFO *k, VARENT *ve __unused)
@@ -643,7 +631,7 @@ getpcpu(const KINFO *k)
 #define	fxtofl(fixpt)	((double)(fixpt) / fscale)
 
 	/* XXX - I don't like this */
-	if (k->ki_p->ki_swtime == 0 || (k->ki_p->ki_flag & P_INMEM) == 0)
+	if (k->ki_p->ki_swtime == 0)
 		return (0.0);
 	if (rawcpu)
 		return (100.0 * fxtofl(k->ki_p->ki_pctcpu));
@@ -671,8 +659,6 @@ getpmem(KINFO *k)
 	if (failure)
 		return (0.0);
 
-	if ((k->ki_p->ki_flag & P_INMEM) == 0)
-		return (0.0);
 	/* XXX want pmap ptpages, segtab, etc. (per architecture) */
 	/* XXX don't have info about shared */
 	fracmem = ((double)k->ki_p->ki_rssize) / mempages;
@@ -748,7 +734,7 @@ priorityr(KINFO *k, VARENT *ve __unused)
  * structures.
  */
 static char *
-printval(void *bp, VAR *v)
+printval(void *bp, const VAR *v)
 {
 	static char ofmt[32] = "%";
 	const char *fcp;
@@ -761,8 +747,15 @@ printval(void *bp, VAR *v)
 #define	CHKINF127(n)	(((n) > 127) && (v->flag & INF127) ? 127 : (n))
 
 	switch (v->type) {
+	case UNSPEC:
+		xo_errx(1, "cannot print value of unspecified type "
+		    "(internal error)");
+		break;
 	case CHAR:
 		(void)asprintf(&str, ofmt, *(char *)bp);
+		break;
+	case SCHAR:
+		(void)asprintf(&str, ofmt, *(signed char *)bp);
 		break;
 	case UCHAR:
 		(void)asprintf(&str, ofmt, *(u_char *)bp);
@@ -791,6 +784,9 @@ printval(void *bp, VAR *v)
 	case PGTOK:
 		(void)asprintf(&str, ofmt, ps_pgtok(*(u_long *)bp));
 		break;
+	default:
+		xo_errx(1, "unknown type (internal error)");
+		break;
 	}
 
 	return (str);
@@ -799,7 +795,7 @@ printval(void *bp, VAR *v)
 char *
 kvar(KINFO *k, VARENT *ve)
 {
-	VAR *v;
+	const VAR *v;
 
 	v = ve->var;
 	return (printval((char *)((char *)k->ki_p + v->off), v));
@@ -808,7 +804,7 @@ kvar(KINFO *k, VARENT *ve)
 char *
 rvar(KINFO *k, VARENT *ve)
 {
-	VAR *v;
+	const VAR *v;
 
 	v = ve->var;
 	if (!k->ki_valid)

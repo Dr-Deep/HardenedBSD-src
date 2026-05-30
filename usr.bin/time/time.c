@@ -29,20 +29,6 @@
  * SUCH DAMAGE.
  */
 
-#ifndef lint
-static const char copyright[] =
-"@(#) Copyright (c) 1987, 1988, 1993\n\
-	The Regents of the University of California.  All rights reserved.\n";
-#endif /* not lint */
-
-#ifndef lint
-#if 0
-static char sccsid[] = "@(#)time.c	8.1 (Berkeley) 6/6/93";
-#endif
-static const char rcsid[] =
-  "$FreeBSD$";
-#endif /* not lint */
-
 #include <sys/types.h>
 #include <sys/resource.h>
 #include <sys/signal.h>
@@ -54,6 +40,8 @@ static const char rcsid[] =
 #include <errno.h>
 #include <locale.h>
 #include <signal.h>
+#include <stdatomic.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -66,7 +54,7 @@ static void humantime(FILE *, long, long);
 static void showtime(FILE *, struct timespec *, struct timespec *,
     struct rusage *);
 static void siginfo(int);
-static void usage(void);
+static void usage(void) __dead2;
 
 static sig_atomic_t siginfo_recvd;
 static char decimal_point;
@@ -139,7 +127,10 @@ main(int argc, char **argv)
 	(void)signal(SIGINFO, siginfo);
 	(void)siginterrupt(SIGINFO, 1);
 	while (wait4(pid, &status, 0, &ru) != pid) {
-		if (siginfo_recvd) {
+		bool do_siginfo = siginfo_recvd != 0;
+
+		atomic_signal_fence(memory_order_acquire);
+		if (do_siginfo) {
 			siginfo_recvd = 0;
 			if (clock_gettime(CLOCK_MONOTONIC, &after))
 				err(1, "clock_gettime");
@@ -310,4 +301,5 @@ siginfo(int sig __unused)
 {
 
 	siginfo_recvd = 1;
+	atomic_signal_fence(memory_order_release);
 }

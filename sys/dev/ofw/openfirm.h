@@ -1,7 +1,7 @@
 /*	$NetBSD: openfirm.h,v 1.1 1998/05/15 10:16:00 tsubai Exp $	*/
 
 /*-
- * SPDX-License-Identifier: (BSD-4-Clause AND BSD-2-Clause-FreeBSD)
+ * SPDX-License-Identifier: (BSD-4-Clause AND BSD-2-Clause)
  *
  * Copyright (C) 1995, 1996 Wolfgang Solfrank.
  * Copyright (C) 1995, 1996 TooLs GmbH.
@@ -55,8 +55,6 @@
  * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
  * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _DEV_OPENFIRM_H_
@@ -85,8 +83,8 @@ MALLOC_DECLARE(M_OFWPROP);
  * interface as the Open Firmware access mechanism, OF_init initializes it.
  */
 
-boolean_t	OF_install(char *name, int prio);
-int		OF_init(void *cookie);
+bool	OF_install(char *name, int prio);
+int	OF_init(void *cookie);
 
 /*
  * Known Open Firmware interface names
@@ -110,7 +108,7 @@ ssize_t		OF_getprop(phandle_t node, const char *propname, void *buf,
 		    size_t len);
 ssize_t		OF_getencprop(phandle_t node, const char *prop, pcell_t *buf,
 		    size_t len); /* Same as getprop, but maintains endianness */
-int		OF_hasprop(phandle_t node, const char *propname);
+bool		OF_hasprop(phandle_t node, const char *propname);
 ssize_t		OF_searchprop(phandle_t node, const char *propname, void *buf,
 		    size_t len);
 ssize_t		OF_searchencprop(phandle_t node, const char *propname,
@@ -151,6 +149,7 @@ phandle_t	OF_xref_from_node(phandle_t node);
 device_t	OF_device_from_xref(phandle_t xref);
 phandle_t	OF_xref_from_device(device_t dev);
 int		OF_device_register_xref(phandle_t xref, device_t dev);
+void		OF_device_unregister_xref(phandle_t xref, device_t dev);
 
 /* Device I/O functions */
 ihandle_t	OF_open(const char *path);

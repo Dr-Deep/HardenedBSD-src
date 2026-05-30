@@ -1,4 +1,3 @@
-/*	$FreeBSD$	*/
 
 /*
  * Copyright (C) 2012 by Darren Reed.
@@ -98,9 +97,6 @@
 #include "netinet/ip_ipsec_pxy.c"
 #include "netinet/ip_rpcb_pxy.c"
 
-#if !defined(lint)
-static const char rcsid[] = "@(#)$Id$";
-#endif
 
 #define	AP_SESS_SIZE	53
 
@@ -683,13 +679,11 @@ ipf_proxy_ok(fr_info_t *fin, tcphdr_t *tcp, ipnat_t *np)
 /* ------------------------------------------------------------------------ */
 int
 ipf_proxy_ioctl(ipf_main_softc_t *softc, caddr_t data, ioctlcmd_t cmd,
-	int mode, void *ctx)
+	int mode __unused, void *ctx)
 {
 	ap_ctl_t ctl;
 	caddr_t ptr;
 	int error;
-
-	mode = mode;	/* LINT */
 
 	switch (cmd)
 	{
@@ -706,8 +700,8 @@ ipf_proxy_ioctl(ipf_main_softc_t *softc, caddr_t data, ioctlcmd_t cmd,
 				IPFERROR(80003);
 				error = ENOMEM;
 			} else {
-				error = copyinptr(softc, ctl.apc_data, ptr,
-						  ctl.apc_dsize);
+				error = ipf_copyin_indirect(softc, ctl.apc_data,
+							    ptr, ctl.apc_dsize);
 				if (error == 0)
 					ctl.apc_data = ptr;
 			}

@@ -27,9 +27,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)in.h	8.3 (Berkeley) 1/3/94
- * $FreeBSD$
  */
 
 #ifndef _NETINET_IN_H_
@@ -463,8 +460,8 @@ VNET_DECLARE(uint32_t, in_loopback_mask);
 				     /* unused; was IP_FAITH */
 #define	IP_ONESBCAST		23   /* bool: send all-ones broadcast */
 #define	IP_BINDANY		24   /* bool: allow bind to any address */
-#define	IP_BINDMULTI		25   /* bool: allow multiple listeners on a tuple */
-#define	IP_RSS_LISTEN_BUCKET	26   /* int; set RSS listen bucket */
+				     /* unused; was IP_BIND_MULTI */
+				     /* unused; was IP_RSS_LISTEN_BUCKET */
 #define	IP_ORIGDSTADDR		27   /* bool: receive IP dst addr/port w/dgram */
 #define	IP_RECVORIGDSTADDR      IP_ORIGDSTADDR
 
@@ -675,19 +672,25 @@ int	getsourcefilter(int, uint32_t, struct sockaddr *, socklen_t,
 struct ifnet; struct mbuf;	/* forward declarations for Standard C */
 struct in_ifaddr;
 
-int	 in_broadcast(struct in_addr, struct ifnet *);
-int	 in_ifaddr_broadcast(struct in_addr, struct in_ifaddr *);
-int	 in_canforward(struct in_addr);
-int	 in_localaddr(struct in_addr);
+bool	 in_ifnet_broadcast(struct in_addr, struct ifnet *);
+bool	 in_ifaddr_broadcast(struct in_addr, struct in_ifaddr *);
+bool	 in_canforward(struct in_addr);
+bool	 in_localaddr(struct in_addr);
 bool	 in_localip(struct in_addr);
 bool	 in_localip_fib(struct in_addr, uint16_t);
-int	 in_ifhasaddr(struct ifnet *, struct in_addr);
+bool	 in_ifhasaddr(struct ifnet *, struct in_addr);
 struct in_ifaddr *in_findlocal(uint32_t, bool);
 int	 inet_aton(const char *, struct in_addr *); /* in libkern */
 char	*inet_ntoa_r(struct in_addr ina, char *buf); /* in libkern */
 char	*inet_ntop(int, const void *, char *, socklen_t); /* in libkern */
 int	 inet_pton(int af, const char *, void *); /* in libkern */
-void	 in_ifdetach(struct ifnet *);
+
+static inline bool
+in_broadcast(struct in_addr in)
+{
+	return (in.s_addr == __htonl(INADDR_BROADCAST) ||
+	    in.s_addr == __htonl(INADDR_ANY));
+}
 
 #define	in_hosteq(s, t)	((s).s_addr == (t).s_addr)
 #define	in_nullhost(x)	((x).s_addr == INADDR_ANY)
@@ -696,23 +699,6 @@ void	 in_ifdetach(struct ifnet *);
 #define	satosin(sa)	((struct sockaddr_in *)(sa))
 #define	sintosa(sin)	((struct sockaddr *)(sin))
 #define	ifatoia(ifa)	((struct in_ifaddr *)(ifa))
-
-typedef int	ipproto_input_t(struct mbuf **, int *, int);
-typedef void	ipproto_ctlinput_t(int, struct sockaddr *, void *);
-int	ipproto_register(uint8_t, ipproto_input_t, ipproto_ctlinput_t);
-int	ipproto_unregister(uint8_t);
-int	ip6proto_register(uint8_t, ipproto_input_t, ipproto_ctlinput_t);
-int	ip6proto_unregister(uint8_t);
-#define	IPPROTO_REGISTER(prot, input, ctl)	do {			\
-	int error __diagused;						\
-	error = ipproto_register(prot, input, ctl);			\
-	MPASS(error == 0);						\
-} while (0)
-#define	IP6PROTO_REGISTER(prot, input, ctl)	do {			\
-	int error __diagused;						\
-	error = ip6proto_register(prot, input, ctl);			\
-	MPASS(error == 0);						\
-} while (0)
 #endif /* _KERNEL */
 
 /* INET6 stuff */

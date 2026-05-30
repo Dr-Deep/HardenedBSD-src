@@ -1,4 +1,3 @@
-# $FreeBSD$
 
 .if !target(__<bsd.init.mk>__)
 .  error bsd.conf.mk cannot be included directly.
@@ -9,7 +8,7 @@
 .    error bsd.dirs.mk must be included after bsd.confs.mk.
 .  endif
 
-__<bsd.confs.mk>__:
+__<bsd.confs.mk>__:	.NOTMAIN
 
 CONFGROUPS?=	CONFS
 
@@ -22,6 +21,14 @@ buildconfig: ${${group}}
 .  if !defined(_SKIP_BUILD)
 all: buildconfig
 .  endif
+
+# Take groups from both CONFGROUPS and CONFGROUPS.yes, to allow syntax like
+# CONFGROUPS.${MK_FOO}=FOO.  Sort and uniq the list of groups in case of
+# duplicates.
+.if defined(CONFGROUPS) || defined(CONFGROUPS.yes)
+CONFGROUPS:=${CONFGROUPS} ${CONFGROUPS.yes}
+CONFGROUPS:=${CONFGROUPS:O:u}
+.endif
 
 .  for group in ${CONFGROUPS}
 .    if defined(${group}) && !empty(${group})
@@ -50,7 +57,7 @@ ${group}TAGS+=		package=${PACKAGE:Uutilities}
 .          endif
 .        endif
 ${group}TAGS+=		config
-${group}TAG_ARGS=	-T ${${group}TAGS:[*]:S/ /,/g}
+${group}TAG_ARGS=	-T ${${group}TAGS:ts,:[*]}
 .      endif
 
 
@@ -135,8 +142,10 @@ _${group}INS_${cnf:T}: ${cnf}
 .if ${MK_STAGING} != "no"
 .  if !empty(STAGE_SETS)
 buildconfig: stage_files
+stage_files:
 .    if !empty(STAGE_AS_SETS)
 buildconfig: stage_as
+stage_as:
 .    endif
 .  endif
 .endif

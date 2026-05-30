@@ -24,8 +24,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _VIRTIO_H_
@@ -55,13 +53,15 @@ struct vq_alloc_info;
 /*
  * VirtIO instance variables indices.
  */
-#define VIRTIO_IVAR_DEVTYPE		1
-#define VIRTIO_IVAR_FEATURE_DESC	2
-#define VIRTIO_IVAR_VENDOR		3
-#define VIRTIO_IVAR_DEVICE		4
-#define VIRTIO_IVAR_SUBVENDOR		5
-#define VIRTIO_IVAR_SUBDEVICE		6
-#define VIRTIO_IVAR_MODERN		7
+enum {
+	VIRTIO_IVAR_DEVTYPE = BUS_IVARS_PRIVATE,
+	VIRTIO_IVAR_FEATURE_DESC,
+	VIRTIO_IVAR_VENDOR,
+	VIRTIO_IVAR_DEVICE,
+	VIRTIO_IVAR_SUBVENDOR,
+	VIRTIO_IVAR_SUBDEVICE,
+	VIRTIO_IVAR_MODERN
+};
 
 struct virtio_feature_desc {
 	uint64_t	 vfd_val;
@@ -94,7 +94,7 @@ void	 virtio_describe(device_t dev, const char *msg,
 int	 virtio_describe_sbuf(struct sbuf *sb, uint64_t features,
 	     struct virtio_feature_desc *desc);
 uint64_t virtio_filter_transport_features(uint64_t features);
-int	 virtio_bus_is_modern(device_t dev);
+bool	 virtio_bus_is_modern(device_t dev);
 void	 virtio_read_device_config_array(device_t dev, bus_size_t offset,
 	     void *dst, int size, int count);
 
@@ -105,10 +105,10 @@ void	 virtio_read_ivar(device_t dev, int ivar, uintptr_t *val);
 void	 virtio_write_ivar(device_t dev, int ivar, uintptr_t val);
 uint64_t virtio_negotiate_features(device_t dev, uint64_t child_features);
 int	 virtio_finalize_features(device_t dev);
-int	 virtio_alloc_virtqueues(device_t dev, int flags, int nvqs,
+int	 virtio_alloc_virtqueues(device_t dev, int nvqs,
 	     struct vq_alloc_info *info);
 int	 virtio_setup_intr(device_t dev, enum intr_type type);
-int	 virtio_with_feature(device_t dev, uint64_t feature);
+bool	 virtio_with_feature(device_t dev, uint64_t feature);
 void	 virtio_stop(device_t dev);
 int	 virtio_config_generation(device_t dev);
 int	 virtio_reinit(device_t dev, uint64_t features);

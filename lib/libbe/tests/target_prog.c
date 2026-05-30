@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2019 Rob Wing
  *
@@ -26,9 +26,8 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <be.h>
+#include <string.h>
 
 /*
  * argv[1] = root boot environment (e.g. zroot/ROOT),
@@ -38,15 +37,17 @@ __FBSDID("$FreeBSD$");
  */
 int main(int argc, char *argv[]) {
 
-        libbe_handle_t *lbh;
+	libbe_handle_t *lbh;
 
 	if (argc != 5)
-		return -1;
+		return (-1);
 
-        if ((lbh = libbe_init(argv[1])) == NULL)
-                return -1;
+	if ((lbh = libbe_init(argv[1])) == NULL)
+		return (-1);
 
 	libbe_print_on_error(lbh, true);
 
+	if (strcmp(argv[2], "empty") == 0)
+		return (be_create_empty(lbh, argv[2]));
 	return (be_create_depth(lbh, argv[2], argv[3], atoi(argv[4])));
 }

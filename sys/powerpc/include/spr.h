@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -26,7 +26,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  *
  * $NetBSD: spr.h,v 1.25 2002/08/14 15:38:40 matt Exp $
- * $FreeBSD$
  */
 #ifndef _POWERPC_SPR_H_
 #define	_POWERPC_SPR_H_
@@ -163,6 +162,11 @@
 #define	  FSCR_DSCR		  0x0000000000000004 /* DSCR available in PR state */
 #define	SPR_UAMOR		0x09d	/* User Authority Mask Override Register */
 #define	SPR_DPDES		0x0b0	/* .6. Directed Privileged Doorbell Exception State Register */
+#define	SPR_HFSCR		0xbe	/* Hypervisor Facility Status and Control Register */
+#define	  HFSCR_BHRB		  0x0000000000000010 /* BHRB instructions */
+#define	  HFSCR_PM		  0x0000000000000008 /* Performance monitor SPRs */
+#define	  HFSCR_VECVSX		  0x0000000000000002 /* Vector and VSX facilities */
+#define	  HFSCR_FP		  0x0000000000000001 /* Floating Point facility */
 #define	SPR_USPRG0		0x100	/* 4.8 User SPR General 0 */
 #define	SPR_VRSAVE		0x100	/* .6. AltiVec VRSAVE */
 #define	SPR_SPRG0		0x110	/* 468 SPR General 0 */
@@ -221,7 +225,9 @@
 #define	  IBMPOWER9		  0x004e
 #define	  MPC860		  0x0050
 #define	  IBMCELLBE		  0x0070
+#define	  IBMPOWER10		  0x0080
 #define	  MPC8240		  0x0081
+#define	  IBMPOWER11		  0x0082
 #define	  PA6T			  0x0090
 #define	  IBM405GP		  0x4011
 #define	  IBM405L		  0x4161
@@ -857,6 +863,11 @@
 #define	SPR_BUCSR		0x3F5	/* ..8 Branch Unit Control and Status Register */
 #define	  BUCSR_BPEN		0x00000001	/* Branch Prediction Enable */
 #define	  BUCSR_BBFI		0x00000200	/* Branch Buffer Flash Invalidate */
+
+#define	SPR_MMUCFG		0x3f7	/* ..8 MMU Configuration Register */
+#define	  MMUCFG_PIDSIZE_M	  0x000007c0
+#define	  MMUCFG_PIDSIZE_S	  6
+#define	  MMUCFG_MAVN_M		  0x00000003
 
 #endif /* BOOKE */
 #endif /* !_POWERPC_SPR_H_ */

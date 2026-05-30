@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2020 Alexander V. Chernikov
  *
@@ -23,8 +23,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -83,10 +81,12 @@ struct nhop_priv {
 	/* nhop lookup comparison end */
 	uint32_t		nh_idx;		/* nexthop index */
 	uint32_t		nh_fibnum;	/* nexthop fib */
+	uint32_t		nh_metric;	/* nexthop metric */
 	void			*cb_func;	/* function handling additional rewrite caps */
 	u_int			nh_refcnt;	/* number of references, refcount(9)  */
 	u_int			nh_linked;	/* refcount(9), == 2 if linked to the list */
 	int			nh_finalized;	/* non-zero if finalized() was called */
+	uint8_t			nh_origin;	/* protocol that originated the nexthop */
 	struct nhop_object	*nh;		/* backreference to the dataplane nhop */
 	struct nh_control	*nh_control;	/* backreference to the rnh */
 	struct nhop_priv	*nh_next;	/* hash table membership */
@@ -107,6 +107,6 @@ int link_nhop(struct nh_control *ctl, struct nhop_priv *nh_priv);
 struct nhop_priv *unlink_nhop(struct nh_control *ctl, struct nhop_priv *nh_priv);
 
 /* nhop_ctl.c */
-int cmp_priv(const struct nhop_priv *_one, const struct nhop_priv *_two);
+int cmp_priv(const struct nhop_priv *key, const struct nhop_priv *search);
 
 #endif

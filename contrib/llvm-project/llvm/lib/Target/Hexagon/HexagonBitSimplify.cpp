@@ -7,14 +7,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "BitTracker.h"
+#include "Hexagon.h"
 #include "HexagonBitTracker.h"
 #include "HexagonInstrInfo.h"
 #include "HexagonRegisterInfo.h"
 #include "HexagonSubtarget.h"
 #include "llvm/ADT/BitVector.h"
-#include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/GraphTraits.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
@@ -22,7 +20,6 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstr.h"
-#include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
@@ -30,19 +27,8 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
-#include <algorithm>
-#include <cassert>
-#include <cstdint>
-#include <iterator>
-#include <limits>
-#include <utility>
-#include <vector>
 
 #define DEBUG_TYPE "hexbit"
 
@@ -62,33 +48,35 @@ static cl::opt<unsigned> MaxBitSplit("hexbit-max-bitsplit", cl::Hidden,
   cl::init(std::numeric_limits<unsigned>::max()));
 static unsigned CountBitSplit = 0;
 
-namespace llvm {
-
-  void initializeHexagonBitSimplifyPass(PassRegistry& Registry);
-  FunctionPass *createHexagonBitSimplify();
-
-} // end namespace llvm
+static cl::opt<unsigned> RegisterSetLimit("hexbit-registerset-limit",
+  cl::Hidden, cl::init(1000));
 
 namespace {
 
   // Set of virtual registers, based on BitVector.
-  struct RegisterSet : private BitVector {
+  struct RegisterSet {
     RegisterSet() = default;
-    explicit RegisterSet(unsigned s, bool t = false) : BitVector(s, t) {}
+    explicit RegisterSet(unsigned s, bool t = false) : Bits(s, t) {}
     RegisterSet(const RegisterSet &RS) = default;
 
-    using BitVector::clear;
-    using BitVector::count;
+    void clear() {
+      Bits.clear();
+      LRU.clear();
+    }
+
+    unsigned count() const {
+      return Bits.count();
+    }
 
     unsigned find_first() const {
-      int First = BitVector::find_first();
+      int First = Bits.find_first();
       if (First < 0)
         return 0;
       return x2v(First);
     }
 
     unsigned find_next(unsigned Prev) const {
-      int Next = BitVector::find_next(v2x(Prev));
+      int Next = Bits.find_next(v2x(Prev));
       if (Next < 0)
         return 0;
       return x2v(Next);
@@ -97,58 +85,76 @@ namespace {
     RegisterSet &insert(unsigned R) {
       unsigned Idx = v2x(R);
       ensure(Idx);
-      return static_cast<RegisterSet&>(BitVector::set(Idx));
+      bool Exists = Bits.test(Idx);
+      Bits.set(Idx);
+      if (!Exists) {
+        LRU.push_back(Idx);
+        if (LRU.size() > RegisterSetLimit) {
+          unsigned T = LRU.front();
+          Bits.reset(T);
+          LRU.pop_front();
+        }
+      }
+      return *this;
     }
     RegisterSet &remove(unsigned R) {
       unsigned Idx = v2x(R);
-      if (Idx >= size())
-        return *this;
-      return static_cast<RegisterSet&>(BitVector::reset(Idx));
+      if (Idx < Bits.size()) {
+        bool Exists = Bits.test(Idx);
+        Bits.reset(Idx);
+        if (Exists) {
+          auto F = llvm::find(LRU, Idx);
+          assert(F != LRU.end());
+          LRU.erase(F);
+        }
+      }
+      return *this;
     }
 
     RegisterSet &insert(const RegisterSet &Rs) {
-      return static_cast<RegisterSet&>(BitVector::operator|=(Rs));
+      for (unsigned R = Rs.find_first(); R; R = Rs.find_next(R))
+        insert(R);
+      return *this;
     }
     RegisterSet &remove(const RegisterSet &Rs) {
-      return static_cast<RegisterSet&>(BitVector::reset(Rs));
+      for (unsigned R = Rs.find_first(); R; R = Rs.find_next(R))
+        remove(R);
+      return *this;
     }
 
-    reference operator[](unsigned R) {
-      unsigned Idx = v2x(R);
-      ensure(Idx);
-      return BitVector::operator[](Idx);
-    }
     bool operator[](unsigned R) const {
       unsigned Idx = v2x(R);
-      assert(Idx < size());
-      return BitVector::operator[](Idx);
+      return Idx < Bits.size() ? Bits[Idx] : false;
     }
     bool has(unsigned R) const {
       unsigned Idx = v2x(R);
-      if (Idx >= size())
+      if (Idx >= Bits.size())
         return false;
-      return BitVector::test(Idx);
+      return Bits.test(Idx);
     }
 
     bool empty() const {
-      return !BitVector::any();
+      return !Bits.any();
     }
     bool includes(const RegisterSet &Rs) const {
-      // A.BitVector::test(B)  <=>  A-B != {}
-      return !Rs.BitVector::test(*this);
+      // A.test(B)  <=>  A-B != {}
+      return !Rs.Bits.test(Bits);
     }
     bool intersects(const RegisterSet &Rs) const {
-      return BitVector::anyCommon(Rs);
+      return Bits.anyCommon(Rs.Bits);
     }
 
   private:
+    BitVector Bits;
+    std::deque<unsigned> LRU;
+
     void ensure(unsigned Idx) {
-      if (size() <= Idx)
-        resize(std::max(Idx+1, 32U));
+      if (Bits.size() <= Idx)
+        Bits.resize(std::max(Idx+1, 32U));
     }
 
     static inline unsigned v2x(unsigned v) {
-      return Register::virtReg2Index(v);
+      return Register(v).virtRegIndex();
     }
 
     static inline unsigned x2v(unsigned x) {
@@ -191,8 +197,8 @@ namespace {
     }
 
     void getAnalysisUsage(AnalysisUsage &AU) const override {
-      AU.addRequired<MachineDominatorTree>();
-      AU.addPreserved<MachineDominatorTree>();
+      AU.addRequired<MachineDominatorTreeWrapperPass>();
+      AU.addPreserved<MachineDominatorTreeWrapperPass>();
       MachineFunctionPass::getAnalysisUsage(AU);
     }
 
@@ -257,7 +263,7 @@ char HexagonBitSimplify::ID = 0;
 
 INITIALIZE_PASS_BEGIN(HexagonBitSimplify, "hexagon-bit-simplify",
       "Hexagon bit simplification", false, false)
-INITIALIZE_PASS_DEPENDENCY(MachineDominatorTree)
+INITIALIZE_PASS_DEPENDENCY(MachineDominatorTreeWrapperPass)
 INITIALIZE_PASS_END(HexagonBitSimplify, "hexagon-bit-simplify",
       "Hexagon bit simplification", false, false)
 
@@ -974,7 +980,7 @@ namespace {
 bool DeadCodeElimination::isDead(unsigned R) const {
   for (const MachineOperand &MO : MRI.use_operands(R)) {
     const MachineInstr *UseI = MO.getParent();
-    if (UseI->isDebugValue())
+    if (UseI->isDebugInstr())
       continue;
     if (UseI->isPHI()) {
       assert(!UseI->getOperand(0).getSubReg());
@@ -998,7 +1004,7 @@ bool DeadCodeElimination::runOnNode(MachineDomTreeNode *N) {
   for (MachineInstr &MI : llvm::reverse(*B))
     Instrs.push_back(&MI);
 
-  for (auto MI : Instrs) {
+  for (auto *MI : Instrs) {
     unsigned Opc = MI->getOpcode();
     // Do not touch lifetime markers. This is why the target-independent DCE
     // cannot be used.
@@ -1009,7 +1015,7 @@ bool DeadCodeElimination::runOnNode(MachineDomTreeNode *N) {
     if (MI->isInlineAsm())
       continue;
     // Delete PHIs if possible.
-    if (!MI->isPHI() && !MI->isSafeToMove(nullptr, Store))
+    if (!MI->isPHI() && !MI->isSafeToMove(Store))
       continue;
 
     bool AllDead = true;
@@ -1028,8 +1034,8 @@ bool DeadCodeElimination::runOnNode(MachineDomTreeNode *N) {
       continue;
 
     B->erase(MI);
-    for (unsigned i = 0, n = Regs.size(); i != n; ++i)
-      MRI.markUsesInDebugValueAsUndef(Regs[i]);
+    for (unsigned Reg : Regs)
+      MRI.markUsesInDebugValueAsUndef(Reg);
     Changed = true;
   }
 
@@ -1727,7 +1733,7 @@ bool CopyPropagation::processBlock(MachineBasicBlock &B, const RegisterSet&) {
     Instrs.push_back(&MI);
 
   bool Changed = false;
-  for (auto I : Instrs) {
+  for (auto *I : Instrs) {
     unsigned Opc = I->getOpcode();
     if (!CopyPropagation::isCopyReg(Opc, true))
       continue;
@@ -1929,7 +1935,8 @@ bool BitSimplification::genStoreUpperHalf(MachineInstr *MI) {
     return false;
   const BitTracker::RegisterCell &RC = BT.lookup(RS.Reg);
   RegHalf H;
-  if (!matchHalf(0, RC, 0, H))
+  unsigned B = (RS.Sub == Hexagon::isub_hi) ? 32 : 0;
+  if (!matchHalf(0, RC, B, H))
     return false;
   if (H.Low)
     return false;
@@ -1947,10 +1954,10 @@ bool BitSimplification::genStoreImmediate(MachineInstr *MI) {
   switch (Opc) {
     case Hexagon::S2_storeri_io:
       Align++;
-      LLVM_FALLTHROUGH;
+      [[fallthrough]];
     case Hexagon::S2_storerh_io:
       Align++;
-      LLVM_FALLTHROUGH;
+      [[fallthrough]];
     case Hexagon::S2_storerb_io:
       break;
     default:
@@ -1997,7 +2004,7 @@ bool BitSimplification::genStoreImmediate(MachineInstr *MI) {
   if (!isInt<8>(V))
     return false;
 
-  MI->RemoveOperand(2);
+  MI->removeOperand(2);
   switch (Opc) {
     case Hexagon::S2_storerb_io:
       MI->setDesc(HII.get(Hexagon::S4_storeirb_io));
@@ -2771,7 +2778,7 @@ bool HexagonBitSimplify::runOnMachineFunction(MachineFunction &MF) {
   auto &HRI = *HST.getRegisterInfo();
   auto &HII = *HST.getInstrInfo();
 
-  MDT = &getAnalysis<MachineDominatorTree>();
+  MDT = &getAnalysis<MachineDominatorTreeWrapperPass>().getDomTree();
   MachineRegisterInfo &MRI = MF.getRegInfo();
   bool Changed;
 
@@ -2825,7 +2832,7 @@ bool HexagonBitSimplify::runOnMachineFunction(MachineFunction &MF) {
 // Recognize loops where the code at the end of the loop matches the code
 // before the entry of the loop, and the matching code is such that is can
 // be simplified. This pass relies on the bit simplification above and only
-// prepares code in a way that can be handled by the bit simplifcation.
+// prepares code in a way that can be handled by the bit simplification.
 //
 // This is the motivating testcase (and explanation):
 //
@@ -2884,22 +2891,13 @@ bool HexagonBitSimplify::runOnMachineFunction(MachineFunction &MF) {
 //   r5:4 = memd(r0++#8)
 // }:endloop0
 
-namespace llvm {
-
-  FunctionPass *createHexagonLoopRescheduling();
-  void initializeHexagonLoopReschedulingPass(PassRegistry&);
-
-} // end namespace llvm
-
 namespace {
 
   class HexagonLoopRescheduling : public MachineFunctionPass {
   public:
     static char ID;
 
-    HexagonLoopRescheduling() : MachineFunctionPass(ID) {
-      initializeHexagonLoopReschedulingPass(*PassRegistry::getPassRegistry());
-    }
+    HexagonLoopRescheduling() : MachineFunctionPass(ID) {}
 
     bool runOnMachineFunction(MachineFunction &MF) override;
 
@@ -2944,8 +2942,8 @@ namespace {
 
 char HexagonLoopRescheduling::ID = 0;
 
-INITIALIZE_PASS(HexagonLoopRescheduling, "hexagon-loop-resched",
-  "Hexagon Loop Rescheduling", false, false)
+INITIALIZE_PASS(HexagonLoopRescheduling, "hexagon-loop-resched-pass",
+                "Hexagon Loop Rescheduling", false, false)
 
 HexagonLoopRescheduling::PhiInfo::PhiInfo(MachineInstr &P,
       MachineBasicBlock &B) {
@@ -3091,8 +3089,7 @@ void HexagonLoopRescheduling::moveGroup(InstrGroup &G, MachineBasicBlock &LB,
     DebugLoc DL = SI->getDebugLoc();
 
     auto MIB = BuildMI(LB, At, DL, HII->get(SI->getOpcode()), NewDR);
-    for (unsigned j = 0, m = SI->getNumOperands(); j < m; ++j) {
-      const MachineOperand &Op = SI->getOperand(j);
+    for (const MachineOperand &Op : SI->operands()) {
       if (!Op.isReg()) {
         MIB.add(Op);
         continue;

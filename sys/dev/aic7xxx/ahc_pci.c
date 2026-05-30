@@ -31,9 +31,6 @@
  * $Id: //depot/aic7xxx/freebsd/dev/aic7xxx/ahc_pci.c#19 $
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <dev/aic7xxx/aic7xxx_osm.h>
 
 static int ahc_pci_probe(device_t dev);
@@ -44,7 +41,7 @@ static device_method_t ahc_pci_device_methods[] = {
 	DEVMETHOD(device_probe,		ahc_pci_probe),
 	DEVMETHOD(device_attach,	ahc_pci_attach),
 	DEVMETHOD(device_detach,	ahc_detach),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t ahc_pci_driver = {
@@ -108,7 +105,7 @@ ahc_pci_attach(device_t dev)
 	error = aic_dma_tag_create(ahc, /*parent*/bus_get_dma_tag(dev),
 				   /*alignment*/1, /*boundary*/0,
 				   (ahc->flags & AHC_39BIT_ADDRESSING)
-				   ? 0x7FFFFFFFFFLL
+				   ? (bus_addr_t)0x7FFFFFFFFFLL
 				   : BUS_SPACE_MAXADDR_32BIT,
 				   /*highaddr*/BUS_SPACE_MAXADDR,
 				   /*filter*/NULL, /*filterarg*/NULL,
@@ -141,7 +138,7 @@ ahc_pci_map_registers(struct ahc_softc *ahc)
 	struct	resource *regs;
 	int	regs_type;
 	int	regs_id;
-	int	allow_memio;
+	int	allow_memio = 1;
 
 	regs = NULL;
 	regs_type = 0;
@@ -153,14 +150,14 @@ ahc_pci_map_registers(struct ahc_softc *ahc)
 			       "allow_memio", &allow_memio) != 0) {
 		if (bootverbose)
 			device_printf(ahc->dev_softc, "Defaulting to MEMIO ");
-#ifdef AHC_ALLOW_MEMIO
-		if (bootverbose)
-			printf("on\n");
-		allow_memio = 1;
-#else
+#if defined(AHC_ALLOW_MEMIO) && (AHC_ALLOW_MEMIO == 0)
 		if (bootverbose)
 			printf("off\n");
 		allow_memio = 0;
+#else
+		if (bootverbose)
+			printf("on\n");
+		allow_memio = 1;
 #endif
 	}
 

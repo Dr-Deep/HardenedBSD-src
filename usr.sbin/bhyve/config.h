@@ -1,7 +1,8 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2021 John H. Baldwin <jhb@FreeBSD.org>
+ * Copyright 2026 Hans Rosenfeld
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -23,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef __CONFIG_H__
@@ -38,7 +37,7 @@
  * The database only stores string values.  Callers should parse
  * values into other types if needed.  String values can reference
  * other configuration variables using a '%(name)' syntax.  In this
- * case, the name must be the the full path of the configuration
+ * case, the name must be the full path of the configuration
  * variable.  The % character can be escaped with a preceding \ to
  * avoid expansion.  Any \ characters must be escaped.
  *
@@ -46,6 +45,14 @@
  * variable is specified as a dot-separated name similar to sysctl(8)
  * OIDs.
  */
+
+/*
+ * Walk the nodes under a parent nvlist. For each node found, call the given
+ * callback function passing the current prefix, nvlist, node name and type,
+ * and the given argument.
+ */
+int walk_config_nodes(const char *, const nvlist_t *, void *,
+    int (*cb)(const char *, const nvlist_t *, const char *, int, void *));
 
 /*
  * Fetches the value of a configuration variable.  If the "raw" value

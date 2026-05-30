@@ -1,5 +1,5 @@
 .\"
-.\" SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+.\" SPDX-License-Identifier: BSD-2-Clause
 .\"
 .\" Copyright (c) 2020 Daniel Ebdrup Jensen
 .\"
@@ -24,9 +24,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
-.Dd April 22, 2021
+.Dd May 7, 2026
 .Dt STATS 7
 .Os
 .Sh NAME
@@ -46,6 +44,8 @@ are currently included in the base system, with more appearing periodically.
 Show Bluetooth socket information
 .It Nm ctlstat
 CAM Target Layer statistics utility
+.It Nm dtrace_mib
+Access the MIB stats counters with DTrace
 .It Nm dwatch
 Watch processes as they trigger a particular DTrace probe
 .It Nm fstat
@@ -101,7 +101,9 @@ Report ZFS I/O statistics
 .Xr sockstat 1 ,
 .Xr stat 1 ,
 .Xr systat 1 ,
+.Xr dtrace_mib 4 ,
 .Xr intro 7 ,
+.Xr tuning 7 ,
 .Xr ctlstat 8 ,
 .Xr gstat 8 ,
 .Xr ibstat 8 ,

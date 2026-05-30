@@ -35,9 +35,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/filedesc.h>
 #include <sys/capsicum.h>
@@ -266,13 +263,13 @@ audit_arg_suid(uid_t suid)
 }
 
 void
-audit_arg_groupset(gid_t *gidset, u_int gidset_size)
+audit_arg_groupset(gid_t *gidset, int gidset_size)
 {
-	u_int i;
+	int i;
 	struct kaudit_record *ar;
 
-	KASSERT(gidset_size <= ngroups_max + 1,
-	    ("audit_arg_groupset: gidset_size > (kern.ngroups + 1)"));
+	KASSERT(gidset_size >= 0 && gidset_size <= ngroups_max + 1,
+	    ("audit_arg_groupset: gidset_size < 0 or > (kern.ngroups + 1)"));
 
 	ar = currecord();
 	if (ar == NULL)
@@ -411,7 +408,7 @@ audit_arg_process(struct proc *p)
 	cred = p->p_ucred;
 	ar->k_ar.ar_arg_auid = cred->cr_audit.ai_auid;
 	ar->k_ar.ar_arg_euid = cred->cr_uid;
-	ar->k_ar.ar_arg_egid = cred->cr_groups[0];
+	ar->k_ar.ar_arg_egid = cred->cr_gid;
 	ar->k_ar.ar_arg_ruid = cred->cr_ruid;
 	ar->k_ar.ar_arg_rgid = cred->cr_rgid;
 	ar->k_ar.ar_arg_asid = cred->cr_audit.ai_asid;

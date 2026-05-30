@@ -29,14 +29,6 @@
  * SUCH DAMAGE.
  */
 
-#ifndef lint
-#if 0
-static char sccsid[] = "@(#)announce.c	8.3 (Berkeley) 4/28/95";
-#endif
-static const char rcsid[] =
-  "$FreeBSD$";
-#endif /* not lint */
-
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <sys/stat.h>
@@ -48,6 +40,7 @@ static const char rcsid[] =
 
 #include <errno.h>
 #include <paths.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -160,7 +153,7 @@ print_mesg(const char *tty, CTL_MSG *request,
 	 * stack up processes trying to write messages to a tty
 	 * that is permanently blocked.
 	 */
-	if (ttymsg(&iovec, 1, tty, RING_WAIT - 5) != NULL)
+	if (ttymsg(&iovec, 1, tty, RING_WAIT - 5, true) != 0)
 		return (FAILED);
 
 	return (SUCCESS);

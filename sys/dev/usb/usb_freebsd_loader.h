@@ -1,6 +1,5 @@
-/* $FreeBSD$ */
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2013 Hans Petter Selasky. All rights reserved.
  *
@@ -43,6 +42,7 @@
 #define	USB_HAVE_TT_SUPPORT 1
 #define	USB_HAVE_POWERD 1
 #define	USB_HAVE_MSCTEST 1
+#define	USB_HAVE_MSCTEST_AUTOQUIRK 0
 #define	USB_HAVE_MSCTEST_DETACH 0
 #define	USB_HAVE_PF 0
 #define	USB_HAVE_ROOT_MOUNT_HOLD 0

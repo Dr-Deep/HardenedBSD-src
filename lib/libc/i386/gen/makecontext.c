@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2001 Daniel M. Eischen <deischen@freebsd.org>
  * All rights reserved.
@@ -25,9 +25,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/signal.h>
@@ -127,7 +124,7 @@ __makecontext(ucontext_t *ucp, void (*start)(void), int argc, ...)
 
 		/*
 		 * Setup the top of the stack with the user start routine
-		 * followed by all of its aguments and the pointer to the
+		 * followed by all of its arguments and the pointer to the
 		 * ucontext.  We need to leave a spare spot at the top of
 		 * the stack because setcontext will move eip to the top
 		 * of the stack before returning.

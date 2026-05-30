@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1998 - 2008 Søren Schmidt <sos@FreeBSD.org>
  * All rights reserved.
@@ -26,9 +26,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
@@ -39,12 +36,15 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/sbuf.h>
 #include <sys/sema.h>
+#include <sys/stdarg.h>
 #include <sys/taskqueue.h>
+
 #include <vm/uma.h>
-#include <machine/stdarg.h>
+
 #include <machine/resource.h>
 #include <machine/bus.h>
 #include <sys/rman.h>
+
 #include <dev/pci/pcivar.h>
 #include <dev/pci/pcireg.h>
 #include <dev/ata/ata-all.h>
@@ -63,7 +63,6 @@ int
 ata_pci_probe(device_t dev)
 {
     struct ata_pci_controller *ctlr = device_get_softc(dev);
-    char buffer[64];
 
     /* is this a storage class device ? */
     if (pci_get_class(dev) != PCIC_STORAGE)
@@ -73,8 +72,7 @@ ata_pci_probe(device_t dev)
     if (pci_get_subclass(dev) != PCIS_STORAGE_IDE)
 	return (ENXIO);
     
-    sprintf(buffer, "%s ATA controller", ata_pcivendor2str(dev));
-    device_set_desc_copy(dev, buffer);
+    device_set_descf(dev, "%s ATA controller", ata_pcivendor2str(dev));
     ctlr->chipinit = ata_generic_chipinit;
 
     /* we are a low priority handler */
@@ -131,7 +129,7 @@ ata_pci_attach(device_t dev)
 	else
 	    device_set_ivars(child, (void *)(intptr_t)unit);
     }
-    bus_generic_attach(dev);
+    bus_attach_children(dev);
     return 0;
 }
 
@@ -139,9 +137,12 @@ int
 ata_pci_detach(device_t dev)
 {
     struct ata_pci_controller *ctlr = device_get_softc(dev);
+    int error;
 
     /* detach & delete all children */
-    device_delete_children(dev);
+    error = bus_generic_detach(dev);
+    if (error != 0)
+	return (error);
 
     if (ctlr->r_irq) {
 	bus_teardown_intr(dev, ctlr->r_irq, ctlr->handle);
@@ -215,7 +216,7 @@ ata_pci_write_config(device_t dev, device_t child, int reg,
 }
 
 struct resource *
-ata_pci_alloc_resource(device_t dev, device_t child, int type, int *rid,
+ata_pci_alloc_resource(device_t dev, device_t child, int type, int rid,
 		       rman_res_t start, rman_res_t end, rman_res_t count,
 		       u_int flags)
 {
@@ -227,7 +228,7 @@ ata_pci_alloc_resource(device_t dev, device_t child, int type, int *rid,
 		int myrid;
 
 		if (type == SYS_RES_IOPORT) {
-			switch (*rid) {
+			switch (rid) {
 			case ATA_IOADDR_RID:
 			    if (controller->legacy) {
 				start = (unit ? ATA_SECONDARY : ATA_PRIMARY);
@@ -236,7 +237,7 @@ ata_pci_alloc_resource(device_t dev, device_t child, int type, int *rid,
 			    }
 			    myrid = PCIR_BAR(0) + (unit << 3);
 			    res = BUS_ALLOC_RESOURCE(device_get_parent(dev), dev,
-				SYS_RES_IOPORT, &myrid,
+				SYS_RES_IOPORT, myrid,
 				start, end, count, flags);
 			    break;
 			case ATA_CTLADDR_RID:
@@ -248,12 +249,12 @@ ata_pci_alloc_resource(device_t dev, device_t child, int type, int *rid,
 			    }
 			    myrid = PCIR_BAR(1) + (unit << 3);
 			    res = BUS_ALLOC_RESOURCE(device_get_parent(dev), dev,
-				SYS_RES_IOPORT, &myrid,
+				SYS_RES_IOPORT, myrid,
 				start, end, count, flags);
 			    break;
 			}
 		}
-		if (type == SYS_RES_IRQ && *rid == ATA_IRQ_RID) {
+		if (type == SYS_RES_IRQ && rid == ATA_IRQ_RID) {
 			if (controller->legacy) {
 			    int irq = (unit == 0 ? 14 : 15);
 	    
@@ -264,7 +265,7 @@ ata_pci_alloc_resource(device_t dev, device_t child, int type, int *rid,
 		}
 	} else {
 		if (type == SYS_RES_IRQ) {
-			if (*rid != ATA_IRQ_RID)
+			if (rid != ATA_IRQ_RID)
 				return (NULL);
 			res = controller->r_irq;
 		} else {
@@ -276,24 +277,20 @@ ata_pci_alloc_resource(device_t dev, device_t child, int type, int *rid,
 }
 
 int
-ata_pci_release_resource(device_t dev, device_t child, int type, int rid,
-			 struct resource *r)
+ata_pci_release_resource(device_t dev, device_t child, struct resource *r)
 {
+	int rid = rman_get_rid(r);
+	int type = rman_get_type(r);
 
 	if (device_get_devclass(child) == ata_devclass) {
 		struct ata_pci_controller *controller = device_get_softc(dev);
-		int unit = ((struct ata_channel *)device_get_softc(child))->unit;
 
 	        if (type == SYS_RES_IOPORT) {
 	    		switch (rid) {
 			case ATA_IOADDR_RID:
-		    	    return BUS_RELEASE_RESOURCE(device_get_parent(dev), dev,
-				SYS_RES_IOPORT,
-				PCIR_BAR(0) + (unit << 3), r);
 			case ATA_CTLADDR_RID:
 			    return BUS_RELEASE_RESOURCE(device_get_parent(dev), dev,
-				SYS_RES_IOPORT,
-				PCIR_BAR(1) + (unit << 3), r);
+				r);
 			default:
 			    return ENOENT;
 			}
@@ -303,7 +300,7 @@ ata_pci_release_resource(device_t dev, device_t child, int type, int rid,
 				return ENOENT;
 			if (controller->legacy) {
 				return BUS_RELEASE_RESOURCE(device_get_parent(dev), child,
-				    SYS_RES_IRQ, rid, r);
+				    r);
 			} else  
 				return 0;
 		}
@@ -314,7 +311,7 @@ ata_pci_release_resource(device_t dev, device_t child, int type, int rid,
 			return (0);
 		} else {
 			return (BUS_RELEASE_RESOURCE(device_get_parent(dev), child,
-			    type, rid, r));
+			    r));
 		}
 	}
 	return (EINVAL);
@@ -838,12 +835,10 @@ void
 ata_set_desc(device_t dev)
 {
     struct ata_pci_controller *ctlr = device_get_softc(dev);
-    char buffer[128];
 
-    sprintf(buffer, "%s %s %s controller",
+    device_set_descf(dev, "%s %s %s controller",
             ata_pcivendor2str(dev), ctlr->chip->text, 
             ata_mode2str(ctlr->chip->max_dma));
-    device_set_desc_copy(dev, buffer);
 }
 
 const struct ata_chip_id *

@@ -29,12 +29,6 @@
  * SUCH DAMAGE.
  */
 
-#if defined(LIBC_SCCS) && !defined(lint)
-static char sccsid[] = "@(#)getprotoent.c	8.1 (Berkeley) 6/4/93";
-#endif /* LIBC_SCCS and not lint */
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/socket.h>
 #include <errno.h>
@@ -271,9 +265,9 @@ __proto_unmarshal_func(char *buffer, size_t buffer_size, void *retval,
 
 	orig_buf = (char *)_ALIGN(orig_buf);
 	memcpy(orig_buf, buffer + sizeof(struct protoent) + sizeof(char *) +
-	    _ALIGN(p) - (size_t)p,
+	    __nss_buf_misalignment(p),
 	    buffer_size - sizeof(struct protoent) - sizeof(char *) -
-	    _ALIGN(p) + (size_t)p);
+	    __nss_buf_misalignment(p));
 	p = (char *)_ALIGN(p);
 
 	NS_APPLY_OFFSET(proto->p_name, orig_buf, p, char *);

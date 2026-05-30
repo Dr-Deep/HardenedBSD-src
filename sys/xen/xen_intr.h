@@ -27,8 +27,6 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
- *
- * $FreeBSD$
  */
 #ifndef _XEN_INTR_H_
 #define _XEN_INTR_H_
@@ -38,7 +36,10 @@
 /** Registered Xen interrupt callback handle. */
 typedef void * xen_intr_handle_t;
 
-void xen_intr_handle_upcall(struct trapframe *trap_frame);
+/*
+ * Main handler for Xen event channel interrupts
+ */
+extern driver_filter_t xen_intr_handle_upcall;
 
 /**
  * Associate an already allocated local event channel port an interrupt
@@ -181,7 +182,7 @@ void xen_intr_unbind(xen_intr_handle_t *handle);
  */
 int
 xen_intr_describe(xen_intr_handle_t port_handle, const char *fmt, ...)
-	__attribute__((format(printf, 2, 3)));
+	__printflike(2, 3);
 
 /**
  * Signal the remote peer of an interrupt source associated with an

@@ -1004,7 +1004,9 @@ die_sou_create(dwarf_t *dw, Dwarf_Die str, Dwarf_Off off, tdesc_t *tdp,
 		else
 			ml->ml_size = tdesc_bitsize(ml->ml_type);
 
-		if (die_unsigned(dw, mem, DW_AT_bit_offset, &bitoff, 0)) {
+		if (die_unsigned(dw, mem, DW_AT_data_bit_offset, &bitoff, 0)) {
+			ml->ml_offset += bitoff;
+		} else if (die_unsigned(dw, mem, DW_AT_bit_offset, &bitoff, 0)) {
 #if BYTE_ORDER == _BIG_ENDIAN
 			ml->ml_offset += bitoff;
 #else
@@ -1358,16 +1360,12 @@ typedef struct fp_size_map {
 static const fp_size_map_t fp_encodings[] = {
 	{ { 4, 4 }, { CTF_FP_SINGLE, CTF_FP_CPLX, CTF_FP_IMAGRY } },
 	{ { 8, 8 }, { CTF_FP_DOUBLE, CTF_FP_DCPLX, CTF_FP_DIMAGRY } },
-#ifdef __sparc
-	{ { 16, 16 }, { CTF_FP_LDOUBLE, CTF_FP_LDCPLX, CTF_FP_LDIMAGRY } },
-#else
 	{ { 12, 16 }, { CTF_FP_LDOUBLE, CTF_FP_LDCPLX, CTF_FP_LDIMAGRY } },
-#endif
 	{ { 0, 0 }, { 0, 0, 0 } }
 };
 
 static uint_t
-die_base_type2enc(dwarf_t *dw, Dwarf_Off off, Dwarf_Signed enc, size_t sz)
+die_base_type2enc(dwarf_t *dw, Dwarf_Off off, Dwarf_Unsigned enc, size_t sz)
 {
 	const fp_size_map_t *map = fp_encodings;
 	uint_t szidx = dw->dw_ptrsz == sizeof (uint64_t);
@@ -1398,9 +1396,9 @@ static intr_t *
 die_base_from_dwarf(dwarf_t *dw, Dwarf_Die base, Dwarf_Off off, size_t sz)
 {
 	intr_t *intr = xcalloc(sizeof (intr_t));
-	Dwarf_Signed enc;
+	Dwarf_Unsigned enc;
 
-	(void) die_signed(dw, base, DW_AT_encoding, &enc, DW_ATTR_REQ);
+	(void) die_unsigned(dw, base, DW_AT_encoding, &enc, DW_ATTR_REQ);
 
 	switch (enc) {
 	case DW_ATE_unsigned:

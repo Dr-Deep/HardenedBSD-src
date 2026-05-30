@@ -21,8 +21,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef	_EFIVAR_H_
@@ -33,7 +31,7 @@
 #include <sys/endian.h>
 #include <stdint.h>
 
-/* Shoud these be elsewhere ? */
+/* Should these be elsewhere ? */
 #define	EFI_VARIABLE_NON_VOLATILE		0x00000001
 #define	EFI_VARIABLE_BOOTSERVICE_ACCESS		0x00000002
 #define	EFI_VARIABLE_RUNTIME_ACCESS		0x00000004
@@ -48,19 +46,14 @@
 #endif
 
 
-#ifndef _EFIVAR_EFI_GUID_T_DEF
-#define _EFIVAR_EFI_GUID_T_DEF
-typedef uuid_t efi_guid_t;
-#endif
-
 #if BYTE_ORDER == LITTLE_ENDIAN
 #define	EFI_GUID(a, b, c, d, e0, e1, e2, e3, e4, e5)			\
-	((efi_guid_t) {(a), (b), (c), (d) >> 8, (d) & 0xff,		\
-	{ (e0), (e1), (e2), (e3), (e4), (e5) }})
+	((efi_guid_t) {(a), (b), (c), { (d) >> 8, (d) & 0xff,		\
+	(e0), (e1), (e2), (e3), (e4), (e5) }})
 #else
 #define	EFI_GUID(a, b, c, d, e0, e1, e2, e3, e4, e5)			\
-	((efi_guid_t) {(a), (b), (c), (d) & 0xff, (d) >> 8,		\
-	{ (e0), (e1), (e2), (e3), (e4), (e5) }})
+	((efi_guid_t) {(a), (b), (c), { (d) & 0xff, (d) >> 8,		\
+	(e0), (e1), (e2), (e3), (e4), (e5) }})
 #endif
 
 #define EFI_GLOBAL_GUID EFI_GUID(0x8be4df61, 0x93ca, 0x11d2, 0xaa0d, \
@@ -86,15 +79,25 @@ int efi_set_variable(efi_guid_t guid, const char *name,
 int efi_str_to_guid(const char *s, efi_guid_t *guid);
 int efi_variables_supported(void);
 
+/*
+ * different routines to dump data.
+ */
+
+void efi_asciidump(uint8_t *data, size_t datalen, int indent);
+void efi_bindump(uint8_t *data, size_t datalen);
+void efi_print_load_option(uint8_t *, size_t, int, int, int);
+void efi_hexdump(uint8_t *data, size_t datalen, int indent);
+void efi_utf8dump(uint8_t *data, size_t datalen, int indent);
+
 /* FreeBSD extensions */
-struct uuid_table
+struct guid_table
 {
 	const char *uuid_str;
 	const char *name;
 	efi_guid_t guid;
 };
 
-int efi_known_guid(struct uuid_table **);
+int efi_known_guid(struct guid_table **);
 
 extern const efi_guid_t efi_guid_empty;
 

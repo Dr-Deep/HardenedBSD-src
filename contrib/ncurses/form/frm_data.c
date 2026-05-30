@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright 2020 Thomas E. Dickey                                          *
+ * Copyright 2020-2021,2024 Thomas E. Dickey                                *
  * Copyright 1998-2010,2013 Free Software Foundation, Inc.                  *
  *                                                                          *
  * Permission is hereby granted, free of charge, to any person obtaining a  *
@@ -33,12 +33,12 @@
 
 #include "form.priv.h"
 
-MODULE_ID("$Id: frm_data.c,v 1.19 2020/12/11 23:20:37 tom Exp $")
+MODULE_ID("$Id: frm_data.c,v 1.22 2024/07/27 18:35:02 tom Exp $")
 
 /*---------------------------------------------------------------------------
-|   Facility      :  libnform  
+|   Facility      :  libnform
 |   Function      :  bool data_behind(const FORM *form)
-|   
+|
 |   Description   :  Check for off-screen data behind. This is nearly trivial
 |                    because the beginning of a field is fixed.
 |
@@ -54,7 +54,7 @@ data_behind(const FORM *form)
 
   if (form && (form->status & _POSTED) && form->current)
     {
-      FIELD *field;
+      const FIELD *field;
 
       field = form->current;
       if (!Single_Line_Field(field))
@@ -70,12 +70,12 @@ data_behind(const FORM *form)
 }
 
 /*---------------------------------------------------------------------------
-|   Facility      :  libnform  
+|   Facility      :  libnform
 |   Function      :  static char * Only_Padding(
 |                                    WINDOW *w,
 |                                    int len,
 |                                    int pad)
-|   
+|
 |   Description   :  Test if 'length' cells starting at the current position
 |                    contain a padding character.
 |
@@ -123,11 +123,11 @@ Only_Padding(WINDOW *w, int len, int pad)
 }
 
 /*---------------------------------------------------------------------------
-|   Facility      :  libnform  
+|   Facility      :  libnform
 |   Function      :  bool data_ahead(const FORM *form)
-|   
+|
 |   Description   :  Check for off-screen data ahead. This is more difficult
-|                    because a dynamic field has a variable end. 
+|                    because a dynamic field has a variable end.
 |
 |   Return Values :  TRUE   - there are off-screen data ahead
 |                    FALSE  - there are no off-screen data ahead
@@ -141,7 +141,7 @@ data_ahead(const FORM *form)
 
   if (form && (form->status & _POSTED) && form->current)
     {
-      FIELD *field;
+      const FIELD *field;
       bool cursor_moved = FALSE;
       int pos;
 
@@ -150,12 +150,11 @@ data_ahead(const FORM *form)
 
       if (Single_Line_Field(field))
 	{
-	  int check_len;
-
 	  pos = form->begincol + field->cols;
 	  while (pos < field->dcols)
 	    {
-	      check_len = field->dcols - pos;
+	      int check_len = field->dcols - pos;
+
 	      if (check_len >= field->cols)
 		check_len = field->cols;
 	      cursor_moved = TRUE;

@@ -11,8 +11,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/IR/CFG.h"
-#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/InitializePasses.h"
@@ -23,7 +21,7 @@
 
 using namespace llvm;
 
-#define DEBUG_TYPE "flattencfg"
+#define DEBUG_TYPE "flatten-cfg"
 
 namespace {
 struct FlattenCFGLegacyPass : public FunctionPass {

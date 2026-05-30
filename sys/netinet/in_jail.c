@@ -26,9 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_ddb.h"
 #include "opt_inet.h"
 #include "opt_inet6.h"
@@ -99,13 +96,7 @@ prison_qcmp_v4(const void *ip1, const void *ip2)
 bool
 prison_valid_v4(const void *ip)
 {
-	in_addr_t ia = ((const struct in_addr *)ip)->s_addr;
-
-	/*
-	 * We do not have to care about byte order for these
-	 * checks so we will do them in NBO.
-	 */
-	return (ia != INADDR_ANY && ia != INADDR_BROADCAST);
+	return (!in_broadcast(*(const struct in_addr *)ip));
 }
 
 /*
@@ -144,49 +135,47 @@ prison_get_ip4(struct ucred *cred, struct in_addr *ia)
 }
 
 /*
- * Return 1 if we should do proper source address selection or are not jailed.
- * We will return 0 if we should bypass source address selection in favour
+ * Return true if we should do proper source address selection or are not jailed.
+ * We will return false if we should bypass source address selection in favour
  * of the primary jail IPv4 address. Only in this case *ia will be updated and
  * returned in NBO.
- * Return EAFNOSUPPORT, in case this jail does not allow IPv4.
+ * Return true, even in case this jail does not allow IPv4.
  */
-int
+bool
 prison_saddrsel_ip4(struct ucred *cred, struct in_addr *ia)
 {
 	struct prison *pr;
 	struct in_addr lia;
-	int error;
 
 	KASSERT(cred != NULL, ("%s: cred is NULL", __func__));
 	KASSERT(ia != NULL, ("%s: ia is NULL", __func__));
 
 	if (!jailed(cred))
-		return (1);
+		return (true);
 
 	pr = cred->cr_prison;
 	if (pr->pr_flags & PR_IP4_SADDRSEL)
-		return (1);
+		return (true);
 
 	lia.s_addr = INADDR_ANY;
-	error = prison_get_ip4(cred, &lia);
-	if (error)
-		return (error);
+	if (prison_get_ip4(cred, &lia) != 0)
+		return (true);
 	if (lia.s_addr == INADDR_ANY)
-		return (1);
+		return (true);
 
 	ia->s_addr = lia.s_addr;
-	return (0);
+	return (false);
 }
 
 /*
  * Return true if pr1 and pr2 have the same IPv4 address restrictions.
  */
-int
+bool
 prison_equal_ip4(struct prison *pr1, struct prison *pr2)
 {
 
 	if (pr1 == pr2)
-		return (1);
+		return (true);
 
 	/*
 	 * No need to lock since the PR_IP4_USER flag can't be altered for

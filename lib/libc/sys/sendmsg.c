@@ -29,21 +29,14 @@
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/types.h>
 #include <sys/syscall.h>
 #include <sys/socket.h>
 #include "libc_private.h"
 
-__weak_reference(__sys_sendmsg, __sendmsg);
-
 #pragma weak sendmsg
 ssize_t
 sendmsg(int s, const struct msghdr *msg, int flags)
 {
-
-	return (((int (*)(int, const struct msghdr *, int))
-	    __libc_interposing[INTERPOS_sendmsg])(s, msg, flags));
+	return (INTERPOS_SYS(sendmsg, s, msg, flags));
 }

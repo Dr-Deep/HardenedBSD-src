@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -25,7 +26,7 @@
 
 #define	ENTRY(x) \
 	.text; \
-	.align	8; \
+	.balign	8; \
 	.globl	x; \
 	.type	x, @function; \
 x:

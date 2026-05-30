@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 PACKAGE=			tests
 
 .include <bsd.own.mk>
@@ -8,11 +6,12 @@ PACKAGE=			tests
 ATF_TESTS_C+=			brk_test
 .endif
 ATF_TESTS_C+=			cpuset_test
+ATF_TESTS_C+=			errno_test
+ATF_TESTS_C+=			swapcontext_test
 ATF_TESTS_C+=			queue_test
 ATF_TESTS_C+=			sendfile_test
 
-# TODO: clone, lwp_create, lwp_ctl, posix_fadvise, recvmmsg,
-# swapcontext
+# TODO: clone, lwp_create, lwp_ctl, posix_fadvise, recvmmsg
 NETBSD_ATF_TESTS_C+=		access_test
 NETBSD_ATF_TESTS_C+=		bind_test
 NETBSD_ATF_TESTS_C+=		chroot_test
@@ -23,6 +22,7 @@ NETBSD_ATF_TESTS_C+=		dup_test
 NETBSD_ATF_TESTS_C+=		fsync_test
 NETBSD_ATF_TESTS_C+=		getcontext_test
 NETBSD_ATF_TESTS_C+=		getgroups_test
+FORTIFY_SOURCE.t_getgroups.c=	0
 NETBSD_ATF_TESTS_C+=		getitimer_test
 NETBSD_ATF_TESTS_C+=		getlogin_test
 NETBSD_ATF_TESTS_C+=		getpid_test
@@ -73,6 +73,13 @@ NETBSD_ATF_TESTS_C+=		write_test
 
 LIBADD.getpid_test+=		pthread
 LIBADD.timer_create_test+=	rt
+
+# Message queue IPC tests need to be executed serially since they variously
+# use global keys and exhaust global IPC limits.
+TEST_METADATA.msgctl_test+=	is_exclusive="true"
+TEST_METADATA.msgget_test+=	is_exclusive="true"
+TEST_METADATA.msgsnd_test+=	is_exclusive="true"
+TEST_METADATA.msgrcv_test+=	is_exclusive="true"
 
 .include "../Makefile.netbsd-tests"
 

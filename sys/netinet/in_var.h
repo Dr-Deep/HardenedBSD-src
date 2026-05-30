@@ -27,9 +27,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)in_var.h	8.2 (Berkeley) 1/9/95
- * $FreeBSD$
  */
 
 #ifndef _NETINET_IN_VAR_H_
@@ -100,10 +97,12 @@ struct in_ifaddr {
 #define IN_LNAOF(in, ifa) \
 	((ntohl((in).s_addr) & ~((struct in_ifaddr *)(ifa)->ia_subnetmask))
 
-extern	u_char	inetctlerrmap[];
+#ifdef _KERNEL
+#define IN_ARE_MASKED_ADDR_EQUAL(d, a, m)	(		\
+	((((d).s_addr ^ (a).s_addr) & (m).s_addr)) == 0 )
+#endif
 
-#define LLTABLE(ifp)	\
-	((struct in_ifinfo *)(ifp)->if_afdata[AF_INET])->ii_llt
+#define LLTABLE(ifp)	((struct in_ifinfo *)(ifp)->if_inet)->ii_llt
 /*
  * Hash table for IP addresses.
  */
@@ -292,9 +291,7 @@ ip_mfilter_count(struct ip_mfilter_head *head)
  * and kept if retransmissions are necessary.
  *
  * FUTURE: inm_link is now only used when groups are being purged
- * on a detaching ifnet. It could be demoted to a SLIST_ENTRY, but
- * because it is at the very start of the struct, we can't do this
- * w/o breaking the ABI for ifmcstat.
+ * on a detaching ifnet. It could be demoted to a SLIST_ENTRY.
  */
 struct in_multi {
 	LIST_ENTRY(in_multi) inm_link;	/* to-be-released by in_ifdetach */
@@ -340,7 +337,6 @@ struct in_multi {
  *  A source is only excluded if all listeners exclude it.
  *  A source is only included if no listeners exclude it,
  *  and at least one listener includes it.
- * May be used by ifmcstat(8).
  */
 static __inline uint8_t
 ims_get_mode(const struct in_multi *inm, const struct ip_msource *ims,
@@ -382,7 +378,21 @@ extern struct sx in_multi_sx;
 #define	IN_MULTI_UNLOCK_ASSERT() sx_assert(&in_multi_sx, SA_XUNLOCKED)
 
 void inm_disconnect(struct in_multi *inm);
-extern int ifma_restart;
+
+/*
+ * Get the in_multi pointer from a ifmultiaddr.
+ * Returns NULL if ifmultiaddr is no longer valid.
+ */
+static __inline struct in_multi *
+inm_ifmultiaddr_get_inm(struct ifmultiaddr *ifma)
+{
+
+	NET_EPOCH_ASSERT();
+
+	return ((ifma->ifma_addr->sa_family != AF_INET ||
+	    (ifma->ifma_flags & IFMA_F_ENQUEUED) == 0) ? NULL :
+	    ifma->ifma_protospec);
+}
 
 /* Acquire an in_multi record. */
 static __inline void
@@ -425,6 +435,7 @@ inm_rele_locked(struct in_multi_head *inmh, struct in_multi *inm)
 
 struct rib_head;
 struct	ip_moptions;
+struct ucred;
 
 struct in_multi *inm_lookup_locked(struct ifnet *, const struct in_addr);
 struct in_multi *inm_lookup(struct ifnet *, const struct in_addr);
@@ -444,8 +455,11 @@ int	in_joingroup_locked(struct ifnet *, const struct in_addr *,
 int	in_leavegroup(struct in_multi *, /*const*/ struct in_mfilter *);
 int	in_leavegroup_locked(struct in_multi *,
 	    /*const*/ struct in_mfilter *);
+int	in_mask2len(struct in_addr *);
 int	in_control(struct socket *, u_long, void *, struct ifnet *,
 	    struct thread *);
+int	in_control_ioctl(u_long, void *, struct ifnet *,
+	    struct ucred *);
 int	in_addprefix(struct in_ifaddr *);
 int	in_scrubprefix(struct in_ifaddr *, u_int);
 void	in_ifscrub_all(void);
@@ -453,9 +467,9 @@ void	ip_input(struct mbuf *);
 void	ip_direct_input(struct mbuf *);
 void	in_ifadown(struct ifaddr *ifa, int);
 struct	mbuf	*ip_tryforward(struct mbuf *);
-void	*in_domifattach(struct ifnet *);
-void	in_domifdetach(struct ifnet *, void *);
 struct rib_head *in_inithead(uint32_t fibnum);
+void	in_ifattach(void *, struct ifnet *);
+
 #ifdef VIMAGE
 void	in_detachhead(struct rib_head *rh);
 #endif

@@ -31,12 +31,12 @@
 
 #include "assym.inc"
 #include "opt_kstack_pages.h"
-#include "opt_sched.h"
+
+#include <sys/elf_common.h>
 
 #include <machine/asm.h>
 #include <machine/armreg.h>
-
-__FBSDID("$FreeBSD$");
+#include <machine/proc.h>
 
 .macro clear_step_flag pcbflags, tmp
 	tbz	\pcbflags, #PCB_SINGLE_STEP_SHIFT, 999f
@@ -57,17 +57,35 @@ __FBSDID("$FreeBSD$");
 .endm
 
 /*
+ * Lower 32 bits of CONTEXTIDR_EL1 are PID
+ * Upper 32 bits are reserved for future use e.g. TID
+ */
+.macro pid_in_context_idr
+	adrp	x9, arm64_pid_in_contextidr
+	ldrb	w10, [x9, :lo12:arm64_pid_in_contextidr]
+	cbz	w10, 998f
+	ldr	x9, [x1, #TD_PROC]
+	/* PID is always 0 or positive, do not sign extend */
+	ldr	w10, [x9, #P_PID]
+	msr	contextidr_el1, x10
+998:
+.endm
+
+/*
  * void cpu_throw(struct thread *old, struct thread *new)
  */
 ENTRY(cpu_throw)
-	/* Of old == NULL skip disabling stepping */
+	/* If old == NULL skip disabling stepping */
 	cbz	x0, 1f
 
 	/* If we were single stepping, disable it */
 	ldr	x4, [x0, #TD_PCB]
 	ldr	w5, [x4, #PCB_FLAGS]
 	clear_step_flag w5, x6
+
 1:
+	/* debug/trace: set CONTEXTIDR_EL1 to current PID, if enabled */
+	pid_in_context_idr
 
 #ifdef VFP
 	/* Backup the new thread pointer around a call to C code */
@@ -78,11 +96,20 @@ ENTRY(cpu_throw)
 	mov	x0, x1
 #endif
 
-	/* This returns the thread pointer so no need to save it */
+	/* These return the thread pointer so no need to save it */
 	bl	ptrauth_switch
+	bl	mte_switch
+#ifdef PERTHREAD_SSP
+	mov	x19, x0
+#endif
 	/* This returns the thread pcb */
 	bl	pmap_switch
 	mov	x4, x0
+#ifdef PERTHREAD_SSP
+	/* Update the per-thread stack canary pointer. */
+	add	x19, x19, #(TD_MD_CANARY)
+	msr	sp_el0, x19
+#endif
 
 	/* If we are single stepping, enable it */
 	ldr	w5, [x4, #PCB_FLAGS]
@@ -94,12 +121,12 @@ ENTRY(cpu_throw)
 	msr	tpidr_el0, x6
 	ldr	x6, [x4, #PCB_TPIDRRO]
 	msr	tpidrro_el0, x6
-	ldp	x19, x20, [x4, #PCB_REGS + 19 * 8]
-	ldp	x21, x22, [x4, #PCB_REGS + 21 * 8]
-	ldp	x23, x24, [x4, #PCB_REGS + 23 * 8]
-	ldp	x25, x26, [x4, #PCB_REGS + 25 * 8]
-	ldp	x27, x28, [x4, #PCB_REGS + 27 * 8]
-	ldp	x29, lr, [x4, #PCB_REGS + 29 * 8]
+	ldp	x19, x20, [x4, #PCB_REGS + (PCB_X19 + 0) * 8]
+	ldp	x21, x22, [x4, #PCB_REGS + (PCB_X19 + 2) * 8]
+	ldp	x23, x24, [x4, #PCB_REGS + (PCB_X19 + 4) * 8]
+	ldp	x25, x26, [x4, #PCB_REGS + (PCB_X19 + 6) * 8]
+	ldp	x27, x28, [x4, #PCB_REGS + (PCB_X19 + 8) * 8]
+	ldp	x29, lr, [x4, #PCB_REGS + (PCB_X19 + 10) * 8]
 
 	ret
 END(cpu_throw)
@@ -119,12 +146,12 @@ ENTRY(cpu_switch)
 	ldr	x4, [x0, #TD_PCB]
 
 	/* Store the callee-saved registers */
-	stp	x19, x20, [x4, #PCB_REGS + 19 * 8]
-	stp	x21, x22, [x4, #PCB_REGS + 21 * 8]
-	stp	x23, x24, [x4, #PCB_REGS + 23 * 8]
-	stp	x25, x26, [x4, #PCB_REGS + 25 * 8]
-	stp	x27, x28, [x4, #PCB_REGS + 27 * 8]
-	stp	x29, lr, [x4, #PCB_REGS + 29 * 8]
+	stp	x19, x20, [x4, #PCB_REGS + (PCB_X19 + 0) * 8]
+	stp	x21, x22, [x4, #PCB_REGS + (PCB_X19 + 2) * 8]
+	stp	x23, x24, [x4, #PCB_REGS + (PCB_X19 + 4) * 8]
+	stp	x25, x26, [x4, #PCB_REGS + (PCB_X19 + 6) * 8]
+	stp	x27, x28, [x4, #PCB_REGS + (PCB_X19 + 8) * 8]
+	stp	x29, lr, [x4, #PCB_REGS + (PCB_X19 + 10) * 8]
 	/* And the old stack pointer */
 	mov	x5, sp
 	mrs	x6, tpidrro_el0
@@ -140,17 +167,19 @@ ENTRY(cpu_switch)
 	mov	x20, x1
 	mov	x21, x2
 
+	/* debug/trace: set CONTEXTIDR_EL1 to current PID, if enabled */
+	pid_in_context_idr
+
 #ifdef VFP
-	/* Load the pcb address */
-	mov	x1, x4
-	bl	vfp_save_state
+	bl	vfp_save_state_switch
 	mov	x0, x20
 #else
 	mov	x0, x1
 #endif
 
-	/* This returns the thread pointer so no need to save it */
+	/* These return the thread pointer so no need to save it */
 	bl	ptrauth_switch
+	bl	mte_switch
 	/* This returns the thread pcb */
 	bl	pmap_switch
 	/* Move the new pcb out of the way */
@@ -159,12 +188,17 @@ ENTRY(cpu_switch)
 	mov	x2, x21
 	mov	x1, x20
 	mov	x0, x19
+#ifdef PERTHREAD_SSP
+	/* Update the per-thread stack canary pointer. */
+	add	x20, x20, #(TD_MD_CANARY)
+	msr	sp_el0, x20
+#endif
 
 	/*
 	 * Release the old thread.
 	 */
 	stlr	x2, [x0, #TD_LOCK]
-#if defined(SCHED_ULE) && defined(SMP)
+#if defined(SMP)
 	/* Spin if TD_LOCK points to a blocked_lock */
 	ldr	x2, =_C_LABEL(blocked_lock)
 1:
@@ -183,14 +217,13 @@ ENTRY(cpu_switch)
 	msr	tpidr_el0, x6
 	ldr	x6, [x4, #PCB_TPIDRRO]
 	msr	tpidrro_el0, x6
-	ldp	x19, x20, [x4, #PCB_REGS + 19 * 8]
-	ldp	x21, x22, [x4, #PCB_REGS + 21 * 8]
-	ldp	x23, x24, [x4, #PCB_REGS + 23 * 8]
-	ldp	x25, x26, [x4, #PCB_REGS + 25 * 8]
-	ldp	x27, x28, [x4, #PCB_REGS + 27 * 8]
-	ldp	x29, lr, [x4, #PCB_REGS + 29 * 8]
+	ldp	x19, x20, [x4, #PCB_REGS + (PCB_X19 + 0) * 8]
+	ldp	x21, x22, [x4, #PCB_REGS + (PCB_X19 + 2) * 8]
+	ldp	x23, x24, [x4, #PCB_REGS + (PCB_X19 + 4) * 8]
+	ldp	x25, x26, [x4, #PCB_REGS + (PCB_X19 + 6) * 8]
+	ldp	x27, x28, [x4, #PCB_REGS + (PCB_X19 + 8) * 8]
+	ldp	x29, lr, [x4, #PCB_REGS + (PCB_X19 + 10) * 8]
 
-	str	xzr, [x4, #PCB_REGS + 18 * 8]
 	ret
 END(cpu_switch)
 
@@ -209,6 +242,16 @@ ENTRY(fork_trampoline)
 	msr	daifset, #(DAIF_D | DAIF_INTR)
 
 	ldr	x0, [x18, #PC_CURTHREAD]
+
+	/* Set the per-process tcr_el1 fields */
+	ldr	x10, [x0, #TD_PROC]
+	ldr	x10, [x10, #P_MD_TCR]
+	mrs	x11, tcr_el1
+	and	x11, x11, #(~MD_TCR_FIELDS)
+	orr	x11, x11, x10
+	msr	tcr_el1, x11
+	/* No isb as the eret below is the context-synchronising event */
+
 	bl	ptrauth_enter_el0
 
 	/* Restore sp, lr, elr, and spsr */
@@ -235,6 +278,8 @@ ENTRY(fork_trampoline)
 	ldp	x26, x27, [sp, #TF_X + 26 * 8]
 	ldp	x28, x29, [sp, #TF_X + 28 * 8]
 
+	add	sp, sp, #(TF_SIZE)
+
 	/*
 	 * No need for interrupts reenabling since PSR
 	 * will be set to the desired value anyway.
@@ -245,12 +290,12 @@ END(fork_trampoline)
 
 ENTRY(savectx)
 	/* Store the callee-saved registers */
-	stp	x19, x20, [x0, #PCB_REGS + 19 * 8]
-	stp	x21, x22, [x0, #PCB_REGS + 21 * 8]
-	stp	x23, x24, [x0, #PCB_REGS + 23 * 8]
-	stp	x25, x26, [x0, #PCB_REGS + 25 * 8]
-	stp	x27, x28, [x0, #PCB_REGS + 27 * 8]
-	stp	x29, lr, [x0, #PCB_REGS + 29 * 8]
+	stp	x19, x20, [x0, #PCB_REGS + (PCB_X19 + 0) * 8]
+	stp	x21, x22, [x0, #PCB_REGS + (PCB_X19 + 2) * 8]
+	stp	x23, x24, [x0, #PCB_REGS + (PCB_X19 + 4) * 8]
+	stp	x25, x26, [x0, #PCB_REGS + (PCB_X19 + 6) * 8]
+	stp	x27, x28, [x0, #PCB_REGS + (PCB_X19 + 8) * 8]
+	stp	x29, lr, [x0, #PCB_REGS + (PCB_X19 + 10) * 8]
 	/* And the old stack pointer */
 	mov	x5, sp
 	mrs	x6, tpidrro_el0
@@ -258,15 +303,12 @@ ENTRY(savectx)
 	mrs	x6, tpidr_el0
 	stp	x5, x6, [x0, #PCB_SP]
 
-	/* Store the VFP registers */
 #ifdef VFP
-	mov	x28, lr
-	mov	x1, x0			/* move pcb to the correct register */
-	mov	x0, xzr			/* td = NULL */
-	bl	vfp_save_state
-	mov	lr, x28
-#endif
-
+	/* Store the VFP registers */
+	b	vfp_save_state_savectx
+#else
 	ret
+#endif
 END(savectx)
 
+GNU_PROPERTY_AARCH64_FEATURE_1_NOTE(GNU_PROPERTY_AARCH64_FEATURE_1_VAL)

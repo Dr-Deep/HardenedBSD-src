@@ -21,8 +21,6 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -30,9 +28,6 @@
  */
 
 #include "opt_device_polling.h"
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -64,10 +59,10 @@ __FBSDID("$FreeBSD$");
 #include <dev/mii/mii.h>
 #include <dev/mii/miivar.h>
 
-#include <dev/extres/clk/clk.h>
-#include <dev/extres/hwreset/hwreset.h>
-#include <dev/extres/regulator/regulator.h>
-#include <dev/extres/syscon/syscon.h>
+#include <dev/clk/clk.h>
+#include <dev/hwreset/hwreset.h>
+#include <dev/regulator/regulator.h>
+#include <dev/syscon/syscon.h>
 
 #include "syscon_if.h"
 #include "miibus_if.h"
@@ -148,12 +143,16 @@ enum awg_type {
 	EMAC_A83T = 1,
 	EMAC_H3,
 	EMAC_A64,
+	EMAC_D1,
+	EMAC_H616,
 };
 
 static struct ofw_compat_data compat_data[] = {
 	{ "allwinner,sun8i-a83t-emac",		EMAC_A83T },
 	{ "allwinner,sun8i-h3-emac",		EMAC_H3 },
 	{ "allwinner,sun50i-a64-emac",		EMAC_A64 },
+	{ "allwinner,sun20i-d1-emac",		EMAC_D1 },
+	{ "allwinner,sun50i-h616-emac",		EMAC_H616 },
 	{ NULL,					0 }
 };
 
@@ -227,6 +226,9 @@ static uint32_t syscon_read_emac_clk_reg(device_t dev);
 static void syscon_write_emac_clk_reg(device_t dev, uint32_t val);
 static phandle_t awg_get_phy_node(device_t dev);
 static bool awg_has_internal_phy(device_t dev);
+#ifdef DEVICE_POLLING
+static int awg_poll(if_t ifp, enum poll_cmd cmd, int count);
+#endif
 
 /*
  * MII functions
@@ -442,7 +444,7 @@ awg_setup_rxfilter(struct awg_softc *sc)
 		val |= HASH_MULTICAST;
 
 	/* Write our unicast address */
-	eaddr = IF_LLADDR(ifp);
+	eaddr = if_getlladdr(ifp);
 	machi = (eaddr[5] << 8) | eaddr[4];
 	maclo = (eaddr[3] << 24) | (eaddr[2] << 16) | (eaddr[1] << 8) |
 	   (eaddr[0] << 0);
@@ -652,13 +654,13 @@ awg_encap(struct awg_softc *sc, struct mbuf **mp)
 
 	flags = TX_FIR_DESC;
 	status = 0;
-	if ((m->m_pkthdr.csum_flags & CSUM_IP) != 0) {
-		if ((m->m_pkthdr.csum_flags & (CSUM_TCP|CSUM_UDP)) != 0)
-			csum_flags = TX_CHECKSUM_CTL_FULL;
-		else
-			csum_flags = TX_CHECKSUM_CTL_IP;
-		flags |= (csum_flags << TX_CHECKSUM_CTL_SHIFT);
-	}
+	if ((m->m_pkthdr.csum_flags & (CSUM_TCP|CSUM_UDP)) != 0)
+		csum_flags = TX_CHECKSUM_CTL_FULL;
+	else if ((m->m_pkthdr.csum_flags & CSUM_IP) != 0)
+		csum_flags = TX_CHECKSUM_CTL_IP;
+	else
+		csum_flags = 0;
+	flags |= (csum_flags << TX_CHECKSUM_CTL_SHIFT);
 
 	for (i = 0; i < nsegs; i++) {
 		sc->tx.segs++;
@@ -988,7 +990,7 @@ awg_start_locked(struct awg_softc *sc)
 				if_sendq_prepend(ifp, m);
 			break;
 		}
-		if_bpfmtap(ifp, m);
+		bpf_mtap_if(ifp, m);
 	}
 
 	if (cnt != 0) {

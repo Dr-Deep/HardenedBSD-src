@@ -1,4 +1,3 @@
-/*	$FreeBSD$	*/
 
 /*
  * Copyright (C) 2012 by Darren Reed.
@@ -9,7 +8,6 @@
  *
  * Simple RCMD transparent proxy for in-kernel use.  For use with the NAT
  * code.
- * $FreeBSD$
  */
 
 #define	IPF_RCMD_PROXY
@@ -65,18 +63,12 @@ ipf_p_rcmd_main_unload(void)
  * Setup for a new RCMD proxy.
  */
 int
-ipf_p_rcmd_new(void *arg, fr_info_t *fin, ap_session_t *aps, nat_t *nat)
+ipf_p_rcmd_new(void *arg, fr_info_t *fin __unused, ap_session_t *aps, nat_t *nat)
 {
 	tcphdr_t *tcp = (tcphdr_t *)fin->fin_dp;
 	rcmdinfo_t *rc;
 	ipnat_t *ipn;
-	ipnat_t *np;
-	int size;
 
-	fin = fin;	/* LINT */
-
-	np = nat->nat_ptr;
-	size = np->in_size;
 	KMALLOC(rc, rcmdinfo_t *);
 	if (rc == NULL) {
 #ifdef IP_RCMD_PROXY_DEBUG
@@ -265,7 +257,7 @@ ipf_p_rcmd_portmsg(fr_info_t *fin, ap_session_t *aps, nat_t *nat)
 	bzero((char *)tcp2, sizeof(*tcp2));
 	tcp2->th_win = htons(8192);
 	TCP_OFF_A(tcp2, 5);
-	tcp2->th_flags = TH_SYN;
+	tcp_set_flags(tcp2, TH_SYN);
 
 	fi.fin_dp = (char *)tcp2;
 	fi.fin_fr = &rcmdfr;

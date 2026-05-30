@@ -27,8 +27,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _SYS_IMGACT_H_
@@ -59,6 +57,7 @@ struct image_args {
 
 struct image_params {
 	struct proc *proc;		/* our process */
+	struct thread *td;
 	struct label *execlabel;	/* optional exec label */
 	struct vnode *vp;		/* pointer to vnode of file to exec */
 	struct vm_object *object;	/* The vm object for this vp */
@@ -66,6 +65,7 @@ struct image_params {
 	const char *image_header;	/* header of file to exec */
 	unsigned long entry_addr;	/* entry address of target executable */
 	unsigned long reloc_base;	/* load address of image */
+	unsigned long et_dyn_addr;	/* PIE load base */
 	char *interpreter_name;		/* name of the interpreter */
 	void *auxargs;			/* ELF Auxinfo structure pointer */
 	struct sf_buf *firstpage;	/* first page that we mapped */
@@ -96,6 +96,7 @@ struct image_params {
 		uint32_t req_acl_flags; /* Requested PaX settings from ACL */
 		uint32_t req_extattr_flags; /* Req. PaX setting from extattr */
 	} pax;
+	struct vnode *interpreter_vp;	/* vnode of the interpreter */
 };
 
 #ifdef _KERNEL
@@ -121,8 +122,7 @@ int	exec_map_stack(struct image_params *);
 int	exec_new_vmspace(struct image_params *, struct sysentvec *);
 void	exec_setregs(struct thread *, struct image_params *, uintptr_t);
 int	exec_shell_imgact(struct image_params *);
-int	exec_copyin_args(struct image_args *, const char *, enum uio_seg,
-	char **, char **);
+int	exec_copyin_args(struct image_args *, const char *, char **, char **);
 int	pre_execve(struct thread *td, struct vmspace **oldvmspace);
 void	post_execve(struct thread *td, int error, struct vmspace *oldvmspace);
 #endif

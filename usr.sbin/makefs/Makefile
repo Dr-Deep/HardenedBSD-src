@@ -1,5 +1,3 @@
-#	$FreeBSD$
-
 SRCDIR:=${.PARSEDIR:tA}
 
 .include <src.opts.mk>
@@ -17,7 +15,6 @@ SRCS=	cd9660.c \
 MAN=	makefs.8
 
 NO_WCAST_ALIGN=
-CSTD=	c11
 
 .if ${MK_ZFS} != "no"
 SRCS+=	zfs.c
@@ -49,5 +46,10 @@ LIBADD=		netbsd util sbuf
 
 HAS_TESTS=
 SUBDIR.${MK_TESTS}+= tests
+
+# cd9660_generate_path_table adds a global variable to an on-stack
+# TAILQ which temporarily stores a pointer to the on-stack TAILQ head
+# in the global
+CWARNFLAGS.cd9660.c+= ${NO_WDANGLING_POINTER}
 
 .include <bsd.prog.mk>

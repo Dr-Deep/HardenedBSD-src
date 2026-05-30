@@ -28,9 +28,6 @@
  * Allwinner Consumer IR controller
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
@@ -43,8 +40,8 @@ __FBSDID("$FreeBSD$");
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
-#include <dev/extres/clk/clk.h>
-#include <dev/extres/hwreset/hwreset.h>
+#include <dev/clk/clk.h>
+#include <dev/hwreset/hwreset.h>
 
 #include <dev/evdev/input.h>
 #include <dev/evdev/evdev.h>
@@ -140,6 +137,7 @@ enum {
 	A10_IR = 1,
 	A13_IR,
 	A31_IR,
+	H616_IR,
 };
 
 #define	AW_IR_RAW_BUF_SIZE		128
@@ -171,6 +169,7 @@ static struct ofw_compat_data compat_data[] = {
 	{ "allwinner,sun4i-a10-ir",	A10_IR },
 	{ "allwinner,sun5i-a13-ir",	A13_IR },
 	{ "allwinner,sun6i-a31-ir",	A31_IR },
+	{ "allwinner,sun6i-h616-ir",	H616_IR },
 	{ NULL,				0 }
 };
 
@@ -430,6 +429,7 @@ aw_ir_attach(device_t dev)
 		break;
 	case A13_IR:
 	case A31_IR:
+	case H616_IR:
 		sc->fifo_size = 64;
 		break;
 	}

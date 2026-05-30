@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2009 Yahoo! Inc.
  * Copyright (c) 2011-2015 LSI Corp.
@@ -28,12 +28,7 @@
  * SUCH DAMAGE.
  *
  * Avago Technologies (LSI) MPT-Fusion Host Adapter FreeBSD
- *
- * $FreeBSD$
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 /* Communications core for Avago Technologies (LSI) MPT2 */
 
@@ -55,12 +50,11 @@ __FBSDID("$FreeBSD$");
 #include <sys/kthread.h>
 #include <sys/taskqueue.h>
 #include <sys/sbuf.h>
+#include <sys/stdarg.h>
 
 #include <machine/bus.h>
 #include <machine/resource.h>
 #include <sys/rman.h>
-
-#include <machine/stdarg.h>
 
 #include <cam/cam.h>
 #include <cam/cam_ccb.h>
@@ -85,6 +79,12 @@ __FBSDID("$FreeBSD$");
 #include <dev/mps/mpsvar.h>
 #include <dev/mps/mps_table.h>
 #include <dev/mps/mps_sas.h>
+
+#include <sys/sdt.h>
+
+/* SDT Probes */
+SDT_PROBE_DEFINE4(cam, , mps, complete, "union ccb *",
+    "struct mps_command *", "u_int", "u32");
 
 /*
  * static array to check SCSI OpCode for EEDP protection bits
@@ -299,7 +299,6 @@ mpssas_log_command(struct mps_command *cm, u_int level, const char *fmt, ...)
 	struct sbuf sb;
 	va_list ap;
 	char str[224];
-	char path_str[64];
 
 	if (cm == NULL)
 		return;
@@ -313,9 +312,7 @@ mpssas_log_command(struct mps_command *cm, u_int level, const char *fmt, ...)
 	va_start(ap, fmt);
 
 	if (cm->cm_ccb != NULL) {
-		xpt_path_string(cm->cm_ccb->csio.ccb_h.path, path_str,
-				sizeof(path_str));
-		sbuf_cat(&sb, path_str);
+		xpt_path_sbuf(cm->cm_ccb->csio.ccb_h.path, &sb);
 		if (cm->cm_ccb->ccb_h.func_code == XPT_SCSI_IO) {
 			scsi_command_string(&cm->cm_ccb->csio, &sb);
 			sbuf_printf(&sb, "length %d ",
@@ -866,7 +863,7 @@ mps_detach_sas(struct mps_softc *sc)
 	if (sassc->devq != NULL)
 		cam_simq_free(sassc->devq);
 
-	for(i=0; i< sassc->maxtargets ;i++) {
+	for (i = 0; i < sassc->maxtargets; i++) {
 		targ = &sassc->targets[i];
 		SLIST_FOREACH_SAFE(lun, &targ->luns, lun_link, lun_tmp) {
 			free(lun, M_MPT2);
@@ -2084,6 +2081,9 @@ mpssas_scsiio_complete(struct mps_softc *sc, struct mps_command *cm)
 		mps_dprint(sc, MPS_INFO, "Decrementing SSU count.\n");
 		sc->SSU_refcount--;
 	}
+
+	SDT_PROBE4(cam, , mps, complete, ccb, cm, sassc->flags,
+	    sc->mapping_table[target_id].device_info);
 
 	/* Take the fast path to completion */
 	if (cm->cm_reply == NULL) {
@@ -3404,7 +3404,7 @@ mpssas_realloc_targets(struct mps_softc *sc, int maxtargets)
 	 * the allocated LUNs for each target and then the target buffer
 	 * itself.
 	 */
-	for (i=0; i< maxtargets; i++) {
+	for (i = 0; i < maxtargets; i++) {
 		targ = &sassc->targets[i];
 		SLIST_FOREACH_SAFE(lun, &targ->luns, lun_link, lun_tmp) {
 			free(lun, M_MPT2);

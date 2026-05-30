@@ -22,10 +22,9 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 
-LIB=	pam_permit
-SRCS=	pam_permit.c
-MAN=	pam_permit.8
+LIB=		pam_permit
+SRCS=		pam_permit.c
+MANNODEV=	pam_permit.8
 
 .include <bsd.lib.mk>

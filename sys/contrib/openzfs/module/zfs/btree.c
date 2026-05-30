@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -20,7 +21,11 @@
 #include	<sys/bitops.h>
 #include	<sys/zfs_context.h>
 
-kmem_cache_t *zfs_btree_leaf_cache;
+#ifndef _KERNEL
+#define	panic(...) PANIC(__VA_ARGS__)
+#endif
+
+kmem_cache_t *zfs_btree_leaf_cache = NULL;
 
 /*
  * Control the extent of the verification that occurs when zfs_btree_verify is
@@ -53,7 +58,7 @@ kmem_cache_t *zfs_btree_leaf_cache;
  * (while the asymptotic complexity of the other steps is the same, the
  * importance of the constant factors cannot be denied).
  */
-int zfs_btree_verify_intensity = 0;
+uint_t zfs_btree_verify_intensity = 0;
 
 /*
  * Convenience functions to silence warnings from memcpy/memmove's
@@ -102,9 +107,11 @@ zfs_btree_poison_node(zfs_btree_t *tree, zfs_btree_hdr_t *hdr)
 		(void) memset(leaf->btl_elems, 0x0f, hdr->bth_first * size);
 		(void) memset(leaf->btl_elems +
 		    (hdr->bth_first + hdr->bth_count) * size, 0x0f,
-		    BTREE_LEAF_ESIZE -
+		    tree->bt_leaf_size - offsetof(zfs_btree_leaf_t, btl_elems) -
 		    (hdr->bth_first + hdr->bth_count) * size);
 	}
+#else
+	(void) tree; (void) hdr;
 #endif
 }
 
@@ -131,6 +138,8 @@ zfs_btree_poison_node_at(zfs_btree_t *tree, zfs_btree_hdr_t *hdr,
 		(void) memset(leaf->btl_elems +
 		    (hdr->bth_first + idx) * size, 0x0f, count * size);
 	}
+#else
+	(void) tree; (void) hdr; (void) idx; (void) count;
 #endif
 }
 
@@ -157,6 +166,8 @@ zfs_btree_verify_poison_at(zfs_btree_t *tree, zfs_btree_hdr_t *hdr,
 			    * size + i], ==, 0x0f);
 		}
 	}
+#else
+	(void) tree; (void) hdr; (void) idx;
 #endif
 }
 
@@ -173,16 +184,55 @@ zfs_btree_fini(void)
 	kmem_cache_destroy(zfs_btree_leaf_cache);
 }
 
+static void *
+zfs_btree_leaf_alloc(zfs_btree_t *tree)
+{
+	if (tree->bt_leaf_size == BTREE_LEAF_SIZE)
+		return (kmem_cache_alloc(zfs_btree_leaf_cache, KM_SLEEP));
+	else
+		return (kmem_alloc(tree->bt_leaf_size, KM_SLEEP));
+}
+
+static void
+zfs_btree_leaf_free(zfs_btree_t *tree, void *ptr)
+{
+	if (tree->bt_leaf_size == BTREE_LEAF_SIZE)
+		return (kmem_cache_free(zfs_btree_leaf_cache, ptr));
+	else
+		return (kmem_free(ptr, tree->bt_leaf_size));
+}
+
 void
 zfs_btree_create(zfs_btree_t *tree, int (*compar) (const void *, const void *),
-    size_t size)
+    bt_find_in_buf_f bt_find_in_buf, size_t size)
 {
-	ASSERT3U(size, <=, BTREE_LEAF_ESIZE / 2);
+	/* Verify zfs_btree_init() was called before zfs_btree_create() */
+	ASSERT(zfs_btree_leaf_cache != NULL);
 
+	zfs_btree_create_custom(tree, compar, bt_find_in_buf, size,
+	    BTREE_LEAF_SIZE);
+}
+
+static void *
+zfs_btree_find_in_buf(zfs_btree_t *tree, uint8_t *buf, uint32_t nelems,
+    const void *value, zfs_btree_index_t *where);
+
+void
+zfs_btree_create_custom(zfs_btree_t *tree,
+    int (*compar) (const void *, const void *),
+    bt_find_in_buf_f bt_find_in_buf,
+    size_t size, size_t lsize)
+{
+	size_t esize = lsize - offsetof(zfs_btree_leaf_t, btl_elems);
+
+	ASSERT3U(size, <=, esize / 2);
 	memset(tree, 0, sizeof (*tree));
 	tree->bt_compar = compar;
+	tree->bt_find_in_buf = (bt_find_in_buf == NULL) ?
+	    zfs_btree_find_in_buf : bt_find_in_buf;
 	tree->bt_elem_size = size;
-	tree->bt_leaf_cap = P2ALIGN(BTREE_LEAF_ESIZE / size, 2);
+	tree->bt_leaf_size = lsize;
+	tree->bt_leaf_cap = P2ALIGN_TYPED(esize / size, 2, size_t);
 	tree->bt_height = -1;
 	tree->bt_bulk = NULL;
 }
@@ -275,7 +325,7 @@ zfs_btree_find(zfs_btree_t *tree, const void *value, zfs_btree_index_t *where)
 			 * element in the last leaf, it's in the last leaf or
 			 * it's not in the tree.
 			 */
-			void *d = zfs_btree_find_in_buf(tree,
+			void *d = tree->bt_find_in_buf(tree,
 			    last_leaf->btl_elems +
 			    last_leaf->btl_hdr.bth_first * size,
 			    last_leaf->btl_hdr.bth_count, value, &idx);
@@ -290,7 +340,7 @@ zfs_btree_find(zfs_btree_t *tree, const void *value, zfs_btree_index_t *where)
 
 	zfs_btree_core_t *node = NULL;
 	uint32_t child = 0;
-	uint64_t depth = 0;
+	uint32_t depth = 0;
 
 	/*
 	 * Iterate down the tree, finding which child the value should be in
@@ -299,7 +349,7 @@ zfs_btree_find(zfs_btree_t *tree, const void *value, zfs_btree_index_t *where)
 	for (node = (zfs_btree_core_t *)tree->bt_root; depth < tree->bt_height;
 	    node = (zfs_btree_core_t *)node->btc_children[child], depth++) {
 		ASSERT3P(node, !=, NULL);
-		void *d = zfs_btree_find_in_buf(tree, node->btc_elems,
+		void *d = tree->bt_find_in_buf(tree, node->btc_elems,
 		    node->btc_hdr.bth_count, value, &idx);
 		EQUIV(d != NULL, !idx.bti_before);
 		if (d != NULL) {
@@ -319,7 +369,7 @@ zfs_btree_find(zfs_btree_t *tree, const void *value, zfs_btree_index_t *where)
 	 */
 	zfs_btree_leaf_t *leaf = (depth == 0 ?
 	    (zfs_btree_leaf_t *)tree->bt_root : (zfs_btree_leaf_t *)node);
-	void *d = zfs_btree_find_in_buf(tree, leaf->btl_elems +
+	void *d = tree->bt_find_in_buf(tree, leaf->btl_elems +
 	    leaf->btl_hdr.bth_first * size,
 	    leaf->btl_hdr.bth_count, value, &idx);
 
@@ -643,7 +693,7 @@ zfs_btree_insert_into_parent(zfs_btree_t *tree, zfs_btree_hdr_t *old_node,
 	zfs_btree_hdr_t *par_hdr = &parent->btc_hdr;
 	zfs_btree_index_t idx;
 	ASSERT(zfs_btree_is_core(par_hdr));
-	VERIFY3P(zfs_btree_find_in_buf(tree, parent->btc_elems,
+	VERIFY3P(tree->bt_find_in_buf(tree, parent->btc_elems,
 	    par_hdr->bth_count, buf, &idx), ==, NULL);
 	ASSERT(idx.bti_before);
 	uint32_t offset = idx.bti_offset;
@@ -811,8 +861,7 @@ zfs_btree_insert_into_leaf(zfs_btree_t *tree, zfs_btree_leaf_t *leaf,
 		move_count++;
 	}
 	tree->bt_num_nodes++;
-	zfs_btree_leaf_t *new_leaf = kmem_cache_alloc(zfs_btree_leaf_cache,
-	    KM_SLEEP);
+	zfs_btree_leaf_t *new_leaf = zfs_btree_leaf_alloc(tree);
 	zfs_btree_hdr_t *new_hdr = &new_leaf->btl_hdr;
 	new_hdr->bth_parent = leaf->btl_hdr.bth_parent;
 	new_hdr->bth_first = (tree->bt_bulk ? 0 : capacity / 4) +
@@ -870,7 +919,7 @@ zfs_btree_find_parent_idx(zfs_btree_t *tree, zfs_btree_hdr_t *hdr)
 	}
 	zfs_btree_index_t idx;
 	zfs_btree_core_t *parent = hdr->bth_parent;
-	VERIFY3P(zfs_btree_find_in_buf(tree, parent->btc_elems,
+	VERIFY3P(tree->bt_find_in_buf(tree, parent->btc_elems,
 	    parent->btc_hdr.bth_count, buf, &idx), ==, NULL);
 	ASSERT(idx.bti_before);
 	ASSERT3U(idx.bti_offset, <=, parent->btc_hdr.bth_count);
@@ -1074,12 +1123,11 @@ zfs_btree_add_idx(zfs_btree_t *tree, const void *value,
 	if (where->bti_node == NULL) {
 		ASSERT3U(tree->bt_num_elems, ==, 1);
 		ASSERT3S(tree->bt_height, ==, -1);
-		ASSERT3P(tree->bt_root, ==, NULL);
+		ASSERT0P(tree->bt_root);
 		ASSERT0(where->bti_offset);
 
 		tree->bt_num_nodes++;
-		zfs_btree_leaf_t *leaf = kmem_cache_alloc(zfs_btree_leaf_cache,
-		    KM_SLEEP);
+		zfs_btree_leaf_t *leaf = zfs_btree_leaf_alloc(tree);
 		tree->bt_root = &leaf->btl_hdr;
 		tree->bt_height++;
 
@@ -1378,7 +1426,7 @@ zfs_btree_node_destroy(zfs_btree_t *tree, zfs_btree_hdr_t *node)
 {
 	tree->bt_num_nodes--;
 	if (!zfs_btree_is_core(node)) {
-		kmem_cache_free(zfs_btree_leaf_cache, node);
+		zfs_btree_leaf_free(tree, node);
 	} else {
 		kmem_free(node, sizeof (zfs_btree_core_t) +
 		    BTREE_CORE_ELEMS * tree->bt_elem_size);
@@ -1608,8 +1656,8 @@ zfs_btree_remove_from_node(zfs_btree_t *tree, zfs_btree_core_t *node,
 	zfs_btree_poison_node_at(tree, keep_hdr, keep_hdr->bth_count, 1);
 
 	new_rm_hdr->bth_count = 0;
-	zfs_btree_node_destroy(tree, new_rm_hdr);
 	zfs_btree_remove_from_node(tree, parent, new_rm_hdr);
+	zfs_btree_node_destroy(tree, new_rm_hdr);
 }
 
 /* Remove the element at the specific location. */
@@ -1817,10 +1865,10 @@ zfs_btree_remove_idx(zfs_btree_t *tree, zfs_btree_index_t *where)
 
 	/* Move our elements to the left neighbor. */
 	bt_transfer_leaf(tree, rm, 0, rm_hdr->bth_count, keep, k_count + 1);
-	zfs_btree_node_destroy(tree, rm_hdr);
 
 	/* Remove the emptied node from the parent. */
 	zfs_btree_remove_from_node(tree, parent, rm_hdr);
+	zfs_btree_node_destroy(tree, rm_hdr);
 	zfs_btree_verify(tree);
 }
 
@@ -1912,7 +1960,7 @@ void
 zfs_btree_destroy(zfs_btree_t *tree)
 {
 	ASSERT0(tree->bt_num_elems);
-	ASSERT3P(tree->bt_root, ==, NULL);
+	ASSERT0P(tree->bt_root);
 }
 
 /* Verify that every child of this node has the correct parent pointer. */
@@ -1934,10 +1982,10 @@ static void
 zfs_btree_verify_pointers(zfs_btree_t *tree)
 {
 	if (tree->bt_height == -1) {
-		VERIFY3P(tree->bt_root, ==, NULL);
+		VERIFY0P(tree->bt_root);
 		return;
 	}
-	VERIFY3P(tree->bt_root->bth_parent, ==, NULL);
+	VERIFY0P(tree->bt_root->bth_parent);
 	zfs_btree_verify_pointers_helper(tree, tree->bt_root);
 }
 
@@ -1991,7 +2039,7 @@ zfs_btree_verify_counts(zfs_btree_t *tree)
  */
 static uint64_t
 zfs_btree_verify_height_helper(zfs_btree_t *tree, zfs_btree_hdr_t *hdr,
-    int64_t height)
+    int32_t height)
 {
 	if (!zfs_btree_is_core(hdr)) {
 		VERIFY0(height);
@@ -2117,8 +2165,10 @@ zfs_btree_verify_poison_helper(zfs_btree_t *tree, zfs_btree_hdr_t *hdr)
 		zfs_btree_leaf_t *leaf = (zfs_btree_leaf_t *)hdr;
 		for (size_t i = 0; i < hdr->bth_first * size; i++)
 			VERIFY3U(leaf->btl_elems[i], ==, 0x0f);
+		size_t esize = tree->bt_leaf_size -
+		    offsetof(zfs_btree_leaf_t, btl_elems);
 		for (size_t i = (hdr->bth_first + hdr->bth_count) * size;
-		    i < BTREE_LEAF_ESIZE; i++)
+		    i < esize; i++)
 			VERIFY3U(leaf->btl_elems[i], ==, 0x0f);
 	} else {
 		zfs_btree_core_t *node = (zfs_btree_core_t *)hdr;
@@ -2148,6 +2198,8 @@ zfs_btree_verify_poison(zfs_btree_t *tree)
 	if (tree->bt_height == -1)
 		return;
 	zfs_btree_verify_poison_helper(tree, tree->bt_root);
+#else
+	(void) tree;
 #endif
 }
 
@@ -2171,3 +2223,7 @@ zfs_btree_verify(zfs_btree_t *tree)
 		return;
 	zfs_btree_verify_poison(tree);
 }
+
+ZFS_MODULE_PARAM(zfs, zfs_, btree_verify_intensity, UINT, ZMOD_RW,
+	"Enable btree verification. Levels above 4 require ZFS be built "
+	"with debugging");

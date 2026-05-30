@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2000,2003 Doug Rabson
  * All rights reserved.
@@ -25,9 +25,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -311,7 +308,7 @@ kobj_init(kobj_t obj, kobj_class_t cls)
 {
 	int error;
 
-	error = kobj_init1(obj, cls, M_NOWAIT);
+	error = kobj_init1(obj, cls, M_WAITOK);
 	if (error != 0)
 		panic("kobj_init1 failed: error %d", error);
 }
@@ -320,6 +317,8 @@ void
 kobj_init_static(kobj_t obj, kobj_class_t cls)
 {
 
+	KASSERT(cls->ops != NULL,
+	    ("%s: class %p is not compiled", __func__, cls));
 	KASSERT(kobj_mutex_inited == 0,
 	    ("%s: only supported during early cycles", __func__));
 

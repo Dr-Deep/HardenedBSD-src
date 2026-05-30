@@ -26,8 +26,6 @@
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -35,11 +33,12 @@
  */
 
 /* Common header files. */
-#include <sys/cdefs.h>
+
 #include <sys/types.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <wchar.h>
 
 extern int com_char;
 extern int esc_char;
@@ -175,5 +174,19 @@ void werr(const char *, ...);
 const char *get_wide_encoding(void);
 int max_wide(void);
 
+/*
+ * A helper function to compare wide characters when sorting.  Forcibly cast to
+ * an unsigned type to help ensure that output is consistent no matter the
+ * signedness of wchar_t.
+ */
+static inline int
+wchar_cmp(const wchar_t a, const wchar_t b)
+{
+	return ((uint32_t)a < (uint32_t)b ? -1 :
+	    ((uint32_t)a > (uint32_t)b ? 1 : 0));
+}
+_Static_assert(sizeof(wchar_t) == sizeof(uint32_t),
+    "wchar_t must be 32 bits wide");
+
 //#define	_(x)	gettext(x)
-#define	INTERR	fprintf(stderr,"internal fault (%s:%d)", __FILE__, __LINE__)
+#define	INTERR	fprintf(stderr,"internal fault (%s:%d)\n", __FILE__, __LINE__)

@@ -28,9 +28,6 @@
  * Tests for corner cases in cexp*().
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 
 #include <complex.h>
@@ -235,6 +232,9 @@ ATF_TC_BODY(imaginaries, tc)
 ATF_TC_WITHOUT_HEAD(small);
 ATF_TC_BODY(small, tc)
 {
+#if defined(__riscv)
+	atf_tc_expect_death("https://bugs.freebsd.org/290099");
+#endif
 	static const double tests[] = {
 	     /* csqrt(a + bI) = x + yI */
 	     /* a	b	x			y */

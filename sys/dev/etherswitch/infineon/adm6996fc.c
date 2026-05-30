@@ -25,8 +25,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -100,7 +98,7 @@ struct adm6996fc_softc {
 	int		*portphy;
 	char		**ifname;
 	device_t	**miibus;
-	struct ifnet	**ifp;
+	if_t *ifp;
 	struct callout	callout_tick;
 	etherswitch_info_t	info;
 };
@@ -122,8 +120,8 @@ struct adm6996fc_softc {
 
 static inline int adm6996fc_portforphy(struct adm6996fc_softc *, int);
 static void adm6996fc_tick(void *);
-static int adm6996fc_ifmedia_upd(struct ifnet *);
-static void adm6996fc_ifmedia_sts(struct ifnet *, struct ifmediareq *);
+static int adm6996fc_ifmedia_upd(if_t);
+static void adm6996fc_ifmedia_sts(if_t, struct ifmediareq *);
 
 #define	ADM6996FC_READREG(dev, x)					\
 	MDIO_READREG(dev, ((x) >> 5), ((x) & 0x1f));
@@ -155,7 +153,7 @@ adm6996fc_probe(device_t dev)
 		return (ENXIO);
 	}
 
-	device_set_desc_copy(dev, "Infineon ADM6996FC/M/MX MDIO switch driver");
+	device_set_desc(dev, "Infineon ADM6996FC/M/MX MDIO switch driver");
 	return (BUS_PROBE_DEFAULT);
 }
 
@@ -175,28 +173,18 @@ adm6996fc_attach_phys(struct adm6996fc_softc *sc)
 		sc->ifpport[phy] = port;
 		sc->portphy[port] = phy;
 		sc->ifp[port] = if_alloc(IFT_ETHER);
-		if (sc->ifp[port] == NULL) {
-			device_printf(sc->sc_dev, "couldn't allocate ifnet structure\n");
-			err = ENOMEM;
-			break;
-		}
-
-		sc->ifp[port]->if_softc = sc;
-		sc->ifp[port]->if_flags |= IFF_UP | IFF_BROADCAST |
-		    IFF_DRV_RUNNING | IFF_SIMPLEX;
+		if_setsoftc(sc->ifp[port], sc);
+		if_setflagbits(sc->ifp[port], IFF_UP | IFF_BROADCAST |
+		    IFF_DRV_RUNNING | IFF_SIMPLEX, 0);
 		if_initname(sc->ifp[port], name, port);
 		sc->miibus[port] = malloc(sizeof(device_t), M_ADM6996FC,
 		    M_WAITOK | M_ZERO);
-		if (sc->miibus[port] == NULL) {
-			err = ENOMEM;
-			goto failed;
-		}
 		err = mii_attach(sc->sc_dev, sc->miibus[port], sc->ifp[port],
 		    adm6996fc_ifmedia_upd, adm6996fc_ifmedia_sts, \
 		    BMSR_DEFCAPMASK, phy, MII_OFFSET_ANY, 0);
 		DPRINTF(sc->sc_dev, "%s attached to pseudo interface %s\n",
 		    device_get_nameunit(*sc->miibus[port]),
-		    sc->ifp[port]->if_xname);
+		    if_name(sc->ifp[port]));
 		if (err != 0) {
 			device_printf(sc->sc_dev,
 			    "attaching PHY %d failed\n",
@@ -254,7 +242,7 @@ adm6996fc_attach(device_t dev)
 	sc->info.es_nvlangroups = 16;
 	sc->info.es_vlan_caps = ETHERSWITCH_VLAN_PORT | ETHERSWITCH_VLAN_DOT1Q;
 
-	sc->ifp = malloc(sizeof(struct ifnet *) * sc->numports, M_ADM6996FC,
+	sc->ifp = malloc(sizeof(if_t) * sc->numports, M_ADM6996FC,
 	    M_WAITOK | M_ZERO);
 	sc->ifname = malloc(sizeof(char *) * sc->numports, M_ADM6996FC,
 	    M_WAITOK | M_ZERO);
@@ -263,12 +251,6 @@ adm6996fc_attach(device_t dev)
 	sc->portphy = malloc(sizeof(int) * sc->numports, M_ADM6996FC,
 	    M_WAITOK | M_ZERO);
 
-	if (sc->ifp == NULL || sc->ifname == NULL || sc->miibus == NULL ||
-	    sc->portphy == NULL) {
-		err = ENOMEM;
-		goto failed;
-	}
-
 	/*
 	 * Attach the PHYs and complete the bus enumeration.
 	 */
@@ -276,11 +258,9 @@ adm6996fc_attach(device_t dev)
 	if (err != 0)
 		goto failed;
 
-	bus_generic_probe(dev);
+	bus_identify_children(dev);
 	bus_enumerate_hinted_children(dev);
-	err = bus_generic_attach(dev);
-	if (err != 0)
-		goto failed;
+	bus_attach_children(dev);
 	
 	callout_init(&sc->callout_tick, 0);
 
@@ -289,14 +269,10 @@ adm6996fc_attach(device_t dev)
 	return (0);
 
 failed:
-	if (sc->portphy != NULL)
-		free(sc->portphy, M_ADM6996FC);
-	if (sc->miibus != NULL)
-		free(sc->miibus, M_ADM6996FC);
-	if (sc->ifname != NULL)
-		free(sc->ifname, M_ADM6996FC);
-	if (sc->ifp != NULL)
-		free(sc->ifp, M_ADM6996FC);
+	free(sc->portphy, M_ADM6996FC);
+	free(sc->miibus, M_ADM6996FC);
+	free(sc->ifname, M_ADM6996FC);
+	free(sc->ifp, M_ADM6996FC);
 
 	return (err);
 }
@@ -305,9 +281,13 @@ static int
 adm6996fc_detach(device_t dev)
 {
 	struct adm6996fc_softc	*sc;
-	int			 i, port;
+	int			 error, i, port;
 
 	sc = device_get_softc(dev);
+
+	error = bus_generic_detach(dev);
+	if (error != 0)
+		return (error);
 
 	callout_drain(&sc->callout_tick);
 
@@ -315,8 +295,6 @@ adm6996fc_detach(device_t dev)
 		if (((1 << i) & sc->phymask) == 0)
 			continue;
 		port = adm6996fc_portforphy(sc, i);
-		if (sc->miibus[port] != NULL)
-			device_delete_child(dev, (*sc->miibus[port]));
 		if (sc->ifp[port] != NULL)
 			if_free(sc->ifp[port]);
 		free(sc->ifname[port], M_ADM6996FC);
@@ -328,7 +306,6 @@ adm6996fc_detach(device_t dev)
 	free(sc->ifname, M_ADM6996FC);
 	free(sc->ifp, M_ADM6996FC);
 
-	bus_generic_detach(dev);
 	mtx_destroy(&sc->sc_mtx);
 
 	return (0);
@@ -355,7 +332,7 @@ adm6996fc_miiforport(struct adm6996fc_softc *sc, int port)
 	return (device_get_softc(*sc->miibus[port]));
 }
 
-static inline struct ifnet *
+static inline if_t 
 adm6996fc_ifpforport(struct adm6996fc_softc *sc, int port)
 {
 
@@ -504,7 +481,7 @@ adm6996fc_setport(device_t dev, etherswitch_port_t *p)
 	struct adm6996fc_softc	*sc;
 	struct ifmedia		*ifm;
 	struct mii_data		*mii;
-	struct ifnet		*ifp;
+	if_t ifp;
 	device_t		 parent;
 	int 			 err;
 	int			 data;
@@ -721,13 +698,13 @@ adm6996fc_statchg(device_t dev)
 }
 
 static int
-adm6996fc_ifmedia_upd(struct ifnet *ifp)
+adm6996fc_ifmedia_upd(if_t ifp)
 {
 	struct adm6996fc_softc *sc;
 	struct mii_data *mii;
 
-	sc = ifp->if_softc;
-	mii = adm6996fc_miiforport(sc, ifp->if_dunit);
+	sc = if_getsoftc(ifp);
+	mii = adm6996fc_miiforport(sc, if_getdunit(ifp));
 
 	DPRINTF(sc->sc_dev, "%s\n", __func__);
 	if (mii == NULL)
@@ -737,13 +714,13 @@ adm6996fc_ifmedia_upd(struct ifnet *ifp)
 }
 
 static void
-adm6996fc_ifmedia_sts(struct ifnet *ifp, struct ifmediareq *ifmr)
+adm6996fc_ifmedia_sts(if_t ifp, struct ifmediareq *ifmr)
 {
 	struct adm6996fc_softc *sc;
 	struct mii_data *mii;
 
-	sc = ifp->if_softc;
-	mii = adm6996fc_miiforport(sc, ifp->if_dunit);
+	sc = if_getsoftc(ifp);
+	mii = adm6996fc_miiforport(sc, if_getdunit(ifp));
 
 	DPRINTF(sc->sc_dev, "%s\n", __func__);
 

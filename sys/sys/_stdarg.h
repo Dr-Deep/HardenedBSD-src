@@ -26,19 +26,16 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _SYS__STDARG_H_
 #define _SYS__STDARG_H_
 
-#include <sys/cdefs.h>
-#include <sys/_types.h>
+#include <sys/_visible.h>
 
 #ifndef _VA_LIST_DECLARED
-  #define _VA_LIST_DECLARED
-  typedef __va_list       va_list;
+#define	_VA_LIST_DECLARED
+typedef	__builtin_va_list	va_list;
 #endif
 
 #define	va_start(ap, last)	__builtin_va_start((ap), (last))

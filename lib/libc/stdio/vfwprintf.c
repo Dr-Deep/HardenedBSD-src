@@ -37,14 +37,6 @@
  * SUCH DAMAGE.
  */
 
-#if 0
-#if defined(LIBC_SCCS) && !defined(lint)
-static char sccsid[] = "@(#)vfprintf.c	8.1 (Berkeley) 6/4/93";
-#endif /* LIBC_SCCS and not lint */
-#endif
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Actual wprintf innards.
  *
@@ -377,13 +369,9 @@ vfwprintf(FILE * __restrict fp, const wchar_t * __restrict fmt0, va_list ap)
 /*
  * The size of the buffer we use as scratch space for integer
  * conversions, among other things.  We need enough space to
- * write a uintmax_t in octal (plus one byte).
+ * write a uintmax_t in binary.
  */
-#if UINTMAX_MAX <= UINT64_MAX
-#define	BUF	32
-#else
-#error "BUF must be large enough to format a uintmax_t"
-#endif
+#define BUF	(sizeof(uintmax_t) * CHAR_BIT)
 
 /*
  * Non-MT-safe version
@@ -401,7 +389,6 @@ __vfwprintf(FILE *fp, locale_t locale, const wchar_t *fmt0, va_list ap)
 	int prec;		/* precision from format; <0 for N/A */
 	wchar_t sign;		/* sign prefix (' ', '+', '-', or \0) */
 	struct grouping_state gs; /* thousands' grouping info */
-#ifndef NO_FLOATING_POINT
 	/*
 	 * We can decompose the printed representation of floating
 	 * point numbers into several parts, some of which may be empty:
@@ -429,7 +416,6 @@ __vfwprintf(FILE *fp, locale_t locale, const wchar_t *fmt0, va_list ap)
 	int ndig;		/* actual number of digits returned by dtoa */
 	wchar_t expstr[MAXEXPDIG+2];	/* buffer for exponent string: e+ZZZ */
 	char *dtoaresult;	/* buffer allocated by dtoa */
-#endif
 	u_long	ulval;		/* integer arguments %[diouxX] */
 	uintmax_t ujval;	/* %j, %ll, %q, %t, %z integers */
 	int base;		/* base for [diouxX] conversion */
@@ -549,9 +535,7 @@ __vfwprintf(FILE *fp, locale_t locale, const wchar_t *fmt0, va_list ap)
 	va_copy(orgap, ap);
 	io_init(&io, fp);
 	ret = 0;
-#ifndef NO_FLOATING_POINT
 	decimal_point = get_decpt(locale);
-#endif
 
 	/*
 	 * Scan the format for conversions (`%' character).
@@ -655,11 +639,9 @@ reswitch:	switch (ch) {
 			}
 			width = n;
 			goto reswitch;
-#ifndef NO_FLOATING_POINT
 		case 'L':
 			flags |= LONGDBL;
 			goto rflag;
-#endif
 		case 'h':
 			if (flags & SHORTINT) {
 				flags &= ~SHORTINT;
@@ -683,9 +665,65 @@ reswitch:	switch (ch) {
 		case 't':
 			flags |= PTRDIFFT;
 			goto rflag;
+		case 'w':
+			/*
+			 * Fixed-width integer types.  On all platforms we
+			 * support, int8_t is equivalent to char, int16_t
+			 * is equivalent to short, int32_t is equivalent
+			 * to int, int64_t is equivalent to long long int.
+			 * Furthermore, int_fast8_t, int_fast16_t and
+			 * int_fast32_t are equivalent to int, and
+			 * int_fast64_t is equivalent to long long int.
+			 */
+			flags &= ~(CHARINT|SHORTINT|LONGINT|LLONGINT|INTMAXT);
+			if (fmt[0] == 'f') {
+				flags |= FASTINT;
+				fmt++;
+			} else {
+				flags &= ~FASTINT;
+			}
+			if (fmt[0] == '8') {
+				if (!(flags & FASTINT))
+					flags |= CHARINT;
+				else
+					/* no flag set = 32 */ ;
+				fmt += 1;
+			} else if (fmt[0] == '1' && fmt[1] == '6') {
+				if (!(flags & FASTINT))
+					flags |= SHORTINT;
+				else
+					/* no flag set = 32 */ ;
+				fmt += 2;
+			} else if (fmt[0] == '3' && fmt[1] == '2') {
+				/* no flag set = 32 */ ;
+				fmt += 2;
+			} else if (fmt[0] == '6' && fmt[1] == '4') {
+				flags |= LLONGINT;
+				fmt += 2;
+			} else {
+				if (flags & FASTINT) {
+					flags &= ~FASTINT;
+					fmt--;
+				}
+				goto invalid;
+			}
+			goto rflag;
 		case 'z':
 			flags |= SIZET;
 			goto rflag;
+		case 'B':
+		case 'b':
+			if (flags & INTMAX_SIZE)
+				ujval = UJARG();
+			else
+				ulval = UARG();
+			base = 2;
+			/* leading 0b/B only if non-zero */
+			if (flags & ALT &&
+			    (flags & INTMAX_SIZE ? ujval != 0 : ulval != 0))
+				ox[1] = ch;
+			goto nosign;
+			break;
 		case 'C':
 			flags |= LONGINT;
 			/*FALLTHROUGH*/
@@ -717,7 +755,6 @@ reswitch:	switch (ch) {
 			}
 			base = 10;
 			goto number;
-#ifndef NO_FLOATING_POINT
 		case 'a':
 		case 'A':
 			if (ch == 'a') {
@@ -841,7 +878,6 @@ fp_common:
 					size += grouping_init(&gs, expt, locale);
 			}
 			break;
-#endif /* !NO_FLOATING_POINT */
 		case 'n':
 			/*
 			 * Assignment-like behavior is specified if the
@@ -982,6 +1018,7 @@ number:			if ((dprec = prec) >= 0)
 		default:	/* "%?" prints ?, unless ? is NUL */
 			if (ch == '\0')
 				goto done;
+invalid:
 			/* pretend it was %c with argument ch */
 			cp = buf;
 			*cp = ch;
@@ -1035,9 +1072,7 @@ number:			if ((dprec = prec) >= 0)
 			PAD(width - realsz, zeroes);
 
 		/* the string or number proper */
-#ifndef NO_FLOATING_POINT
 		if ((flags & FPT) == 0) {
-#endif
 			/* leading zeroes from decimal precision */
 			PAD(dprec - size, zeroes);
 			if (gs.grouping) {
@@ -1046,7 +1081,6 @@ number:			if ((dprec = prec) >= 0)
 			} else {
 				PRINT(cp, size);
 			}
-#ifndef NO_FLOATING_POINT
 		} else {	/* glue together f_p fragments */
 			if (!expchar) {	/* %[fF] or sufficiently short %[gG] */
 				if (expt <= 0) {
@@ -1084,7 +1118,6 @@ number:			if ((dprec = prec) >= 0)
 				PRINT(expstr, expsize);
 			}
 		}
-#endif
 		/* left-adjusting padding (always blank) */
 		if (flags & LADJUST)
 			PAD(width - realsz, blanks);

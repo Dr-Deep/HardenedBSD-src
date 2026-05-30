@@ -1,9 +1,9 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
  * All rights reserved.
- * Copyright (c) 2020 Vladimir Kondratyev <wulf@FreeBSD.org>
+ * Copyright (c) 2020, 2025 Vladimir Kondratyev <wulf@FreeBSD.org>
  *
  * This code is derived from software contributed to The NetBSD Foundation
  * by Lennart Augustsson (lennart@augustsson.net) at
@@ -36,8 +36,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_hid.h"
 
 #include <sys/param.h>
@@ -86,6 +84,12 @@ SYSCTL_INT(_hw_hid_hidraw, OID_AUTO, debug, CTLFLAG_RWTUN,
 	if ((local_buf) != (buf)) {			\
 		free((buf), M_DEVBUF);			\
 	}
+
+#ifdef HIDRAW_MAKE_UHID_ALIAS
+#define	HIDRAW_NAME	"uhid"
+#else
+#define	HIDRAW_NAME	"hidraw"
+#endif
 
 struct hidraw_softc {
 	device_t sc_dev;		/* base device */
@@ -174,10 +178,11 @@ static int		hidraw_kqread(struct knote *, long);
 static void		hidraw_kqdetach(struct knote *);
 static void		hidraw_notify(struct hidraw_softc *);
 
-static struct filterops hidraw_filterops_read = {
+static const struct filterops hidraw_filterops_read = {
 	.f_isfd =	1,
 	.f_detach =	hidraw_kqdetach,
 	.f_event =	hidraw_kqread,
+	.f_copy =	knote_triv_copy,
 };
 
 static void
@@ -185,8 +190,8 @@ hidraw_identify(driver_t *driver, device_t parent)
 {
 	device_t child;
 
-	if (device_find_child(parent, "hidraw", -1) == NULL) {
-		child = BUS_ADD_CHILD(parent, 0, "hidraw",
+	if (device_find_child(parent, HIDRAW_NAME, DEVICE_UNIT_ANY) == NULL) {
+		child = BUS_ADD_CHILD(parent, 0, HIDRAW_NAME,
 		    device_get_unit(parent));
 		if (child != NULL)
 			hidbus_set_index(child, HIDRAW_INDEX);
@@ -379,7 +384,7 @@ hidraw_open(struct cdev *dev, int flag, int mode, struct thread *td)
 	sc->sc_head = sc->sc_tail = 0;
 	sc->sc_fflags = flag;
 
-	hidbus_intr_start(sc->sc_dev);
+	hid_intr_start(sc->sc_dev);
 
 	return (0);
 }
@@ -392,7 +397,7 @@ hidraw_dtor(void *data)
 	DPRINTF("sc=%p\n", sc);
 
 	/* Disable interrupts. */
-	hidbus_intr_stop(sc->sc_dev);
+	hid_intr_stop(sc->sc_dev);
 
 	sc->sc_tail = sc->sc_head = 0;
 	sc->sc_async = 0;
@@ -566,13 +571,16 @@ hidraw_ioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flag,
 #endif
 	void *buf;
 	struct hidraw_softc *sc;
+	struct hidraw_device_info *hdi;
 	struct hidraw_gen_descriptor *hgd;
 	struct hidraw_report_descriptor *hrd;
-	struct hidraw_devinfo *hdi;
+	struct hidraw_devinfo *hd;
 	const char *devname;
 	uint32_t size;
+	hid_size_t actsize;
 	int id, len;
 	int error = 0;
+	uint8_t reptype;
 
 	DPRINTFN(2, "cmd=%lx\n", cmd);
 
@@ -675,14 +683,16 @@ hidraw_ioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flag,
 			sc->sc_state.quiet = true;
 		mtx_unlock(&sc->sc_mtx);
 		if (error != 0)
-			return(error);
+			return (error);
 
 		buf = HIDRAW_LOCAL_ALLOC(local_buf, hgd->hgd_maxlen);
-		copyin(hgd->hgd_data, buf, hgd->hgd_maxlen);
-		/* Lock newbus around set_report_descr call */
-		mtx_lock(&Giant);
-		error = hid_set_report_descr(sc->sc_dev, buf, hgd->hgd_maxlen);
-		mtx_unlock(&Giant);
+		error = copyin(hgd->hgd_data, buf, hgd->hgd_maxlen);
+		if (error == 0) {
+			bus_topo_lock();
+			error = hid_set_report_descr(sc->sc_dev, buf,
+			    hgd->hgd_maxlen);
+			bus_topo_unlock();
+		}
 		HIDRAW_LOCAL_FREE(local_buf, buf);
 
 		/* Realloc hidraw input queue */
@@ -739,20 +749,23 @@ hidraw_ioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flag,
 		default:
 			return (EINVAL);
 		}
-		if (id != 0)
-			copyin(hgd->hgd_data, &id, 1);
+		if (id != 0) {
+			error = copyin(hgd->hgd_data, &id, 1);
+			if (error != 0)
+				return (error);
+		}
 		size = MIN(hgd->hgd_maxlen, size);
 		buf = HIDRAW_LOCAL_ALLOC(local_buf, size);
-		error = hid_get_report(sc->sc_dev, buf, size, NULL,
+		actsize = 0;
+		error = hid_get_report(sc->sc_dev, buf, size, &actsize,
 		    hgd->hgd_report_type, id);
 		if (!error)
-			error = copyout(buf, hgd->hgd_data, size);
+			error = copyout(buf, hgd->hgd_data, actsize);
 		HIDRAW_LOCAL_FREE(local_buf, buf);
+		hgd->hgd_actlen = actsize;
 #ifdef COMPAT_FREEBSD32
-		/*
-		 * HIDRAW_GET_REPORT is declared _IOWR, but hgd is not written
-		 * so we don't call update_hgd32().
-		 */
+		if (hgd32 != NULL)
+			update_hgd32(hgd, hgd32);
 #endif
 		return (error);
 
@@ -777,17 +790,36 @@ hidraw_ioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flag,
 		}
 		size = MIN(hgd->hgd_maxlen, size);
 		buf = HIDRAW_LOCAL_ALLOC(local_buf, size);
-		copyin(hgd->hgd_data, buf, size);
-		if (id != 0)
-			id = *(uint8_t *)buf;
-		error = hid_set_report(sc->sc_dev, buf, size,
-		    hgd->hgd_report_type, id);
+		error = copyin(hgd->hgd_data, buf, size);
+		if (error == 0) {
+			if (id != 0)
+				id = *(uint8_t *)buf;
+			error = hid_set_report(sc->sc_dev, buf, size,
+			    hgd->hgd_report_type, id);
+		}
 		HIDRAW_LOCAL_FREE(local_buf, buf);
 		return (error);
 
 	case HIDRAW_GET_REPORT_ID:
 		*(int *)addr = 0;	/* XXX: we only support reportid 0? */
 		return (0);
+
+	case HIDRAW_GET_DEVICEINFO:
+		hdi = (struct hidraw_device_info *)addr;
+		bzero(hdi, sizeof(struct hidraw_device_info));
+		hdi->hdi_product = sc->sc_hw->idProduct;
+		hdi->hdi_vendor = sc->sc_hw->idVendor;
+		hdi->hdi_version = sc->sc_hw->idVersion;
+		hdi->hdi_bustype = sc->sc_hw->idBus;
+		strlcpy(hdi->hdi_name, sc->sc_hw->name,
+		    sizeof(hdi->hdi_name));
+		strlcpy(hdi->hdi_phys, device_get_nameunit(sc->sc_dev),
+		    sizeof(hdi->hdi_phys));
+		strlcpy(hdi->hdi_uniq, sc->sc_hw->serial,
+		    sizeof(hdi->hdi_uniq));
+		snprintf(hdi->hdi_release, sizeof(hdi->hdi_release), "%x.%02x",
+		    sc->sc_hw->idVersion >> 8, sc->sc_hw->idVersion & 0xff);
+		return(0);
 
 	case HIDIOCGRDESCSIZE:
 		*(int *)addr = sc->sc_hw->rdescsize;
@@ -804,6 +836,9 @@ hidraw_ioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flag,
 		 */
 		if (size >= HID_MAX_DESCRIPTOR_SIZE)
 			return (EINVAL);
+		mtx_lock(&sc->sc_mtx);
+		sc->sc_state.uhid = false;
+		mtx_unlock(&sc->sc_mtx);
 		buf = HIDRAW_LOCAL_ALLOC(local_buf, size);
 		error = hid_get_rdesc(sc->sc_dev, buf, size);
 		if (error == 0) {
@@ -814,10 +849,10 @@ hidraw_ioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flag,
 		return (error);
 
 	case HIDIOCGRAWINFO:
-		hdi = (struct hidraw_devinfo *)addr;
-		hdi->bustype = sc->sc_hw->idBus;
-		hdi->vendor = sc->sc_hw->idVendor;
-		hdi->product = sc->sc_hw->idProduct;
+		hd = (struct hidraw_devinfo *)addr;
+		hd->bustype = sc->sc_hw->idBus;
+		hd->vendor = sc->sc_hw->idVendor;
+		hd->product = sc->sc_hw->idProduct;
 		return (0);
 	}
 
@@ -836,6 +871,8 @@ hidraw_ioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flag,
 		return (0);
 
 	case HIDIOCSFEATURE(0):
+	case HIDIOCSINPUT(0):
+	case HIDIOCSOUTPUT(0):
 		if (!(sc->sc_fflags & FWRITE))
 			return (EPERM);
 		if (len < 2)
@@ -845,10 +882,27 @@ hidraw_ioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flag,
 			addr = (uint8_t *)addr + 1;
 			len--;
 		}
-		return (hid_set_report(sc->sc_dev, addr, len,
-		    HID_FEATURE_REPORT, id));
+		switch (IOCBASECMD(cmd)) {
+			case HIDIOCSFEATURE(0):
+				reptype = HID_FEATURE_REPORT;
+				break;
+			case HIDIOCSINPUT(0):
+				reptype = HID_INPUT_REPORT;
+				break;
+			case HIDIOCSOUTPUT(0):
+				reptype = HID_OUTPUT_REPORT;
+				break;
+			default:
+				panic("Invalid report type");
+		}
+		error = hid_set_report(sc->sc_dev, addr, len, reptype, id);
+		if (error == 0)
+			td->td_retval[0] = IOCPARM_LEN(cmd);
+		return (error);
 
 	case HIDIOCGFEATURE(0):
+	case HIDIOCGINPUT(0):
+	case HIDIOCGOUTPUT(0):
 		if (!(sc->sc_fflags & FREAD))
 			return (EPERM);
 		if (len < 2)
@@ -858,8 +912,27 @@ hidraw_ioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flag,
 			addr = (uint8_t *)addr + 1;
 			len--;
 		}
-		return (hid_get_report(sc->sc_dev, addr, len, NULL,
-		    HID_FEATURE_REPORT, id));
+		switch (IOCBASECMD(cmd)) {
+			case HIDIOCGFEATURE(0):
+				reptype = HID_FEATURE_REPORT;
+				break;
+			case HIDIOCGINPUT(0):
+				reptype = HID_INPUT_REPORT;
+				break;
+			case HIDIOCGOUTPUT(0):
+				reptype = HID_OUTPUT_REPORT;
+				break;
+			default:
+				panic("Invalid report type");
+		}
+		error = hid_get_report(sc->sc_dev, addr, len, &actsize,
+		    reptype, id);
+		if (error == 0) {
+			if (id == 0)
+				actsize++;
+			td->td_retval[0] = actsize;
+		}
+		return (error);
 
 	case HIDIOCGRAWUNIQ(0):
 		strlcpy(addr, sc->sc_hw->serial, len);
@@ -984,7 +1057,7 @@ static device_method_t hidraw_methods[] = {
 };
 
 static driver_t hidraw_driver = {
-	"hidraw",
+	HIDRAW_NAME,
 	hidraw_methods,
 	sizeof(struct hidraw_softc)
 };
@@ -992,5 +1065,4 @@ static driver_t hidraw_driver = {
 DRIVER_MODULE(hidraw, hidbus, hidraw_driver, NULL, NULL);
 MODULE_DEPEND(hidraw, hidbus, 1, 1, 1);
 MODULE_DEPEND(hidraw, hid, 1, 1, 1);
-MODULE_DEPEND(hidraw, usb, 1, 1, 1);
 MODULE_VERSION(hidraw, 1);

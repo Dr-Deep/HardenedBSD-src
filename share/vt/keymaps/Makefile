@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 PACKAGE=	vt-data
 
 FILES=	INDEX.keymaps \
@@ -10,9 +8,11 @@ FILES=	INDEX.keymaps \
 	bg.phonetic.kbd \
 	br.kbd \
 	br.noacc.kbd \
+	br.lenovo.kbd \
 	by.kbd \
 	ca.kbd \
 	ca-fr.kbd \
+	ca-multi.kbd \
 	centraleuropean.kbd \
 	centraleuropean.qwerty.kbd \
 	ch-fr.acc.kbd \
@@ -80,6 +80,7 @@ FILES=	INDEX.keymaps \
 	uk.kbd \
 	uk.macbook.kbd \
 	us.acc.kbd \
+	us.intl.acc.kbd \
 	us.ctrl.kbd \
 	us.dvorak.kbd \
 	us.dvorakl.kbd \

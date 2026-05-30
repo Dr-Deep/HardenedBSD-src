@@ -1,5 +1,4 @@
 /* $OpenBSD: ldapclient.c,v 1.31 2014/11/16 23:24:44 tedu Exp $ */
-/* $FreeBSD$ */
 
 /*
  * Copyright (c) 2008 Alexander Schrijver <aschrijver@openbsd.org>
@@ -318,7 +317,7 @@ client_dispatch_parent(int fd, short events, void *p)
 			client_configure(env);
 			break;
 		default:
-			log_debug("client_dispatch_parent: unexpect imsg %d",
+			log_debug("client_dispatch_parent: unexpected imsg %d",
 			    imsg.hdr.type);
 
 			break;
@@ -346,7 +345,7 @@ client_shutdown(void)
 pid_t
 ldapclient(int pipe_main2client[2])
 {
-	pid_t            pid, dns_pid;
+	pid_t            pid;
 	int              pipe_dns[2];
 	struct passwd	*pw;
 	struct event	 ev_sigint;
@@ -371,7 +370,7 @@ ldapclient(int pipe_main2client[2])
 
 	if (socketpair(AF_UNIX, SOCK_STREAM, PF_UNSPEC, pipe_dns) == -1)
 		fatal("socketpair");
-	dns_pid = ypldap_dns(pipe_dns, pw);
+	ypldap_dns(pipe_dns, pw);
 	close(pipe_dns[1]);
 
 #ifndef DEBUG
@@ -386,7 +385,7 @@ ldapclient(int pipe_main2client[2])
 	ypldap_process = PROC_CLIENT;
 
 #ifndef DEBUG
-	if (setgroups(1, &pw->pw_gid) ||
+	if (setgroups(0, NULL) ||
 	    setresgid(pw->pw_gid, pw->pw_gid, pw->pw_gid) ||
 	    setresuid(pw->pw_uid, pw->pw_uid, pw->pw_uid))
 		fatal("cannot drop privileges");

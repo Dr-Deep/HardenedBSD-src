@@ -29,9 +29,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "namespace.h"
 #include <stdlib.h>
 #include <string.h>
@@ -97,6 +94,7 @@ _pthread_condattr_setclock(pthread_condattr_t *attr, clockid_t clock_id)
 	if (attr == NULL || *attr == NULL)
 		return (EINVAL);
 	if (clock_id != CLOCK_REALTIME &&
+	    clock_id != CLOCK_TAI &&
 	    clock_id != CLOCK_VIRTUAL &&
 	    clock_id != CLOCK_PROF &&
 	    clock_id != CLOCK_MONOTONIC) {

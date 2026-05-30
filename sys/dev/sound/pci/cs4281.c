@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2000 Orion Hodson <O.Hodson@cs.ucl.ac.uk>
  * All rights reserved.
@@ -44,8 +44,6 @@
 #include <dev/pci/pcivar.h>
 
 #include <dev/sound/pci/cs4281.h>
-
-SND_DECLARE_FILE("$FreeBSD$");
 
 #define CS4281_DEFAULT_BUFSZ 16384
 
@@ -328,9 +326,9 @@ cs4281chan_init(kobj_t obj, void *devinfo, struct snd_dbuf *b, struct pcm_channe
     ch->channel = c;
 
     ch->fmt = SND_FORMAT(AFMT_U8, 1, 0);
-    ch->spd = DSP_DEFAULT_SPEED;
+    ch->spd = 8000;
     ch->bps = 1;
-    ch->blksz = sndbuf_getsize(ch->buffer);
+    ch->blksz = ch->buffer->bufsize;
 
     ch->dma_chan = (dir == PCMDIR_PLAY) ? CS4281_DMA_PLAY : CS4281_DMA_REC;
     ch->dma_setup = 0;
@@ -352,7 +350,7 @@ cs4281chan_setblocksize(kobj_t obj, void *data, u_int32_t blocksize)
 
     /* 2 interrupts are possible and used in buffer (half-empty,empty),
      * hence factor of 2. */
-    ch->blksz = MIN(blocksize, sc->bufsz / 2);
+    ch->blksz = min(blocksize, sc->bufsz / 2);
     sndbuf_resize(ch->buffer, 2, ch->blksz);
     ch->dma_setup = 0;
     adcdac_prog(ch);
@@ -414,7 +412,7 @@ cs4281chan_getptr(kobj_t obj, void *data)
     u_int32_t  dba, dca, ptr;
     int sz;
 
-    sz  = sndbuf_getsize(ch->buffer);
+    sz  = ch->buffer->bufsize;
     dba = cs4281_rd(sc, CS4281PCI_DBA(ch->dma_chan));
     dca = cs4281_rd(sc, CS4281PCI_DCA(ch->dma_chan));
     ptr = (dca - dba + sz) % sz;
@@ -495,9 +493,9 @@ adcdac_prog(struct sc_chinfo *ch)
     if (!ch->dma_setup) {
 	go = adcdac_go(ch, 0);
 	cs4281_wr(sc, CS4281PCI_DBA(ch->dma_chan),
-		  sndbuf_getbufaddr(ch->buffer));
+		  ch->buffer->buf_addr);
 	cs4281_wr(sc, CS4281PCI_DBC(ch->dma_chan),
-		  sndbuf_getsize(ch->buffer) / ch->bps - 1);
+		  ch->buffer->bufsize / ch->bps - 1);
 	ch->dma_setup = 1;
 	adcdac_go(ch, go);
     }
@@ -841,16 +839,17 @@ cs4281_pci_attach(device_t dev)
 
     mixer_init(dev, ac97_getmixerclass(), codec);
 
-    if (pcm_register(dev, sc, 1, 1))
-	goto bad;
+    pcm_init(dev, sc);
 
     pcm_addchan(dev, PCMDIR_PLAY, &cs4281chan_class, sc);
     pcm_addchan(dev, PCMDIR_REC, &cs4281chan_class, sc);
 
-    snprintf(status, SND_STATUSLEN, "at %s 0x%jx irq %jd %s",
-	     (sc->regtype == SYS_RES_IOPORT)? "io" : "memory",
-	     rman_get_start(sc->reg), rman_get_start(sc->irq),PCM_KLDSTRING(snd_cs4281));
-    pcm_setstatus(dev, status);
+    snprintf(status, SND_STATUSLEN, "%s 0x%jx irq %jd on %s",
+	     (sc->regtype == SYS_RES_IOPORT)? "port" : "mem",
+	     rman_get_start(sc->reg), rman_get_start(sc->irq),
+	     device_get_nameunit(device_get_parent(dev)));
+    if (pcm_register(dev, status))
+	goto bad;
 
     return 0;
 
@@ -955,7 +954,7 @@ static device_method_t cs4281_methods[] = {
     DEVMETHOD(device_detach,		cs4281_pci_detach),
     DEVMETHOD(device_suspend,		cs4281_pci_suspend),
     DEVMETHOD(device_resume,		cs4281_pci_resume),
-    { 0, 0 }
+    DEVMETHOD_END
 };
 
 static driver_t cs4281_driver = {

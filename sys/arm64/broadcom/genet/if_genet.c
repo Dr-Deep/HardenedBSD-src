@@ -22,8 +22,6 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -36,9 +34,6 @@
  */
 
 #include "opt_device_polling.h"
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -206,6 +201,7 @@ struct gen_softc {
 
 static void gen_init(void *softc);
 static void gen_start(if_t ifp);
+static void gen_stop(struct gen_softc *sc);
 static void gen_destroy(struct gen_softc *sc);
 static int gen_encap(struct gen_softc *sc, struct mbuf **mp);
 static int gen_parse_tx(struct mbuf *m, int csum_flags);
@@ -354,7 +350,7 @@ gen_attach(device_t dev)
 	}
 
 	/* If address was not found, create one based on the hostid and name. */
-	if (eaddr_found == 0)
+	if (!eaddr_found)
 		ether_gen_addr(sc->ifp, &eaddr);
 	/* Attach ethernet interface */
 	ether_ifattach(sc->ifp, eaddr.octet);
@@ -370,10 +366,7 @@ static void
 gen_destroy(struct gen_softc *sc)
 {
 
-	if (sc->miibus) {	/* can't happen */
-		device_delete_child(sc->dev, sc->miibus);
-		sc->miibus = NULL;
-	}
+	device_delete_children(sc->dev);
 	bus_teardown_intr(sc->dev, sc->res[_RES_IRQ1], sc->ih);
 	bus_teardown_intr(sc->dev, sc->res[_RES_IRQ2], sc->ih2);
 	gen_bus_dma_teardown(sc);
@@ -385,6 +378,39 @@ gen_destroy(struct gen_softc *sc)
 		if_free(sc->ifp);
 		sc->ifp = NULL;
 	}
+}
+
+static int
+gen_detach(device_t dev)
+{
+	struct gen_softc *sc;
+	int error;
+
+	sc = device_get_softc(dev);
+
+	GEN_LOCK(sc);
+	gen_stop(sc);
+	GEN_UNLOCK(sc);
+	callout_drain(&sc->stat_ch);
+	ether_ifdetach(sc->ifp);
+
+	/* Detach the miibus */
+	error = bus_generic_detach(dev);
+	if (error != 0)
+		return (error);
+
+	/* clean up dma */
+	gen_bus_dma_teardown(sc);
+
+	/* Release bus resources. */
+	bus_teardown_intr(sc->dev, sc->res[_RES_IRQ1], sc->ih);
+	bus_teardown_intr(sc->dev, sc->res[_RES_IRQ2], sc->ih2);
+	bus_release_resources(sc->dev, gen_spec, sc->res);
+
+	if (sc->ifp != NULL)
+		if_free(sc->ifp);
+	mtx_destroy(&sc->mtx);
+	return (0);
 }
 
 static int
@@ -661,7 +687,7 @@ gen_bus_dma_teardown(struct gen_softc *sc)
 			    error);
 	}
 
-	if (sc->tx_buf_tag != NULL) {
+	if (sc->rx_buf_tag != NULL) {
 		for (i = 0; i < RX_DESC_COUNT; i++) {
 			error = bus_dmamap_destroy(sc->rx_buf_tag,
 			    sc->rx_ring_ent[i].map);
@@ -950,7 +976,7 @@ gen_setup_multi(void *arg, struct sockaddr_dl *sdl, u_int count)
 static void
 gen_setup_rxfilter(struct gen_softc *sc)
 {
-	struct ifnet *ifp = sc->ifp;
+	if_t ifp = sc->ifp;
 	uint32_t cmd, mdf_ctrl;
 	u_int n;
 
@@ -966,17 +992,17 @@ gen_setup_rxfilter(struct gen_softc *sc)
 	n = if_llmaddr_count(ifp) + 2;
 
 	if (n > GENET_MAX_MDF_FILTER)
-		ifp->if_flags |= IFF_ALLMULTI;
+		if_setflagbits(ifp, IFF_ALLMULTI, 0);
 	else
-		ifp->if_flags &= ~IFF_ALLMULTI;
+		if_setflagbits(ifp, 0, IFF_ALLMULTI);
 
-	if ((ifp->if_flags & (IFF_PROMISC|IFF_ALLMULTI)) != 0) {
+	if ((if_getflags(ifp) & (IFF_PROMISC|IFF_ALLMULTI)) != 0) {
 		cmd |= GENET_UMAC_CMD_PROMISC;
 		mdf_ctrl = 0;
 	} else {
 		cmd &= ~GENET_UMAC_CMD_PROMISC;
 		gen_setup_rxfilter_mdf(sc, 0, ether_broadcastaddr);
-		gen_setup_rxfilter_mdf(sc, 1, IF_LLADDR(ifp));
+		gen_setup_rxfilter_mdf(sc, 1, if_getlladdr(ifp));
 		(void) if_foreach_llmaddr(ifp, gen_setup_multi, sc);
 		mdf_ctrl = (__BIT(GENET_MAX_MDF_FILTER) - 1)  &~
 		    (__BIT(GENET_MAX_MDF_FILTER - n) - 1);
@@ -998,7 +1024,7 @@ gen_set_enaddr(struct gen_softc *sc)
 	ifp = sc->ifp;
 
 	/* Write our unicast address */
-	enaddr = IF_LLADDR(ifp);
+	enaddr = if_getlladdr(ifp);
 	/* Write hardware address */
 	val = enaddr[3] | (enaddr[2] << 8) | (enaddr[1] << 16) |
 	    (enaddr[0] << 24);
@@ -1012,7 +1038,7 @@ gen_start_locked(struct gen_softc *sc)
 {
 	struct mbuf *m;
 	if_t ifp;
-	int cnt, err;
+	int err;
 
 	GEN_ASSERT_LOCKED(sc);
 
@@ -1025,7 +1051,7 @@ gen_start_locked(struct gen_softc *sc)
 	    IFF_DRV_RUNNING)
 		return;
 
-	for (cnt = 0; ; cnt++) {
+	while (true) {
 		m = if_dequeue(ifp);
 		if (m == NULL)
 			break;
@@ -1040,7 +1066,7 @@ gen_start_locked(struct gen_softc *sc)
 				if_sendq_prepend(ifp, m);
 			break;
 		}
-		if_bpfmtap(ifp, m);
+		bpf_mtap_if(ifp, m);
 	}
 }
 
@@ -1074,6 +1100,10 @@ gen_encap(struct gen_softc *sc, struct mbuf **mp)
 	GEN_ASSERT_LOCKED(sc);
 
 	q = &sc->tx_queue[DEF_TXQUEUE];
+	if (q->queued == q->nentries) {
+		/* tx_queue is full */
+		return (ENOBUFS);
+	}
 
 	m = *mp;
 
@@ -1084,7 +1114,7 @@ gen_encap(struct gen_softc *sc, struct mbuf **mp)
 	if (m->m_len == sizeof(struct ether_header)) {
 		m = m_pullup(m, MIN(m->m_pkthdr.len, gen_tx_hdr_min));
 		if (m == NULL) {
-			if (sc->ifp->if_flags & IFF_DEBUG)
+			if (if_getflags(sc->ifp) & IFF_DEBUG)
 				device_printf(sc->dev,
 				    "header pullup fail\n");
 			*mp = NULL;
@@ -1098,7 +1128,7 @@ gen_encap(struct gen_softc *sc, struct mbuf **mp)
 		csumdata = m->m_pkthdr.csum_data;
 		M_PREPEND(m, sizeof(struct statusblock), M_NOWAIT);
 		if (m == NULL) {
-			if (sc->ifp->if_flags & IFF_DEBUG)
+			if (if_getflags(sc->ifp) & IFF_DEBUG)
 				device_printf(sc->dev, "prepend fail\n");
 			*mp = NULL;
 			return (ENOMEM);
@@ -1302,9 +1332,12 @@ gen_parse_tx(struct mbuf *m, int csum_flags)
 		offset += sizeof(struct ip6_hdr);
 	} else {
 		/*
-		 * Unknown whether other cases require moving a header;
-		 * ARP works without.
+		 * Unknown whether most other cases require moving a header;
+		 * ARP works without.  However, Wake On LAN packets sent
+		 * by wake(8) via BPF need something like this.
 		 */
+		COPY(MIN(gen_tx_hdr_min, m->m_len));
+		offset += MIN(gen_tx_hdr_min, m->m_len);
 	}
 	return (offset);
 #undef COPY
@@ -1374,7 +1407,7 @@ gen_rxintr(struct gen_softc *sc, struct rx_queue *q)
 		    (GENET_RX_DESC_STATUS_SOP | GENET_RX_DESC_STATUS_EOP |
 		    GENET_RX_DESC_STATUS_RX_ERROR)) !=
 		    (GENET_RX_DESC_STATUS_SOP | GENET_RX_DESC_STATUS_EOP)) {
-			if (ifp->if_flags & IFF_DEBUG)
+			if (if_getflags(ifp) & IFF_DEBUG)
 				device_printf(sc->dev,
 				    "error/frag %x csum %x\n", status,
 				    sb->rxcsum);
@@ -1385,7 +1418,7 @@ gen_rxintr(struct gen_softc *sc, struct rx_queue *q)
 		error = gen_newbuf_rx(sc, q, index);
 		if (error != 0) {
 			if_inc_counter(ifp, IFCOUNTER_IQDROPS, 1);
-			if (ifp->if_flags & IFF_DEBUG)
+			if (if_getflags(ifp) & IFF_DEBUG)
 				device_printf(sc->dev, "gen_newbuf_rx %d\n",
 				    error);
 			/* reuse previous mbuf */
@@ -1806,6 +1839,7 @@ static device_method_t gen_methods[] = {
 	/* Device interface */
 	DEVMETHOD(device_probe,		gen_probe),
 	DEVMETHOD(device_attach,	gen_attach),
+	DEVMETHOD(device_detach,	gen_detach),
 
 	/* MII interface */
 	DEVMETHOD(miibus_readreg,	gen_miibus_readreg),

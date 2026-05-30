@@ -24,8 +24,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_platform.h"
 
 #include <sys/param.h>
@@ -251,9 +249,8 @@ audio_soc_chan_free(kobj_t obj, void *data)
 
 	ausoc_chan = (struct audio_soc_channel *)data;
 
-	buffer = sndbuf_getbuf(ausoc_chan->buf);
-	if (buffer)
-		free(buffer, M_DEVBUF);
+	buffer = ausoc_chan->buf->buf;
+	free(buffer, M_DEVBUF);
 
 	return (0);
 }
@@ -369,7 +366,7 @@ audio_soc_init(void *arg)
 		auxdev = OF_device_from_xref(aux_devs[i]);
 		if (auxdev == NULL)
 			device_printf(sc->dev, "warning: no driver attached to aux node\n");
-		aux_node = (struct audio_soc_aux_node *)malloc(sizeof(*aux_node), M_DEVBUF, M_NOWAIT);
+		aux_node = malloc(sizeof(*aux_node), M_DEVBUF, M_NOWAIT);
 		if (aux_node == NULL) {
 			device_printf(sc->dev, "failed to allocate aux node struct\n");
 			return;
@@ -399,10 +396,7 @@ audio_soc_init(void *arg)
 		}
 	}
 
-	if (pcm_register(sc->dev, sc, 1, 1)) {
-		device_printf(sc->dev, "failed to register PCM\n");
-		return;
-	}
+	pcm_init(sc->dev, sc);
 
 	sc->play_channel.sc = sc;
 	sc->rec_channel.sc = sc;
@@ -410,7 +404,10 @@ audio_soc_init(void *arg)
 	pcm_addchan(sc->dev, PCMDIR_PLAY, &audio_soc_chan_class, &sc->play_channel);
 	pcm_addchan(sc->dev, PCMDIR_REC, &audio_soc_chan_class, &sc->rec_channel);
 
-	pcm_setstatus(sc->dev, "at EXPERIMENT");
+	if (pcm_register(sc->dev, "at simplebus")) {
+		device_printf(sc->dev, "failed to register PCM\n");
+		return;
+	}
 
 	AUDIO_DAI_SETUP_INTR(sc->cpu_dev, audio_soc_intr, sc);
 	AUDIO_DAI_SETUP_MIXER(sc->codec_dev, sc->dev);
@@ -510,8 +507,7 @@ audio_soc_detach(device_t dev)
 	struct audio_soc_aux_node *aux;
 
 	sc = device_get_softc(dev);
-	if (sc->name)
-		free(sc->name, M_DEVBUF);
+	free(sc->name, M_DEVBUF);
 
 	while ((aux = SLIST_FIRST(&sc->aux_devs)) != NULL) {
 		SLIST_REMOVE_HEAD(&sc->aux_devs, link);

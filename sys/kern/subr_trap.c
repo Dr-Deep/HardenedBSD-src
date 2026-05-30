@@ -39,13 +39,9 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	from: @(#)trap.c	7.4 (Berkeley) 5/13/91
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_hwpmc_hooks.h"
 
 #include <sys/param.h>
@@ -129,16 +125,6 @@ userret(struct thread *td, struct trapframe *frame)
 	if (PMC_THREAD_HAS_SAMPLES(td))
 		PMC_CALL_HOOK(td, PMC_FN_THR_USERRET, NULL);
 #endif
-#ifdef TCPHPTS
-	/*
-	 * @gallatin is adament that this needs to go here, I
-	 * am not so sure. Running hpts is a lot like
-	 * a lro_flush() that happens while a user process
-	 * is running. But he may know best so I will go
-	 * with his view of accounting. :-)
-	 */
-	tcp_run_hpts();
-#endif
 	/*
 	 * Let the scheduler adjust our priority etc.
 	 */
@@ -175,7 +161,7 @@ userret(struct thread *td, struct trapframe *frame)
 		KASSERT(0, ("userret: Returning with sleep disabled"));
 	}
 	KASSERT(td->td_pinned == 0 || (td->td_pflags & TDP_CALLCHAIN) != 0,
-	    ("userret: Returning with with pinned thread"));
+	    ("userret: Returning with pinned thread"));
 	KASSERT(td->td_vp_reserved == NULL,
 	    ("userret: Returning with preallocated vnode"));
 	KASSERT((td->td_flags & (TDF_SBDRY | TDF_SEINTR | TDF_SERESTART)) == 0,
@@ -336,8 +322,9 @@ ast_handler(struct thread *td, struct trapframe *framep, bool dtor)
 		td->td_ast = 0;
 	}
 
-	CTR3(KTR_SYSC, "ast: thread %p (pid %d, %s)", td, td->td_proc->p_pid,
-            td->td_proc->p_comm);
+	CTR3(KTR_SYSC, "ast: thread %p (pid %d, %s)", td,
+	     td->td_proc == NULL ? -1 : td->td_proc->p_pid,
+	     td->td_proc == NULL ? "" : td->td_proc->p_comm);
 	KASSERT(framep == NULL || TRAPF_USERMODE(framep),
 	    ("ast in kernel mode"));
 

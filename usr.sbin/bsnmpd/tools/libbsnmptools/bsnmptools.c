@@ -27,8 +27,6 @@
  * SUCH DAMAGE.
  *
  * Helper functions for snmp client tools
- *
- * $FreeBSD$
  */
 
 #include <sys/param.h>
@@ -52,7 +50,7 @@
 #include "bsnmptc.h"
 #include "bsnmptools.h"
 
-/* Internal varibale to turn on library debugging for testing and to
+/* Internal variable to turn on library debugging for testing and to
  * find bugs. It is not exported via the header file.
  * XXX should we cover it by some #ifdef BSNMPTOOLS_DEBUG? */
 int _bsnmptools_debug = 0;
@@ -180,8 +178,7 @@ snmptool_init(struct snmp_toolinfo *snmptoolctx)
 			warn("malloc() failed");
 			return (-1);
 		}
-		if (slen > 0)
-			strlcpy(snmptoolctx->passwd, str, slen + 1);
+		strlcpy(snmptoolctx->passwd, str, slen + 1);
 	}
 
 	return (0);
@@ -483,7 +480,7 @@ parse_ascii(char *ascii, uint8_t *binstr, size_t binlen)
 int32_t
 parse_authentication(struct snmp_toolinfo *snmptoolctx __unused, char *opt_arg)
 {
-	int32_t count, subopt;
+	int32_t /* count, */ subopt;
 	char *val, *option;
 	const char *const subopts[] = {
 		"proto",
@@ -492,7 +489,7 @@ parse_authentication(struct snmp_toolinfo *snmptoolctx __unused, char *opt_arg)
 	};
 
 	assert(opt_arg != NULL);
-	count = 1;
+	/* count = 1; */
 	while ((subopt = getsubopt1(&opt_arg, subopts, &val, &option)) != EOF) {
 		switch (subopt) {
 		case 0:
@@ -530,7 +527,7 @@ parse_authentication(struct snmp_toolinfo *snmptoolctx __unused, char *opt_arg)
 			warnx("Unknown suboption - '%s'", suboptarg);
 			return (-1);
 		}
-		count += 1;
+		/* count += 1; */
 	}
 	return (2/* count */);
 }
@@ -538,7 +535,7 @@ parse_authentication(struct snmp_toolinfo *snmptoolctx __unused, char *opt_arg)
 int32_t
 parse_privacy(struct snmp_toolinfo *snmptoolctx __unused, char *opt_arg)
 {
-	int32_t count, subopt;
+	int32_t /* count, */ subopt;
 	char *val, *option;
 	const char *const subopts[] = {
 		"proto",
@@ -547,7 +544,7 @@ parse_privacy(struct snmp_toolinfo *snmptoolctx __unused, char *opt_arg)
 	};
 
 	assert(opt_arg != NULL);
-	count = 1;
+	/* count = 1; */
 	while ((subopt = getsubopt1(&opt_arg, subopts, &val, &option)) != EOF) {
 		switch (subopt) {
 		case 0:
@@ -583,7 +580,7 @@ parse_privacy(struct snmp_toolinfo *snmptoolctx __unused, char *opt_arg)
 			warnx("Unknown suboption - '%s'", suboptarg);
 			return (-1);
 		}
-		count += 1;
+		/* count += 1; */
 	}
 	return (2/* count */);
 }
@@ -591,7 +588,7 @@ parse_privacy(struct snmp_toolinfo *snmptoolctx __unused, char *opt_arg)
 int32_t
 parse_context(struct snmp_toolinfo *snmptoolctx __unused, char *opt_arg)
 {
-	int32_t count, subopt;
+	int32_t /* count, */ subopt;
 	char *val, *option;
 	const char *const subopts[] = {
 		"context",
@@ -600,7 +597,7 @@ parse_context(struct snmp_toolinfo *snmptoolctx __unused, char *opt_arg)
 	};
 
 	assert(opt_arg != NULL);
-	count = 1;
+	/* count = 1; */
 	while ((subopt = getsubopt1(&opt_arg, subopts, &val, &option)) != EOF) {
 		switch (subopt) {
 		case 0:
@@ -625,7 +622,7 @@ parse_context(struct snmp_toolinfo *snmptoolctx __unused, char *opt_arg)
 			warnx("Unknown suboption - '%s'", suboptarg);
 			return (-1);
 		}
-		count += 1;
+		/* count += 1; */
 	}
 	return (2/* count */);
 }
@@ -633,7 +630,7 @@ parse_context(struct snmp_toolinfo *snmptoolctx __unused, char *opt_arg)
 int32_t
 parse_user_security(struct snmp_toolinfo *snmptoolctx __unused, char *opt_arg)
 {
-	int32_t count, subopt, saved_errno;
+	int32_t /* count, */ subopt, saved_errno;
 	char *val, *option;
 	const char *const subopts[] = {
 		"engine",
@@ -644,7 +641,7 @@ parse_user_security(struct snmp_toolinfo *snmptoolctx __unused, char *opt_arg)
 	};
 
 	assert(opt_arg != NULL);
-	count = 1;
+	/* count = 1; */
 	while ((subopt = getsubopt1(&opt_arg, subopts, &val, &option)) != EOF) {
 		switch (subopt) {
 		case 0:
@@ -697,7 +694,7 @@ parse_user_security(struct snmp_toolinfo *snmptoolctx __unused, char *opt_arg)
 			warnx("Unknown suboption - '%s'", suboptarg);
 			return (-1);
 		}
-		count += 1;
+		/* count += 1; */
 	}
 	return (2/* count */);
 }
@@ -793,15 +790,6 @@ parse_server(char *opt_arg)
 	if (snmp_parse_server(&snmp_client, opt_arg) < 0)
 		return (-1);
 
-	if (snmp_client.trans > SNMP_TRANS_UDP && snmp_client.chost == NULL) {
-		if ((snmp_client.chost = malloc(strlen(SNMP_DEFAULT_LOCAL) + 1))
-		    == NULL) {
-			syslog(LOG_ERR, "malloc() failed: %s", strerror(errno));
-			return (-1);
-		}
-		strcpy(snmp_client.chost, SNMP_DEFAULT_LOCAL);
-	}
-
 	return (2);
 }
 
@@ -893,12 +881,11 @@ parse_local_path(char *opt_arg)
 {
 	assert(opt_arg != NULL);
 
-	if (sizeof(opt_arg) > sizeof(SNMP_LOCAL_PATH)) {
+	if (strlcpy(snmp_client.local_path, opt_arg,
+	    sizeof(snmp_client.local_path)) >= sizeof(snmp_client.local_path)) {
 		warnx("Filename too long - %s", opt_arg);
 		return (-1);
 	}
-
-	strlcpy(snmp_client.local_path, opt_arg, sizeof(SNMP_LOCAL_PATH));
 	return (2);
 }
 
@@ -1340,7 +1327,7 @@ snmp_suboid_pop(struct asn_oid *var)
 }
 
 /*
- * Parse the command-line provided string into an OID - alocate memory for a new
+ * Parse the command-line provided string into an OID - allocate memory for a new
  * snmp object, fill in its fields and insert it in the object list. A
  * (snmp_verify_inoid_f) function must be provided to validate the input string.
  */

@@ -36,9 +36,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/conf.h>
 #include <sys/smp.h>
@@ -59,6 +56,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/filedesc.h>
 #include <sys/reboot.h>
 #include <sys/sbuf.h>
+#include <sys/stdarg.h>
 #include <sys/syscallsubr.h>
 #include <sys/sysproto.h>
 #include <sys/sx.h>
@@ -70,15 +68,14 @@ __FBSDID("$FreeBSD$");
 
 #include <geom/geom.h>
 
-#include <machine/stdarg.h>
-
 #include <security/audit/audit.h>
 #include <security/mac/mac_framework.h>
 
 #define	VFS_MOUNTARG_SIZE_MAX	(1024 * 64)
 
 static int	vfs_domount(struct thread *td, const char *fstype, char *fspath,
-		    uint64_t fsflags, struct vfsoptlist **optlist);
+		    uint64_t fsflags, bool only_export, bool jail_export,
+		    struct vfsoptlist **optlist);
 static void	free_mntarg(struct mntarg *ma);
 
 static int	usermount = 0;
@@ -159,6 +156,7 @@ mount_init(void *mem, int size, int flags)
 	mtx_init(&mp->mnt_mtx, "struct mount mtx", NULL, MTX_DEF);
 	mtx_init(&mp->mnt_listmtx, "struct mount vlist mtx", NULL, MTX_DEF);
 	lockinit(&mp->mnt_explock, PVFS, "explock", 0, 0);
+	lockinit(&mp->mnt_renamelock, PVFS, "rename", 0, 0);
 	mp->mnt_pcpu = uma_zalloc_pcpu(pcpu_zone_16, M_WAITOK | M_ZERO);
 	mp->mnt_ref = 0;
 	mp->mnt_vfs_ops = 1;
@@ -173,6 +171,7 @@ mount_fini(void *mem, int size)
 
 	mp = (struct mount *)mem;
 	uma_zfree_pcpu(pcpu_zone_16, mp->mnt_pcpu);
+	lockdestroy(&mp->mnt_renamelock);
 	lockdestroy(&mp->mnt_explock);
 	mtx_destroy(&mp->mnt_listmtx);
 	mtx_destroy(&mp->mnt_mtx);
@@ -475,7 +474,7 @@ sys_nmount(struct thread *td, struct nmount_args *uap)
 	}
 	error = vfs_donmount(td, flags, auio);
 
-	free(auio, M_IOV);
+	freeuio(auio);
 	return (error);
 }
 
@@ -501,7 +500,7 @@ vfs_ref_from_vp(struct vnode *vp)
 	if (__predict_false(mp == NULL)) {
 		return (mp);
 	}
-	if (vfs_op_thread_enter(mp, mpcpu)) {
+	if (vfs_op_thread_enter(mp, &mpcpu)) {
 		if (__predict_true(mp == vp->v_mount)) {
 			vfs_mp_count_add_pcpu(mpcpu, ref, 1);
 			vfs_op_thread_exit(mp, mpcpu);
@@ -528,7 +527,7 @@ vfs_ref(struct mount *mp)
 	struct mount_pcpu *mpcpu;
 
 	CTR2(KTR_VFS, "%s: mp %p", __func__, mp);
-	if (vfs_op_thread_enter(mp, mpcpu)) {
+	if (vfs_op_thread_enter(mp, &mpcpu)) {
 		vfs_mp_count_add_pcpu(mpcpu, ref, 1);
 		vfs_op_thread_exit(mp, mpcpu);
 		return;
@@ -646,7 +645,7 @@ vfs_rel(struct mount *mp)
 	struct mount_pcpu *mpcpu;
 
 	CTR2(KTR_VFS, "%s: mp %p", __func__, mp);
-	if (vfs_op_thread_enter(mp, mpcpu)) {
+	if (vfs_op_thread_enter(mp, &mpcpu)) {
 		vfs_mp_count_sub_pcpu(mpcpu, ref, 1);
 		vfs_op_thread_exit(mp, mpcpu);
 		return;
@@ -684,7 +683,6 @@ vfs_mount_alloc(struct vnode *vp, struct vfsconf *vfsp, const char *fspath,
 	MPASSERT(mp->mnt_vfs_ops == 1, mp,
 	    ("vfs_ops should be 1 but %d found", mp->mnt_vfs_ops));
 	(void) vfs_busy(mp, MBF_NOWAIT);
-	atomic_add_acq_int(&vfsp->vfc_refcount, 1);
 	mp->mnt_op = vfsp->vfc_vfsops;
 	mp->mnt_vfc = vfsp;
 	mp->mnt_stat.f_type = vfsp->vfc_typenum;
@@ -732,7 +730,6 @@ vfs_mount_destroy(struct mount *mp)
 	    __FILE__, __LINE__));
 	MPPASS(mp->mnt_writeopcount == 0, mp);
 	MPPASS(mp->mnt_secondary_writes == 0, mp);
-	atomic_subtract_rel_int(&mp->mnt_vfc->vfc_refcount, 1);
 	if (!TAILQ_EMPTY(&mp->mnt_nvnodelist)) {
 		struct vnode *vp;
 
@@ -761,6 +758,18 @@ vfs_mount_destroy(struct mount *mp)
 #endif
 	if (mp->mnt_opt != NULL)
 		vfs_freeopts(mp->mnt_opt);
+	if (mp->mnt_exjail != NULL) {
+		atomic_subtract_int(&mp->mnt_exjail->cr_prison->pr_exportcnt,
+		    1);
+		crfree(mp->mnt_exjail);
+	}
+	if (mp->mnt_export != NULL) {
+		vfs_free_addrlist(mp->mnt_export);
+		free(mp->mnt_export, M_MOUNT);
+	}
+	vfsconf_lock();
+	mp->mnt_vfc->vfc_refcount--;
+	vfsconf_unlock();
 	crfree(mp->mnt_cred);
 	uma_zfree(mount_zone, mp);
 }
@@ -797,7 +806,7 @@ vfs_donmount(struct thread *td, uint64_t fsflags, struct uio *fsoptions)
 	struct vfsopt *opt, *tmp_opt;
 	char *fstype, *fspath, *errmsg;
 	int error, fstypelen, fspathlen, errmsg_len, errmsg_pos;
-	bool autoro;
+	bool autoro, has_nonexport, only_export, jail_export;
 
 	errmsg = fspath = NULL;
 	errmsg_len = fspathlen = 0;
@@ -834,14 +843,35 @@ vfs_donmount(struct thread *td, uint64_t fsflags, struct uio *fsoptions)
 	}
 
 	/*
+	 * Check to see that "export" is only used with the "update", "fstype",
+	 * "fspath", "from" and "errmsg" options when in a vnet jail.
+	 * These are the ones used to set/update exports by mountd(8).
+	 * If only the above options are set in a jail that can run mountd(8),
+	 * then the jail_export argument of vfs_domount() will be true.
+	 * When jail_export is true, the vfs_suser() check does not cause
+	 * failure, but limits the update to exports only.
+	 * This allows mountd(8) running within the vnet jail
+	 * to export file systems visible within the jail, but
+	 * mounted outside of the jail.
+	 */
+	/*
 	 * We need to see if we have the "update" option
 	 * before we call vfs_domount(), since vfs_domount() has special
 	 * logic based on MNT_UPDATE.  This is very important
 	 * when we want to update the root filesystem.
 	 */
+	has_nonexport = false;
+	only_export = false;
 	TAILQ_FOREACH_SAFE(opt, optlist, link, tmp_opt) {
 		int do_freeopt = 0;
 
+		if (strcmp(opt->name, "export") != 0 &&
+		    strcmp(opt->name, "update") != 0 &&
+		    strcmp(opt->name, "fstype") != 0 &&
+		    strcmp(opt->name, "fspath") != 0 &&
+		    strcmp(opt->name, "from") != 0 &&
+		    strcmp(opt->name, "errmsg") != 0)
+			has_nonexport = true;
 		if (strcmp(opt->name, "update") == 0) {
 			fsflags |= MNT_UPDATE;
 			do_freeopt = 1;
@@ -924,7 +954,10 @@ vfs_donmount(struct thread *td, uint64_t fsflags, struct uio *fsoptions)
 			fsflags |= MNT_SYNCHRONOUS;
 		else if (strcmp(opt->name, "union") == 0)
 			fsflags |= MNT_UNION;
-		else if (strcmp(opt->name, "automounted") == 0) {
+		else if (strcmp(opt->name, "export") == 0) {
+			fsflags |= MNT_EXPORTED;
+			only_export = true;
+		} else if (strcmp(opt->name, "automounted") == 0) {
 			fsflags |= MNT_AUTOMOUNTED;
 			do_freeopt = 1;
 		} else if (strcmp(opt->name, "nocover") == 0) {
@@ -954,8 +987,24 @@ vfs_donmount(struct thread *td, uint64_t fsflags, struct uio *fsoptions)
 		goto bail;
 	}
 
-	error = vfs_domount(td, fstype, fspath, fsflags, &optlist);
-	if (error == ENOENT) {
+	/*
+	 * only_export is set to true only if exports are being
+	 * updated and nothing else is being updated.
+	 */
+	if (has_nonexport)
+		only_export = false;
+	/*
+	 * If only_export is true and the caller is running within a
+	 * vnet prison that can run mountd(8), set jail_export true.
+	 */
+	jail_export = false;
+	if (only_export && jailed(td->td_ucred) &&
+	    prison_check_nfsd(td->td_ucred))
+		jail_export = true;
+
+	error = vfs_domount(td, fstype, fspath, fsflags, only_export,
+	    jail_export, &optlist);
+	if (error == ENODEV) {
 		error = EINVAL;
 		if (errmsg != NULL)
 			strncpy(errmsg, "Invalid fstype", errmsg_len);
@@ -972,7 +1021,8 @@ vfs_donmount(struct thread *td, uint64_t fsflags, struct uio *fsoptions)
 		printf("%s: R/W mount failed, possibly R/O media,"
 		    " trying R/O mount\n", __func__);
 		fsflags |= MNT_RDONLY;
-		error = vfs_domount(td, fstype, fspath, fsflags, &optlist);
+		error = vfs_domount(td, fstype, fspath, fsflags, only_export,
+		    jail_export, &optlist);
 	}
 bail:
 	/* copyout the errmsg */
@@ -983,7 +1033,7 @@ bail:
 			    fsoptions->uio_iov[2 * errmsg_pos + 1].iov_base,
 			    fsoptions->uio_iov[2 * errmsg_pos + 1].iov_len);
 		} else {
-			copyout(errmsg,
+			(void)copyout(errmsg,
 			    fsoptions->uio_iov[2 * errmsg_pos + 1].iov_base,
 			    fsoptions->uio_iov[2 * errmsg_pos + 1].iov_len);
 		}
@@ -1044,7 +1094,7 @@ sys_mount(struct thread *td, struct mount_args *uap)
 	vfsp = vfs_byname_kld(fstype, td, &error);
 	free(fstype, M_TEMP);
 	if (vfsp == NULL)
-		return (ENOENT);
+		return (EINVAL);
 	if (((vfsp->vfc_flags & VFCF_SBDRY) != 0 &&
 	    vfsp->vfc_vfsops_sd->vfs_cmount == NULL) ||
 	    ((vfsp->vfc_flags & VFCF_SBDRY) == 0 &&
@@ -1091,6 +1141,7 @@ vfs_domount_first(
 	if (jailed(td->td_ucred) && (!prison_allow(td->td_ucred,
 	    vfsp->vfc_prison_flag) || vp == td->td_ucred->cr_prison->pr_root)) {
 		vput(vp);
+		vfs_unref_vfsconf(vfsp);
 		return (EPERM);
 	}
 
@@ -1101,12 +1152,33 @@ vfs_domount_first(
 	error = VOP_GETATTR(vp, &va, td->td_ucred);
 	if (error == 0 && va.va_uid != td->td_ucred->cr_uid)
 		error = priv_check_cred(td->td_ucred, PRIV_VFS_ADMIN);
+#ifdef MAC
+	/*
+	 * XXX XNU also has a check_mount_late variant, which takes the
+	 * struct mount instead and gives MAC visibility into, e.g.,
+	 * f_mntfromname and other facts.
+	 */
+	if (error == 0) {
+		error = mac_mount_check_mount(td->td_ucred, vp, vfsp,
+		    optlist, fsflags);
+	}
+#endif
 	if (error == 0)
 		error = vinvalbuf(vp, V_SAVE, 0, 0);
-	if (error == 0 && vp->v_type != VDIR)
-		error = ENOTDIR;
+	if (vfsp->vfc_flags & VFCF_FILEMOUNT) {
+		if (error == 0 && vp->v_type != VDIR && vp->v_type != VREG)
+			error = EINVAL;
+		/*
+		 * For file mounts, ensure that there is only one hardlink to the file.
+		 */
+		if (error == 0 && vp->v_type == VREG && va.va_nlink != 1)
+			error = EINVAL;
+	} else {
+		if (error == 0 && vp->v_type != VDIR)
+			error = ENOTDIR;
+	}
 	if (error == 0 && (fsflags & MNT_EMPTYDIR) != 0)
-		error = vfs_emptydir(vp);
+		error = vn_dir_check_empty(vp);
 	if (error == 0) {
 		VI_LOCK(vp);
 		if ((vp->v_iflag & VI_MOUNT) == 0 && vp->v_mountedhere == NULL)
@@ -1117,6 +1189,7 @@ vfs_domount_first(
 	}
 	if (error != 0) {
 		vput(vp);
+		vfs_unref_vfsconf(vfsp);
 		return (error);
 	}
 	vn_seqc_write_begin(vp);
@@ -1201,10 +1274,16 @@ vfs_domount_first(
 		mp->mnt_kern_flag &= ~MNTK_ASYNC;
 	MNT_IUNLOCK(mp);
 
+	/*
+	 * VIRF_MOUNTPOINT and v_mountedhere need to be set under the
+	 * vp lock to satisfy vfs_lookup() requirements.
+	 */
+	VOP_LOCK(vp, LK_EXCLUSIVE | LK_RETRY);
 	VI_LOCK(vp);
 	vn_irflag_set_locked(vp, VIRF_MOUNTPOINT);
 	vp->v_mountedhere = mp;
 	VI_UNLOCK(vp);
+	VOP_UNLOCK(vp);
 	cache_purge(vp);
 
 	/*
@@ -1213,7 +1292,8 @@ vfs_domount_first(
 	 * Use vn_lock_pair to avoid establishing an ordering between vnodes
 	 * from different filesystems.
 	 */
-	vn_lock_pair(vp, false, newdp, false);
+	error1 = vn_lock_pair(vp, false, LK_EXCLUSIVE, newdp, false,
+	    LK_EXCLUSIVE);
 
 	VI_LOCK(vp);
 	vp->v_iflag &= ~VI_MOUNT;
@@ -1223,7 +1303,10 @@ vfs_domount_first(
 	TAILQ_INSERT_TAIL(&mountlist, mp, mnt_list);
 	mtx_unlock(&mountlist_mtx);
 	vfs_event_signal(NULL, VQ_MOUNT, 0);
-	VOP_UNLOCK(vp);
+	if (error1 == 0)
+		VOP_UNLOCK(vp);
+	else
+		MPASS(error1 == EDEADLK);
 	EVENTHANDLER_DIRECT_INVOKE(vfs_mounted, mp, newdp, td);
 	VOP_UNLOCK(newdp);
 	mount_devctl_event("MOUNT", mp, false);
@@ -1246,6 +1329,8 @@ vfs_domount_update(
 	struct thread *td,		/* Calling thread. */
 	struct vnode *vp,		/* Mount point vnode. */
 	uint64_t fsflags,		/* Flags common to all filesystems. */
+	bool only_export,		/* Got export option. */
+	bool jail_export,		/* Got export option in vnet prison. */
 	struct vfsoptlist **optlist	/* Options local to the filesystem. */
 	)
 {
@@ -1254,9 +1339,11 @@ vfs_domount_update(
 	struct vnode *rootvp;
 	void *bufp;
 	struct mount *mp;
-	int error, export_error, i, len;
-	uint64_t flag;
+	int error, export_error, i, len, fsid_up_len;
+	uint64_t flag, mnt_union;
 	gid_t *grps;
+	fsid_t *fsid_up;
+	bool vfs_suser_failed;
 
 	ASSERT_VOP_ELOCKED(vp, __func__);
 	KASSERT((fsflags & MNT_UPDATE) != 0, ("MNT_UPDATE should be here"));
@@ -1285,7 +1372,26 @@ vfs_domount_update(
 	 * Only privileged root, or (if MNT_USER is set) the user that
 	 * did the original mount is permitted to update it.
 	 */
+	/*
+	 * For the case of mountd(8) doing exports in a jail, the vfs_suser()
+	 * call does not cause failure.  vfs_domount() has already checked
+	 * that "root" is doing this and vfs_suser() will fail when
+	 * the file system has been mounted outside the jail.
+	 * jail_export set true indicates that "export" is not mixed
+	 * with other options that change mount behaviour.
+	 */
+	vfs_suser_failed = false;
 	error = vfs_suser(mp, td);
+	if (jail_export && error != 0) {
+		error = 0;
+		vfs_suser_failed = true;
+	}
+#ifdef MAC
+	if (error == 0) {
+		error = mac_mount_check_update(td->td_ucred, mp, optlist,
+		    fsflags);
+	}
+#endif
 	if (error != 0) {
 		vput(vp);
 		return (error);
@@ -1305,21 +1411,55 @@ vfs_domount_update(
 	VI_UNLOCK(vp);
 	VOP_UNLOCK(vp);
 
+	rootvp = NULL;
 	vfs_op_enter(mp);
 	vn_seqc_write_begin(vp);
 
-	rootvp = NULL;
+	if (vfs_getopt(*optlist, "fsid", (void **)&fsid_up,
+	    &fsid_up_len) == 0) {
+		if (fsid_up_len != sizeof(*fsid_up)) {
+			error = EINVAL;
+			goto end;
+		}
+		if (fsidcmp(fsid_up, &mp->mnt_stat.f_fsid) != 0) {
+			error = ENOENT;
+			goto end;
+		}
+		vfs_deleteopt(*optlist, "fsid");
+	}
+
+	mnt_union = 0;
 	MNT_ILOCK(mp);
 	if ((mp->mnt_kern_flag & MNTK_UNMOUNT) != 0) {
 		MNT_IUNLOCK(mp);
 		error = EBUSY;
 		goto end;
 	}
-	mp->mnt_flag &= ~MNT_UPDATEMASK;
-	mp->mnt_flag |= fsflags & (MNT_RELOAD | MNT_FORCE | MNT_UPDATE |
-	    MNT_SNAPSHOT | MNT_ROOTFS | MNT_UPDATEMASK | MNT_RDONLY);
-	if ((mp->mnt_flag & MNT_ASYNC) == 0)
-		mp->mnt_kern_flag &= ~MNTK_ASYNC;
+	if (vfs_suser_failed) {
+		KASSERT((fsflags & (MNT_EXPORTED | MNT_UPDATE)) ==
+		    (MNT_EXPORTED | MNT_UPDATE),
+		    ("%s: jailed export did not set expected fsflags",
+		     __func__));
+		/*
+		 * For this case, only MNT_UPDATE and
+		 * MNT_EXPORTED have been set in fsflags
+		 * by the options.  Only set MNT_UPDATE,
+		 * since that is the one that would be set
+		 * when set in fsflags, below.
+		 */
+		mp->mnt_flag |= MNT_UPDATE;
+	} else {
+		mp->mnt_flag &= ~MNT_UPDATEMASK;
+		if ((mp->mnt_flag & MNT_UNION) == 0 &&
+		    (fsflags & MNT_UNION) != 0) {
+			fsflags &= ~MNT_UNION;
+			mnt_union = MNT_UNION;
+		}
+		mp->mnt_flag |= fsflags & (MNT_RELOAD | MNT_FORCE | MNT_UPDATE |
+		    MNT_SNAPSHOT | MNT_ROOTFS | MNT_UPDATEMASK | MNT_RDONLY);
+		if ((mp->mnt_flag & MNT_ASYNC) == 0)
+			mp->mnt_kern_flag &= ~MNTK_ASYNC;
+	}
 	rootvp = vfs_cache_root_clear(mp);
 	MNT_IUNLOCK(mp);
 	mp->mnt_optnew = *optlist;
@@ -1330,7 +1470,18 @@ vfs_domount_update(
 	 * XXX The final recipients of VFS_MOUNT just overwrite the ndp they
 	 * get.  No freeing of cn_pnbuf.
 	 */
-	error = VFS_MOUNT(mp);
+	/*
+	 * When only updating mount exports, VFS_MOUNT() does not need to
+	 * be called, as indicated by only_export being set true.
+	 * For the case of mountd(8) doing exports from within a vnet jail,
+	 * "from" is typically not set correctly such that VFS_MOUNT() will
+	 * return ENOENT. For ZFS, there is a locking bug which can result in
+	 * deadlock if VFS_MOUNT() is called when extended attributes are
+	 * being updated.
+	 */
+	error = 0;
+	if (!only_export)
+		error = VFS_MOUNT(mp);
 
 	export_error = 0;
 	/* Process the export option. */
@@ -1373,14 +1524,14 @@ vfs_domount_update(
 			} else
 				export_error = EINVAL;
 			if (export_error == 0)
-				export_error = vfs_export(mp, &export);
+				export_error = vfs_export(mp, &export, true);
 			free(export.ex_groups, M_TEMP);
 			break;
 		case (sizeof(export)):
 			bcopy(bufp, &export, len);
 			grps = NULL;
 			if (export.ex_ngroups > 0) {
-				if (export.ex_ngroups <= NGROUPS_MAX) {
+				if (export.ex_ngroups <= ngroups_max + 1) {
 					grps = malloc(export.ex_ngroups *
 					    sizeof(gid_t), M_TEMP, M_WAITOK);
 					export_error = copyin(export.ex_groups,
@@ -1395,7 +1546,7 @@ vfs_domount_update(
 			else
 				export_error = EINVAL;
 			if (export_error == 0)
-				export_error = vfs_export(mp, &export);
+				export_error = vfs_export(mp, &export, true);
 			free(grps, M_TEMP);
 			break;
 		default:
@@ -1406,8 +1557,9 @@ vfs_domount_update(
 
 	MNT_ILOCK(mp);
 	if (error == 0) {
-		mp->mnt_flag &=	~(MNT_UPDATE | MNT_RELOAD | MNT_FORCE |
+		mp->mnt_flag &= ~(MNT_UPDATE | MNT_RELOAD | MNT_FORCE |
 		    MNT_SNAPSHOT);
+		mp->mnt_flag |= mnt_union;
 	} else {
 		/*
 		 * If we fail, restore old mount flags. MNT_QUOTA is special,
@@ -1468,6 +1620,8 @@ vfs_domount(
 	const char *fstype,		/* Filesystem type. */
 	char *fspath,			/* Mount path. */
 	uint64_t fsflags,		/* Flags common to all filesystems. */
+	bool only_export,		/* Got export option. */
+	bool jail_export,		/* Got export option in vnet prison. */
 	struct vfsoptlist **optlist	/* Options local to the filesystem. */
 	)
 {
@@ -1485,7 +1639,11 @@ vfs_domount(
 	if (strlen(fstype) >= MFSNAMELEN || strlen(fspath) >= MNAMELEN)
 		return (ENAMETOOLONG);
 
-	if (jailed(td->td_ucred) || usermount == 0) {
+	if (jail_export) {
+		error = priv_check(td, PRIV_NFS_DAEMON);
+		if (error)
+			return (error);
+	} else if (jailed(td->td_ucred) || usermount == 0) {
 		if ((error = priv_check(td, PRIV_VFS_MOUNT)) != 0)
 			return (error);
 	}
@@ -1527,29 +1685,51 @@ vfs_domount(
 	/*
 	 * Get vnode to be covered or mount point's vnode in case of MNT_UPDATE.
 	 */
-	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | AUDITVNODE1, UIO_SYSSPACE,
-	    fspath);
+	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | AUDITVNODE1 | WANTPARENT,
+	    UIO_SYSSPACE, fspath);
 	error = namei(&nd);
 	if (error != 0)
 		return (error);
-	NDFREE_PNBUF(&nd);
 	vp = nd.ni_vp;
+	/*
+	 * Don't allow stacking file mounts to work around problems with the way
+	 * that namei sets nd.ni_dvp to vp_crossmp for these.
+	 */
+	if (vp->v_type == VREG)
+		fsflags |= MNT_NOCOVER;
 	if ((fsflags & MNT_UPDATE) == 0) {
 		if ((vp->v_vflag & VV_ROOT) != 0 &&
 		    (fsflags & MNT_NOCOVER) != 0) {
 			vput(vp);
-			return (EBUSY);
+			error = EBUSY;
+			goto out;
 		}
 		pathbuf = malloc(MNAMELEN, M_TEMP, M_WAITOK);
 		strcpy(pathbuf, fspath);
-		error = vn_path_to_global_path(td, vp, pathbuf, MNAMELEN);
+		/*
+		 * Note: we allow any vnode type here. If the path sanity check
+		 * succeeds, the type will be validated in vfs_domount_first
+		 * above.
+		 */
+		if (vp->v_type == VDIR)
+			error = vn_path_to_global_path(td, vp, pathbuf,
+			    MNAMELEN);
+		else
+			error = vn_path_to_global_path_hardlink(td, vp,
+			    nd.ni_dvp, pathbuf, MNAMELEN,
+			    nd.ni_cnd.cn_nameptr, nd.ni_cnd.cn_namelen);
 		if (error == 0) {
 			error = vfs_domount_first(td, vfsp, pathbuf, vp,
 			    fsflags, optlist);
 		}
 		free(pathbuf, M_TEMP);
 	} else
-		error = vfs_domount_update(td, vp, fsflags, optlist);
+		error = vfs_domount_update(td, vp, fsflags, only_export,
+		    jail_export, optlist);
+
+out:
+	NDFREE_PNBUF(&nd);
+	vrele(nd.ni_dvp);
 
 	return (error);
 }
@@ -1571,11 +1751,11 @@ int
 sys_unmount(struct thread *td, struct unmount_args *uap)
 {
 
-	return (kern_unmount(td, uap->path, uap->flags));
+	return (kern_unmount(td, uap->path, (unsigned)uap->flags));
 }
 
 int
-kern_unmount(struct thread *td, const char *path, int flags)
+kern_unmount(struct thread *td, const char *path, uint64_t flags)
 {
 	struct nameidata nd;
 	struct mount *mp;
@@ -1584,12 +1764,13 @@ kern_unmount(struct thread *td, const char *path, int flags)
 	int error;
 
 	AUDIT_ARG_VALUE(flags);
+	if ((flags & (MNT_DEFERRED | MNT_RECURSE)) != 0)
+		return (EINVAL);
 	if (jailed(td->td_ucred) || usermount == 0) {
 		error = priv_check(td, PRIV_VFS_UNMOUNT);
 		if (error)
 			return (error);
 	}
-
 	if (flags & MNT_BYFSID) {
 		fsidbuf = malloc(MNAMELEN, M_TEMP, M_WAITOK);
 		error = copyinstr(path, fsidbuf, MNAMELEN, NULL);
@@ -1657,6 +1838,13 @@ kern_unmount(struct thread *td, const char *path, int flags)
 		vfs_rel(mp);
 		return (EINVAL);
 	}
+#ifdef MAC
+	error = mac_mount_check_unmount(td->td_ucred, mp, flags);
+	if (error != 0) {
+		vfs_rel(mp);
+		return (error);
+	}
+#endif
 	error = dounmount(mp, flags, td);
 	return (error);
 }
@@ -1703,6 +1891,7 @@ dounmount_cleanup(struct mount *mp, struct vnode *coveredvp, int mntkflags)
 		vdrop(coveredvp);
 	}
 	vn_finished_write(mp);
+	vfs_rel(mp);
 }
 
 /*
@@ -2127,7 +2316,7 @@ dounmount(struct mount *mp, uint64_t flags, struct thread *td)
 
 	vfs_op_enter(mp);
 
-	vn_start_write(NULL, &mp, V_WAIT | V_MNTREF);
+	vn_start_write(NULL, &mp, V_WAIT);
 	MNT_ILOCK(mp);
 	if ((mp->mnt_kern_flag & MNTK_UNMOUNT) != 0 ||
 	    (mp->mnt_flag & MNT_UPDATE) != 0 ||
@@ -2200,6 +2389,7 @@ dounmount(struct mount *mp, uint64_t flags, struct thread *td)
 	vfs_deallocate_syncvnode(mp);
 	error = VFS_UNMOUNT(mp, flags);
 	vn_finished_write(mp);
+	vfs_rel(mp);
 	/*
 	 * If we failed to flush the dirty blocks for this mount point,
 	 * undo all the cdir/rdir and rootvnode changes we made above.
@@ -2903,6 +3093,7 @@ vfs_remount_ro(struct mount *mp)
 	struct vnode *vp_covered, *rootvp;
 	int error;
 
+	vfs_op_enter(mp);
 	KASSERT(mp->mnt_lockref > 0,
 	    ("vfs_remount_ro: mp %p is not busied", mp));
 	KASSERT((mp->mnt_kern_flag & MNTK_UNMOUNT) == 0,
@@ -2911,17 +3102,19 @@ vfs_remount_ro(struct mount *mp)
 	rootvp = NULL;
 	vp_covered = mp->mnt_vnodecovered;
 	error = vget(vp_covered, LK_EXCLUSIVE | LK_NOWAIT);
-	if (error != 0)
+	if (error != 0) {
+		vfs_op_exit(mp);
 		return (error);
+	}
 	VI_LOCK(vp_covered);
 	if ((vp_covered->v_iflag & VI_MOUNT) != 0) {
 		VI_UNLOCK(vp_covered);
 		vput(vp_covered);
+		vfs_op_exit(mp);
 		return (EBUSY);
 	}
 	vp_covered->v_iflag |= VI_MOUNT;
 	VI_UNLOCK(vp_covered);
-	vfs_op_enter(mp);
 	vn_seqc_write_begin(vp_covered);
 
 	MNT_ILOCK(mp);
@@ -3016,6 +3209,41 @@ suspend_all_fs(void)
 		}
 	}
 	mtx_unlock(&mountlist_mtx);
+}
+
+/*
+ * Clone the mnt_exjail field to a new mount point.
+ */
+void
+vfs_exjail_clone(struct mount *inmp, struct mount *outmp)
+{
+	struct ucred *cr;
+	struct prison *pr;
+
+	MNT_ILOCK(inmp);
+	cr = inmp->mnt_exjail;
+	if (cr != NULL) {
+		crhold(cr);
+		MNT_IUNLOCK(inmp);
+		pr = cr->cr_prison;
+		sx_slock(&allprison_lock);
+		if (!prison_isalive(pr)) {
+			sx_sunlock(&allprison_lock);
+			crfree(cr);
+			return;
+		}
+		MNT_ILOCK(outmp);
+		if (outmp->mnt_exjail == NULL) {
+			outmp->mnt_exjail = cr;
+			atomic_add_int(&pr->pr_exportcnt, 1);
+			cr = NULL;
+		}
+		MNT_IUNLOCK(outmp);
+		sx_sunlock(&allprison_lock);
+		if (cr != NULL)
+			crfree(cr);
+	} else
+		MNT_IUNLOCK(inmp);
 }
 
 void

@@ -11,7 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "NVPTXMCAsmInfo.h"
-#include "llvm/ADT/Triple.h"
+#include "llvm/TargetParser/Triple.h"
 
 using namespace llvm;
 
@@ -49,9 +49,16 @@ NVPTXMCAsmInfo::NVPTXMCAsmInfo(const Triple &TheTriple,
   SupportsExtendedDwarfLocDirective = false;
   SupportsSignedData = false;
 
+  PrivateGlobalPrefix = "$L__";
+  PrivateLabelPrefix = PrivateGlobalPrefix;
+
   // @TODO: Can we just disable this?
   WeakDirective = "\t// .weak\t";
   GlobalDirective = "\t// .globl\t";
 
   UseIntegratedAssembler = false;
+
+  // ptxas does not support DWARF `.file fileno directory filename'
+  // syntax as of v11.X.
+  EnableDwarfFileDirectoryDefault = false;
 }

@@ -23,8 +23,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include <sys/param.h>
@@ -94,8 +92,8 @@ static uint16_t evdev_usb_scancodes[256] = {
 	NONE,		NONE,		NONE,		NONE,
 	NONE,		NONE,		NONE,		NONE,
 	/* 0xc0 - 0xdf */
-	NONE,		NONE,		NONE,		NONE,
-	NONE,		NONE,		NONE,		NONE,
+	KEY_BRIGHTNESSDOWN, KEY_BRIGHTNESSUP, KEY_SCALE, KEY_DASHBOARD,
+	KEY_KBDILLUMDOWN, KEY_KBDILLUMUP, NONE, 	NONE,
 	NONE,		NONE,		NONE,		NONE,
 	NONE,		NONE,		NONE,		NONE,
 	NONE,		NONE,		NONE,		NONE,
@@ -110,7 +108,12 @@ static uint16_t evdev_usb_scancodes[256] = {
 	KEY_WWW,	KEY_BACK,	KEY_FORWARD,	KEY_STOP,
 	KEY_FIND,	KEY_SCROLLUP,	KEY_SCROLLDOWN,	KEY_EDIT,
 	KEY_SLEEP,	KEY_COFFEE,	KEY_REFRESH,	KEY_CALC,
-	NONE,		NONE,		NONE,		NONE,
+	/*
+	 * last item maps to APPLE_FN_KEY in hkbd.c. using KEY_WAKEUP instead
+	 * of KEY_FN as evdev translates the latter to too high of a code for
+	 * xkb to parse.
+	 */
+	NONE,		NONE,		NONE,		KEY_WAKEUP,
 
 };
 

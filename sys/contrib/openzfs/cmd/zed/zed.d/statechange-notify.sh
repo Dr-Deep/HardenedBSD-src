@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: CDDL-1.0
 # shellcheck disable=SC2154
 #
 # CDDL HEADER START
@@ -38,7 +39,7 @@ if [ "${ZEVENT_VDEV_STATE_STR}" != "FAULTED" ] \
 fi
 
 umask 077
-note_subject="ZFS device fault for pool ${ZEVENT_POOL_GUID} on $(hostname)"
+note_subject="ZFS device fault for pool ${ZEVENT_POOL} on $(hostname)"
 note_pathname="$(mktemp)"
 {
     if [ "${ZEVENT_VDEV_STATE_STR}" = "FAULTED" ] ; then
@@ -66,7 +67,7 @@ note_pathname="$(mktemp)"
     [ -n "${ZEVENT_VDEV_GUID}" ] && echo "  vguid: ${ZEVENT_VDEV_GUID}"
     [ -n "${ZEVENT_VDEV_DEVID}" ] && echo "  devid: ${ZEVENT_VDEV_DEVID}"
 
-    echo "   pool: ${ZEVENT_POOL_GUID}"
+    echo "   pool: ${ZEVENT_POOL} (${ZEVENT_POOL_GUID})"
 
 } > "${note_pathname}"
 

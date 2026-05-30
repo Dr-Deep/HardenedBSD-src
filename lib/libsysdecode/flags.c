@@ -23,9 +23,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #define L2CAP_SOCKET_CHECKED
 
 #include <sys/types.h>
@@ -33,10 +30,12 @@ __FBSDID("$FreeBSD$");
 #include <sys/capsicum.h>
 #include <sys/event.h>
 #include <sys/extattr.h>
+#include <sys/inotify.h>
 #include <sys/linker.h>
 #include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/pledge.h>
+#include <sys/poll.h>
 #include <sys/procctl.h>
 #include <sys/ptrace.h>
 #include <sys/reboot.h>
@@ -198,7 +197,7 @@ sysdecode_vmprot(FILE *fp, int type, int *rem)
 }
 
 static struct name_table sockflags[] = {
-	X(SOCK_CLOEXEC) X(SOCK_NONBLOCK) XEND
+	X(SOCK_CLOEXEC) X(SOCK_CLOFORK) X(SOCK_NONBLOCK) XEND
 };
 
 bool
@@ -208,16 +207,17 @@ sysdecode_socket_type(FILE *fp, int type, int *rem)
 	uintmax_t val;
 	bool printed;
 
-	str = lookup_value(socktype, type & ~(SOCK_CLOEXEC | SOCK_NONBLOCK));
+	str = lookup_value(socktype,
+	    type & ~(SOCK_CLOEXEC | SOCK_CLOFORK | SOCK_NONBLOCK));
 	if (str != NULL) {
 		fputs(str, fp);
 		*rem = 0;
 		printed = true;
 	} else {
-		*rem = type & ~(SOCK_CLOEXEC | SOCK_NONBLOCK);
+		*rem = type & ~(SOCK_CLOEXEC | SOCK_CLOFORK | SOCK_NONBLOCK);
 		printed = false;
 	}
-	val = type & (SOCK_CLOEXEC | SOCK_NONBLOCK);
+	val = type & (SOCK_CLOEXEC | SOCK_CLOFORK | SOCK_NONBLOCK);
 	print_mask_part(fp, sockflags, &val, &printed);
 	return (printed);
 }
@@ -351,6 +351,13 @@ sysdecode_getrusage_who(int who)
 {
 
 	return (lookup_value(rusage, who));
+}
+
+bool
+sysdecode_inotifyflags(FILE *fp, int flag, int *rem)
+{
+
+	return (print_mask_int(fp, inotifyflags, flag, rem));
 }
 
 static struct name_table kevent_user_ffctrl[] = {
@@ -558,7 +565,7 @@ sysdecode_nfssvc_flags(int flags)
 }
 
 static struct name_table pipe2flags[] = {
-	X(O_CLOEXEC) X(O_NONBLOCK) XEND
+	X(O_CLOEXEC) X(O_CLOFORK) X(O_NONBLOCK) XEND
 };
 
 bool
@@ -573,6 +580,12 @@ sysdecode_pledge_flags(FILE *fp, u_long flags, u_long *rem)
 {
 
 	return (print_mask_0ul(fp, pledgeflags, flags, rem));
+}
+
+sysdecode_pollfd_events(FILE *fp, int flags, int *rem)
+{
+
+	return (print_mask_int(fp, pollfdevents, flags, rem));
 }
 
 const char *
@@ -868,7 +881,7 @@ sysdecode_fcntl_cmd(int cmd)
 }
 
 static struct name_table fcntl_fd_arg[] = {
-	X(FD_CLOEXEC) X(0) XEND
+	X(FD_CLOEXEC) X(FD_CLOFORK) X(0) XEND
 };
 
 bool
@@ -921,20 +934,11 @@ sysdecode_mmap_flags(FILE *fp, int flags, int *rem)
 
 	/*
 	 * MAP_ALIGNED can't be handled directly by print_mask_int().
-	 * MAP_32BIT is also problematic since it isn't defined for
-	 * all platforms.
 	 */
 	printed = false;
 	align = flags & MAP_ALIGNMENT_MASK;
 	val = (unsigned)flags & ~MAP_ALIGNMENT_MASK;
 	print_mask_part(fp, mmapflags, &val, &printed);
-#ifdef MAP_32BIT
-	if (val & MAP_32BIT) {
-		fprintf(fp, "%sMAP_32BIT", printed ? "|" : "");
-		printed = true;
-		val &= ~MAP_32BIT;
-	}
-#endif
 	if (align != 0) {
 		if (printed)
 			fputc('|', fp);
@@ -979,7 +983,7 @@ sysdecode_sigcode(int sig, int si_code)
 	str = lookup_value(sigcode, si_code);
 	if (str != NULL)
 		return (str);
-	
+
 	switch (sig) {
 	case SIGILL:
 		return (sysdecode_sigill_code(si_code));

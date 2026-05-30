@@ -22,8 +22,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _LINUXKPI_LINUX_ATOMIC_H_
@@ -31,7 +29,9 @@
 
 #include <asm/atomic.h>
 #include <asm/atomic64.h>
+#include <linux/atomic/atomic-arch-fallback.h>
 #include <asm/atomic-long.h>
+#include <linux/atomic/atomic-instrumented.h>
 #include <asm/barrier.h>
 
 #endif /* _LINUXKPI_LINUX_ATOMIC_H_ */

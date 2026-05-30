@@ -58,9 +58,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)in.h	8.3 (Berkeley) 1/3/94
- * $FreeBSD$
  */
 
 #ifndef __KAME_NETINET_IN_H_INCLUDED_
@@ -103,7 +100,13 @@ struct in6_addr {
 };
 
 #define s6_addr   __u6_addr.__u6_addr8
-#if defined(_KERNEL) || defined(_STANDALONE) /* XXX nonstandard */
+#if __BSD_VISIBLE
+/*
+ * s6_addr is the only in6_addr element specified in RFCs 2553 and 3493,
+ * also in POSIX 1003.1-2017.  The following three definitions were not
+ * exposed to user programs in FreeBSD before 14.1, or in other BSDs,
+ * and are thus less portable than s6_addr.
+ */
 #define s6_addr8  __u6_addr.__u6_addr8
 #define s6_addr16 __u6_addr.__u6_addr16
 #define s6_addr32 __u6_addr.__u6_addr32
@@ -219,18 +222,10 @@ extern const struct in6_addr in6addr_linklocal_allv2routers;
 
 /*
  * Equality
- * NOTE: Some of kernel programming environment (for example, openbsd/sparc)
- * does not supply memcmp().  For userland memcmp() is preferred as it is
- * in ANSI standard.
  */
-#ifdef _KERNEL
-#define IN6_ARE_ADDR_EQUAL(a, b)			\
-    (bcmp(&(a)->s6_addr[0], &(b)->s6_addr[0], sizeof(struct in6_addr)) == 0)
-#else
 #if __BSD_VISIBLE
 #define IN6_ARE_ADDR_EQUAL(a, b)			\
     (memcmp(&(a)->s6_addr[0], &(b)->s6_addr[0], sizeof(struct in6_addr)) == 0)
-#endif
 #endif
 
 /*
@@ -363,11 +358,11 @@ extern const struct in6_addr in6addr_linklocal_allv2routers;
 
 #define IFA6_IS_DEPRECATED(a) \
 	((a)->ia6_lifetime.ia6t_pltime != ND6_INFINITE_LIFETIME && \
-	 (u_int32_t)((time_uptime - (a)->ia6_updatetime)) > \
+	 (u_int32_t)((time_uptime - (a)->ia6_updatetime)) >= \
 	 (a)->ia6_lifetime.ia6t_pltime)
 #define IFA6_IS_INVALID(a) \
 	((a)->ia6_lifetime.ia6t_vltime != ND6_INFINITE_LIFETIME && \
-	 (u_int32_t)((time_uptime - (a)->ia6_updatetime)) > \
+	 (u_int32_t)((time_uptime - (a)->ia6_updatetime)) >= \
 	 (a)->ia6_lifetime.ia6t_vltime)
 #endif /* _KERNEL */
 
@@ -491,9 +486,8 @@ struct route_in6 {
 				    */
 
 #define	IPV6_BINDANY		64 /* bool: allow bind to any address */
-
-#define	IPV6_BINDMULTI		65 /* bool; allow multibind to same addr/port */
-#define	IPV6_RSS_LISTEN_BUCKET	66 /* int; set RSS listen bucket */
+				   /* unused; was IPV6_BIND_MULTI */
+				   /* unused; was IPV6_RSS_LISTEN_BUCKET */
 #define	IPV6_FLOWID		67 /* int; flowid of given socket */
 #define	IPV6_FLOWTYPE		68 /* int; flowtype of given socket */
 #define	IPV6_RSSBUCKETID	69 /* int; RSS bucket ID of given socket */
@@ -615,6 +609,8 @@ struct ip6_mtuinfo {
 /*	IPV6CTL_RTMINEXPIRE	26	deprecated */
 /*	IPV6CTL_RTMAXCACHE	27	deprecated */
 
+#define IPV6CTL_STABLEADDR_NETIFSRC	30	/* semantically opaque addresses (RFC7217) hash algo netif parameter src */
+#define IPV6CTL_STABLEADDR_MAXRETRIES	31	/* semantically opaque addresses (RFC7217) max DAD retries */
 #define IPV6CTL_USETEMPADDR	32	/* use temporary addresses (RFC3041) */
 #define IPV6CTL_TEMPPLTIME	33	/* preferred lifetime for tmpaddrs */
 #define IPV6CTL_TEMPVLTIME	34	/* valid lifetime for tmpaddrs */
@@ -623,6 +619,7 @@ struct ip6_mtuinfo {
 #define IPV6CTL_PREFER_TEMPADDR	37	/* prefer temporary addr as src */
 #define IPV6CTL_ADDRCTLPOLICY	38	/* get/set address selection policy */
 #define IPV6CTL_USE_DEFAULTZONE	39	/* use default scope zone */
+#define IPV6CTL_USESTABLEADDR	40	/* use semantically opaque addresses (RFC7217) */
 
 #define IPV6CTL_MAXFRAGS	41	/* max fragments */
 #if 0
@@ -646,7 +643,8 @@ struct ip6_mtuinfo {
 					 * queue */
 #define	IPV6CTL_MAXFRAGSPERPACKET	53 /* Max fragments per packet */
 #define	IPV6CTL_MAXFRAGBUCKETSIZE	54 /* Max reassembly queues per bucket */
-#define	IPV6CTL_MAXID		55
+#define	IPV6CTL_GRAND_COUNT	55
+#define	IPV6CTL_MAXID		56
 #endif /* __BSD_VISIBLE */
 
 /*
@@ -668,10 +666,14 @@ struct ip6_mtuinfo {
 struct cmsghdr;
 struct ip6_hdr;
 
+int	in6_cksum(struct mbuf *, uint8_t, uint32_t, uint32_t);
+int	in6_cksum_partial(struct mbuf *, uint8_t, uint32_t, uint32_t, uint32_t);
+int	in6_cksum_partial_l2(struct mbuf *m, uint8_t nxt, uint32_t off_l3,
+	    uint32_t off_l4, uint32_t len, uint32_t cov);
 int	in6_cksum_pseudo(struct ip6_hdr *, uint32_t, uint8_t, uint16_t);
-int	in6_cksum(struct mbuf *, u_int8_t, u_int32_t, u_int32_t);
-int	in6_cksum_partial(struct mbuf *, u_int8_t, u_int32_t, u_int32_t,
-			  u_int32_t);
+
+time_t	in6_expire_time(uint32_t);
+
 int	in6_localaddr(struct in6_addr *);
 int	in6_localip(struct in6_addr *);
 bool	in6_localip_fib(struct in6_addr *, uint16_t);
@@ -683,11 +685,10 @@ extern void in6_if_up(struct ifnet *);
 struct sockaddr;
 
 void	in6_sin6_2_sin(struct sockaddr_in *sin,
-			    struct sockaddr_in6 *sin6);
-void	in6_sin_2_v4mapsin6(struct sockaddr_in *sin,
-				 struct sockaddr_in6 *sin6);
+	    const struct sockaddr_in6 *sin6);
+void	in6_sin_2_v4mapsin6(const struct sockaddr_in *sin,
+	    struct sockaddr_in6 *sin6);
 void	in6_sin6_2_sin_in_sock(struct sockaddr *nam);
-void	in6_sin_2_v4mapsin6_in_sock(struct sockaddr **nam);
 extern void addrsel_policy_init(void);
 
 #define	satosin6(sa)	((struct sockaddr_in6 *)(sa))

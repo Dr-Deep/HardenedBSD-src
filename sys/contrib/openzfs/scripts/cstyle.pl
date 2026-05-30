@@ -1,4 +1,5 @@
 #!/usr/bin/env perl
+# SPDX-License-Identifier: CDDL-1.0
 #
 # CDDL HEADER START
 #
@@ -211,6 +212,7 @@ my $next_in_cpp = 0;
 my $in_comment = 0;
 my $comment_done = 0;
 my $in_warlock_comment = 0;
+my $in_macro_call = 0;
 my $in_function = 0;
 my $in_function_header = 0;
 my $function_header_full_indent = 0;
@@ -395,12 +397,18 @@ line: while (<$filehandle>) {
 		}
 	}
 
+	# If this looks like a top-level macro invocation, remember it so we
+	# don't mistake it for a function declaration below.
+	if (/^[A-Za-z_][A-Za-z_0-9]*\(/) {
+		$in_macro_call = 1;
+	}
+
 	#
 	# If this matches something of form "foo(", it's probably a function
 	# definition, unless it ends with ") bar;", in which case it's a declaration
 	# that uses a macro to generate the type.
 	#
-	if (/^\w+\(/ && !/\) \w+;/) {
+	if (!$in_macro_call && /^\w+\(/ && !/\) \w+;/) {
 		$in_function_header = 1;
 		if (/\($/) {
 			$function_header_full_indent = 1;
@@ -498,9 +506,6 @@ line: while (<$filehandle>) {
 	if (/\S\*\/[^)]|\S\*\/$/ && !/$lint_re/) {
 		err("missing blank before close comment");
 	}
-	if (/\/\/\S/) {		# C++ comments
-		err("missing blank after start comment");
-	}
 	# check for unterminated single line comments, but allow them when
 	# they are used to comment out the argument list of a function
 	# declaration.
@@ -534,7 +539,15 @@ line: while (<$filehandle>) {
 	# multiple comments on the same line.
 	#
 	s/\/\*.*?\*\///g;
-	s/\/\/.*$//;		# C++ comments
+	s/\/\/(?:\s.*)?$//;	# Valid C++ comments
+
+	# After stripping correctly spaced comments, check for (and strip) comments
+	# without a blank.  By checking this after clearing out C++ comments that
+	# correctly have a blank, we guarantee URIs in a C++ comment will not cause
+	# an error.
+	if (s!//.*$!!) {		# C++ comments
+		err("missing blank after start comment");
+	}
 
 	# delete any trailing whitespace; we have already checked for that.
 	s/\s*$//;
@@ -560,7 +573,9 @@ line: while (<$filehandle>) {
 		err("comma or semicolon followed by non-blank");
 	}
 	# allow "for" statements to have empty "while" clauses
-	if (/\s[,;]/ && !/^[\t]+;$/ && !/^\s*for \([^;]*; ;[^;]*\)/) {
+	# allow macro invocations to have empty parameters
+	if (/\s[,;]/ && !/^[\t]+;$/ &&
+	    !($in_macro_call || /^\s*for \([^;]*; ;[^;]*\)/)) {
 		err("comma or semicolon preceded by blank");
 	}
 	if (/^\s*(&&|\|\|)/) {
@@ -681,10 +696,13 @@ line: while (<$filehandle>) {
 			err("unary * followed by space");
 		}
 	}
-	if ($check_posix_types) {
+	if ($check_posix_types && !$in_macro_call) {
 		# try to detect old non-POSIX types.
 		# POSIX requires all non-standard typedefs to end in _t,
 		# but historically these have been used.
+		#
+		# We don't check inside macro invocations because macros have
+		# legitmate uses for these names in function generators.
 		if (/\b(unchar|ushort|uint|ulong|u_int|u_short|u_long|u_char|quad)\b/) {
 			err("non-POSIX typedef $1 used: use $old2posix{$1} instead");
 		}
@@ -695,6 +713,14 @@ line: while (<$filehandle>) {
 			    "else and right brace should be on same line");
 		}
 	}
+
+	# Macro invocations end with a closing paren, and possibly a semicolon.
+	# We do this check down here to make sure all the regular checks are
+	# applied to calls that appear entirely on a single line.
+	if ($in_macro_call && /\);?$/) {
+		$in_macro_call = 0;
+	}
+
 	$prev = $line;
 }
 

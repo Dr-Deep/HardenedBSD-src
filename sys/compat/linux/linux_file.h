@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2007 Roman Divacky
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _LINUX_FILE_H_
@@ -129,6 +127,7 @@
 
 #define	LINUX_F_SETLEASE	(LINUX_F_SPECIFIC_BASE + 0)
 #define	LINUX_F_GETLEASE	(LINUX_F_SPECIFIC_BASE + 1)
+#define	LINUX_F_DUPFD_QUERY	(LINUX_F_SPECIFIC_BASE + 3)
 #define	LINUX_F_CANCELLK	(LINUX_F_SPECIFIC_BASE + 5)
 #define	LINUX_F_DUPFD_CLOEXEC	(LINUX_F_SPECIFIC_BASE + 6)
 #define	LINUX_F_NOTIFY		(LINUX_F_SPECIFIC_BASE + 2)
@@ -191,10 +190,54 @@
 #define LINUX_HUGETLB_FLAG_ENCODE_2GB	(31 << LINUX_HUGETLB_FLAG_ENCODE_SHIFT)
 #define LINUX_HUGETLB_FLAG_ENCODE_16GB	(34U << LINUX_HUGETLB_FLAG_ENCODE_SHIFT)
 
+/* inotify flags */
+#define	LINUX_IN_ACCESS		0x00000001
+#define	LINUX_IN_MODIFY		0x00000002
+#define	LINUX_IN_ATTRIB		0x00000004
+#define	LINUX_IN_CLOSE_WRITE	0x00000008
+#define	LINUX_IN_CLOSE_NOWRITE	0x00000010
+#define	LINUX_IN_OPEN		0x00000020
+#define	LINUX_IN_MOVED_FROM	0x00000040
+#define	LINUX_IN_MOVED_TO	0x00000080
+#define	LINUX_IN_CREATE		0x00000100
+#define	LINUX_IN_DELETE		0x00000200
+#define	LINUX_IN_DELETE_SELF	0x00000400
+#define	LINUX_IN_MOVE_SELF	0x00000800
+
+#define	LINUX_IN_UNMOUNT	0x00002000
+#define	LINUX_IN_Q_OVERFLOW	0x00004000
+#define	LINUX_IN_IGNORED	0x00008000
+
+#define	LINUX_IN_ONLYDIR	0x01000000
+#define	LINUX_IN_DONT_FOLLOW	0x02000000
+#define	LINUX_IN_EXCL_UNLINK	0x04000000
+#define	LINUX_IN_MASK_CREATE	0x10000000
+#define	LINUX_IN_MASK_ADD	0x20000000
+#define	LINUX_IN_ISDIR		0x40000000
+#define	LINUX_IN_ONESHOT	0x80000000
+
+#define	LINUX_IN_ALL_EVENTS	0x00000fff
+#define	LINUX_IN_ALL_FLAGS	0xf700e000
+
+#define	LINUX_IN_NONBLOCK	0x00000800
+#define	LINUX_IN_CLOEXEC	0x00080000
+
+#if defined(_KERNEL)
 struct l_file_handle {
 	l_uint handle_bytes;
 	l_int handle_type;
 	unsigned char f_handle[0];
 };
+
+int	linux_enobufs2eagain(struct thread *, int, int);
+int	linux_common_openflags(int);
+#endif
+
+/*
+ * Look at linux_close_range() for an explanation.
+ *
+ * #define	LINUX_CLOSE_RANGE_UNSHARE	(1U << 1)
+ */
+#define	LINUX_CLOSE_RANGE_CLOEXEC	(1U << 2)
 
 #endif	/* !_LINUX_FILE_H_ */

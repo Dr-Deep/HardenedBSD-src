@@ -27,6 +27,10 @@
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 
+#ifdef EXPENSIVE_CHECKS
+#include "llvm/IR/StructuralHash.h"
+#endif
+
 using namespace llvm;
 
 #define DEBUG_TYPE "ir"
@@ -56,9 +60,10 @@ static std::string getDescription(const Module &M) {
   return "module (" + M.getName().str() + ")";
 }
 
-bool ModulePass::skipModule(Module &M) const {
-  OptPassGate &Gate = M.getContext().getOptPassGate();
-  return Gate.isEnabled() && !Gate.shouldRunPass(this, getDescription(M));
+bool ModulePass::skipModule(const Module &M) const {
+  const OptPassGate &Gate = M.getContext().getOptPassGate();
+  return Gate.isEnabled() &&
+         !Gate.shouldRunPass(this->getPassName(), getDescription(M));
 }
 
 bool Pass::mustPreserveAnalysisID(char &AID) const {
@@ -102,10 +107,6 @@ void Pass::verifyAnalysis() const {
   // By default, don't do anything.
 }
 
-void *Pass::getAdjustedAnalysisPointer(AnalysisID AID) {
-  return this;
-}
-
 ImmutablePass *Pass::getAsImmutablePass() {
   return nullptr;
 }
@@ -130,6 +131,16 @@ void Pass::print(raw_ostream &OS, const Module *) const {
 // dump - call print(cerr);
 LLVM_DUMP_METHOD void Pass::dump() const {
   print(dbgs(), nullptr);
+}
+#endif
+
+#ifdef EXPENSIVE_CHECKS
+uint64_t Pass::structuralHash(Module &M) const {
+  return StructuralHash(M, true);
+}
+
+uint64_t Pass::structuralHash(Function &F) const {
+  return StructuralHash(F, true);
 }
 #endif
 
@@ -162,7 +173,8 @@ static std::string getDescription(const Function &F) {
 
 bool FunctionPass::skipFunction(const Function &F) const {
   OptPassGate &Gate = F.getContext().getOptPassGate();
-  if (Gate.isEnabled() && !Gate.shouldRunPass(this, getDescription(F)))
+  if (Gate.isEnabled() &&
+      !Gate.shouldRunPass(this->getPassName(), getDescription(F)))
     return true;
 
   if (F.hasOptNone()) {
@@ -186,19 +198,6 @@ Pass *Pass::createPass(AnalysisID ID) {
   if (!PI)
     return nullptr;
   return PI->createPass();
-}
-
-//===----------------------------------------------------------------------===//
-//                  Analysis Group Implementation Code
-//===----------------------------------------------------------------------===//
-
-// RegisterAGBase implementation
-
-RegisterAGBase::RegisterAGBase(StringRef Name, const void *InterfaceID,
-                               const void *PassID, bool isDefault)
-    : PassInfo(Name, InterfaceID) {
-  PassRegistry::getPassRegistry()->registerAnalysisGroup(InterfaceID, PassID,
-                                                         *this, isDefault);
 }
 
 //===----------------------------------------------------------------------===//
@@ -279,3 +278,21 @@ AnalysisUsage &AnalysisUsage::addRequiredTransitiveID(char &ID) {
   pushUnique(RequiredTransitive, &ID);
   return *this;
 }
+
+#ifndef NDEBUG
+const char *llvm::to_string(ThinOrFullLTOPhase Phase) {
+  switch (Phase) {
+  case ThinOrFullLTOPhase::None:
+    return "None";
+  case ThinOrFullLTOPhase::ThinLTOPreLink:
+    return "ThinLTOPreLink";
+  case ThinOrFullLTOPhase::ThinLTOPostLink:
+    return "ThinLTOPostLink";
+  case ThinOrFullLTOPhase::FullLTOPreLink:
+    return "FullLTOPreLink";
+  case ThinOrFullLTOPhase::FullLTOPostLink:
+    return "FullLTOPostLink";
+  }
+  llvm_unreachable("invalid phase");
+}
+#endif

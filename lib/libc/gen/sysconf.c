@@ -32,12 +32,9 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__SCCSID("@(#)sysconf.c	8.2 (Berkeley) 3/20/94");
-__FBSDID("$FreeBSD$");
-
 #include "namespace.h"
 #include <sys/param.h>
+#include <sys/exterrvar.h>
 #include <sys/time.h>
 #include <sys/sysctl.h>
 #include <sys/resource.h>
@@ -54,7 +51,7 @@ __FBSDID("$FreeBSD$");
 #include "un-namespace.h"
 
 #include "../stdlib/atexit.h"
-#include "tzfile.h"		/* from ../../../contrib/tzcode/stdtime */
+#include "tzdir.h"		/* from ../../../contrib/tzcode */
 #include "libc_private.h"
 
 #define	_PATH_ZONEINFO	TZDIR	/* from tzfile.h */
@@ -75,6 +72,7 @@ long
 sysconf(int name)
 {
 	struct rlimit rl;
+	cpuset_t cpus;
 	size_t len;
 	int mib[2], sverrno, value;
 	long lvalue, defaultresult;
@@ -290,6 +288,8 @@ do_NAME_MAX:
 		mib[0] = CTL_P1003_1B;
 		mib[1] = CTL_P1003_1B_MQ_OPEN_MAX;
 		goto yesno;
+	case _SC_NSIG:
+		return (_SIG_MAXSIG);
 	case _SC_PAGESIZE:
 		return (getpagesize());
 	case _SC_RTSIG_MAX:
@@ -571,7 +571,7 @@ yesno:
 	case _SC_IPV6:
 #if _POSIX_IPV6 == 0
 		sverrno = errno;
-		value = _socket(PF_INET6, SOCK_DGRAM, 0);
+		value = _socket(PF_INET6, SOCK_CLOEXEC | SOCK_DGRAM, 0);
 		errno = sverrno;
 		if (value >= 0) {
 			_close(value);
@@ -582,8 +582,21 @@ yesno:
 		return (_POSIX_IPV6);
 #endif
 
-	case _SC_NPROCESSORS_CONF:
 	case _SC_NPROCESSORS_ONLN:
+		/*
+		 * Consult our root set first, because our CPU availability
+		 * may not match the total number of CPUs available on the
+		 * system and we may have a non-uniform layout even within
+		 * userland.  In particular, each jail has a root set that can
+		 * be constrained by its parent and processes within the jail
+		 * cannot widen beyond those constraints, so to those processes
+		 * it makes sense to claim the more limited count.
+		 */
+		if (cpuset_getaffinity(CPU_LEVEL_ROOT, CPU_WHICH_PID, -1,
+		    sizeof(cpus), &cpus) == 0)
+			return (CPU_COUNT(&cpus));
+		/* FALLTHROUGH */
+	case _SC_NPROCESSORS_CONF:
 		if (_elf_aux_info(AT_NCPUS, &value, sizeof(value)) == 0)
 			return ((long)value);
 		mib[0] = CTL_HW;
@@ -606,6 +619,8 @@ yesno:
 			return (-1);
 		return ((long)value);
 #endif
+	case _SC_UEXTERR_MAXLEN:
+		return (UEXTERROR_MAXLEN);
 
 	default:
 		errno = EINVAL;

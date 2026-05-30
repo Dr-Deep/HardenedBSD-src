@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -29,9 +29,6 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 /* Universal Host Controller Interface
  *
@@ -81,6 +78,8 @@ __FBSDID("$FreeBSD$");
 #define	PCI_UHCI_VENDORID_INTEL		0x8086
 #define	PCI_UHCI_VENDORID_HP		0x103c
 #define	PCI_UHCI_VENDORID_VIA		0x1106
+#define	PCI_UHCI_VENDORID_VMWARE	0x15ad
+#define	PCI_UHCI_VENDORID_ZHAOXIN	0x1d17
 
 /* PIIX4E has no separate stepping */
 
@@ -224,6 +223,18 @@ uhci_pci_match(device_t self)
 		return ("Intel 82801JI (ICH10) USB controller USB-E");
 	case 0x3a398086:
 		return ("Intel 82801JI (ICH10) USB controller USB-F");
+	case 0x3a678086:
+		return ("Intel 82801JD (ICH10) USB controller USB-A");
+	case 0x3a688086:
+		return ("Intel 82801JD (ICH10) USB controller USB-B");
+	case 0x3a698086:
+		return ("Intel 82801JD (ICH10) USB controller USB-C");
+	case 0x3a648086:
+		return ("Intel 82801JD (ICH10) USB controller USB-D");
+	case 0x3a658086:
+		return ("Intel 82801JD (ICH10) USB controller USB-E");
+	case 0x3a668086:
+		return ("Intel 82801JD (ICH10) USB controller USB-F");
 
 	case 0x719a8086:
 		return ("Intel 82443MX USB controller");
@@ -236,6 +247,12 @@ uhci_pci_match(device_t self)
 
 	case 0x30381106:
 		return ("VIA 83C572 USB controller");
+
+	case 0x077415ad:
+		return ("VMware USB controller");
+
+	case 0x30381d17:
+		return ("Zhaoxin ZX-100/ZX-200/ZX-E USB controller");
 
 	default:
 		break;
@@ -305,7 +322,7 @@ uhci_pci_attach(device_t self)
 		device_printf(self, "Could not allocate irq\n");
 		goto error;
 	}
-	sc->sc_bus.bdev = device_add_child(self, "usbus", -1);
+	sc->sc_bus.bdev = device_add_child(self, "usbus", DEVICE_UNIT_ANY);
 	if (!sc->sc_bus.bdev) {
 		device_printf(self, "Could not add USB device\n");
 		goto error;
@@ -326,6 +343,12 @@ uhci_pci_attach(device_t self)
 		break;
 	case PCI_UHCI_VENDORID_VIA:
 		sprintf(sc->sc_vendor, "VIA");
+		break;
+	case PCI_UHCI_VENDORID_VMWARE:
+		sprintf(sc->sc_vendor, "VMware");
+		break;
+	case PCI_UHCI_VENDORID_ZHAOXIN:
+		sprintf(sc->sc_vendor, "Zhaoxin");
 		break;
 	default:
 		if (bootverbose) {
@@ -349,13 +372,8 @@ uhci_pci_attach(device_t self)
 		break;
 	}
 
-#if (__FreeBSD_version >= 700031)
 	err = bus_setup_intr(self, sc->sc_irq_res, INTR_TYPE_BIO | INTR_MPSAFE,
 	    NULL, (driver_intr_t *)uhci_interrupt, sc, &sc->sc_intr_hdl);
-#else
-	err = bus_setup_intr(self, sc->sc_irq_res, INTR_TYPE_BIO | INTR_MPSAFE,
-	    (driver_intr_t *)uhci_interrupt, sc, &sc->sc_intr_hdl);
-#endif
 
 	if (err) {
 		device_printf(self, "Could not setup irq, %d\n", err);
@@ -395,9 +413,12 @@ int
 uhci_pci_detach(device_t self)
 {
 	uhci_softc_t *sc = device_get_softc(self);
+	int error;
 
 	/* during module unload there are lots of children leftover */
-	device_delete_children(self);
+	error = bus_generic_detach(self);
+	if (error != 0)
+		return (error);
 
 	/*
 	 * disable interrupts that might have been switched on in

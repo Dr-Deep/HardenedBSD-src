@@ -36,7 +36,6 @@
 
   $Id: auth_gss.h,v 1.12 2001/04/30 19:44:47 andros Exp $
 */
-/* $FreeBSD$ */
 
 #ifndef _RPCSEC_GSS_INT_H
 #define _RPCSEC_GSS_INT_H
@@ -73,6 +72,12 @@ struct rpc_gss_init_res {
 
 /* Maximum sequence number value. */
 #define MAXSEQ		0x80000000
+
+enum krb_imp {
+	KRBIMP_UNKNOWN,
+	KRBIMP_HEIMDALV1,
+	KRBIMP_MIT
+};
 
 /* Prototypes. */
 __BEGIN_DECLS

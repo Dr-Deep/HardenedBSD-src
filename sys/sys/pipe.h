@@ -17,8 +17,6 @@
  *    is allowed if this notation is included.
  * 5. Modifications may be freely made to this file if the above conditions
  *    are met.
- *
- * $FreeBSD$
  */
 
 #ifndef _SYS_PIPE_H_
@@ -54,7 +52,7 @@
  * See sys_pipe.c for info on what these limits mean. 
  */
 extern long	maxpipekva;
-extern struct	fileops pipeops;
+extern const struct fileops pipeops;
 #endif
 
 /*
@@ -90,7 +88,6 @@ struct pipemapping {
 #define PIPE_SEL	0x040	/* Pipe has a select active. */
 #define PIPE_EOF	0x080	/* Pipe is in EOF condition. */
 #define PIPE_LOCKFL	0x100	/* Process has exclusive access to pointers/data. */
-#define PIPE_LWANT	0x200	/* Process wants exclusive access to pointers/data. */
 #define PIPE_DIRECTW	0x400	/* Pipe direct write active. */
 #define PIPE_DIRECTOK	0x800	/* Direct mode ok. */
 
@@ -138,6 +135,7 @@ struct pipepair {
 	struct pipe	pp_wpipe;
 	struct mtx	pp_mtx;
 	struct label	*pp_label;
+	struct ucred	*pp_owner;	/* to dec pipe usage count */
 };
 
 #define PIPE_MTX(pipe)		(&(pipe)->pipe_pair->pp_mtx)

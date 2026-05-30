@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2002 Orion Hodson <orion@freebsd.org>
  * Portions of this code derived from via82c686.c:
@@ -49,8 +49,6 @@
 #include <sys/sysctl.h>
 
 #include <dev/sound/pci/via8233.h>
-
-SND_DECLARE_FILE("$FreeBSD$");
 
 #define VIA8233_PCI_ID 0x30591106
 
@@ -123,7 +121,7 @@ struct via_info {
 	uint16_t codec_caps;
 	uint16_t n_dxs_registered;
 	int play_num, rec_num;
-	struct mtx *lock;
+	struct mtx lock;
 	struct callout poll_timer;
 	int poll_ticks, polling;
 };
@@ -166,9 +164,9 @@ sysctl_via8233_spdif_enable(SYSCTL_HANDLER_ARGS)
 
 	dev = oidp->oid_arg1;
 	via = pcm_getdevinfo(dev);
-	snd_mtxlock(via->lock);
+	mtx_lock(&via->lock);
 	r = pci_read_config(dev, VIA_PCI_SPDIF, 1);
-	snd_mtxunlock(via->lock);
+	mtx_unlock(&via->lock);
 	new_en = (r & VIA_SPDIF_EN) ? 1 : 0;
 	err = sysctl_handle_int(oidp, &new_en, 0, req);
 
@@ -181,9 +179,9 @@ sysctl_via8233_spdif_enable(SYSCTL_HANDLER_ARGS)
 		r |= VIA_SPDIF_EN;
 	else
 		r &= ~VIA_SPDIF_EN;
-	snd_mtxlock(via->lock);
+	mtx_lock(&via->lock);
 	pci_write_config(dev, VIA_PCI_SPDIF, r, 1);
-	snd_mtxunlock(via->lock);
+	mtx_unlock(&via->lock);
 
 	return (0);
 }
@@ -197,9 +195,9 @@ sysctl_via8233_dxs_src(SYSCTL_HANDLER_ARGS)
 
 	dev = oidp->oid_arg1;
 	via = pcm_getdevinfo(dev);
-	snd_mtxlock(via->lock);
+	mtx_lock(&via->lock);
 	val = via->dxs_src;
-	snd_mtxunlock(via->lock);
+	mtx_unlock(&via->lock);
 	err = sysctl_handle_int(oidp, &val, 0, req);
 
 	if (err || req->newptr == NULL)
@@ -207,9 +205,9 @@ sysctl_via8233_dxs_src(SYSCTL_HANDLER_ARGS)
 	if (val < 0 || val > 1)
 		return (EINVAL);
 
-	snd_mtxlock(via->lock);
+	mtx_lock(&via->lock);
 	via->dxs_src = val;
-	snd_mtxunlock(via->lock);
+	mtx_unlock(&via->lock);
 
 	return (0);
 }
@@ -225,9 +223,9 @@ sysctl_via_polling(SYSCTL_HANDLER_ARGS)
 	via = pcm_getdevinfo(dev);
 	if (via == NULL)
 		return (EINVAL);
-	snd_mtxlock(via->lock);
+	mtx_lock(&via->lock);
 	val = via->polling;
-	snd_mtxunlock(via->lock);
+	mtx_unlock(&via->lock);
 	err = sysctl_handle_int(oidp, &val, 0, req);
 
 	if (err || req->newptr == NULL)
@@ -235,7 +233,7 @@ sysctl_via_polling(SYSCTL_HANDLER_ARGS)
 	if (val < 0 || val > 1)
 		return (EINVAL);
 
-	snd_mtxlock(via->lock);
+	mtx_lock(&via->lock);
 	if (val != via->polling) {
 		if (via_chan_active(via) != 0)
 			err = EBUSY;
@@ -244,7 +242,7 @@ sysctl_via_polling(SYSCTL_HANDLER_ARGS)
 		else
 			via->polling = 1;
 	}
-	snd_mtxunlock(via->lock);
+	mtx_unlock(&via->lock);
 
 	return (err);
 }
@@ -387,7 +385,7 @@ via_buildsgdt(struct via_chinfo *ch)
 	uint32_t phys_addr, flag;
 	int i;
 
-	phys_addr = sndbuf_getbufaddr(ch->buffer);
+	phys_addr = ch->buffer->buf_addr;
 
 	for (i = 0; i < ch->blkcnt; i++) {
 		flag = (i == ch->blkcnt - 1) ? VIA_DMAOP_EOL : VIA_DMAOP_FLAG;
@@ -413,9 +411,9 @@ via8233wr_setformat(kobj_t obj, void *data, uint32_t format)
 		f |= WR_FORMAT_STEREO;
 	if (format & AFMT_S16_LE)
 		f |= WR_FORMAT_16BIT;
-	snd_mtxlock(via->lock);
+	mtx_lock(&via->lock);
 	via_wr(via, VIA_WR0_FORMAT, f, 4);
-	snd_mtxunlock(via->lock);
+	mtx_unlock(&via->lock);
 
 	return (0);
 }
@@ -428,7 +426,7 @@ via8233dxs_setformat(kobj_t obj, void *data, uint32_t format)
 	uint32_t r, v;
 
 	r = ch->rbase + VIA8233_RP_DXS_RATEFMT;
-	snd_mtxlock(via->lock);
+	mtx_lock(&via->lock);
 	v = via_rd(via, r, 4);
 
 	v &= ~(VIA8233_DXS_RATEFMT_STEREO | VIA8233_DXS_RATEFMT_16BIT);
@@ -437,7 +435,7 @@ via8233dxs_setformat(kobj_t obj, void *data, uint32_t format)
 	if (format & AFMT_16BIT)
 		v |= VIA8233_DXS_RATEFMT_16BIT;
 	via_wr(via, r, v, 4);
-	snd_mtxunlock(via->lock);
+	mtx_unlock(&via->lock);
 
 	return (0);
 }
@@ -459,10 +457,10 @@ via8233msgd_setformat(kobj_t obj, void *data, uint32_t format)
 		s |= SLOT3(1) | SLOT4(1);
 	}
 
-	snd_mtxlock(via->lock);
+	mtx_lock(&via->lock);
 	via_wr(via, VIA_MC_SLOT_SELECT, s, 4);
 	via_wr(via, VIA_MC_SGD_FORMAT, v, 1);
-	snd_mtxunlock(via->lock);
+	mtx_unlock(&via->lock);
 
 	return (0);
 }
@@ -490,14 +488,14 @@ via8233dxs_setspeed(kobj_t obj, void *data, uint32_t speed)
 	uint32_t r, v;
 
 	r = ch->rbase + VIA8233_RP_DXS_RATEFMT;
-	snd_mtxlock(via->lock);
+	mtx_lock(&via->lock);
 	v = via_rd(via, r, 4) & ~VIA8233_DXS_RATEFMT_48K;
 
 	/* Careful to avoid overflow (divide by 48 per vt8233c docs) */
 
 	v |= VIA8233_DXS_RATEFMT_48K * (speed / 48) / (48000 / 48);
 	via_wr(via, r, v, 4);
-	snd_mtxunlock(via->lock);
+	mtx_unlock(&via->lock);
 
 	return (speed);
 }
@@ -570,8 +568,8 @@ via8233chan_setfragments(kobj_t obj, void *data,
 
 	blksz &= VIA_BLK_ALIGN;
 
-	if (blksz > (sndbuf_getmaxsize(ch->buffer) / VIA_SEGS_MIN))
-		blksz = sndbuf_getmaxsize(ch->buffer) / VIA_SEGS_MIN;
+	if (blksz > (ch->buffer->maxsize / VIA_SEGS_MIN))
+		blksz = ch->buffer->maxsize / VIA_SEGS_MIN;
 	if (blksz < VIA_BLK_MIN)
 		blksz = VIA_BLK_MIN;
 	if (blkcnt > VIA_SEGS_MAX)
@@ -579,7 +577,7 @@ via8233chan_setfragments(kobj_t obj, void *data,
 	if (blkcnt < VIA_SEGS_MIN)
 		blkcnt = VIA_SEGS_MIN;
 
-	while ((blksz * blkcnt) > sndbuf_getmaxsize(ch->buffer)) {
+	while ((blksz * blkcnt) > ch->buffer->maxsize) {
 		if ((blkcnt >> 1) >= VIA_SEGS_MIN)
 			blkcnt >>= 1;
 		else if ((blksz >> 1) >= VIA_BLK_MIN)
@@ -588,14 +586,14 @@ via8233chan_setfragments(kobj_t obj, void *data,
 			break;
 	}
 
-	if ((sndbuf_getblksz(ch->buffer) != blksz ||
-	    sndbuf_getblkcnt(ch->buffer) != blkcnt) &&
+	if ((ch->buffer->blksz != blksz ||
+	    ch->buffer->blkcnt != blkcnt) &&
 	    sndbuf_resize(ch->buffer, blkcnt, blksz) != 0)
 		device_printf(via->dev, "%s: failed blksz=%u blkcnt=%u\n",
 		    __func__, blksz, blkcnt);
 
-	ch->blksz = sndbuf_getblksz(ch->buffer);
-	ch->blkcnt = sndbuf_getblkcnt(ch->buffer);
+	ch->blksz = ch->buffer->blksz;
+	ch->blkcnt = ch->buffer->blkcnt;
 
 	return (0);
 }
@@ -618,13 +616,13 @@ via8233chan_getptr(kobj_t obj, void *data)
 	struct via_info *via = ch->parent;
 	uint32_t v, index, count, ptr;
 
-	snd_mtxlock(via->lock);
+	mtx_lock(&via->lock);
 	if (via->polling != 0) {
 		ptr = ch->ptr;
-		snd_mtxunlock(via->lock);
+		mtx_unlock(&via->lock);
 	} else {
 		v = via_rd(via, ch->rbase + VIA_RP_CURRENT_COUNT, 4);
-		snd_mtxunlock(via->lock);
+		mtx_unlock(&via->lock);
 		index = v >> 24;		/* Last completed buffer */
 		count = v & 0x00ffffff;	/* Bytes remaining */
 		ptr = (index + 1) * ch->blksz - count;
@@ -662,7 +660,7 @@ via8233wr_init(kobj_t obj, void *devinfo, struct snd_dbuf *b,
 	struct via_chinfo *ch;
 	int num;
 
-	snd_mtxlock(via->lock);
+	mtx_lock(&via->lock);
 	num = via->rec_num++;
 	ch = &via->rch[num];
 	ch->parent = via;
@@ -672,15 +670,15 @@ via8233wr_init(kobj_t obj, void *devinfo, struct snd_dbuf *b,
 	ch->blkcnt = via->blkcnt;
 	ch->rbase = VIA_WR_BASE(num);
 	via_wr(via, ch->rbase + VIA_WR_RP_SGD_FORMAT, WR_FIFO_ENABLE, 1);
-	snd_mtxunlock(via->lock);
+	mtx_unlock(&via->lock);
 
 	if (sndbuf_alloc(ch->buffer, via->parent_dmat, 0, via->bufsz) != 0)
 		return (NULL);
 
-	snd_mtxlock(via->lock);
+	mtx_lock(&via->lock);
 	via8233chan_sgdinit(via, ch, num);
 	via8233chan_reset(via, ch);
-	snd_mtxunlock(via->lock);
+	mtx_unlock(&via->lock);
 
 	return (ch);
 }
@@ -693,7 +691,7 @@ via8233dxs_init(kobj_t obj, void *devinfo, struct snd_dbuf *b,
 	struct via_chinfo *ch;
 	int num;
 
-	snd_mtxlock(via->lock);
+	mtx_lock(&via->lock);
 	num = via->play_num++;
 	ch = &via->pch[num];
 	ch->parent = via;
@@ -709,15 +707,15 @@ via8233dxs_init(kobj_t obj, void *devinfo, struct snd_dbuf *b,
 	 */
 	ch->rbase = VIA_DXS_BASE(NDXSCHANS - 1 - via->n_dxs_registered);
 	via->n_dxs_registered++;
-	snd_mtxunlock(via->lock);
+	mtx_unlock(&via->lock);
 
 	if (sndbuf_alloc(ch->buffer, via->parent_dmat, 0, via->bufsz) != 0)
 		return (NULL);
 
-	snd_mtxlock(via->lock);
+	mtx_lock(&via->lock);
 	via8233chan_sgdinit(via, ch, NWRCHANS + num);
 	via8233chan_reset(via, ch);
-	snd_mtxunlock(via->lock);
+	mtx_unlock(&via->lock);
 
 	return (ch);
 }
@@ -730,7 +728,7 @@ via8233msgd_init(kobj_t obj, void *devinfo, struct snd_dbuf *b,
 	struct via_chinfo *ch;
 	int num;
 
-	snd_mtxlock(via->lock);
+	mtx_lock(&via->lock);
 	num = via->play_num++;
 	ch = &via->pch[num];
 	ch->parent = via;
@@ -739,15 +737,15 @@ via8233msgd_init(kobj_t obj, void *devinfo, struct snd_dbuf *b,
 	ch->dir = dir;
 	ch->rbase = VIA_MC_SGD_STATUS;
 	ch->blkcnt = via->blkcnt;
-	snd_mtxunlock(via->lock);
+	mtx_unlock(&via->lock);
 
 	if (sndbuf_alloc(ch->buffer, via->parent_dmat, 0, via->bufsz) != 0)
 		return (NULL);
 
-	snd_mtxlock(via->lock);
+	mtx_lock(&via->lock);
 	via8233chan_sgdinit(via, ch, NWRCHANS + num);
 	via8233chan_reset(via, ch);
-	snd_mtxunlock(via->lock);
+	mtx_unlock(&via->lock);
 
 	return (ch);
 }
@@ -809,9 +807,9 @@ via_poll_callback(void *arg)
 	if (via == NULL)
 		return;
 
-	snd_mtxlock(via->lock);
+	mtx_lock(&via->lock);
 	if (via->polling == 0 || via_chan_active(via) == 0) {
-		snd_mtxunlock(via->lock);
+		mtx_unlock(&via->lock);
 		return;
 	}
 
@@ -827,7 +825,7 @@ via_poll_callback(void *arg)
 	callout_reset(&via->poll_timer, 1/*via->poll_ticks*/,
 	    via_poll_callback, via);
 
-	snd_mtxunlock(via->lock);
+	mtx_unlock(&via->lock);
 
 	for (i = 0; i < NDXSCHANS + NMSGDCHANS; i++) {
 		if (ptrigger & (1 << i))
@@ -852,8 +850,7 @@ via_poll_ticks(struct via_info *via)
 		if (ch->channel == NULL || ch->active == 0)
 			continue;
 		pollticks = ((uint64_t)hz * ch->blksz) /
-		    ((uint64_t)sndbuf_getalign(ch->buffer) *
-		    sndbuf_getspd(ch->buffer));
+		    ((uint64_t)ch->buffer->align * ch->buffer->spd);
 		pollticks >>= 2;
 		if (pollticks > hz)
 			pollticks = hz;
@@ -868,8 +865,7 @@ via_poll_ticks(struct via_info *via)
 		if (ch->channel == NULL || ch->active == 0)
 			continue;
 		pollticks = ((uint64_t)hz * ch->blksz) /
-		    ((uint64_t)sndbuf_getalign(ch->buffer) *
-		    sndbuf_getspd(ch->buffer));
+		    ((uint64_t)ch->buffer->align * ch->buffer->spd);
 		pollticks >>= 2;
 		if (pollticks > hz)
 			pollticks = hz;
@@ -892,7 +888,7 @@ via8233chan_trigger(kobj_t obj, void* data, int go)
 	if (!PCMTRIG_COMMON(go))
 		return (0);
 
-	snd_mtxlock(via->lock);
+	mtx_lock(&via->lock);
 	switch(go) {
 	case PCMTRIG_START:
 		via_buildsgdt(ch);
@@ -902,8 +898,8 @@ via8233chan_trigger(kobj_t obj, void* data, int go)
 			ch->ptr = 0;
 			ch->prevptr = 0;
 			pollticks = ((uint64_t)hz * ch->blksz) /
-			    ((uint64_t)sndbuf_getalign(ch->buffer) *
-			    sndbuf_getspd(ch->buffer));
+			    ((uint64_t)ch->buffer->align *
+			    ch->buffer->spd);
 			pollticks >>= 2;
 			if (pollticks > hz)
 				pollticks = hz;
@@ -961,7 +957,7 @@ via8233chan_trigger(kobj_t obj, void* data, int go)
 	default:
 		break;
 	}
-	snd_mtxunlock(via->lock);
+	mtx_unlock(&via->lock);
 	return (0);
 }
 
@@ -1013,9 +1009,9 @@ via_intr(void *p)
 	uint32_t ptrigger = 0, rtrigger = 0;
 	int i, reg, stat;
 
-	snd_mtxlock(via->lock);
+	mtx_lock(&via->lock);
 	if (via->polling != 0) {
-		snd_mtxunlock(via->lock);
+		mtx_unlock(&via->lock);
 		return;
 	}
 	/* Poll playback channels */
@@ -1050,7 +1046,7 @@ via_intr(void *p)
 			rtrigger |= 1 << i;
 		}
 	}
-	snd_mtxunlock(via->lock);
+	mtx_unlock(&via->lock);
 
 	for (i = 0; i < NDXSCHANS + NMSGDCHANS; i++) {
 		if (ptrigger & (1 << i))
@@ -1172,8 +1168,8 @@ via_attach(device_t dev)
 	uint32_t revid;
 
 	via = malloc(sizeof *via, M_DEVBUF, M_WAITOK | M_ZERO);
-	via->lock = snd_mtxcreate(device_get_nameunit(dev),
-	    "snd_via8233 softc");
+	mtx_init(&via->lock, device_get_nameunit(dev), "snd_via8233 softc",
+	    MTX_DEF);
 	via->dev = dev;
 
 	callout_init(&via->poll_timer, 1);
@@ -1349,13 +1345,12 @@ via_attach(device_t dev)
 		ac97_setextmode(via->codec, ext);
 	}
 
-	snprintf(status, SND_STATUSLEN, "at io 0x%jx irq %jd %s",
+	snprintf(status, SND_STATUSLEN, "port 0x%jx irq %jd on %s",
 	    rman_get_start(via->reg), rman_get_start(via->irq),
-	    PCM_KLDSTRING(snd_via8233));
+	    device_get_nameunit(device_get_parent(dev)));
 
 	/* Register */
-	if (pcm_register(dev, via, via_dxs_chnum + via_sgd_chnum, NWRCHANS))
-	      goto bad;
+	pcm_init(dev, via);
 	for (i = 0; i < via_dxs_chnum; i++)
 	      pcm_addchan(dev, PCMDIR_PLAY, &via8233dxs_class, via);
 	for (i = 0; i < via_sgd_chnum; i++)
@@ -1368,7 +1363,8 @@ via_attach(device_t dev)
 	    (via_dxs_chnum > 0) ? "En" : "Dis", (via->dxs_src) ? "(SRC)" : "",
 	    via_dxs_chnum, via_sgd_chnum, NWRCHANS);
 
-	pcm_setstatus(dev, status);
+	if (pcm_register(dev, status))
+	      goto bad;
 
 	return (0);
 bad:
@@ -1388,10 +1384,8 @@ bad:
 		bus_dmamem_free(via->sgd_dmat, via->sgd_table, via->sgd_dmamap);
 	if (via->sgd_dmat)
 		bus_dma_tag_destroy(via->sgd_dmat);
-	if (via->lock)
-		snd_mtxfree(via->lock);
-	if (via)
-		free(via, M_DEVBUF);
+	mtx_destroy(&via->lock);
+	free(via, M_DEVBUF);
 	return (ENXIO);
 }
 
@@ -1408,10 +1402,10 @@ via_detach(device_t dev)
 	via = pcm_getdevinfo(dev);
 
 	if (via != NULL && (via->play_num != 0 || via->rec_num != 0)) {
-		snd_mtxlock(via->lock);
+		mtx_lock(&via->lock);
 		via->polling = 0;
 		callout_stop(&via->poll_timer);
-		snd_mtxunlock(via->lock);
+		mtx_unlock(&via->lock);
 		callout_drain(&via->poll_timer);
 	}
 
@@ -1422,7 +1416,7 @@ via_detach(device_t dev)
 	bus_dmamap_unload(via->sgd_dmat, via->sgd_dmamap);
 	bus_dmamem_free(via->sgd_dmat, via->sgd_table, via->sgd_dmamap);
 	bus_dma_tag_destroy(via->sgd_dmat);
-	snd_mtxfree(via->lock);
+	mtx_destroy(&via->lock);
 	free(via, M_DEVBUF);
 	return (0);
 }

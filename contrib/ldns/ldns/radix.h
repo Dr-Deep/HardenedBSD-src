@@ -74,7 +74,7 @@ struct ldns_radix_node_t {
 	void* data;
 	/** Parent node. */
 	ldns_radix_node_t* parent;
-	/** Index in the the parent node select edge array. */
+	/** Index in the parent node select edge array. */
 	uint8_t parent_index;
 	/** Length of the array. */
 	uint16_t len;
@@ -154,7 +154,7 @@ ldns_radix_node_t* ldns_radix_search(ldns_radix_t* tree, const uint8_t* key,
  * @param tree: tree to insert to.
  * @param key:  key.
  * @param len:  length of key.
- * @param result: the radix node with the exact or closest match. NULL if
+ * @param[out] result: the radix node with the exact or closest match. NULL if
  *                the key is smaller than the smallest key in the tree.
  * @return 1 if exact match, 0 otherwise.
  *
@@ -198,7 +198,7 @@ ldns_radix_node_t* ldns_radix_prev(ldns_radix_node_t* node);
  * Split radix tree intwo.
  * @param tree1: one tree.
  * @param num: number of elements to split off.
- * @param tree2: another tree.
+ * @param[out] tree2: another tree.
  * @return: status.
  *
  */

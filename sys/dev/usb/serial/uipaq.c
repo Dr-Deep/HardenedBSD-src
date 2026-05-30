@@ -2,7 +2,7 @@
 /*	$OpenBSD: uipaq.c,v 1.1 2005/06/17 23:50:33 deraadt Exp $	*/
 
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2000-2005 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -42,9 +42,6 @@
  *
  * Contact isis@cs.umd.edu if you have any questions/comments about this driver
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/stdint.h>
 #include <sys/stddef.h>

@@ -25,19 +25,21 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #ifndef _LINUXKPI_LINUX_VMALLOC_H_
 #define	_LINUXKPI_LINUX_VMALLOC_H_
 
+#include <linux/overflow.h>
 #include <linux/page.h>
 
 #define	VM_MAP		0x0000
 #define	PAGE_KERNEL	0x0000
 
+#define	vmap_pfn(...)	linuxkpi_vmap_pfn(__VA_ARGS__)
+
 void *vmap(struct page **pages, unsigned int count, unsigned long flags,
     int prot);
+void *linuxkpi_vmap_pfn(unsigned long *pfns, unsigned int count, int prot);
 void vunmap(void *addr);
 
 #endif	/* _LINUXKPI_LINUX_VMALLOC_H_ */

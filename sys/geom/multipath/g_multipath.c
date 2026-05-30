@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2011-2013 Alexander Motin <mav@FreeBSD.org>
  * Copyright (c) 2006-2007 Matthew Jacob <mjacob@FreeBSD.org>
@@ -32,8 +32,6 @@
  * itself, all of which is most gratefully acknowledged.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
@@ -323,7 +321,7 @@ g_multipath_resize(struct g_consumer *cp)
 	if (sc->sc_uuid[0] != 0) {
 		pp = cp->provider;
 		strlcpy(md.md_magic, G_MULTIPATH_MAGIC, sizeof(md.md_magic));
-		memcpy(md.md_uuid, sc->sc_uuid, sizeof (sc->sc_uuid));
+		memcpy(md.md_uuid, sc->sc_uuid, sizeof(sc->sc_uuid));
 		strlcpy(md.md_name, sc->sc_name, sizeof(md.md_name));
 		md.md_version = G_MULTIPATH_VERSION;
 		md.md_size = size;
@@ -551,11 +549,11 @@ g_multipath_create(struct g_class *mp, struct g_multipath_metadata *md)
 		}
 	}
 
-	gp = g_new_geomf(mp, "%s", md->md_name);
+	gp = g_new_geom(mp, md->md_name);
 	sc = g_malloc(sizeof(*sc), M_WAITOK | M_ZERO);
 	mtx_init(&sc->sc_mtx, "multipath", NULL, MTX_DEF);
-	memcpy(sc->sc_uuid, md->md_uuid, sizeof (sc->sc_uuid));
-	memcpy(sc->sc_name, md->md_name, sizeof (sc->sc_name));
+	memcpy(sc->sc_uuid, md->md_uuid, sizeof(sc->sc_uuid));
+	memcpy(sc->sc_name, md->md_name, sizeof(sc->sc_name));
 	sc->sc_active_active = md->md_active_active;
 	sc->sc_size = md->md_size;
 	gp->softc = sc;
@@ -823,7 +821,7 @@ g_multipath_taste(struct g_class *mp, struct g_provider *pp, int flags __unused)
 
 	g_topology_assert();
 
-	gp = g_new_geomf(mp, "multipath:taste");
+	gp = g_new_geom(mp, "multipath:taste");
 	gp->start = g_multipath_start;
 	gp->access = g_multipath_access;
 	gp->orphan = g_multipath_orphan;
@@ -908,7 +906,7 @@ g_multipath_taste(struct g_class *mp, struct g_provider *pp, int flags __unused)
 			char buf[16];
 			u_long rand = random();
 
-			snprintf(buf, sizeof (buf), "%s-%lu", md.md_name, rand);
+			snprintf(buf, sizeof(buf), "%s-%lu", md.md_name, rand);
 			printf("GEOM_MULTIPATH: geom %s/%s exists already\n",
 			    sc->sc_name, sc->sc_uuid);
 			printf("GEOM_MULTIPATH: %s will be (temporarily) %s\n",
@@ -951,7 +949,6 @@ g_multipath_ctl_add_name(struct gctl_req *req, struct g_class *mp,
 	struct g_consumer *cp;
 	struct g_provider *pp;
 	const char *mpname;
-	static const char devpf[6] = _PATH_DEV;
 	int error;
 
 	g_topology_assert();
@@ -968,8 +965,6 @@ g_multipath_ctl_add_name(struct gctl_req *req, struct g_class *mp,
 	}
 	sc = gp->softc;
 
-	if (strncmp(name, devpf, 5) == 0)
-		name += 5;
 	pp = g_provider_by_name(name);
 	if (pp == NULL) {
 		gctl_error(req, "Provider %s is invalid", name);
@@ -1202,7 +1197,7 @@ g_multipath_ctl_configure(struct gctl_req *req, struct g_class *mp)
 		cp = sc->sc_active;
 		pp = cp->provider;
 		strlcpy(md.md_magic, G_MULTIPATH_MAGIC, sizeof(md.md_magic));
-		memcpy(md.md_uuid, sc->sc_uuid, sizeof (sc->sc_uuid));
+		memcpy(md.md_uuid, sc->sc_uuid, sizeof(sc->sc_uuid));
 		strlcpy(md.md_name, name, sizeof(md.md_name));
 		md.md_version = G_MULTIPATH_VERSION;
 		md.md_size = pp->mediasize;

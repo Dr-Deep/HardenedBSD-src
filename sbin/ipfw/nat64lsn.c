@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2015-2019 Yandex LLC
  * Copyright (c) 2015-2016 Alexander V. Chernikov <melifaro@FreeBSD.org>
@@ -26,9 +26,6 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -383,6 +380,8 @@ static struct _s_x nat64newcmds[] = {
       { "-log",		TOK_LOGOFF },
       { "allow_private", TOK_PRIVATE },
       { "-allow_private", TOK_PRIVATEOFF },
+      { "swap_conf",	TOK_SWAPCONF },
+      { "-swap_conf",	TOK_SWAPCONFOFF },
       /* for compatibility with old configurations */
       { "max_ports",	TOK_MAX_PORTS },	/* unused */
       { NULL, 0 }
@@ -517,6 +516,12 @@ nat64lsn_create(const char *name, uint8_t set, int ac, char **av)
 		case TOK_PRIVATEOFF:
 			cfg->flags &= ~NAT64_ALLOW_PRIVATE;
 			break;
+		case TOK_SWAPCONF:
+			cfg->flags |= NAT64LSN_ALLOW_SWAPCONF;
+			break;
+		case TOK_SWAPCONFOFF:
+			cfg->flags &= ~NAT64LSN_ALLOW_SWAPCONF;
+			break;
 		}
 	}
 
@@ -633,6 +638,12 @@ nat64lsn_config(const char *name, uint8_t set, int ac, char **av)
 			break;
 		case TOK_PRIVATEOFF:
 			cfg->flags &= ~NAT64_ALLOW_PRIVATE;
+			break;
+		case TOK_SWAPCONF:
+			cfg->flags |= NAT64LSN_ALLOW_SWAPCONF;
+			break;
+		case TOK_SWAPCONFOFF:
+			cfg->flags &= ~NAT64LSN_ALLOW_SWAPCONF;
 			break;
 		default:
 			errx(EX_USAGE, "Can't change %s option", opt);
@@ -799,6 +810,8 @@ nat64lsn_show_cb(ipfw_nat64lsn_cfg *cfg, const char *name, uint8_t set)
 		printf(" icmp_age %u", cfg->st_icmp_ttl);
 	if (g_co.verbose || cfg->jmaxlen != NAT64LSN_JMAXLEN)
 		printf(" jmaxlen %u", cfg->jmaxlen);
+	if (cfg->flags & NAT64LSN_ALLOW_SWAPCONF)
+		printf(" swap_conf");
 	if (cfg->flags & NAT64_LOG)
 		printf(" log");
 	if (cfg->flags & NAT64_ALLOW_PRIVATE)
@@ -853,7 +866,6 @@ nat64lsn_foreach(nat64lsn_cb_t *f, const char *name, uint8_t set,  int sort)
 	ipfw_nat64lsn_cfg *cfg;
 	size_t sz;
 	uint32_t i;
-	int error;
 
 	/* Start with reasonable default */
 	sz = sizeof(*olh) + 16 * sizeof(ipfw_nat64lsn_cfg);
@@ -877,7 +889,7 @@ nat64lsn_foreach(nat64lsn_cb_t *f, const char *name, uint8_t set,  int sort)
 
 		cfg = (ipfw_nat64lsn_cfg *)(olh + 1);
 		for (i = 0; i < olh->count; i++) {
-			error = f(cfg, name, set); /* Ignore errors for now */
+			(void)f(cfg, name, set); /* Ignore errors for now */
 			cfg = (ipfw_nat64lsn_cfg *)((caddr_t)cfg +
 			    olh->objsize);
 		}

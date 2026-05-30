@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1998-2000 Doug Rabson
  * Copyright (c) 2004 Peter Wemm
@@ -27,10 +27,8 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_ddb.h"
+#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -76,6 +74,7 @@ __FBSDID("$FreeBSD$");
 
 typedef struct {
 	void		*addr;
+	void		*origaddr; /* Used by debuggers. */
 	Elf_Off		size;
 	int		flags;	/* Section flags. */
 	int		sec;	/* Original section number. */
@@ -137,6 +136,8 @@ static int	link_elf_lookup_symbol(linker_file_t, const char *,
 		    c_linker_sym_t *);
 static int	link_elf_lookup_debug_symbol(linker_file_t, const char *,
 		    c_linker_sym_t *);
+static int	link_elf_lookup_debug_symbol_ctf(linker_file_t lf,
+		    const char *name, c_linker_sym_t *sym, linker_ctf_t *lc);
 static int	link_elf_symbol_values(linker_file_t, c_linker_sym_t,
 		    linker_symval_t *);
 static int	link_elf_debug_symbol_values(linker_file_t, c_linker_sym_t,
@@ -155,6 +156,9 @@ static int	link_elf_each_function_nameval(linker_file_t,
 static int	link_elf_reloc_local(linker_file_t, bool);
 static long	link_elf_symtab_get(linker_file_t, const Elf_Sym **);
 static long	link_elf_strtab_get(linker_file_t, caddr_t *);
+#ifdef VIMAGE
+static void	link_elf_propagate_vnets(linker_file_t);
+#endif
 
 static int	elf_obj_lookup(linker_file_t lf, Elf_Size symidx, int deps,
 		    Elf_Addr *);
@@ -168,6 +172,7 @@ static int	link_elf_detect_insecure_late(struct thread *td,
 static kobj_method_t link_elf_methods[] = {
 	KOBJMETHOD(linker_lookup_symbol,	link_elf_lookup_symbol),
 	KOBJMETHOD(linker_lookup_debug_symbol,	link_elf_lookup_debug_symbol),
+	KOBJMETHOD(linker_lookup_debug_symbol_ctf, link_elf_lookup_debug_symbol_ctf),
 	KOBJMETHOD(linker_symbol_values,	link_elf_symbol_values),
 	KOBJMETHOD(linker_debug_symbol_values,	link_elf_debug_symbol_values),
 	KOBJMETHOD(linker_search_symbol,	link_elf_search_symbol),
@@ -179,8 +184,12 @@ static kobj_method_t link_elf_methods[] = {
 	KOBJMETHOD(linker_each_function_name,	link_elf_each_function_name),
 	KOBJMETHOD(linker_each_function_nameval, link_elf_each_function_nameval),
 	KOBJMETHOD(linker_ctf_get,		link_elf_ctf_get),
+	KOBJMETHOD(linker_ctf_lookup_typename,  link_elf_ctf_lookup_typename),
 	KOBJMETHOD(linker_symtab_get, 		link_elf_symtab_get),
 	KOBJMETHOD(linker_strtab_get, 		link_elf_strtab_get),
+#ifdef VIMAGE
+	KOBJMETHOD(linker_propagate_vnets,	link_elf_propagate_vnets),
+#endif
 	KOBJMETHOD_END
 };
 
@@ -215,6 +224,10 @@ link_elf_detect_insecure_early(struct thread *td, struct vnode *vp,
     const char *filename)
 {
 
+	if (pax_kmod_load_disabled()) {
+		return (EPERM);
+	}
+
 	return (0);
 }
 
@@ -229,6 +242,7 @@ link_elf_detect_insecure_late(struct thread *td, const char *filename,
 		return (0);
 	}
 
+#ifdef HARDEN_KLD
 	if ((flags & PAX_NOTE_FORBIDKMOD) == PAX_NOTE_FORBIDKMOD ||
 	    (link_elf_kmod_is_insecure(lf) && !pax_insecure_kmod())) {
 		pax_log_internal(td->td_proc, PAX_LOG_P_COMM,
@@ -236,6 +250,7 @@ link_elf_detect_insecure_late(struct thread *td, const char *filename,
 		    filename != NULL ? filename : "<unknown>");
 		return (EPERM);
 	}
+#endif
 
 	return (0);
 }
@@ -272,14 +287,15 @@ link_elf_protect_range(elf_file_t ef, vm_offset_t start, vm_offset_t end,
 		return;
 	if (ef->preloaded) {
 #ifdef __amd64__
-		error = pmap_change_prot(start, end - start, prot);
+		error = pmap_change_prot((void *)start, end - start, prot);
 		KASSERT(error == 0,
 		    ("link_elf_protect_range: pmap_change_prot() returned %d",
 		    error));
 #endif
 		return;
 	}
-	error = vm_map_protect(NULL, kernel_map, start, end, prot, FALSE);
+	error = vm_map_protect(NULL, kernel_map, start, end, prot, 0,
+	    VM_MAP_PROTECT_SET_PROT);
 	KASSERT(error == KERN_SUCCESS,
 	    ("link_elf_protect_range: vm_map_protect() returned %d", error));
 }
@@ -405,11 +421,8 @@ link_elf_link_preload(linker_class_t cls, const char *filename,
 	    MODINFOMD_ELFHDR);
 	shdr = (Elf_Shdr *)preload_search_info(modptr, MODINFO_METADATA |
 	    MODINFOMD_SHDR);
-	if (type == NULL || (strcmp(type, "elf" __XSTRING(__ELF_WORD_SIZE)
-	    " obj module") != 0 &&
-	    strcmp(type, "elf obj module") != 0)) {
+	if (type == NULL || strcmp(type, preload_modtype_obj) != 0)
 		return (EFTYPE);
-	}
 	if (baseptr == NULL || sizeptr == NULL || hdr == NULL ||
 	    shdr == NULL)
 		return (EINVAL);
@@ -535,7 +548,8 @@ link_elf_link_preload(linker_class_t cls, const char *filename,
 		case SHT_FINI_ARRAY:
 			if (shdr[i].sh_addr == 0)
 				break;
-			ef->progtab[pb].addr = (void *)shdr[i].sh_addr;
+			ef->progtab[pb].addr = ef->progtab[pb].origaddr =
+			    (void *)shdr[i].sh_addr;
 			if (shdr[i].sh_type == SHT_PROGBITS)
 				ef->progtab[pb].name = "<<PROGBITS>>";
 #ifdef __amd64__
@@ -589,8 +603,9 @@ link_elf_link_preload(linker_class_t cls, const char *filename,
 				}
 				memcpy(vnet_data, ef->progtab[pb].addr,
 				    ef->progtab[pb].size);
-				vnet_data_copy(vnet_data, shdr[i].sh_size);
 				ef->progtab[pb].addr = vnet_data;
+				vnet_save_init(ef->progtab[pb].addr,
+				    ef->progtab[pb].size);
 #endif
 			} else if ((ef->progtab[pb].name != NULL &&
 			    strcmp(ef->progtab[pb].name, ".ctors") == 0) ||
@@ -697,6 +712,30 @@ link_elf_invoke_cbs(caddr_t addr, size_t size)
 	}
 }
 
+static void
+link_elf_invoke_ctors(linker_file_t lf)
+{
+	KASSERT(lf->ctors_invoked == LF_NONE,
+	    ("%s: file %s ctor state %d",
+	    __func__, lf->filename, lf->ctors_invoked));
+
+	link_elf_invoke_cbs(lf->ctors_addr, lf->ctors_size);
+	lf->ctors_invoked = LF_CTORS;
+}
+
+static void
+link_elf_invoke_dtors(linker_file_t lf)
+{
+	KASSERT(lf->ctors_invoked != LF_DTORS,
+	    ("%s: file %s ctor state %d",
+	    __func__, lf->filename, lf->ctors_invoked));
+
+	if (lf->ctors_invoked == LF_CTORS) {
+		link_elf_invoke_cbs(lf->dtors_addr, lf->dtors_size);
+		lf->ctors_invoked = LF_DTORS;
+	}
+}
+
 static int
 link_elf_link_preload_finish(linker_file_t lf)
 {
@@ -723,7 +762,7 @@ link_elf_link_preload_finish(linker_file_t lf)
 	/* Apply protections now that relocation processing is complete. */
 	link_elf_protect(ef);
 
-	link_elf_invoke_cbs(lf->ctors_addr, lf->ctors_size);
+	link_elf_invoke_ctors(lf);
 	return (0);
 }
 
@@ -1111,6 +1150,8 @@ link_elf_load_file(linker_class_t cls, const char *filename,
 				ef->progtab[pb].name = "<<NOBITS>>";
 			if (ef->progtab[pb].name != NULL && 
 			    !strcmp(ef->progtab[pb].name, DPCPU_SETNAME)) {
+				ef->progtab[pb].origaddr =
+				    (void *)(uintptr_t)mapbase;
 				ef->progtab[pb].addr =
 				    dpcpu_alloc(shdr[i].sh_size);
 				if (ef->progtab[pb].addr == NULL) {
@@ -1124,6 +1165,8 @@ link_elf_load_file(linker_class_t cls, const char *filename,
 #ifdef VIMAGE
 			else if (ef->progtab[pb].name != NULL &&
 			    !strcmp(ef->progtab[pb].name, VNET_SETNAME)) {
+				ef->progtab[pb].origaddr =
+				    (void *)(uintptr_t)mapbase;
 				ef->progtab[pb].addr =
 				    vnet_data_alloc(shdr[i].sh_size);
 				if (ef->progtab[pb].addr == NULL) {
@@ -1161,21 +1204,20 @@ link_elf_load_file(linker_class_t cls, const char *filename,
 					error = EINVAL;
 					goto out;
 				}
-				/* Initialize the per-cpu or vnet area. */
+				/* Initialize the per-cpu area. */
 				if (ef->progtab[pb].addr != (void *)mapbase &&
 				    !strcmp(ef->progtab[pb].name, DPCPU_SETNAME))
 					dpcpu_copy(ef->progtab[pb].addr,
 					    shdr[i].sh_size);
-#ifdef VIMAGE
-				else if (ef->progtab[pb].addr !=
-				    (void *)mapbase &&
-				    !strcmp(ef->progtab[pb].name, VNET_SETNAME))
-					vnet_data_copy(ef->progtab[pb].addr,
-					    shdr[i].sh_size);
-#endif
 			} else
 				bzero(ef->progtab[pb].addr, shdr[i].sh_size);
 
+#ifdef VIMAGE
+			if (ef->progtab[pb].addr != (void *)mapbase &&
+			    strcmp(ef->progtab[pb].name, VNET_SETNAME) == 0)
+				vnet_save_init(ef->progtab[pb].addr,
+				    ef->progtab[pb].size);
+#endif
 			/* Update all symbol values with the offset. */
 			for (j = 0; j < ef->ddbsymcnt; j++) {
 				es = &ef->ddbsymtab[j];
@@ -1289,7 +1331,7 @@ link_elf_load_file(linker_class_t cls, const char *filename,
 #endif
 
 	link_elf_protect(ef);
-	link_elf_invoke_cbs(lf->ctors_addr, lf->ctors_size);
+	link_elf_invoke_ctors(lf);
 	*result = lf;
 
 out:
@@ -1309,7 +1351,7 @@ link_elf_unload_file(linker_file_t file)
 	elf_file_t ef = (elf_file_t) file;
 	u_int i;
 
-	link_elf_invoke_cbs(file->dtors_addr, file->dtors_size);
+	link_elf_invoke_dtors(file);
 
 	/* Notify MD code that a module is being unloaded. */
 	elf_cpu_unload_file(file);
@@ -1328,6 +1370,20 @@ link_elf_unload_file(linker_file_t file)
 				vnet_data_free(ef->progtab[i].addr,
 				    ef->progtab[i].size);
 #endif
+			else if (ef->preloaded) {
+				vm_offset_t start, end;
+
+				start = (vm_offset_t)ef->progtab[i].addr;
+				end = start + ef->progtab[i].size;
+
+				/*
+				 * Reset mapping protections to their original
+				 * state.  This affects the direct map alias of
+				 * the module mapping as well.
+				 */
+				link_elf_protect_range(ef, trunc_page(start),
+				    round_page(end), VM_PROT_RW);
+			}
 		}
 	}
 	if (ef->preloaded) {
@@ -1530,12 +1586,45 @@ link_elf_lookup_debug_symbol(linker_file_t lf, const char *name,
 }
 
 static int
+link_elf_lookup_debug_symbol_ctf(linker_file_t lf, const char *name,
+    c_linker_sym_t *sym, linker_ctf_t *lc)
+{
+	if (link_elf_lookup_debug_symbol(lf, name, sym))
+		return (ENOENT);
+
+	return (link_elf_ctf_get_ddb(lf, lc));
+}
+
+static void
+link_elf_ifunc_symbol_value(linker_file_t lf, caddr_t *valp, size_t *sizep)
+{
+	c_linker_sym_t sym;
+	const Elf_Sym *es;
+	caddr_t val;
+	long off;
+
+	val = *valp;
+
+	/* Provide the value and size of the target symbol, if available. */
+	val = ((caddr_t (*)(void))val)();
+	if (link_elf_search_symbol(lf, val, &sym, &off) == 0 && off == 0) {
+		es = (const Elf_Sym *)sym;
+		*valp = (caddr_t)es->st_value;
+		*sizep = es->st_size;
+	} else {
+		*valp = val;
+		*sizep = 0;
+	}
+}
+
+static int
 link_elf_symbol_values1(linker_file_t lf, c_linker_sym_t sym,
     linker_symval_t *symval, bool see_local)
 {
 	elf_file_t ef;
 	const Elf_Sym *es;
 	caddr_t val;
+	size_t size;
 
 	ef = (elf_file_t) lf;
 	es = (const Elf_Sym*) sym;
@@ -1546,9 +1635,11 @@ link_elf_symbol_values1(linker_file_t lf, c_linker_sym_t sym,
 		symval->name = ef->ddbstrtab + es->st_name;
 		val = (caddr_t)es->st_value;
 		if (ELF_ST_TYPE(es->st_info) == STT_GNU_IFUNC)
-			val = ((caddr_t (*)(void))val)();
+			link_elf_ifunc_symbol_value(lf, &val, &size);
+		else
+			size = es->st_size;
 		symval->value = val;
-		symval->size = es->st_size;
+		symval->size = size;
 		return (0);
 	}
 	return (ENOENT);
@@ -1690,7 +1781,7 @@ elf_obj_cleanup_globals_cache(elf_file_t ef)
 
 	for (i = 0; i < ef->ddbsymcnt; i++) {
 		sym = ef->ddbsymtab + i;
-		if (sym->st_shndx == SHN_FBSD_CACHED) {
+		if (sym->st_shndx == SHN_FREEBSD_CACHED) {
 			sym->st_shndx = SHN_UNDEF;
 			sym->st_value = 0;
 		}
@@ -1759,7 +1850,7 @@ elf_obj_lookup(linker_file_t lf, Elf_Size symidx, int deps, Elf_Addr *res)
 		 * above.
 		 */
 		if (res1 != 0) {
-			sym->st_shndx = SHN_FBSD_CACHED;
+			sym->st_shndx = SHN_FREEBSD_CACHED;
 			sym->st_value = res1;
 			*res = res1;
 			return (0);
@@ -1907,7 +1998,7 @@ link_elf_symtab_get(linker_file_t lf, const Elf_Sym **symtab)
 		return (0);
 	return (ef->ddbsymcnt);
 }
-    
+
 static long
 link_elf_strtab_get(linker_file_t lf, caddr_t *strtab)
 {
@@ -1918,3 +2009,25 @@ link_elf_strtab_get(linker_file_t lf, caddr_t *strtab)
 		return (0);
 	return (ef->ddbstrcnt);
 }
+
+#ifdef VIMAGE
+static void
+link_elf_propagate_vnets(linker_file_t lf)
+{
+	elf_file_t ef = (elf_file_t) lf;
+
+	if (ef->progtab) {
+		for (int i = 0; i < ef->nprogtab; i++) {
+			if (ef->progtab[i].size == 0)
+				continue;
+			if (ef->progtab[i].name == NULL)
+				continue;
+			if (strcmp(ef->progtab[i].name, VNET_SETNAME) == 0) {
+				vnet_data_copy(ef->progtab[i].addr,
+				    ef->progtab[i].size);
+				break;
+			}
+		}
+	}
+}
+#endif

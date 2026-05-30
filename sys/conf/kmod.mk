@@ -1,6 +1,3 @@
-#	From: @(#)bsd.prog.mk	5.26 (Berkeley) 6/25/91
-# $FreeBSD$
-#
 # The include file <bsd.kmod.mk> handles building and installing loadable
 # kernel modules.
 #
@@ -74,6 +71,8 @@ KMODLOAD?=	/sbin/kldload
 KMODUNLOAD?=	/sbin/kldunload
 KMODISLOADED?=	/sbin/kldstat -q -n
 OBJCOPY?=	objcopy
+XARGS?=		xargs
+XARGS_J?=	-J
 
 .include "kmod.opts.mk"
 .include <bsd.sysdir.mk>
@@ -104,9 +103,18 @@ LINUXKPI_GENSRCS+= \
 	pci_iov_if.h \
 	pcib_if.h \
 	vnode_if.h \
-	usb_if.h \
-	opt_usb.h \
 	opt_stack.h
+
+.if ${MK_USB} != "no"
+LINUXKPI_GENSRCS+= \
+	usb_if.h \
+	opt_usb.h
+.endif
+
+LINUXKPI_INCLUDES+= \
+	-I${SYSDIR}/compat/linuxkpi/common/include \
+	-I${SYSDIR}/compat/linuxkpi/dummy/include \
+	-include ${SYSDIR}/compat/linuxkpi/common/include/linux/kconfig.h
 
 CFLAGS+=	${WERROR}
 CFLAGS+=	-D_KERNEL
@@ -131,7 +139,6 @@ CFLAGS+=	-include ${.OBJDIR}/opt_global.h
 CFLAGS+=	-I. -I${SYSDIR} -I${SYSDIR}/contrib/ck/include
 
 CFLAGS.gcc+=	-finline-limit=${INLINE_LIMIT}
-CFLAGS.gcc+=	-fms-extensions
 CFLAGS.gcc+= --param inline-unit-growth=100
 CFLAGS.gcc+= --param large-function-growth=1000
 
@@ -151,22 +158,28 @@ LDFLAGS+=	-d
 .endif
 LDFLAGS+=	-warn-common
 
-.if defined(LINKER_FEATURES) && ${LINKER_FEATURES:Mbuild-id}
 LDFLAGS+=	--build-id=sha1
-.endif
 
 CFLAGS+=	${DEBUG_FLAGS}
-.if ${MACHINE_CPUARCH} == aarch64 || ${MACHINE_CPUARCH} == amd64
+.if ${MACHINE_CPUARCH} == aarch64 || ${MACHINE_CPUARCH} == amd64 || \
+    ${MACHINE_CPUARCH} == riscv
 CFLAGS+=	-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
 .endif
 
 .if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "riscv" || \
-    ${MACHINE_CPUARCH} == "powerpc"
+    ${MACHINE_CPUARCH} == "powerpc" || ${MACHINE_CPUARCH} == "i386"
 CFLAGS+=	-fPIC
 .endif
 
 .if defined(MK_RETPOLINE) && ${MK_RETPOLINE} != "no"
 CFLAGS+=	-mretpoline
+.endif
+
+.if ${MACHINE_CPUARCH} == "aarch64"
+# https://bugs.freebsd.org/264094
+# lld >= 14 and recent GNU ld can relax adrp+add and adrp+ldr instructions,
+# which breaks VNET.
+LDFLAGS+=	--no-relax
 .endif
 
 # Temporary workaround for PR 196407, which contains the fascinating details.
@@ -202,7 +215,7 @@ ${_firmw:C/\:.*$/.fwo/:T}:	${_firmw:C/\:.*$//} ${SYSDIR}/kern/firmw.S
 	@${ECHO} ${_firmw:C/\:.*$//} ${.ALLSRC:M*${_firmw:C/\:.*$//}}
 	${CC:N${CCACHE_BIN}} -c -x assembler-with-cpp -DLOCORE 	\
 	    ${CFLAGS} ${WERROR} 				\
-	    -DFIRMW_FILE="${.ALLSRC:M*${_firmw:C/\:.*$//}}" 	\
+	    -DFIRMW_FILE=\""${.ALLSRC:M*${_firmw:C/\:.*$//}}"\"	\
 	    -DFIRMW_SYMBOL="${_firmw:C/\:.*$//:C/[-.\/@]/_/g}"	\
 	    ${SYSDIR}/kern/firmw.S -o ${.TARGET}
 
@@ -265,23 +278,21 @@ ${FULLPROG}: ${OBJS} ${BLOB_OBJS}
 .if ${EXPORT_SYMS} == NO
 	:> export_syms
 .elif !exists(${.CURDIR}/${EXPORT_SYMS})
-	echo -n "${EXPORT_SYMS:@s@$s${.newline}@}" > export_syms
+	printf '%s' "${EXPORT_SYMS:@s@$s${.newline}@}" > export_syms
 .else
 	grep -v '^#' < ${EXPORT_SYMS} > export_syms
 .endif
 	${AWK} -f ${SYSDIR}/conf/kmod_syms.awk ${.TARGET} \
-	    export_syms | xargs -J% ${OBJCOPY} % ${.TARGET}
+	    export_syms | ${XARGS} ${XARGS_J} % ${OBJCOPY} % ${.TARGET}
 .endif
 .endif # defined(EXPORT_SYMS)
 .if defined(PREFIX_SYMS)
 	${AWK} -v prefix=${PREFIX_SYMS} -f ${SYSDIR}/conf/kmod_syms_prefix.awk \
-	    ${.TARGET} /dev/null | xargs -J% ${OBJCOPY} % ${.TARGET}
+	    ${.TARGET} /dev/null | ${XARGS} ${XARGS_J} % ${OBJCOPY} % ${.TARGET}
 .endif
 .if !defined(DEBUG_FLAGS) && ${__KLD_SHARED} == no
 	${OBJCOPY} --strip-debug ${.TARGET}
 .endif
-
-_MAP_DEBUG_PREFIX= yes
 
 _ILINKS=machine
 .if ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "amd64"
@@ -297,6 +308,25 @@ all: ${PROG}
 beforedepend: ${_ILINKS}
 beforebuild: ${_ILINKS}
 
+.if ${MK_REPRODUCIBLE_PATHS} != "no"
+PREFIX_SYSDIR=/usr/src/sys
+CFLAGS+= -ffile-prefix-map=${SYSDIR}=${PREFIX_SYSDIR}
+.if defined(KERNBUILDDIR)
+PREFIX_KERNBUILDDIR=/usr/obj/usr/src/${MACHINE}.${MACHINE_CPUARCH}/sys/${KERNBUILDDIR:T}
+PREFIX_OBJDIR=${PREFIX_KERNBUILDDIR}/modules/usr/src/sys/modules/${.OBJDIR:T}
+CFLAGS+= -ffile-prefix-map=${KERNBUILDDIR}=${PREFIX_KERNBUILDDIR}
+.else
+PREFIX_OBJDIR=/usr/obj/usr/src/${MACHINE}.${MACHINE_CPUARCH}/sys/modules/${.OBJDIR:T}
+.endif
+CFLAGS+= -ffile-prefix-map=${.OBJDIR}=${PREFIX_OBJDIR}
+.if defined(SYSROOT)
+CFLAGS+= -ffile-prefix-map=${SYSROOT}=/sysroot
+.endif
+.else
+PREFIX_SYSDIR=${SYSDIR}
+PREFIX_OBJDIR=${.OBJDIR}
+.endif
+
 # Ensure that the links exist without depending on it when it exists which
 # causes all the modules to be rebuilt when the directory pointed to changes.
 # Ensure that debug info references the path in the source tree.
@@ -304,12 +334,10 @@ beforebuild: ${_ILINKS}
 .if !exists(${.OBJDIR}/${_link})
 OBJS_DEPEND_GUESS+=	${_link}
 .endif
-.if defined(_MAP_DEBUG_PREFIX)
 .if ${_link} == "machine"
-CFLAGS+= -fdebug-prefix-map=./machine=${SYSDIR}/${MACHINE}/include
+CFLAGS+= -fdebug-prefix-map=./machine=${PREFIX_SYSDIR}/${MACHINE}/include
 .else
-CFLAGS+= -fdebug-prefix-map=./${_link}=${SYSDIR}/${_link}/include
-.endif
+CFLAGS+= -fdebug-prefix-map=./${_link}=${PREFIX_SYSDIR}/${_link}/include
 .endif
 .endfor
 
@@ -358,10 +386,11 @@ afterinstall: _kldxref
 .ORDER: realinstall _kldxref
 .ORDER: _installlinks _kldxref
 _kldxref: .PHONY
-	@if type kldxref >/dev/null 2>&1; then \
-		${ECHO} ${KLDXREF_CMD} ${DESTDIR}${KMODDIR}; \
-		${KLDXREF_CMD} ${DESTDIR}${KMODDIR}; \
-	fi
+	${KLDXREF_CMD} ${DESTDIR}${KMODDIR}
+.if defined(NO_ROOT) && defined(METALOG)
+	echo ".${DISTBASE}${KMODDIR}/linker.hints type=file uname=root gname=wheel mode=0644" | \
+	    cat -l >> ${METALOG}
+.endif
 .endif
 .endif # !target(realinstall)
 
@@ -401,8 +430,10 @@ ${_src}:
 .endfor
 .endif
 
-# Add the sanitizer C flags
-CFLAGS+=	${SAN_CFLAGS}
+KASAN_ENABLED=	${KERN_OPTS:MKASAN}
+KCSAN_ENABLED=	${KERN_OPTS:MKCSAN}
+KMSAN_ENABLED=	${KERN_OPTS:MKMSAN}
+KUBSAN_ENABLED=	${KERN_OPTS:MKUBSAN}
 
 # Add the gcov flags
 CFLAGS+=	${GCOV_CFLAGS}
@@ -446,7 +477,7 @@ CLEANFILES+=	${_i}
 .m.h:	${SYSDIR}/tools/makeobjops.awk
 	${AWK} -f ${SYSDIR}/tools/makeobjops.awk ${.IMPSRC} -h
 
-.for _i in mii pccard
+.for _i in mii
 .if !empty(SRCS:M${_i}devs.h)
 CLEANFILES+=	${_i}devs.h
 ${_i}devs.h: ${SYSDIR}/tools/${_i}devs2h.awk ${SYSDIR}/dev/${_i}/${_i}devs
@@ -522,13 +553,13 @@ assym.inc: ${SYSDIR}/kern/genassym.sh
 	sh ${SYSDIR}/kern/genassym.sh genassym.o > ${.TARGET}
 genassym.o: ${SYSDIR}/${MACHINE}/${MACHINE}/genassym.c offset.inc
 genassym.o: ${SRCS:Mopt_*.h}
-	${CC} -c ${CFLAGS:N-flto:N-fno-common} -fcommon \
+	${CC} -c ${NOSAN_CFLAGS:N-flto*:N-fno-common} -fcommon \
 	    ${SYSDIR}/${MACHINE}/${MACHINE}/genassym.c
 offset.inc: ${SYSDIR}/kern/genoffset.sh genoffset.o
 	sh ${SYSDIR}/kern/genoffset.sh genoffset.o > ${.TARGET}
 genoffset.o: ${SYSDIR}/kern/genoffset.c
 genoffset.o: ${SRCS:Mopt_*.h}
-	${CC} -c ${CFLAGS:N-flto:N-fno-common} -fcommon \
+	${CC} -c ${NOSAN_CFLAGS:N-flto*:N-fno-common} -fcommon \
 	    ${SYSDIR}/kern/genoffset.c
 
 CLEANDEPENDFILES+=	${_ILINKS}
@@ -554,8 +585,6 @@ OPENZFS_CFLAGS=     \
 	-I${SYSDIR}/cddl/compat/opensolaris \
 	-I${SYSDIR}/cddl/contrib/opensolaris/uts/common \
 	-include ${ZINCDIR}/os/freebsd/spl/sys/ccompile.h
-OPENZFS_CWARNFLAGS= \
-	-Wno-nested-externs
 
 .include <bsd.dep.mk>
 .include <bsd.clang-analyze.mk>

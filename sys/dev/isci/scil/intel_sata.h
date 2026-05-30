@@ -50,8 +50,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #ifndef _SATA_H_
 #define _SATA_H_
@@ -63,7 +61,7 @@
  *
  * @brief This file defines all of the SATA releated constants, enumerations,
  *        and types. Please note that this file does not necessarily contain
- *        an exhaustive list of all contants and commands.
+ *        an exhaustive list of all constants and commands.
  */
 
 /**

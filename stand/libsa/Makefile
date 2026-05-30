@@ -1,4 +1,3 @@
-# $FreeBSD$
 # Originally from	$NetBSD: Makefile,v 1.21 1997/10/26 22:08:38 lukem Exp $
 #
 # Notes:
@@ -14,8 +13,8 @@ LIB?=		sa
 
 # standalone components and stuff we have modified locally
 SRCS+=	gzguts.h zutil.h __main.c abort.c assert.c bcd.c environment.c \
-	getopt.c gets.c globals.c \
-	hexdump.c pager.c panic.c printf.c strdup.c strerror.c \
+	features.c getopt.c gets.c globals.c \
+	hexdump.c nvstore.c pager.c panic.c printf.c strdup.c strerror.c \
 	random.c sbrk.c tslog.c twiddle.c zalloc.c zalloc_malloc.c
 
 # private (pruned) versions of libc string functions
@@ -67,6 +66,9 @@ SRCS+=	clzsi2.c ctzsi2.c
 SRCS+=	divmoddi4.c  divmodsi4.c  divdi3.c  divsi3.c  moddi3.c  modsi3.c
 SRCS+=	udivmoddi4.c udivmodsi4.c udivdi3.c udivsi3.c umoddi3.c umodsi3.c
 SRCS+=	ashldi3.c ashrdi3.c lshrdi3.c
+.if ${MACHINE_CPUARCH} == "riscv"
+SRCS+=	bswapdi2.c bswapsi2.c clzdi2.c ctzdi2.c
+.endif
 
 .if ${MACHINE_CPUARCH:Namd64:Ni386} == ""
 .PATH: ${SASRC}/x86
@@ -95,8 +97,10 @@ SRCS+=${i}
 .endfor
 
 # decompression functionality from zlib
+# https://github.com/madler/zlib/issues/633 documents why we suppress deprecated
+# prototype warnings.
 .PATH: ${SRCTOP}/sys/contrib/zlib
-ZLIB_CFLAGS=-DHAVE_MEMCPY -I${SRCTOP}/sys/contrib/zlib
+ZLIB_CFLAGS=-DHAVE_MEMCPY -I${SRCTOP}/sys/contrib/zlib ${NO_WDEPRECATED_NON_PROTOTYPE}
 .for i in adler32.c crc32.c infback.c inffast.c inflate.c inftrees.c zutil.c
 CFLAGS.${i}+=${ZLIB_CFLAGS}
 SRCS+=	${i}
@@ -106,32 +110,6 @@ SRCS+=	${i}
 .PATH: ${SRCTOP}/sys/cddl/contrib/opensolaris/common/lz4
 SRCS+=	lz4.c
 CFLAGS.lz4.c+= -I${SRCTOP}/sys/cddl/contrib/opensolaris/common/lz4
-
-# Create a subset of includes that are safe, as well as adjusting those that aren't
-# The lists may drive people nuts, but they are explicitly opt-in
-FAKE_DIRS=xlocale arpa
-SAFE_INCS=a.out.h assert.h elf.h limits.h nlist.h setjmp.h stddef.h stdbool.h string.h strings.h time.h unistd.h uuid.h
-STAND_H_INC=ctype.h fcntl.h signal.h stdio.h stdlib.h
-OTHER_INC=stdarg.h errno.h stdint.h
-
-beforedepend:
-	mkdir -p ${FAKE_DIRS}; \
-	for i in ${SAFE_INCS}; do \
-		ln -sf ${SRCTOP}/include/$$i $$i; \
-	done; \
-	ln -sf ${SYSDIR}/${MACHINE}/include/stdarg.h stdarg.h; \
-	ln -sf ${SYSDIR}/sys/errno.h errno.h; \
-	ln -sf ${SYSDIR}/sys/stdint.h stdint.h; \
-	ln -sf ${SRCTOP}/include/arpa/inet.h arpa/inet.h; \
-	ln -sf ${SRCTOP}/include/arpa/tftp.h arpa/tftp.h; \
-	for i in _time.h _strings.h _string.h; do \
-		[ -f xlocale/$$i ] || :> xlocale/$$i; \
-	done; \
-	for i in ${STAND_H_INC}; do \
-		ln -sf ${SASRC}/stand.h $$i; \
-	done
-CLEANDIRS+=${FAKE_DIRS}
-CLEANFILES+= ${SAFE_INCS} ${STAND_H_INC} ${OTHER_INC}
 
 # io routines
 SRCS+=	closeall.c dev.c ioctl.c nullfs.c stat.c mount.c \
@@ -189,6 +167,10 @@ CFLAGS.bzipfs.c+= -I${SRCTOP}/contrib/bzip2  -DBZ_NO_STDIO -DBZ_NO_COMPRESS
 .PATH: ${SYSDIR}/libkern
 SRCS+=  explicit_bzero.c crc32_libkern.c
 
+# Bits from GELI reused for some random seeding cases
+.PATH: ${SYSDIR}/geom/eli
+SRCS+=	g_eli_hmac.c pkcs5v2.c
+
 # Maybe GELI
 .if ${MK_LOADER_GELI} == "yes"
 .include "${SASRC}/geli/Makefile.inc"
@@ -205,8 +187,44 @@ SRCS+=  explicit_bzero.c crc32_libkern.c
 .include "${SASRC}/zfs/Makefile.inc"
 .endif
 
+# Crypto hashing functions
+# sha256 and sha512 from sys/crypto
+.PATH: ${SYSDIR}/crypto/sha2
+SRCS+=		sha256c.c sha512c.c
+
+.PATH: ${SYSDIR}/crypto
+SRCS+=		md5c.c
+CFLAGS.md5c.c+= -DSTANDALONE_SMALL
+
 .if ${DO32:U0} == 0
 MAN=libsa.3
 .endif
+
+# Create a subset of includes that are safe, as well as adjusting those that aren't
+# The lists may drive people nuts, but they are explicitly opt-in
+FAKE_DIRS=xlocale arpa ssp
+SAFE_INCS=a.out.h assert.h elf.h limits.h nlist.h setjmp.h stddef.h stdbool.h string.h strings.h time.h uuid.h
+STAND_H_INC=ctype.h fcntl.h signal.h stdio.h stdlib.h unistd.h
+OTHER_INC=stdarg.h errno.h stdint.h
+
+beforedepend:
+	mkdir -p ${FAKE_DIRS}; \
+	for i in ${SAFE_INCS}; do \
+		ln -sf ${SRCTOP}/include/$$i $$i; \
+	done; \
+	ln -sf ${SYSDIR}/sys/errno.h errno.h; \
+	ln -sf ${SYSDIR}/sys/stdarg.h stdarg.h; \
+	ln -sf ${SYSDIR}/sys/stdint.h stdint.h; \
+	ln -sf ${SRCTOP}/include/arpa/inet.h arpa/inet.h; \
+	ln -sf ${SRCTOP}/include/arpa/tftp.h arpa/tftp.h; \
+	ln -sf ${SRCTOP}/include/ssp/ssp.h ssp/ssp.h; \
+	for i in _time.h _strings.h _string.h; do \
+		[ -f xlocale/$$i ] || :> xlocale/$$i; \
+	done; \
+	for i in ${STAND_H_INC}; do \
+		ln -sf ${SASRC}/stand.h $$i; \
+	done
+CLEANDIRS+=${FAKE_DIRS}
+CLEANFILES+= ${SAFE_INCS} ${STAND_H_INC} ${OTHER_INC}
 
 .include <bsd.lib.mk>

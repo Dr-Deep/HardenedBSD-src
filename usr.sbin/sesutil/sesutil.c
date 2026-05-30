@@ -31,15 +31,12 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/endian.h>
 #include <sys/param.h>
 #include <sys/disk.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
 
-#include <err.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
@@ -100,26 +97,26 @@ static const int nbcmds = nitems(cmds);
 static const char *uflag;
 
 static void
-usage(FILE *out, const char *subcmd)
+usage(const char *subcmd)
 {
 	int i;
 
 	if (subcmd == NULL) {
-		fprintf(out, "Usage: %s [-u /dev/ses<N>] <command> [options]\n",
+		xo_error("usage: %s [-u /dev/ses<N>] <command> [options]\n",
 		    getprogname());
-		fprintf(out, "Commands supported:\n");
+		xo_error("Commands supported:\n");
 	}
 	for (i = 0; i < nbcmds; i++) {
 		if (subcmd != NULL) {
 			if (strcmp(subcmd, cmds[i].name) == 0) {
-				fprintf(out, "Usage: %s %s [-u /dev/ses<N>] "
+				xo_error("usage: %s %s [-u /dev/ses<N>] "
 				    "%s\n\t%s\n", getprogname(), subcmd,
 				    cmds[i].param, cmds[i].desc);
 				break;
 			}
 			continue;
 		}
-		fprintf(out, "    %-12s%s\n\t\t%s\n\n", cmds[i].name,
+		xo_error("    %-12s%s\n\t\t%s\n\n", cmds[i].name,
 		    cmds[i].param, cmds[i].desc);
 	}
 
@@ -191,7 +188,7 @@ sesled(int argc, char **argv, bool setfault)
 	onoff = false;
 
 	if (argc != 3) {
-		usage(stderr, (setfault ? "fault" : "locate"));
+		usage(setfault ? "fault" : "locate");
 	}
 
 	disk = argv[1];
@@ -202,7 +199,7 @@ sesled(int argc, char **argv, bool setfault)
 		if (endptr != NULL && *endptr == '*') {
 			xo_warnx("Must specifying a SES device (-u) to use a SES "
 			    "id# to identify a disk");
-			usage(stderr, (setfault ? "fault" : "locate"));
+			usage(setfault ? "fault" : "locate");
 		}
 		isses = true;
 	}
@@ -212,7 +209,7 @@ sesled(int argc, char **argv, bool setfault)
 	} else if (strcmp(argv[2], "off") == 0) {
 		onoff = false;
 	} else {
-		usage(stderr, (setfault ? "fault" : "locate"));
+		usage(setfault ? "fault" : "locate");
 	}
 
 	if (strcmp(disk, "all") == 0) {
@@ -281,6 +278,16 @@ sesled(int argc, char **argv, bool setfault)
 			char devnames[devnames_size];
 
 			if (all) {
+				encioc_elm_status_t es;
+				memset(&es, 0, sizeof(es));
+				es.elm_idx = objp[j].elm_idx;
+				if (ioctl(fd, ENCIOC_GETELMSTAT, &es) < 0) {
+					close(fd);
+					xo_err(EXIT_FAILURE,
+						"ENCIOC_GETELMSTAT");
+				}
+				if ((es.cstat[0] & 0xf) == SES_OBJSTAT_NOACCESS)
+					continue;
 				do_led(fd, objp[j].elm_idx, objp[j].elm_type,
 				    onoff, setfault);
 				continue;
@@ -308,7 +315,7 @@ sesled(int argc, char **argv, bool setfault)
 	}
 	globfree(&g);
 	if (ndisks == 0 && all == false) {
-		xo_errx(EXIT_FAILURE, "Count not find the SES id of device '%s'",
+		xo_errx(EXIT_FAILURE, "Could not find the SES id of device '%s'",
 		    disk);
 	}
 
@@ -414,8 +421,19 @@ objmap(int argc, char **argv __unused)
 	char str[32];
 
 	if (argc != 1) {
-		usage(stderr, "map");
+		usage("map");
 	}
+
+	memset(&e_desc, 0, sizeof(e_desc));
+	/* SES4r02 allows element descriptors of up to 65536 characters */
+	e_desc.elm_desc_str = calloc(UINT16_MAX, sizeof(char));
+	if (e_desc.elm_desc_str == NULL)
+		xo_err(EXIT_FAILURE, "calloc()");
+
+	e_devname.elm_devnames = calloc(128, sizeof(char));
+	if (e_devname.elm_devnames == NULL)
+		xo_err(EXIT_FAILURE, "calloc()");
+	e_devname.elm_names_size = 128;
 
 	/* Get the list of ses devices */
 	if (glob(uflag, 0, NULL, &g) == GLOB_NOMATCH) {
@@ -481,29 +499,16 @@ objmap(int argc, char **argv __unused)
 				xo_err(EXIT_FAILURE, "ENCIOC_GETELMSTAT");
 			}
 			/* Get the description of the element */
-			memset(&e_desc, 0, sizeof(e_desc));
 			e_desc.elm_idx = e_ptr[j].elm_idx;
 			e_desc.elm_desc_len = UINT16_MAX;
-			/* XXX memory leak! */
-			e_desc.elm_desc_str = calloc(UINT16_MAX, sizeof(char));
-			if (e_desc.elm_desc_str == NULL) {
-				close(fd);
-				xo_err(EXIT_FAILURE, "calloc()");
-			}
 			if (ioctl(fd, ENCIOC_GETELMDESC,
 			    (caddr_t) &e_desc) < 0) {
 				close(fd);
 				xo_err(EXIT_FAILURE, "ENCIOC_GETELMDESC");
 			}
+			e_desc.elm_desc_str[e_desc.elm_desc_len] = '\0';
 			/* Get the device name(s) of the element */
-			memset(&e_devname, 0, sizeof(e_devname));
 			e_devname.elm_idx = e_ptr[j].elm_idx;
-			e_devname.elm_names_size = 128;
-			e_devname.elm_devnames = calloc(128, sizeof(char));
-			if (e_devname.elm_devnames == NULL) {
-				close(fd);
-				xo_err(EXIT_FAILURE, "calloc()");
-			}
 			if (ioctl(fd, ENCIOC_GETELMDEVNAMES,
 			    (caddr_t) &e_devname) <0) {
 				/* Continue even if we can't look up devnames */
@@ -526,16 +531,18 @@ objmap(int argc, char **argv __unused)
 			}
 			print_extra_status(e_ptr[j].elm_type, e_status.cstat, PRINT_STYLE_DASHED);
 			xo_close_instance("elements");
-			free(e_devname.elm_devnames);
 		}
 		xo_close_list("elements");
 		free(e_ptr);
 		close(fd);
 	}
 	globfree(&g);
+	free(e_devname.elm_devnames);
+	free(e_desc.elm_desc_str);
 	xo_close_list("enclosures");
 	xo_close_container("sesutil");
-	xo_finish();
+	if (xo_finish() < 0)
+		xo_err(EXIT_FAILURE, "stdout");
 
 	return (EXIT_SUCCESS);
 }
@@ -580,7 +587,7 @@ fetch_device_details(char *devnames, char **model, char **serial, off_t *size)
 	comma = (int)strcspn(devnames, ",");
 	asprintf(&tmp, "/dev/%.*s", comma, devnames);
 	if (tmp == NULL)
-		err(1, "asprintf");
+		xo_err(EXIT_FAILURE, "asprintf");
 	fd = open(tmp, O_RDONLY);
 	free(tmp);
 	if (fd < 0) {
@@ -618,7 +625,7 @@ static void
 show_device(int fd, int elm_idx, encioc_elm_status_t e_status, encioc_elm_desc_t e_desc)
 {
 	encioc_elm_devnames_t e_devname;
-	char *model, *serial;
+	char *model = NULL, *serial = NULL;
 	off_t size;
 
 	/* Get the device name(s) of the element */
@@ -635,8 +642,6 @@ show_device(int fd, int elm_idx, encioc_elm_status_t e_status, encioc_elm_desc_t
 	    (caddr_t) &e_devname) < 0) {
 		/* We don't care if this fails */
 		e_devname.elm_devnames[0] = '\0';
-		model = NULL;
-		serial = NULL;
 		size = -1;
 	} else {
 		skip_pass_devices(e_devname.elm_devnames, 128);
@@ -645,7 +650,7 @@ show_device(int fd, int elm_idx, encioc_elm_status_t e_status, encioc_elm_desc_t
 	xo_open_instance("elements");
 	xo_emit("{e:type/device_slot}");
 	xo_emit("{d:description/%-15s} ", e_desc.elm_desc_len > 0 ? e_desc.elm_desc_str : "-");
-	xo_emit("{e:description/%-15s}", e_desc.elm_desc_len > 0 ? e_desc.elm_desc_str : "");
+	xo_emit("{e:description/%s}", e_desc.elm_desc_len > 0 ? e_desc.elm_desc_str : "");
 	xo_emit("{d:device_names/%-7s} ", e_devname.elm_names_len > 0 ? e_devname.elm_devnames : "-");
 	xo_emit("{e:device_names/%s}", e_devname.elm_names_len > 0 ? e_devname.elm_devnames : "");
 	xo_emit("{d:model/%-25s} ", model ? model : "-");
@@ -661,6 +666,8 @@ show_device(int fd, int elm_idx, encioc_elm_status_t e_status, encioc_elm_desc_t
 	print_extra_status(ELMTYP_ARRAY_DEV, e_status.cstat, PRINT_STYLE_CSV);
 	xo_emit("\n");
 	xo_close_instance("elements");
+	free(serial);
+	free(model);
 	free(e_devname.elm_devnames);
 }
 
@@ -722,10 +729,14 @@ show(int argc, char **argv __unused)
 	char str[32];
 
 	if (argc != 1) {
-		usage(stderr, "map");
+		usage("map");
 	}
 
 	first_ses = true;
+
+	e_desc.elm_desc_str = calloc(UINT16_MAX, sizeof(char));
+	if (e_desc.elm_desc_str == NULL)
+		xo_err(EXIT_FAILURE, "calloc()");
 
 	/* Get the list of ses devices */
 	if (glob(uflag, 0, NULL, &g) == GLOB_NOMATCH) {
@@ -808,19 +819,14 @@ show(int argc, char **argv __unused)
 				continue;
 
 			/* Get the description of the element */
-			memset(&e_desc, 0, sizeof(e_desc));
 			e_desc.elm_idx = e_ptr[j].elm_idx;
 			e_desc.elm_desc_len = UINT16_MAX;
-			e_desc.elm_desc_str = calloc(UINT16_MAX, sizeof(char));
-			if (e_desc.elm_desc_str == NULL) {
-				close(fd);
-				xo_err(EXIT_FAILURE, "calloc()");
-			}
 			if (ioctl(fd, ENCIOC_GETELMDESC,
 			    (caddr_t) &e_desc) < 0) {
 				close(fd);
 				xo_err(EXIT_FAILURE, "ENCIOC_GETELMDESC");
 			}
+			e_desc.elm_desc_str[e_desc.elm_desc_len] = '\0';
 
 			switch (e_ptr[j].elm_type) {
 			case ELMTYP_DEVICE:
@@ -862,9 +868,11 @@ show(int argc, char **argv __unused)
 		close(fd);
 	}
 	globfree(&g);
+	free(e_desc.elm_desc_str);
 	xo_close_list("enclosures");
 	xo_close_container("sesutil");
-	xo_finish();
+	if (xo_finish() < 0)
+		xo_err(EXIT_FAILURE, "stdout");
 
 	return (EXIT_SUCCESS);
 }
@@ -879,7 +887,7 @@ encstatus(int argc, char **argv __unused)
 
 	status = 0;
 	if (argc != 1) {
-		usage(stderr, "status");
+		usage("status");
 	}
 
 	/* Get the list of ses devices */
@@ -956,7 +964,8 @@ encstatus(int argc, char **argv __unused)
 
 	xo_close_list("enclosures");
 	xo_close_container("sesutil");
-	xo_finish();
+	if (xo_finish() < 0)
+		xo_err(EXIT_FAILURE, "stdout");
 
 	if (status == 1) {
 		return (EXIT_SUCCESS);
@@ -973,7 +982,7 @@ main(int argc, char **argv)
 
 	argc = xo_parse_args(argc, argv);
 	if (argc < 0)
-		exit(1);
+		exit(EXIT_FAILURE);
 
 	uflag = "/dev/ses[0-9]*";
 	while ((ch = getopt_long(argc, argv, "u:", NULL, NULL)) != -1) {
@@ -983,15 +992,15 @@ main(int argc, char **argv)
 			break;
 		case '?':
 		default:
-			usage(stderr, NULL);
+			usage(NULL);
 		}
 	}
 	argc -= optind;
 	argv += optind;
 
 	if (argc < 1) {
-		warnx("Missing command");
-		usage(stderr, NULL);
+		xo_warnx("Missing command");
+		usage(NULL);
 	}
 
 	for (i = 0; i < nbcmds; i++) {
@@ -1002,8 +1011,8 @@ main(int argc, char **argv)
 	}
 
 	if (cmd == NULL) {
-		warnx("unknown command %s", argv[0]);
-		usage(stderr, NULL);
+		xo_warnx("unknown command %s", argv[0]);
+		usage(NULL);
 	}
 
 	return (cmd->exec(argc, argv));

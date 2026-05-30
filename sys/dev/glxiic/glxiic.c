@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2011 Henrik Brix Andersen <brix@FreeBSD.org>
  * All rights reserved.
@@ -26,7 +26,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 /*
  * AMD Geode LX CS5536 System Management Bus controller.
  *
@@ -267,7 +266,7 @@ static device_method_t glxiic_methods[] = {
 	DEVMETHOD(iicbus_transfer,	glxiic_transfer),
 	DEVMETHOD(iicbus_callback,	iicbus_null_callback),
 
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t glxiic_driver = {
@@ -285,11 +284,11 @@ glxiic_identify(driver_t *driver, device_t parent)
 {
 
 	/* Prevent child from being added more than once. */
-	if (device_find_child(parent, driver->name, -1) != NULL)
+	if (device_find_child(parent, driver->name, DEVICE_UNIT_ANY) != NULL)
 		return;
 
 	if (pci_get_devid(parent) == GLXIIC_CS5536_DEV_ID) {
-		if (device_add_child(parent, driver->name, -1) == NULL)
+		if (device_add_child(parent, driver->name, DEVICE_UNIT_ANY) == NULL)
 			device_printf(parent, "Could not add glxiic child\n");
 	}
 }
@@ -391,7 +390,8 @@ glxiic_attach(device_t dev)
 		goto out;
 	}
 
-	if ((sc->iicbus = device_add_child(dev, "iicbus", -1)) == NULL) {
+	if ((sc->iicbus = device_add_child(dev, "iicbus",
+	    DEVICE_UNIT_ANY)) == NULL) {
 		device_printf(dev, "Could not allocate iicbus instance\n");
 		error = ENXIO;
 		goto out;
@@ -409,7 +409,7 @@ glxiic_attach(device_t dev)
 	glxiic_smb_enable(sc, IIC_FASTEST, 0);
 
 	/* Probe and attach the iicbus when interrupts are available. */
-	error = bus_delayed_attach_children(dev);
+	bus_delayed_attach_children(dev);
 
 out:
 	if (error != 0) {
@@ -452,11 +452,8 @@ glxiic_detach(device_t dev)
 
 	error = bus_generic_detach(dev);
 	if (error != 0)
-		goto out;
-	if (sc->iicbus != NULL)
-		error = device_delete_child(dev, sc->iicbus);
+		return (error);
 
-out:
 	callout_drain(&sc->callout);
 
 	if (sc->smb_res != NULL) {
@@ -480,7 +477,7 @@ out:
 
 	GLXIIC_LOCK_DESTROY(sc);
 
-	return (error);
+	return (0);
 }
 
 static uint8_t

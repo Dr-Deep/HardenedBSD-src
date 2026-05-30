@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2001 Orion Hodson <O.Hodson@cs.ucl.ac.uk>
  * All rights reserved.
@@ -43,8 +43,6 @@
 #include <dev/pci/pcivar.h>
 
 #include "mixer_if.h"
-
-SND_DECLARE_FILE("$FreeBSD$");
 
 /* ------------------------------------------------------------------------- */
 /* Constants */
@@ -206,7 +204,7 @@ svchan_init(kobj_t obj, void *devinfo, struct snd_dbuf *b, struct pcm_channel *c
 	}
 	ch->buffer = b;
 	ch->fmt = SND_FORMAT(AFMT_U8, 1, 0);
-	ch->spd = DSP_DEFAULT_SPEED;
+	ch->spd = 8000;
 	ch->dma_active = ch->dma_was_active = 0;
 
 	return ch;
@@ -330,9 +328,9 @@ svrchan_trigger(kobj_t obj, void *data, int go)
 		sv_indirect_set(sc, SV_REG_FORMAT, v);
 
 		/* Program DMA */
-		count = sndbuf_getsize(ch->buffer) / 2; /* DMAC uses words */
+		count = ch->buffer->bufsize / 2; /* DMAC uses words */
 		sv_dma_set_config(sc->dmac_st, sc->dmac_sh,
-				  sndbuf_getbufaddr(ch->buffer),
+				  ch->buffer->buf_addr,
 				  count - 1,
 				  SV_DMA_MODE_AUTO | SV_DMA_MODE_RD);
 		count = count / SV_INTR_PER_BUFFER - 1;
@@ -362,7 +360,7 @@ svrchan_getptr(kobj_t obj, void *data)
 	struct sc_info 		*sc = ch->parent;
 	u_int32_t sz, remain;
 
-	sz = sndbuf_getsize(ch->buffer);
+	sz = ch->buffer->bufsize;
 	/* DMAC uses words */
 	remain = (sv_dma_get_count(sc->dmac_st, sc->dmac_sh) + 1) * 2;
 	return sz - remain;
@@ -406,9 +404,9 @@ svpchan_trigger(kobj_t obj, void *data, int go)
 		sv_indirect_set(sc, SV_REG_FORMAT, v);
 
 		/* Program DMA */
-		count = sndbuf_getsize(ch->buffer);
+		count = ch->buffer->bufsize;
 		sv_dma_set_config(sc->dmaa_st, sc->dmaa_sh,
-				  sndbuf_getbufaddr(ch->buffer),
+				  ch->buffer->buf_addr,
 				  count - 1,
 				  SV_DMA_MODE_AUTO | SV_DMA_MODE_WR);
 		count = count / SV_INTR_PER_BUFFER - 1;
@@ -439,7 +437,7 @@ svpchan_getptr(kobj_t obj, void *data)
 	struct sc_info 		*sc = ch->parent;
 	u_int32_t sz, remain;
 
-	sz = sndbuf_getsize(ch->buffer);
+	sz = ch->buffer->bufsize;
 	/* DMAA uses bytes */
 	remain = sv_dma_get_count(sc->dmaa_st, sc->dmaa_sh) + 1;
 	return (sz - remain);
@@ -868,17 +866,17 @@ sv_attach(device_t dev) {
 	if (bootverbose)
 		printf("Sonicvibes: revision %d.\n", sc->rev);
 
-        if (pcm_register(dev, sc, 1, 1)) {
-		device_printf(dev, "sv_attach: pcm_register fail\n");
-                goto fail;
-	}
-
+	pcm_init(dev, sc);
         pcm_addchan(dev, PCMDIR_PLAY, &svpchan_class, sc);
         pcm_addchan(dev, PCMDIR_REC,  &svrchan_class, sc);
 
-        snprintf(status, SND_STATUSLEN, "at io 0x%jx irq %jd %s",
-                 rman_get_start(sc->enh_reg),  rman_get_start(sc->irq),PCM_KLDSTRING(snd_vibes));
-        pcm_setstatus(dev, status);
+        snprintf(status, SND_STATUSLEN, "port 0x%jx irq %jd on %s",
+                 rman_get_start(sc->enh_reg),  rman_get_start(sc->irq),
+		 device_get_nameunit(device_get_parent(dev)));
+	if (pcm_register(dev, status)) {
+		device_printf(dev, "sv_attach: pcm_register fail\n");
+                goto fail;
+	}
 
         DEB(printf("sv_attach: succeeded\n"));
 
@@ -925,12 +923,12 @@ sv_detach(device_t dev) {
 }
 
 static device_method_t sc_methods[] = {
-        DEVMETHOD(device_probe,         sv_probe),
-        DEVMETHOD(device_attach,        sv_attach),
-        DEVMETHOD(device_detach,        sv_detach),
-        DEVMETHOD(device_resume,        sv_resume),
-        DEVMETHOD(device_suspend,       sv_suspend),
-        { 0, 0 }
+	DEVMETHOD(device_probe,         sv_probe),
+	DEVMETHOD(device_attach,        sv_attach),
+	DEVMETHOD(device_detach,        sv_detach),
+	DEVMETHOD(device_resume,        sv_resume),
+	DEVMETHOD(device_suspend,       sv_suspend),
+	DEVMETHOD_END
 };
 
 static driver_t sonicvibes_driver = {

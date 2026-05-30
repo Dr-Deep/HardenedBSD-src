@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2022, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2026, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -252,6 +252,7 @@ extern FILE                         *AslCompilerin;
 extern int                          DtParserdebug;
 extern int                          PrParserdebug;
 extern const ASL_MAPPING_ENTRY      AslKeywordMapping[];
+extern const UINT32                 AslKeywordMappingCount;
 extern char                         *AslCompilertext;
 extern char                         *DtCompilerParsertext;
 
@@ -325,6 +326,7 @@ ASL_EXTERN BOOLEAN                  ASL_INIT_GLOBAL (AslGbl_ReferenceOptimizatio
 ASL_EXTERN BOOLEAN                  ASL_INIT_GLOBAL (AslGbl_DisplayRemarks, TRUE);
 ASL_EXTERN BOOLEAN                  ASL_INIT_GLOBAL (AslGbl_DisplayWarnings, TRUE);
 ASL_EXTERN BOOLEAN                  ASL_INIT_GLOBAL (AslGbl_DisplayOptimizations, FALSE);
+ASL_EXTERN BOOLEAN                  ASL_INIT_GLOBAL (AslGbl_Deterministic, TRUE);
 ASL_EXTERN UINT8                    ASL_INIT_GLOBAL (AslGbl_WarningLevel, ASL_WARNING);
 ASL_EXTERN BOOLEAN                  ASL_INIT_GLOBAL (AslGbl_UseOriginalCompilerId, FALSE);
 ASL_EXTERN BOOLEAN                  ASL_INIT_GLOBAL (AslGbl_VerboseTemplates, FALSE);

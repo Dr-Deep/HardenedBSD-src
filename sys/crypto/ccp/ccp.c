@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2017 Chelsio Communications, Inc.
  * Copyright (c) 2017 Conrad Meyer <cem@FreeBSD.org>
@@ -29,8 +29,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_ddb.h"
 
 #include <sys/param.h>
@@ -81,7 +79,7 @@ static struct pciid {
 	{ 0x15df1022, "AMD CCP-5a" },
 };
 
-static struct random_source random_ccp = {
+static const struct random_source random_ccp = {
 	.rs_ident = "AMD CCP TRNG",
 	.rs_source = RANDOM_PURE_CCP,
 	.rs_read = random_ccp_read,
@@ -112,7 +110,7 @@ ccp_populate_sglist(struct sglist *sg, struct crypto_buffer *cb)
 		break;
 	case CRYPTO_BUF_VMPAGE:
 		error = sglist_append_vmpages(sg, cb->cb_vm_page,
-		    cb->cb_vm_page_len, cb->cb_vm_page_offset);
+		    cb->cb_vm_page_offset, cb->cb_vm_page_len);
 		break;
 	default:
 		error = EINVAL;

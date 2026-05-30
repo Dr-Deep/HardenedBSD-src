@@ -1,4 +1,5 @@
 #!/bin/ksh -p
+# SPDX-License-Identifier: CDDL-1.0
 #
 # CDDL HEADER START
 #
@@ -38,6 +39,6 @@
 verify_runnable "global"
 
 # create a pool without any features
-log_must mkfile 128m $TMPDEV
+log_must truncate -s $MINVDEVSIZE $TMPDEV
 
 log_pass

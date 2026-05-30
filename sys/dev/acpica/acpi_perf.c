@@ -25,8 +25,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_acpi.h"
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -144,7 +142,7 @@ acpi_perf_identify(driver_t *driver, device_t parent)
 	device_t dev;
 
 	/* Make sure we're not being doubly invoked. */
-	if (device_find_child(parent, "acpi_perf", -1) != NULL)
+	if (device_find_child(parent, "acpi_perf", DEVICE_UNIT_ANY) != NULL)
 		return;
 
 	/* Get the handle for the Processor object and check for perf states. */
@@ -193,7 +191,7 @@ acpi_perf_probe(device_t dev)
 	pkg = (ACPI_OBJECT *)buf.Pointer;
 	if (ACPI_PKG_VALID(pkg, 2)) {
 		rid = 0;
-		error = acpi_PkgGas(dev, pkg, 0, &type, &rid, &res, 0);
+		error = acpi_PkgGas(dev, pkg, 0, &type, rid, &res, 0);
 		switch (error) {
 		case 0:
 			bus_release_resource(dev, type, rid, res);
@@ -328,7 +326,7 @@ acpi_perf_evaluate(device_t dev)
 		goto out;
 	}
 
-	error = acpi_PkgGas(sc->dev, pkg, 0, &sc->perf_ctrl_type, &sc->px_rid,
+	error = acpi_PkgGas(sc->dev, pkg, 0, &sc->perf_ctrl_type, sc->px_rid,
 	    &sc->perf_ctrl, 0);
 	if (error) {
 		/*
@@ -344,7 +342,7 @@ acpi_perf_evaluate(device_t dev)
 	}
 	sc->px_rid++;
 
-	error = acpi_PkgGas(sc->dev, pkg, 1, &sc->perf_sts_type, &sc->px_rid,
+	error = acpi_PkgGas(sc->dev, pkg, 1, &sc->perf_sts_type, sc->px_rid,
 	    &sc->perf_status, 0);
 	if (error) {
 		if (error == EOPNOTSUPP) {

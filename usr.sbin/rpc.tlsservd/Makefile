@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 .include <src.opts.mk>
 
 PROG=	rpc.tlsservd
@@ -8,9 +6,11 @@ SRCS=	rpc.tlsservd.c rpc.tlscommon.c rpctlssd.h rpctlssd_svc.c rpctlssd_xdr.c
 
 CFLAGS+= -I.
 
-LIBADD=	ssl crypto util
+LIBADD=	ssl crypto util pthread
 
 CLEANFILES= rpctlssd_svc.c rpctlssd_xdr.c rpctlssd.h
+
+CFI_OVERRIDE=	-fno-sanitize=cfi-icall
 
 RPCSRC=	${SRCTOP}/sys/rpc/rpcsec_tls/rpctlssd.x
 RPCGEN= RPCGEN_CPP=${CPP:Q} rpcgen -L -C -M

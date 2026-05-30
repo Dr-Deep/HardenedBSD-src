@@ -28,14 +28,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#if defined(LIBC_SCCS) && !defined(lint)
-static char *sccsid2 = "@(#)clnt_tcp.c 1.37 87/10/05 Copyr 1984 Sun Micro";
-static char *sccsid = "@(#)clnt_tcp.c	2.2 88/08/01 4.0 RPCSRC";
-static char sccsid3[] = "@(#)clnt_vc.c 1.19 89/03/16 Copyr 1988 Sun Micro";
-#endif
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
- 
 /*
  * clnt_tcp.c, Implements a TCP/IP based, client side RPC.
  *
@@ -65,6 +58,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/jail.h>
 #include <sys/ktls.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
@@ -321,13 +315,11 @@ call_again:
 	 */
 	sx_xlock(&xprt->xp_lock);
 	error = sosend(xprt->xp_socket, NULL, NULL, mreq, NULL, 0, curthread);
-if (error != 0) printf("sosend=%d\n", error);
 	mreq = NULL;
 	if (error == EMSGSIZE) {
-printf("emsgsize\n");
-		SOCKBUF_LOCK(&xprt->xp_socket->so_snd);
+		SOCK_SENDBUF_LOCK(xprt->xp_socket);
 		sbwait(xprt->xp_socket, SO_SND);
-		SOCKBUF_UNLOCK(&xprt->xp_socket->so_snd);
+		SOCK_SENDBUF_UNLOCK(xprt->xp_socket);
 		sx_xunlock(&xprt->xp_lock);
 		AUTH_VALIDATE(auth, xid, NULL, NULL);
 		mtx_lock(&ct->ct_lock);
@@ -449,15 +441,19 @@ got_reply:
 		 * If unsuccessful AND error is an authentication error
 		 * then refresh credentials and try again, else break
 		 */
-		else if (stat == RPC_AUTHERROR)
+		else if (stat == RPC_AUTHERROR) {
 			/* maybe our credentials need to be refreshed ... */
+			CURVNET_SET_QUIET(TD_TO_VNET(curthread));
 			if (nrefreshes > 0 && AUTH_REFRESH(auth, &reply_msg)) {
+				CURVNET_RESTORE();
 				nrefreshes--;
 				XDR_DESTROY(&xdrs);
 				mtx_lock(&ct->ct_lock);
 				goto call_again;
 			}
+			CURVNET_RESTORE();
 			/* end of unsuccessful completion */
+		}
 		/* end of valid reply message */
 	} else
 		errp->re_status = stat = RPC_CANTDECODERES;

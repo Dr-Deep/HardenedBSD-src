@@ -31,8 +31,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- *	from: @(#)vm_object.h	8.3 (Berkeley) 1/12/94
- *
  *
  * Copyright (c) 1987, 1990 Carnegie-Mellon University.
  * All rights reserved.
@@ -58,8 +56,6 @@
  *
  * any improvements or extensions that they make and grant Carnegie the
  * rights to redistribute these changes.
- *
- * $FreeBSD$
  */
 
 /*
@@ -102,7 +98,6 @@ struct vm_object {
 	TAILQ_ENTRY(vm_object) object_list; /* list of all objects */
 	LIST_HEAD(, vm_object) shadow_head; /* objects that this is a shadow for */
 	LIST_ENTRY(vm_object) shadow_list; /* chain of shadow objects */
-	struct pglist memq;		/* list of resident pages */
 	struct vm_radix rtree;		/* root of the resident page radix trie*/
 	vm_pindex_t size;		/* Object size */
 	struct domainset_ref domain;	/* NUMA policy. */
@@ -112,8 +107,8 @@ struct vm_object {
 	int shadow_count;		/* how many objects that this is a shadow for */
 	vm_memattr_t memattr;		/* default memory attribute for pages */
 	objtype_t type;			/* type of pager */
-	u_short flags;			/* see below */
 	u_short pg_color;		/* (c) color of first page in obj */
+	u_int flags;			/* see below */
 	blockcount_t paging_in_progress; /* (a) Paging (in or out) so don't collapse or destroy */
 	blockcount_t busy;		/* (a) object is busy, disallow page busy. */
 	int resident_page_count;	/* number of resident pages */
@@ -141,7 +136,7 @@ struct vm_object {
 		struct {
 			TAILQ_HEAD(, vm_page) devp_pglist;
 			const struct cdev_pager_ops *ops;
-			struct cdev *dev;
+			void *handle;
 		} devp;
 
 		/*
@@ -156,20 +151,13 @@ struct vm_object {
 		/*
 		 * Swap pager
 		 *
-		 *	swp_tmpfs - back-pointer to the tmpfs vnode,
-		 *		     if any, which uses the vm object
-		 *		     as backing store.  The handle
-		 *		     cannot be reused for linking,
-		 *		     because the vnode can be
-		 *		     reclaimed and recreated, making
-		 *		     the handle changed and hash-chain
-		 *		     invalid.
-		 *
-		 *	swp_blks -   pc-trie of the allocated swap blocks.
+		 *	swp_priv - pager-private.
+		 *	swp_blks - pc-trie of the allocated swap blocks.
+		 *	writemappings - count of bytes mapped for write
 		 *
 		 */
 		struct {
-			void *swp_tmpfs;
+			void *swp_priv;
 			struct pctrie swp_blks;
 			vm_ooffset_t writemappings;
 		} swp;
@@ -183,33 +171,37 @@ struct vm_object {
 				void *data_ptr;
 				uintptr_t data_val;
 			};
+			void *phys_priv;
 		} phys;
 	} un_pager;
 	struct ucred *cred;
-	vm_ooffset_t charge;
 	void *umtx_data;
 };
 
 /*
  * Flags
  */
-#define	OBJ_FICTITIOUS	0x0001		/* (c) contains fictitious pages */
-#define	OBJ_UNMANAGED	0x0002		/* (c) contains unmanaged pages */
-#define	OBJ_POPULATE	0x0004		/* pager implements populate() */
-#define	OBJ_DEAD	0x0008		/* dead objects (during rundown) */
-#define	OBJ_ANON	0x0010		/* (c) contains anonymous memory */
-#define	OBJ_UMTXDEAD	0x0020		/* umtx pshared was terminated */
-#define	OBJ_SIZEVNLOCK	0x0040		/* lock vnode to check obj size */
-#define	OBJ_PG_DTOR	0x0080		/* dont reset object, leave that for dtor */
-#define	OBJ_SHADOWLIST	0x0100		/* Object is on the shadow list. */
-#define	OBJ_SWAP	0x0200		/* object swaps, type will be OBJT_SWAP
+#define	OBJ_FICTITIOUS	0x00000001	/* (c) contains fictitious pages */
+#define	OBJ_UNMANAGED	0x00000002	/* (c) contains unmanaged pages */
+#define	OBJ_POPULATE	0x00000004	/* pager implements populate() */
+#define	OBJ_DEAD	0x00000008	/* dead objects (during rundown) */
+#define	OBJ_ANON	0x00000010	/* (c) contains anonymous memory */
+#define	OBJ_UMTXDEAD	0x00000020	/* umtx pshared was terminated */
+#define	OBJ_SIZEVNLOCK	0x00000040	/* lock vnode to check obj size */
+#define	OBJ_PG_DTOR	0x00000080	/* do not reset object, leave that
+					   for dtor */
+#define	OBJ_SHADOWLIST	0x00000100	/* Object is on the shadow list. */
+#define	OBJ_SWAP	0x00000200	/* object swaps, type will be OBJT_SWAP
 					   or dynamically registered */
-#define	OBJ_SPLIT	0x0400		/* object is being split */
-#define	OBJ_COLLAPSING	0x0800		/* Parent of collapse. */
-#define	OBJ_COLORED	0x1000		/* pg_color is defined */
-#define	OBJ_ONEMAPPING	0x2000		/* One USE (a single, non-forked) mapping flag */
-#define	OBJ_PAGERPRIV1	0x4000		/* Pager private */
-#define	OBJ_PAGERPRIV2	0x8000		/* Pager private */
+#define	OBJ_SPLIT	0x00000400	/* object is being split */
+#define	OBJ_COLLAPSING	0x00000800	/* Parent of collapse. */
+#define	OBJ_COLORED	0x00001000	/* pg_color is defined */
+#define	OBJ_ONEMAPPING	0x00002000	/* Each page has at most one managed
+					   mapping, all in the same vm_map */
+#define	OBJ_PAGERPRIV1	0x00004000	/* Pager private */
+#define	OBJ_PAGERPRIV2	0x00008000	/* Pager private */
+#define	OBJ_SYSVSHM	0x00010000	/* SysV SHM */
+#define	OBJ_POSIXSHM	0x00020000	/* Posix SHM */
 
 /*
  * Helpers to perform conversion between vm_object page indexes and offsets.
@@ -235,6 +227,12 @@ struct vm_object {
 #define	OBJPR_NOTMAPPED	0x2		/* Don't unmap pages. */
 #define	OBJPR_VALIDONLY	0x4		/* Ignore invalid pages. */
 
+/*
+ * Options for vm_object_coalesce().
+ */
+#define	OBJCO_CHARGED	0x1		/* The next_size was charged already */
+#define	OBJCO_NO_CHARGE	0x2		/* Do not do swap accounting at all */
+
 TAILQ_HEAD(object_q, vm_object);
 
 extern struct object_q vm_object_list;	/* list of allocated objects */
@@ -242,9 +240,7 @@ extern struct mtx vm_object_list_mtx;	/* lock for object list and count */
 
 extern struct vm_object kernel_object_store;
 
-/* kernel and kmem are aliased for backwards KPI compat. */
 #define	kernel_object	(&kernel_object_store)
-#define	kmem_object	(&kernel_object_store)
 
 #define	VM_OBJECT_ASSERT_LOCKED(object)					\
 	rw_assert(&(object)->lock, RA_LOCKED)
@@ -274,6 +270,8 @@ extern struct vm_object kernel_object_store;
 	rw_wowned(&(object)->lock)
 #define	VM_OBJECT_WUNLOCK(object)					\
 	rw_wunlock(&(object)->lock)
+#define	VM_OBJECT_UNLOCK(object)					\
+	rw_unlock(&(object)->lock)
 #define	VM_OBJECT_DROP(object)						\
 	lock_class_rw.lc_unlock(&(object)->lock.lock_object)
 #define	VM_OBJECT_PICKUP(object, state)					\
@@ -292,7 +290,7 @@ struct vnode;
  *	The object must be locked or thread private.
  */
 static __inline void
-vm_object_set_flag(vm_object_t object, u_short bits)
+vm_object_set_flag(vm_object_t object, u_int bits)
 {
 
 	object->flags |= bits;
@@ -357,11 +355,10 @@ void umtx_shm_object_terminated(vm_object_t object);
 extern int umtx_shm_vnobj_persistent;
 
 vm_object_t vm_object_allocate (objtype_t, vm_pindex_t);
-vm_object_t vm_object_allocate_anon(vm_pindex_t, vm_object_t, struct ucred *,
-   vm_size_t);
+vm_object_t vm_object_allocate_anon(vm_pindex_t, vm_object_t, struct ucred *);
 vm_object_t vm_object_allocate_dyn(objtype_t, vm_pindex_t, u_short);
 boolean_t vm_object_coalesce(vm_object_t, vm_ooffset_t, vm_size_t, vm_size_t,
-   boolean_t);
+   int);
 void vm_object_collapse (vm_object_t);
 void vm_object_deallocate (vm_object_t);
 void vm_object_destroy (vm_object_t);
@@ -380,6 +377,8 @@ void vm_object_page_noreuse(vm_object_t object, vm_pindex_t start,
 void vm_object_page_remove(vm_object_t object, vm_pindex_t start,
     vm_pindex_t end, int options);
 boolean_t vm_object_populate(vm_object_t, vm_pindex_t, vm_pindex_t);
+void vm_object_prepare_buf_pages(vm_object_t object, vm_page_t *ma_dst,
+    int count, int *rbehind, int *rahead, vm_page_t *ma_src);
 void vm_object_print(long addr, boolean_t have_addr, long count, char *modif);
 void vm_object_reference (vm_object_t);
 void vm_object_reference_locked(vm_object_t);

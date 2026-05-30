@@ -17,7 +17,7 @@ typedef	struct	{
 
 static ipf_error_entry_t *find_error(int);
 
-#define	IPF_NUM_ERRORS	477
+#define	IPF_NUM_ERRORS	sizeof(ipf_errors) / sizeof(ipf_error_entry_t)
 
 /*
  * NO REUSE OF NUMBERS!
@@ -25,11 +25,11 @@ static ipf_error_entry_t *find_error(int);
  * IF YOU WANT TO ADD AN ERROR TO THIS TABLE, _ADD_ A NEW NUMBER.
  * DO _NOT_ USE AN EMPTY NUMBER OR FILL IN A GAP.
  */
-static ipf_error_entry_t ipf_errors[IPF_NUM_ERRORS] = {
+static ipf_error_entry_t ipf_errors[] = {
 	{	1,	"auth table locked/full" },
 	{	2,	"" },
-	{	3,	"copyinptr received bad address" },
-	{	4,	"copyoutptr received bad address" },
+	{	3,	"ipf_copyin_indirect received bad address" },
+	{	4,	"ipf_copyout_indirect received bad address" },
 	{	5,	"" },
 	{	6,	"cannot load a rule with FR_T_BUILTIN flag set" },
 	{	7,	"internal rule without FR_T_BUILDINT flag set" },
@@ -70,7 +70,7 @@ static ipf_error_entry_t ipf_errors[IPF_NUM_ERRORS] = {
 	{	42,	"ipfilter not enabled for NAT ioctl" },
 	{	43,	"ipfilter not enabled for state ioctl" },
 	{	44,	"ipfilter not enabled for auth ioctl" },
-	{	45,	"ipfilter not enbaled for sync ioctl" },
+	{	45,	"ipfilter not enabled for sync ioctl" },
 	{	46,	"ipfilter not enabled for scan ioctl" },
 	{	47,	"ipfilter not enabled for lookup ioctl" },
 	{	48,	"unrecognised device minor number for ioctl" },
@@ -144,7 +144,7 @@ static ipf_error_entry_t ipf_errors[IPF_NUM_ERRORS] = {
 	{	116,	"error copying in match array" },
 	{	117,	"match array type is not IPFOBJ_IPFEXPR" },
 	{	118,	"bad size for match array" },
-	{	119,	"cannot allocate memory for match aray" },
+	{	119,	"cannot allocate memory for match array" },
 	{	120,	"error copying in match array" },
 	{	121,	"error verifying contents of match array" },
 	{	122,	"need write permissions to set ipf lock status" },
@@ -177,6 +177,11 @@ static ipf_error_entry_t ipf_errors[IPF_NUM_ERRORS] = {
 	{	149,	"object size validation failed for kernel copyout" },
 	{	150,	"error copying data out for kernel copyout" },
 	{	151,	"version mismatch for kernel copyout" },
+	{	152,	"fr_names offset is wrapped negative" },
+	{	153,	"fr_names larger than fr_namelen" },
+	{	154,	"frentry larger than fr_size" },
+	{	155,	"frentry and fr_namelen mismatch fr_size" },
+	{	156,	"fr_namelen too large" },
 /* -------------------------------------------------------------------------- */
 	{	10001,	"could not find token for auth iterator" },
 	{	10002,	"write permissions require to add/remove auth rule" },
@@ -206,7 +211,7 @@ static ipf_error_entry_t ipf_errors[IPF_NUM_ERRORS] = {
 	{	30002,	"could not malloc memory for new hash table" },
 	{	30003,	"error coping in hash table structure" },
 	{	30004,	"hash table already exists" },
-	{	30005,	"mismach between new hash table and operation unit" },
+	{	30005,	"mismatch between new hash table and operation unit" },
 	{	30006,	"could not malloc memory for hash table base" },
 	{	30007,	"could not find hash table" },
 	{	30008,	"mismatch between hash table and operation unit" },
@@ -228,8 +233,10 @@ static ipf_error_entry_t ipf_errors[IPF_NUM_ERRORS] = {
 	{	30024,	"object size incorrect for hash table" },
 	{	30025,	"hash table size must be at least 1"},
 	{	30026,	"cannot allocate memory for hash table context" },
+	{	30027,	"hash table larger than maximum allowed" },
+	{	30028,	"hash table multiplication overflow" },
 /* -------------------------------------------------------------------------- */
-	{	40001,	"invalid minor device numebr for log read" },
+	{	40001,	"invalid minor device number for log read" },
 	{	40002,	"read size too small" },
 	{	40003,	"interrupted waiting for log data to read" },
 	{	40004,	"interrupted waiting for log data to read" },
@@ -276,7 +283,7 @@ static ipf_error_entry_t ipf_errors[IPF_NUM_ERRORS] = {
 	{	50038,	"invalid unit for lookup iterator" },
 	{	50039,	"invalid unit for lookup iterator" },
 	{	50040,	"could not find token for lookup iterator" },
-	{	50041,	"unrecognised object type for lookup interator" },
+	{	50041,	"unrecognised object type for lookup iterator" },
 	{	50042,	"error copying in lookup delete node operation" },
 /* -------------------------------------------------------------------------- */
 	{	60001,	"insufficient privilege for NAT write operation" },
@@ -333,7 +340,7 @@ log" },
 	{	60051,	"iterator error copying out NAT entry data" },
 	{	60052,	"iterator data supplied with NULL pointer" },
 	{	60053,	"unknown NAT iterator type" },
-	{	60054,	"unknwon next address type" },
+	{	60054,	"unknown next address type" },
 	{	60055,	"iterator suppled with unknown type for get-next" },
 	{	60056,	"unknown lookup group for next address" },
 	{	60057,	"error copying out NAT log flush results" },
@@ -356,6 +363,12 @@ log" },
 	{	60074,	"unknown next address type (ipv6)" },
 	{	60075,	"one object at a time must be copied" },
 	{	60076,	"NAT ioctl denied in jail without VNET" },
+	{	60077,	"in_names offset is wrapped negative" },
+	{	60078,	"in_names larger than in_namelen" },
+	{	60079,	"ipnat larger than in_size" },
+	{	60080,	"ipnat and in_namelen mismatch in_size" },
+	{	60081,	"ip_names runs off the end of ipnat" },
+	{	60082,	"in_namelen too large" },
 /* -------------------------------------------------------------------------- */
 	{	70001,	"incorrect object size to get pool stats" },
 	{	70002,	"could not malloc memory for new pool node" },
@@ -419,7 +432,7 @@ log" },
 	{	100006,	"" },
 	{	100007,	"" },
 	{	100008,	"need write permissions to flush state log" },
-	{	100009,	"erorr copyout results of flushing state log" },
+	{	100009,	"error copyout results of flushing state log" },
 	{	100010,	"need write permissions to turn state logging on/off" },
 	{	100011,	"error copying in new state logging state" },
 	{	100012,	"error copying out current state logging state" },
@@ -470,6 +483,11 @@ log" },
 	{	110019,	"sync update could not find NAT entry" },
 	{	110020,	"unrecognised sync NAT command" },
 	{	110021,	"ioctls are not handled with sync" },
+	/* missing entries 110022-110024 */
+	{	110025,	"invalid payload length (sync create state)" },
+	{	110026,	"invalid payload length (sync update state)" },
+	{	110027,	"invalid payload length (sync create NAT)" },
+	{	110028,	"invalid payload length (sync update NAT)" },
 /* -------------------------------------------------------------------------- */
 	{	120001,	"null data pointer for iterator" },
 	{	120002,	"unit outside of acceptable range" },
@@ -518,6 +536,7 @@ log" },
 	{	130016,	"finding pfil head failed" },
 	{	130017,	"ipfilter is already initialised and running" },
 	{	130018,	"ioctl denied in jail without VNET" },
+	{	130019,	"ioctl denied in jail" },
 };
 
 
@@ -527,7 +546,7 @@ find_error(int errnum)
 	ipf_error_entry_t *ie;
 
 	int l = -1, r = IPF_NUM_ERRORS + 1, step;
-	step = (r - l) / 2;;
+	step = (r - l) / 2;
 
 	while (step != 0) {
 		ie = ipf_errors + l + step;
@@ -538,7 +557,7 @@ find_error(int errnum)
 			r = step;
 		else
 			l = step;
-		step = (r - l) / 2;;
+		step = (r - l) / 2;
 	}
 
 	return (NULL);

@@ -1,6 +1,5 @@
-/* $FreeBSD$ */
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1998 The NetBSD Foundation, Inc. All rights reserved.
  * Copyright (c) 1998 Lennart Augustsson. All rights reserved.
@@ -955,7 +954,8 @@ done:
  * packet. This function is called having the "bus_mtx" locked.
  *------------------------------------------------------------------------*/
 void
-uhub_root_intr(struct usb_bus *bus, const uint8_t *ptr, uint8_t len)
+uhub_root_intr(struct usb_bus *bus,
+    const uint8_t *ptr __unused, uint8_t len __unused)
 {
 	USB_BUS_LOCK_ASSERT(bus, MA_OWNED);
 

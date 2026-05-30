@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2010-2011 Monthadar Al Jaberi, TerraNet AB
  * All rights reserved.
@@ -30,8 +30,6 @@
  * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGES.
- *
- * $FreeBSD$
  */
 
 /*
@@ -42,7 +40,7 @@
 #ifndef _DEV_WTAP_WTAPIOCTL_H
 #define _DEV_WTAP_WTAPIOCTL_H
 
-#include <sys/param.h>
+#include <sys/types.h>
 #include <net80211/ieee80211_radiotap.h>
 
 #define	SIOCGATHSTATS	_IOWR('i', 137, struct ifreq)

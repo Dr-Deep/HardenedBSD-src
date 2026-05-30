@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * Copyright (c) 2018-2021 Gavin D. Howard and contributors.
+ * Copyright (c) 2018-2025 Gavin D. Howard and contributors.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -77,7 +77,9 @@ bc_opt_longopt(const BcOptLong* longopts, int c)
 
 	BC_UNREACHABLE
 
+#if !BC_CLANG
 	return "NULL";
+#endif // !BC_CLANG
 }
 
 /**
@@ -141,8 +143,8 @@ static int
 bc_opt_parseShort(BcOpt* o, const BcOptLong* longopts)
 {
 	int type;
-	char* next;
-	char* option = o->argv[o->optind];
+	const char* next;
+	const char* option = o->argv[o->optind];
 	int ret = -1;
 
 	// Make sure to clear these.
@@ -197,11 +199,13 @@ bc_opt_parseShort(BcOpt* o, const BcOptLong* longopts)
 
 		case BC_OPT_REQUIRED_BC_ONLY:
 		{
+#if DC_ENABLED
 			if (BC_IS_DC)
 			{
 				bc_opt_error(BC_ERR_FATAL_OPTION, option[0],
 				             bc_opt_longopt(longopts, option[0]), true);
 			}
+#endif // DC_ENABLED
 
 			// Fallthrough
 			BC_FALLTHROUGH
@@ -269,8 +273,8 @@ bc_opt_longoptsMatch(const char* name, const char* option)
  * @param option  The option to find the argument of.
  * @return        A pointer to the argument of the option, or NULL if none.
  */
-static char*
-bc_opt_longoptsArg(char* option)
+static const char*
+bc_opt_longoptsArg(const char* option)
 {
 	// Find the end or equals sign.
 	for (; *option && *option != '='; ++option)
@@ -286,7 +290,7 @@ int
 bc_opt_parse(BcOpt* o, const BcOptLong* longopts)
 {
 	size_t i;
-	char* option;
+	const char* option;
 	bool empty;
 
 	// This just eats empty options.
@@ -328,7 +332,7 @@ bc_opt_parse(BcOpt* o, const BcOptLong* longopts)
 		// If we have a match...
 		if (bc_opt_longoptsMatch(name, option))
 		{
-			char* arg;
+			const char* arg;
 
 			// Get the option char and the argument.
 			o->optopt = longopts[i].val;
@@ -375,11 +379,13 @@ bc_opt_parse(BcOpt* o, const BcOptLong* longopts)
 
 	BC_UNREACHABLE
 
+#if !BC_CLANG
 	return -1;
+#endif // !BC_CLANG
 }
 
 void
-bc_opt_init(BcOpt* o, char* argv[])
+bc_opt_init(BcOpt* o, const char* argv[])
 {
 	o->argv = argv;
 	o->optind = 1;

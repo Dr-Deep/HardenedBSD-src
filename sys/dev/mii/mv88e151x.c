@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2019 Rubicon Communications, LLC (Netgate)
  * All rights reserved.
@@ -31,8 +31,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /* Driver for the Marvell 88e151x gigabit ethernet PHY. */
 
 #include <sys/param.h>
@@ -99,7 +97,7 @@ mv88e151x_attach(device_t dev)
 {
 	const struct mii_attach_args *ma;
 	struct mii_softc *sc;
-	uint32_t cop_cap, cop_extcap;
+	uint32_t cop_cap = 0, cop_extcap = 0;
 
 	sc = device_get_softc(dev);
 	ma = device_get_ivars(dev);
@@ -226,10 +224,12 @@ mv88e151x_fiber_status(struct mii_softc *phy)
 		else if (reg & MV88E151X_STATUS_LINK &&
 		    reg & MV88E151X_STATUS_SYNC &&
 		    (reg & MV88E151X_STATUS_ENERGY) == 0) {
-			if ((reg & MV88E151X_STATUS_SPEED_MASK) ==
+			if (((reg & MV88E151X_STATUS_SPEED_MASK) >>
+			    MV88E151X_STATUS_SPEED_SHIFT) ==
 			    MV88E151X_STATUS_SPEED_1000)
 				mii->mii_media_active |= IFM_1000_SX;
-			else if ((reg & MV88E151X_STATUS_SPEED_MASK) ==
+			else if (((reg & MV88E151X_STATUS_SPEED_MASK) >>
+			    MV88E151X_STATUS_SPEED_SHIFT) ==
 			    MV88E151X_STATUS_SPEED_100)
 				mii->mii_media_active |= IFM_100_FX;
 			else

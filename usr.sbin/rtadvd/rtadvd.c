@@ -1,4 +1,3 @@
-/*	$FreeBSD$	*/
 /*	$KAME: rtadvd.c,v 1.82 2003/08/05 12:34:23 itojun Exp $	*/
 
 /*-
@@ -138,6 +137,8 @@ union nd_opt {
 #define NDOPT_FLAG_MTU		(1 << 4)
 #define NDOPT_FLAG_RDNSS	(1 << 5)
 #define NDOPT_FLAG_DNSSL	(1 << 6)
+#define NDOPT_FLAG_PREF64	(1 << 7)
+#define NDOPT_FLAG_ROUTEINFO	(1 << 8)
 
 static uint32_t ndopt_flags[] = {
 	[ND_OPT_SOURCE_LINKADDR]	= NDOPT_FLAG_SRCLINKADDR,
@@ -147,6 +148,8 @@ static uint32_t ndopt_flags[] = {
 	[ND_OPT_MTU]			= NDOPT_FLAG_MTU,
 	[ND_OPT_RDNSS]			= NDOPT_FLAG_RDNSS,
 	[ND_OPT_DNSSL]			= NDOPT_FLAG_DNSSL,
+	[ND_OPT_PREF64]			= NDOPT_FLAG_PREF64,
+	[ND_OPT_ROUTE_INFO]		= NDOPT_FLAG_ROUTEINFO,
 };
 
 static void	rtadvd_shutdown(void);
@@ -329,7 +332,7 @@ main(int argc, char *argv[])
 			    "<%s> there's no timer. waiting for inputs",
 			    __func__);
 		}
-		if ((i = poll(set, sizeof(set)/sizeof(set[0]),
+		if ((i = poll(set, nitems(set),
 			    timeout ? (timeout->tv_sec * 1000 +
 				timeout->tv_nsec / 1000 / 1000) : INFTIM)) < 0) {
 
@@ -371,6 +374,7 @@ rtadvd_shutdown(void)
 	struct rainfo *rai;
 	struct rdnss *rdn;
 	struct dnssl *dns;
+	struct rtinfo *rti;
 
 	if (wait_shutdown) {
 		syslog(LOG_INFO,
@@ -415,6 +419,8 @@ rtadvd_shutdown(void)
 			rdn->rd_ltime = 0;
 		TAILQ_FOREACH(dns, &rai->rai_dnssl, dn_next)
 			dns->dn_ltime = 0;
+		TAILQ_FOREACH(rti, &rai->rai_route, rti_next)
+			rti->rti_ltime = 0;
 	}
 	TAILQ_FOREACH(ifi, &ifilist, ifi_next) {
 		if (!ifi->ifi_persist)
@@ -705,8 +711,6 @@ rtmsg_input(struct sockinfo *s)
 			set_short_delay(ifi);
 		}
 	}
-
-	return;
 }
 
 void
@@ -898,8 +902,6 @@ rtadvd_input(struct sockinfo *s)
 		syslog(LOG_ERR, "invalid icmp type(%d)", icp->icmp6_type);
 		return;
 	}
-
-	return;
 }
 
 static void
@@ -991,7 +993,6 @@ rs_input(int len, struct nd_router_solicit *rs,
 
   done:
 	free_ndopts(&ndopts);
-	return;
 }
 
 static void
@@ -1089,7 +1090,8 @@ ra_input(int len, struct nd_router_advert *nra,
 	error = nd6_options((struct nd_opt_hdr *)(nra + 1),
 	    len - sizeof(struct nd_router_advert), &ndopts,
 	    NDOPT_FLAG_SRCLINKADDR | NDOPT_FLAG_PREFIXINFO | NDOPT_FLAG_MTU |
-	    NDOPT_FLAG_RDNSS | NDOPT_FLAG_DNSSL);
+	    NDOPT_FLAG_RDNSS | NDOPT_FLAG_DNSSL | NDOPT_FLAG_PREF64 |
+	    NDOPT_FLAG_ROUTEINFO);
 	if (error) {
 		syslog(LOG_INFO,
 		    "<%s> ND option check failed for an RA from %s on %s",
@@ -1152,19 +1154,6 @@ ra_input(int len, struct nd_router_advert *nra,
 			sizeof(ntopbuf)), on_off[rai->rai_otherflg]);
 		inconsistent++;
 	}
-#ifdef DRAFT_IETF_6MAN_IPV6ONLY_FLAG
-	/* S "IPv6-Only" (Six, Silence-IPv4) flag */
-	if ((nra->nd_ra_flags_reserved & ND_RA_FLAG_IPV6_ONLY) !=
-	    rai->rai_ipv6onlyflg) {
-		syslog(LOG_NOTICE,
-		    "S flag inconsistent on %s:"
-		    " %s from %s, %s from us",
-		    ifi->ifi_ifname, on_off[!rai->rai_ipv6onlyflg],
-		    inet_ntop(AF_INET6, &from->sin6_addr, ntopbuf,
-			sizeof(ntopbuf)), on_off[rai->rai_ipv6onlyflg]);
-		inconsistent++;
-	}
-#endif
 	/* Reachable Time */
 	reachabletime = ntohl(nra->nd_ra_reachable);
 	if (reachabletime && rai->rai_reachabletime &&
@@ -1221,7 +1210,6 @@ ra_input(int len, struct nd_router_advert *nra,
 
   done:
 	free_ndopts(&ndopts);
-	return;
 }
 
 static uint32_t
@@ -1435,7 +1423,9 @@ nd6_options(struct nd_opt_hdr *hdr, int limit,
 
 		if (hdr->nd_opt_type > ND_OPT_MTU &&
 		    hdr->nd_opt_type != ND_OPT_RDNSS &&
-		    hdr->nd_opt_type != ND_OPT_DNSSL) {
+		    hdr->nd_opt_type != ND_OPT_DNSSL &&
+		    hdr->nd_opt_type != ND_OPT_PREF64 &&
+		    hdr->nd_opt_type != ND_OPT_ROUTE_INFO) {
 			syslog(LOG_INFO, "<%s> unknown ND option(type %d)",
 			    __func__, hdr->nd_opt_type);
 			continue;
@@ -1469,6 +1459,11 @@ nd6_options(struct nd_opt_hdr *hdr, int limit,
 		case ND_OPT_PREFIX_INFORMATION:
 			if (optlen == sizeof(struct nd_opt_prefix_info))
 				break;
+			goto skip;
+		case ND_OPT_ROUTE_INFO:
+			if (optlen >= 8 && optlen <= 24 &&
+			    (optlen - sizeof(struct nd_opt_route_info)) % 8 == 0)
+				break;
 skip:
 			syslog(LOG_INFO, "<%s> invalid option length",
 			    __func__);
@@ -1480,6 +1475,8 @@ skip:
 		case ND_OPT_REDIRECTED_HEADER:
 		case ND_OPT_RDNSS:
 		case ND_OPT_DNSSL:
+		case ND_OPT_PREF64:
+		case ND_OPT_ROUTE_INFO:
 			break;	/* we don't care about these options */
 		case ND_OPT_SOURCE_LINKADDR:
 		case ND_OPT_MTU:
@@ -1613,8 +1610,6 @@ sock_open(struct sockinfo *s)
 	sndmhdr.msg_iovlen = 1;
 	sndmhdr.msg_control = (caddr_t)sndcmsgbuf;
 	sndmhdr.msg_controllen = sndcmsgbuflen;
-
-	return;
 }
 
 /* open a routing socket to watch the routing table */
@@ -1916,6 +1911,4 @@ ra_timer_update(void *arg, struct timespec *tm)
 	    "<%s> RA timer on %s is set to %ld:%ld",
 	    __func__, ifi->ifi_ifname,
 	    (long int)tm->tv_sec, (long int)tm->tv_nsec / 1000);
-
-	return;
 }

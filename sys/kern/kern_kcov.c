@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (C) 2018 The FreeBSD Foundation. All rights reserved.
  * Copyright (C) 2018, 2019 Andrew Turner
@@ -31,17 +31,12 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /* Interceptors are required for KMSAN. */
 #if defined(KASAN) || defined(KCSAN)
 #define	SAN_RUNTIME
 #endif
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -65,6 +60,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_page.h>
 #include <vm/vm_pager.h>
 #include <vm/vm_param.h>
+#include <vm/vm_radix.h>
 
 MALLOC_DEFINE(M_KCOV_INFO, "kcovinfo", "KCOV info type");
 
@@ -128,7 +124,7 @@ typedef enum {
 struct kcov_info {
 	struct thread	*thread;	/* (l) */
 	vm_object_t	bufobj;		/* (o) */
-	vm_offset_t	kvaddr;		/* (o) */
+	void		*kvaddr;	/* (o) */
 	size_t		entries;	/* (o) */
 	size_t		bufsize;	/* (o) */
 	kcov_state_t	state;		/* (s) */
@@ -210,9 +206,9 @@ trace_pc(uintptr_t ret)
 	if (info->mode != KCOV_MODE_TRACE_PC)
 		return;
 
-	KASSERT(info->kvaddr != 0, ("%s: NULL buf while running", __func__));
+	KASSERT(info->kvaddr != NULL, ("%s: NULL buf while running", __func__));
 
-	buf = (uint64_t *)info->kvaddr;
+	buf = info->kvaddr;
 
 	/* The first entry of the buffer holds the index */
 	index = buf[0];
@@ -241,9 +237,9 @@ trace_cmp(uint64_t type, uint64_t arg1, uint64_t arg2, uint64_t ret)
 	if (info->mode != KCOV_MODE_TRACE_CMP)
 		return (false);
 
-	KASSERT(info->kvaddr != 0, ("%s: NULL buf while running", __func__));
+	KASSERT(info->kvaddr != NULL, ("%s: NULL buf while running", __func__));
 
-	buf = (uint64_t *)info->kvaddr;
+	buf = info->kvaddr;
 
 	/* The first entry of the buffer holds the index */
 	index = buf[0];
@@ -351,7 +347,7 @@ kcov_mmap_single(struct cdev *dev, vm_ooffset_t *offset, vm_size_t size,
 	if ((error = devfs_get_cdevpriv((void **)&info)) != 0)
 		return (error);
 
-	if (info->kvaddr == 0 || size / KCOV_ELEMENT_SIZE != info->entries)
+	if (info->kvaddr == NULL || size / KCOV_ELEMENT_SIZE != info->entries)
 		return (EINVAL);
 
 	vm_object_reference(info->bufobj);
@@ -366,7 +362,7 @@ kcov_alloc(struct kcov_info *info, size_t entries)
 	size_t n, pages;
 	vm_page_t m;
 
-	KASSERT(info->kvaddr == 0, ("kcov_alloc: Already have a buffer"));
+	KASSERT(info->kvaddr == NULL, ("kcov_alloc: Already have a buffer"));
 	KASSERT(info->state == KCOV_STATE_OPEN,
 	    ("kcov_alloc: Not in open state (%x)", info->state));
 
@@ -389,7 +385,7 @@ kcov_alloc(struct kcov_info *info, size_t entries)
 		    VM_ALLOC_ZERO | VM_ALLOC_WIRED);
 		vm_page_valid(m);
 		vm_page_xunbusy(m);
-		pmap_qenter(info->kvaddr + n * PAGE_SIZE, &m, 1);
+		pmap_qenter((char *)info->kvaddr + n * PAGE_SIZE, &m, 1);
 	}
 	VM_OBJECT_WUNLOCK(info->bufobj);
 
@@ -401,20 +397,19 @@ kcov_alloc(struct kcov_info *info, size_t entries)
 static void
 kcov_free(struct kcov_info *info)
 {
+	struct pctrie_iter pages;
 	vm_page_t m;
-	size_t i;
 
-	if (info->kvaddr != 0) {
+	if (info->kvaddr != NULL) {
 		pmap_qremove(info->kvaddr, info->bufsize / PAGE_SIZE);
 		kva_free(info->kvaddr, info->bufsize);
 	}
 	if (info->bufobj != NULL) {
+		vm_page_iter_limit_init(&pages, info->bufobj,
+		    info->bufsize / PAGE_SIZE);
 		VM_OBJECT_WLOCK(info->bufobj);
-		m = vm_page_lookup(info->bufobj, 0);
-		for (i = 0; i < info->bufsize / PAGE_SIZE; i++) {
+		VM_RADIX_FORALL(m, &pages)
 			vm_page_unwire_noq(m);
-			m = vm_page_next(m);
-		}
 		VM_OBJECT_WUNLOCK(info->bufobj);
 		vm_object_deallocate(info->bufobj);
 	}

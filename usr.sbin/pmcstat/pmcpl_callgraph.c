@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2005-2007, Joseph Koshy
  * Copyright (c) 2007 The FreeBSD Foundation
@@ -34,9 +34,6 @@
  * Transform a hwpmc(4) log into human readable form, and into
  * gprof(1) compatible profiles.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/endian.h>
@@ -361,11 +358,11 @@ pmcpl_cg_process(struct pmcstat_process *pp, struct pmcstat_pmcrecord *pmcr,
 	 * For each return address in the call chain record, subject
 	 * to the maximum depth desired.
 	 * - Find the image associated with the sample.  Stop if there
-	 *   there is no valid image at that address.
+	 *   is no valid image at that address.
 	 * - Find the function that overlaps the return address.
 	 * - If found: use the start address of the function.
 	 *   If not found (say an object's symbol table is not present or
-	 *   is incomplete), round down to th gprof bucket granularity.
+	 *   is incomplete), round down to the gprof bucket granularity.
 	 * - Convert return virtual address to an offset in the image.
 	 * - Look for a child with the same {offset,image} tuple,
 	 *   inserting one if needed.

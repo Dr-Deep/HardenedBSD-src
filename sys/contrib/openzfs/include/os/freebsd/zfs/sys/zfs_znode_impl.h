@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -28,6 +29,7 @@
 #ifndef	_FREEBSD_ZFS_SYS_ZNODE_IMPL_H
 #define	_FREEBSD_ZFS_SYS_ZNODE_IMPL_H
 
+#ifdef _KERNEL
 #include <sys/list.h>
 #include <sys/dmu.h>
 #include <sys/sa.h>
@@ -41,6 +43,7 @@
 #include <sys/zfs_project.h>
 #include <vm/vm_object.h>
 #include <sys/uio.h>
+#endif
 
 #ifdef	__cplusplus
 extern "C" {
@@ -53,13 +56,15 @@ extern "C" {
  */
 #define	ZNODE_OS_FIELDS                 \
 	struct zfsvfs	*z_zfsvfs;      \
-	vnode_t		*z_vnode;       \
+	struct vnode	*z_vnode;       \
 	char		*z_cached_symlink;	\
 	uint64_t		z_uid;          \
 	uint64_t		z_gid;          \
 	uint64_t		z_gen;          \
 	uint64_t		z_atime[2];     \
 	uint64_t		z_links;
+
+#ifdef _KERNEL
 
 #define	ZFS_LINK_MAX	UINT64_MAX
 
@@ -116,34 +121,31 @@ typedef struct zfs_soft_state {
 #define	Z_ISLNK(type) ((type) == VLNK)
 #define	Z_ISDIR(type) ((type) == VDIR)
 
-#define	zn_has_cached_data(zp)		vn_has_cached_data(ZTOV(zp))
+#define	zn_has_cached_data(zp, start, end) \
+    vn_has_cached_data(ZTOV(zp))
 #define	zn_flush_cached_data(zp, sync)	vn_flush_cached_data(ZTOV(zp), sync)
-#define	zn_rlimit_fsize(zp, uio) \
+#define	zn_rlimit_fsize(size)		zfs_rlimit_fsize(size)
+#define	zn_rlimit_fsize_uio(zp, uio) \
     vn_rlimit_fsize(ZTOV(zp), GET_UIO_STRUCT(uio), zfs_uio_td(uio))
 
-#define	ZFS_ENTER_ERROR(zfsvfs, error) do {			\
-	ZFS_TEARDOWN_ENTER_READ((zfsvfs), FTAG);		\
-	if (__predict_false((zfsvfs)->z_unmounted)) {		\
-		ZFS_TEARDOWN_EXIT_READ(zfsvfs, FTAG);		\
-		return (error);					\
-	}							\
-} while (0)
-
 /* Called on entry to each ZFS vnode and vfs operation  */
-#define	ZFS_ENTER(zfsvfs)	ZFS_ENTER_ERROR(zfsvfs, EIO)
+static inline int
+zfs_enter(zfsvfs_t *zfsvfs, const char *tag)
+{
+	ZFS_TEARDOWN_ENTER_READ(zfsvfs, tag);
+	if (__predict_false((zfsvfs)->z_unmounted)) {
+		ZFS_TEARDOWN_EXIT_READ(zfsvfs, tag);
+		return (SET_ERROR(EIO));
+	}
+	return (0);
+}
 
 /* Must be called before exiting the vop */
-#define	ZFS_EXIT(zfsvfs)	ZFS_TEARDOWN_EXIT_READ(zfsvfs, FTAG)
-
-#define	ZFS_VERIFY_ZP_ERROR(zp, error) do {			\
-	if (__predict_false((zp)->z_sa_hdl == NULL)) {		\
-		ZFS_EXIT((zp)->z_zfsvfs);			\
-		return (error);					\
-	}							\
-} while (0)
-
-/* Verifies the znode is valid */
-#define	ZFS_VERIFY_ZP(zp)	ZFS_VERIFY_ZP_ERROR(zp, EIO)
+static inline void
+zfs_exit(zfsvfs_t *zfsvfs, const char *tag)
+{
+	ZFS_TEARDOWN_EXIT_READ(zfsvfs, tag);
+}
 
 /*
  * Macros for dealing with dmu_buf_hold
@@ -172,17 +174,24 @@ typedef struct zfs_soft_state {
 	(tp)->tv_nsec = (long)(stmp)[1];		\
 }
 #define	ZFS_ACCESSTIME_STAMP(zfsvfs, zp) \
-	if ((zfsvfs)->z_atime && !((zfsvfs)->z_vfs->vfs_flag & VFS_RDONLY)) \
+	if ((zfsvfs)->z_atime && !((zfsvfs)->z_vfs->vfs_flag & VFS_RDONLY) && \
+	    (!(zfsvfs)->z_relatime || zfs_relatime_need_update(zp))) \
 		zfs_tstamp_update_setup_ext(zp, ACCESSED, NULL, NULL, B_FALSE);
 
 extern void	zfs_tstamp_update_setup_ext(struct znode *,
     uint_t, uint64_t [2], uint64_t [2], boolean_t have_tx);
+extern boolean_t zfs_relatime_need_update(const struct znode *);
 extern void zfs_znode_free(struct znode *);
 
 extern zil_replay_func_t *const zfs_replay_vector[TX_MAX_TYPE];
 
 extern int zfs_znode_parent_and_name(struct znode *zp, struct znode **dzpp,
-    char *buf);
+    char *buf, uint64_t buflen);
+
+extern int zfs_rlimit_fsize(off_t fsize);
+
+#endif	/* _KERNEL */
+
 #ifdef	__cplusplus
 }
 #endif

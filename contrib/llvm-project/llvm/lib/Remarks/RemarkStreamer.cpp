@@ -12,6 +12,7 @@
 
 #include "llvm/Remarks/RemarkStreamer.h"
 #include "llvm/Support/CommandLine.h"
+#include <optional>
 
 using namespace llvm;
 using namespace llvm::remarks;
@@ -20,14 +21,15 @@ static cl::opt<cl::boolOrDefault> EnableRemarksSection(
     "remarks-section",
     cl::desc(
         "Emit a section containing remark diagnostics metadata. By default, "
-        "this is enabled for the following formats: yaml-strtab, bitstream."),
+        "this is enabled for the following formats: bitstream."),
     cl::init(cl::BOU_UNSET), cl::Hidden);
 
 RemarkStreamer::RemarkStreamer(
     std::unique_ptr<remarks::RemarkSerializer> RemarkSerializer,
-    Optional<StringRef> FilenameIn)
+    std::optional<StringRef> FilenameIn)
     : RemarkSerializer(std::move(RemarkSerializer)),
-      Filename(FilenameIn ? Optional<std::string>(FilenameIn->str()) : None) {}
+      Filename(FilenameIn ? std::optional<std::string>(FilenameIn->str())
+                          : std::nullopt) {}
 
 Error RemarkStreamer::setFilter(StringRef Filter) {
   Regex R = Regex(Filter);
@@ -61,9 +63,7 @@ bool RemarkStreamer::needsSection() const {
 
   // Only some formats need a section:
   // * bitstream
-  // * yaml-strtab
   switch (RemarkSerializer->SerializerFormat) {
-  case remarks::Format::YAMLStrTab:
   case remarks::Format::Bitstream:
     return true;
   default:

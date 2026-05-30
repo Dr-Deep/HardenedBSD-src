@@ -2,6 +2,8 @@
  * Copyright (c) 2004 Ted Unangst and Todd Miller
  * All rights reserved.
  *
+ * Copyright 2023 Oxide Computer Company
+ *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
@@ -17,9 +19,6 @@
  *	$OpenBSD: strtonum.c,v 1.7 2013/04/17 18:40:58 tedu Exp $
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <errno.h>
 #include <limits.h>
 #include <stdlib.h>
@@ -27,10 +26,13 @@ __FBSDID("$FreeBSD$");
 #define	INVALID		1
 #define	TOOSMALL	2
 #define	TOOLARGE	3
+#define	BADBASE		4
+
+#define	MBASE		('z' - 'a' + 1 + 10)
 
 long long
-strtonum(const char *numstr, long long minval, long long maxval,
-    const char **errstrp)
+strtonumx(const char *numstr, long long minval, long long maxval,
+    const char **errstrp, int base)
 {
 	long long ll = 0;
 	int error = 0;
@@ -38,20 +40,23 @@ strtonum(const char *numstr, long long minval, long long maxval,
 	struct errval {
 		const char *errstr;
 		int err;
-	} ev[4] = {
+	} ev[5] = {
 		{ NULL,		0 },
 		{ "invalid",	EINVAL },
 		{ "too small",	ERANGE },
 		{ "too large",	ERANGE },
+		{ "unparsable; invalid base specified", EINVAL },
 	};
 
 	ev[0].err = errno;
 	errno = 0;
 	if (minval > maxval) {
 		error = INVALID;
+	} else if (base < 0 || base > MBASE || base == 1) {
+		error = BADBASE;
 	} else {
-		ll = strtoll(numstr, &ep, 10);
-		if (errno == EINVAL || numstr == ep || *ep != '\0')
+		ll = strtoll(numstr, &ep, base);
+		if (numstr == ep || *ep != '\0')
 			error = INVALID;
 		else if ((ll == LLONG_MIN && errno == ERANGE) || ll < minval)
 			error = TOOSMALL;
@@ -61,8 +66,15 @@ strtonum(const char *numstr, long long minval, long long maxval,
 	if (errstrp != NULL)
 		*errstrp = ev[error].errstr;
 	errno = ev[error].err;
-	if (error)
+	if (error != 0)
 		ll = 0;
 
 	return (ll);
+}
+
+long long
+strtonum(const char *numstr, long long minval, long long maxval,
+    const char **errstrp)
+{
+	return (strtonumx(numstr, minval, maxval, errstrp, 10));
 }

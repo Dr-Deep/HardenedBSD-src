@@ -1,6 +1,5 @@
-# $FreeBSD$
-
 PACKAGE=	kerberos
+LIB_PACKAGE=
 
 LIB=	com_err
 SRCS=	com_err.c error.c
@@ -9,7 +8,7 @@ MAN=	com_err.3
 COM_ERRDIR=	${SRCTOP}/contrib/com_err
 CFLAGS+=	-I${COM_ERRDIR}
 
-LDFLAGS=	-Wl,--no-undefined
+LDFLAGS+=	-Wl,--no-undefined
 VERSION_MAP=	${COM_ERRDIR}/version-script.map
 
 .include <bsd.lib.mk>

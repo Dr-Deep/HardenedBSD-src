@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2018 The FreeBSD Foundation
  *
@@ -26,8 +26,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _MACHINE_PMAP_BASE_H_
@@ -42,8 +40,8 @@ struct pmap_methods {
 	void (*pm_remap_lowptdi)(bool);
 	void (*pm_align_superpage)(vm_object_t object, vm_ooffset_t offset,
 	    vm_offset_t *addr, vm_size_t size);
-	vm_offset_t (*pm_quick_enter_page)(vm_page_t m);
-	void (*pm_quick_remove_page)(vm_offset_t addr);
+	void *(*pm_quick_enter_page)(vm_page_t m);
+	void (*pm_quick_remove_page)(void *addr);
 	void *(*pm_trm_alloc)(size_t size, int flags);
 	void (*pm_trm_free)(void *addr, size_t size);
 	vm_offset_t (*pm_get_map_low)(void);
@@ -60,8 +58,8 @@ struct pmap_methods {
 	void *(*pm_bios16_enter)(void);
 	void (*pm_bios16_leave)(void *handle);
 	void (*pm_bootstrap)(vm_paddr_t firstaddr);
-	boolean_t (*pm_is_valid_memattr)(pmap_t, vm_memattr_t);
-	int (*pm_cache_bits)(pmap_t, int, boolean_t);
+	bool (*pm_is_valid_memattr)(pmap_t, vm_memattr_t);
+	int (*pm_cache_bits)(pmap_t, int, bool);
 	bool (*pm_ps_enabled)(pmap_t);
 	void (*pm_pinit0)(pmap_t);
 	int (*pm_pinit)(pmap_t);
@@ -69,7 +67,7 @@ struct pmap_methods {
 	void (*pm_activate_boot)(pmap_t);
 	void (*pm_advise)(pmap_t, vm_offset_t, vm_offset_t, int);
 	void (*pm_clear_modify)(vm_page_t);
-	int (*pm_change_attr)(vm_offset_t, vm_size_t, int);
+	int (*pm_change_attr)(void *, vm_size_t, int);
 	int (*pm_mincore)(pmap_t, vm_offset_t, vm_paddr_t *);
 	void (*pm_copy)(pmap_t, pmap_t, vm_offset_t, vm_size_t, vm_offset_t);
 	void (*pm_copy_page)(vm_page_t, vm_page_t);
@@ -86,30 +84,30 @@ struct pmap_methods {
 	void (*pm_object_init_pt)(pmap_t, vm_offset_t, vm_object_t,
 	    vm_pindex_t, vm_size_t);
 	void (*pm_unwire)(pmap_t, vm_offset_t, vm_offset_t);
-	boolean_t (*pm_page_exists_quick)(pmap_t, vm_page_t);
+	bool (*pm_page_exists_quick)(pmap_t, vm_page_t);
 	int (*pm_page_wired_mappings)(vm_page_t);
-	boolean_t (*pm_page_is_mapped)(vm_page_t);
+	bool (*pm_page_is_mapped)(vm_page_t);
 	void (*pm_remove_pages)(pmap_t);
-	boolean_t (*pm_is_modified)(vm_page_t);
-	boolean_t (*pm_is_prefaultable)(pmap_t, vm_offset_t);
-	boolean_t (*pm_is_referenced)(vm_page_t);
+	bool (*pm_is_modified)(vm_page_t);
+	bool (*pm_is_prefaultable)(pmap_t, vm_offset_t);
+	bool (*pm_is_referenced)(vm_page_t);
 	void (*pm_remove_write)(vm_page_t);
 	int (*pm_ts_referenced)(vm_page_t);
 	void *(*pm_mapdev_attr)(vm_paddr_t, vm_size_t, int, int);
-	void (*pm_unmapdev)(vm_offset_t, vm_size_t);
+	void (*pm_unmapdev)(void *, vm_size_t);
 	void (*pm_page_set_memattr)(vm_page_t, vm_memattr_t);
 	vm_paddr_t (*pm_extract)(pmap_t, vm_offset_t);
 	vm_page_t (*pm_extract_and_hold)(pmap_t, vm_offset_t, vm_prot_t);
-	vm_offset_t (*pm_map)(vm_offset_t *, vm_paddr_t, vm_paddr_t, int);
-	void (*pm_qenter)(vm_offset_t sva, vm_page_t *, int);
-	void (*pm_qremove)(vm_offset_t, int);
+	void *(*pm_map)(vm_offset_t *, vm_paddr_t, vm_paddr_t, int);
+	void (*pm_qenter)(void *sva, vm_page_t *, int);
+	void (*pm_qremove)(void *, int);
 	void (*pm_release)(pmap_t);
 	void (*pm_protect)(pmap_t, vm_offset_t, vm_offset_t, vm_prot_t);
 	void (*pm_remove)(pmap_t, vm_offset_t, vm_offset_t);
 	void (*pm_remove_all)(vm_page_t);
 	void (*pm_init)(void);
 	void (*pm_init_pat)(void);
-	void (*pm_growkernel)(vm_offset_t);
+	int (*pm_growkernel)(vm_offset_t);
 	void (*pm_invalidate_page)(pmap_t, vm_offset_t);
 	void (*pm_invalidate_range)(pmap_t, vm_offset_t, vm_offset_t);
 	void (*pm_invalidate_all)(pmap_t);

@@ -1,5 +1,4 @@
 /*
- * $FreeBSD$
  */
 
 /*
@@ -137,7 +136,6 @@ FBSDprivate_1.0 {
 	__pthread_mutex_lock;
 	__pthread_mutex_timedlock;
 	__pthread_mutex_trylock;
-	__pthread_distribute_static_tls;
 	_pthread_atfork;
 	_pthread_barrier_destroy;
 	_pthread_barrier_init;
@@ -299,6 +297,9 @@ FBSDprivate_1.0 {
 
 	/* ABI bug workaround, indicate that pli->rtli_version is valid */
 	_pli_rtli_version;
+
+	/* Expose stub for libsys filter */
+	_umtx_op_err;
 };
 
 FBSD_1.1 {
@@ -334,4 +335,14 @@ FBSD_1.6 {
 	 pthread_getname_np;
 	 pthread_peekjoin_np;
 	 pthread_setname_np;
+};
+
+FBSD_1.8 {
+	 pthread_signals_block_np;
+	 pthread_signals_unblock_np;
+	 pthread_sigqueue;
+};
+
+FBSD_1.9 {
+	 pthread_tryjoin_np;
 };

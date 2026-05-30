@@ -33,15 +33,15 @@
  * Which is the new name for an in kernel routing (next hop) table.	*
  ***********************************************************************/
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 #include "opt_route.h"
 
 #include <sys/param.h>
+#include <sys/eventhandler.h>
 #include <sys/socket.h>
 #include <sys/systm.h>
 #include <sys/malloc.h>
 #include <sys/jail.h>
+#include <sys/osd.h>
 #include <sys/proc.h>
 #include <sys/sysctl.h>
 #include <sys/syslog.h>
@@ -53,6 +53,7 @@ __FBSDID("$FreeBSD$");
 
 #include <net/vnet.h>
 #include <net/route.h>
+#include <net/route/route_ctl.h>
 #include <net/route/route_var.h>
 
 /* Kernel config default option. */
@@ -82,7 +83,7 @@ VNET_DEFINE_STATIC(struct sx, rtables_lock);
 VNET_DEFINE_STATIC(struct rib_head **, rt_tables);
 #define	V_rt_tables	VNET(rt_tables)
 
-VNET_DEFINE(uint32_t, _rt_numfibs) = RT_NUMFIBS;
+VNET_DEFINE(uint32_t, _rt_numfibs) = 1;
 
 /*
  * Handler for net.my_fibnum.
@@ -131,7 +132,7 @@ sysctl_fibs(SYSCTL_HANDLER_ARGS)
 		new_fibs = normalize_num_rtables(new_fibs);
 
 		if (new_fibs < V_rt_numfibs)
-			error = ENOTCAPABLE;
+			error = EINVAL;
 		if (new_fibs > V_rt_numfibs)
 			grow_rtables(new_fibs);
 	}
@@ -161,6 +162,39 @@ sys_setfib(struct thread *td, struct setfib_args *uap)
 
 	return (error);
 }
+
+static int
+rtables_check_proc_fib(void *obj, void *data)
+{
+	struct prison *pr = obj;
+	struct thread *td = data;
+	int error = 0;
+
+	if (TD_TO_VNET(td) != pr->pr_vnet) {
+		/* number of fibs may be lower in a new vnet */
+		CURVNET_SET(pr->pr_vnet);
+		if (td->td_proc->p_fibnum >= V_rt_numfibs)
+			error = EINVAL;
+		CURVNET_RESTORE();
+	}
+	return (error);
+}
+
+static void
+rtables_prison_destructor(void *data)
+{
+}
+
+static void
+rtables_init(void *dummy __unused)
+{
+	osd_method_t methods[PR_MAXMETHOD] = {
+	    [PR_METHOD_ATTACH] =	rtables_check_proc_fib,
+	};
+	osd_jail_register(rtables_prison_destructor, methods);
+}
+SYSINIT(rtables_init, SI_SUB_PROTO_DOMAIN, SI_ORDER_THIRD, rtables_init, NULL);
+
 
 /*
  * If required, copy interface routes from existing tables to the
@@ -197,11 +231,6 @@ grow_rtables(uint32_t num_tables)
 	new_rt_tables = mallocarray(num_tables * (AF_MAX + 1), sizeof(void *),
 	    M_RTABLE, M_WAITOK | M_ZERO);
 
-	if ((num_tables > 1) && (V_rt_add_addr_allfibs == 0))
-		printf("WARNING: Adding ifaddrs to all fibs has been turned off "
-			"by default. Consider tuning %s if needed\n",
-			"net.add_addr_allfibs");
-
 #ifdef FIB_ALGO
 	fib_grow_rtables(num_tables);
 #endif
@@ -225,11 +254,7 @@ grow_rtables(uint32_t num_tables)
 			if (*prnh != NULL)
 				continue;
 			rh = dom->dom_rtattach(i);
-			if (rh == NULL)
-				log(LOG_ERR, "unable to create routing table for %d.%d\n",
-				    dom->dom_family, i);
-			else
-				populate_kernel_routes(new_rt_tables, rh);
+			populate_kernel_routes(new_rt_tables, rh);
 			*prnh = rh;
 		}
 	}
@@ -243,9 +268,11 @@ grow_rtables(uint32_t num_tables)
 	old_rt_tables = V_rt_tables;
 	V_rt_tables = new_rt_tables;
 
+	EVENTHANDLER_INVOKE(rtnumfibs_change, num_tables);
+
 	/* Wait till all cpus see new pointers */
 	atomic_thread_fence_rel();
-	epoch_wait_preempt(net_epoch_preempt);
+	NET_EPOCH_WAIT();
 
 	/* Set number of fibs to a new value */
 	V_rt_numfibs = num_tables;
@@ -263,17 +290,25 @@ grow_rtables(uint32_t num_tables)
 }
 
 static void
-vnet_rtables_init(const void *unused __unused)
+rtnumfibs_init(const void *unused __unused)
 {
 	int num_rtables_base;
 
-	if (IS_DEFAULT_VNET(curvnet)) {
-		num_rtables_base = RT_NUMFIBS;
-		TUNABLE_INT_FETCH("net.fibs", &num_rtables_base);
-		V_rt_numfibs = normalize_num_rtables(num_rtables_base);
-	} else
-		V_rt_numfibs = 1;
+	/*
+	 * Set the number of FIBs based on compile-time and boot-time settings.
+	 * For some reason, VNET jails do not inherit this parameter, so they
+	 * must set net.fibs manually.
+	 */
+	num_rtables_base = RT_NUMFIBS;
+	TUNABLE_INT_FETCH("net.fibs", &num_rtables_base);
+	V_rt_numfibs = normalize_num_rtables(num_rtables_base);
+}
+SYSINIT(rtnumfibs_init, SI_SUB_PROTO_BEGIN, SI_ORDER_FIRST, rtnumfibs_init,
+    NULL);
 
+static void
+vnet_rtables_init(const void *unused __unused)
+{
 	vnet_rtzone_init();
 #ifdef FIB_ALGO
 	vnet_fib_init();
@@ -285,7 +320,7 @@ vnet_rtables_init(const void *unused __unused)
 	RTABLES_UNLOCK();
 }
 VNET_SYSINIT(vnet_rtables_init, SI_SUB_PROTO_DOMAIN, SI_ORDER_FOURTH,
-    vnet_rtables_init, 0);
+    vnet_rtables_init, NULL);
 
 #ifdef VIMAGE
 static void
@@ -324,7 +359,7 @@ rtables_destroy(const void *unused __unused)
 #endif
 }
 VNET_SYSUNINIT(rtables_destroy, SI_SUB_PROTO_DOMAIN, SI_ORDER_FIRST,
-    rtables_destroy, 0);
+    rtables_destroy, NULL);
 #endif
 
 static inline struct rib_head *
@@ -350,6 +385,16 @@ struct rib_head *
 rt_tables_get_rnh(uint32_t table, sa_family_t family)
 {
 
+	return (rt_tables_get_rnh_ptr(table, family));
+}
+
+struct rib_head *
+rt_tables_get_rnh_safe(uint32_t table, sa_family_t family)
+{
+	if (__predict_false(table >= V_rt_numfibs))
+		return (NULL);
+	if (__predict_false(family >= (AF_MAX + 1)))
+		return (NULL);
 	return (rt_tables_get_rnh_ptr(table, family));
 }
 

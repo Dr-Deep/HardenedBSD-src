@@ -1,4 +1,5 @@
 #!/bin/ksh -p
+# SPDX-License-Identifier: CDDL-1.0
 #
 # CDDL HEADER START
 #
@@ -42,7 +43,7 @@ verify_runnable "global"
 
 function cleanup
 {
-	log_must set_tunable64 VDEV_FILE_PHYSICAL_ASHIFT $orig_ashift
+	log_must set_tunable32 VDEV_FILE_PHYSICAL_ASHIFT $orig_ashift
 	destroy_pool $TESTPOOL1
 	rm -f $disk
 }
@@ -60,7 +61,7 @@ orig_ashift=$(get_tunable VDEV_FILE_PHYSICAL_ASHIFT)
 # the ashift using the -o ashift property should still
 # be honored.
 #
-log_must set_tunable64 VDEV_FILE_PHYSICAL_ASHIFT 16
+log_must set_tunable32 VDEV_FILE_PHYSICAL_ASHIFT 16
 
 disk=$TEST_BASE_DIR/disk
 log_must mkfile $SIZE $disk

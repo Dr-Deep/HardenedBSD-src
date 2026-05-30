@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: CDDL-1.0
 if BUILD_LINUX
 include $(srcdir)/%D%/os/linux/Makefile.am
 endif
@@ -10,18 +11,22 @@ COMMON_H = \
 	cityhash.h \
 	zfeature_common.h \
 	zfs_comutil.h \
+	zfs_crrd.h \
 	zfs_deleg.h \
 	zfs_fletcher.h \
 	zfs_namecheck.h \
 	zfs_prop.h \
+	zfs_valstr.h \
 	\
 	sys/abd.h \
 	sys/abd_impl.h \
 	sys/aggsum.h \
 	sys/arc.h \
 	sys/arc_impl.h \
+	sys/asm_linkage.h \
 	sys/avl.h \
 	sys/avl_impl.h \
+	sys/bitmap.h \
 	sys/bitops.h \
 	sys/blake3.h \
 	sys/blkptr.h \
@@ -30,9 +35,12 @@ COMMON_H = \
 	sys/bptree.h \
 	sys/bqueue.h \
 	sys/btree.h \
+	sys/brt.h \
+	sys/brt_impl.h \
 	sys/dataset_kstats.h \
 	sys/dbuf.h \
 	sys/ddt.h \
+	sys/ddt_impl.h \
 	sys/dmu.h \
 	sys/dmu_impl.h \
 	sys/dmu_objset.h \
@@ -63,7 +71,6 @@ COMMON_H = \
 	sys/metaslab_impl.h \
 	sys/mmp.h \
 	sys/mntent.h \
-	sys/mod.h \
 	sys/multilist.h \
 	sys/nvpair.h \
 	sys/nvpair_impl.h \
@@ -74,9 +81,10 @@ COMMON_H = \
 	sys/rrwlock.h \
 	sys/sa.h \
 	sys/sa_impl.h \
+	sys/sha2.h \
+	sys/simd_config.h \
 	sys/skein.h \
 	sys/spa.h \
-	sys/spa_boot.h \
 	sys/spa_checkpoint.h \
 	sys/spa_checksum.h \
 	sys/spa_impl.h \
@@ -124,6 +132,7 @@ COMMON_H = \
 	sys/zfs_delay.h \
 	sys/zfs_file.h \
 	sys/zfs_fuid.h \
+	sys/zfs_impl.h \
 	sys/zfs_project.h \
 	sys/zfs_quota.h \
 	sys/zfs_racct.h \
@@ -143,7 +152,6 @@ COMMON_H = \
 	sys/zio_compress.h \
 	sys/zio_crypt.h \
 	sys/zio_impl.h \
-	sys/zio_priority.h \
 	sys/zrlock.h \
 	sys/zthr.h \
 	\
@@ -178,14 +186,12 @@ KERNEL_H = \
 
 USER_H = \
 	libnvpair.h \
-	libuutil.h \
-	libuutil_common.h \
-	libuutil_impl.h \
+	libzdb.h \
 	libzfs.h \
 	libzfs_core.h \
 	libzfsbootenv.h \
-	libzutil.h \
-	thread_pool.h
+	libzpool.h \
+	libzutil.h
 
 
 if CONFIG_USER

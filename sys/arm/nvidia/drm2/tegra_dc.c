@@ -24,9 +24,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
@@ -39,8 +36,8 @@ __FBSDID("$FreeBSD$");
 
 #include <machine/bus.h>
 
-#include <dev/extres/clk/clk.h>
-#include <dev/extres/hwreset/hwreset.h>
+#include <dev/clk/clk.h>
+#include <dev/hwreset/hwreset.h>
 #include <dev/drm2/drmP.h>
 #include <dev/drm2/drm_crtc_helper.h>
 #include <dev/drm2/drm_fb_helper.h>
@@ -1231,7 +1228,8 @@ dc_init_client(device_t dev, device_t host1x, struct tegra_drm *drm)
 	sc->tegra_crtc.cursor_vbase = kmem_alloc_contig(256 * 256 * 4,
 	    M_WAITOK | M_ZERO, 0, -1UL, PAGE_SIZE, 0,
 	    VM_MEMATTR_WRITE_COMBINING);
-	sc->tegra_crtc.cursor_pbase = vtophys(sc->tegra_crtc.cursor_vbase);
+	sc->tegra_crtc.cursor_pbase =
+	    vtophys((uintptr_t)sc->tegra_crtc.cursor_vbase);
 	return (0);
 }
 
@@ -1370,7 +1368,8 @@ dc_attach(device_t dev)
 		goto fail;
 	}
 
-	return (bus_generic_attach(dev));
+	bus_attach_children(dev);
+	return (0);
 
 fail:
 	TEGRA_DRM_DEREGISTER_CLIENT(device_get_parent(sc->dev), sc->dev);
@@ -1395,6 +1394,11 @@ static int
 dc_detach(device_t dev)
 {
 	struct dc_softc *sc;
+	int error;
+
+	error = bus_generic_detach(dev);
+	if (error != 0)
+		return (error);
 
 	sc = device_get_softc(dev);
 
@@ -1414,7 +1418,7 @@ dc_detach(device_t dev)
 		bus_release_resource(dev, SYS_RES_MEMORY, 0, sc->mem_res);
 	LOCK_DESTROY(sc);
 
-	return (bus_generic_detach(dev));
+	return (0);
 }
 
 static device_method_t tegra_dc_methods[] = {

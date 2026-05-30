@@ -62,11 +62,6 @@
  * messages from MMCCAM to newbus and back.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
-#include "opt_cam.h"
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/types.h>
@@ -155,7 +150,7 @@ sdiob_rw_direct_sc(struct sdiob_softc *sc, uint8_t fn, uint32_t addr, bool wr,
 		sc->ccb = xpt_alloc_ccb();
 	else
 		memset(sc->ccb, 0, sizeof(*sc->ccb));
-	xpt_setup_ccb(&sc->ccb->ccb_h, sc->periph->path, CAM_PRIORITY_NONE);
+	xpt_setup_ccb(&sc->ccb->ccb_h, sc->periph->path, CAM_PRIORITY_NORMAL);
 	CAM_DEBUG(sc->ccb->ccb_h.path, CAM_DEBUG_TRACE,
 	    ("%s(fn=%d, addr=%#02x, wr=%d, *val=%#02x)\n", __func__,
 	    fn, addr, wr, *val));
@@ -255,7 +250,7 @@ sdiob_rw_extended_cam(struct sdiob_softc *sc, uint8_t fn, uint32_t addr,
 		sc->ccb = xpt_alloc_ccb();
 	else
 		memset(sc->ccb, 0, sizeof(*sc->ccb));
-	xpt_setup_ccb(&sc->ccb->ccb_h, sc->periph->path, CAM_PRIORITY_NONE);
+	xpt_setup_ccb(&sc->ccb->ccb_h, sc->periph->path, CAM_PRIORITY_NORMAL);
 	CAM_DEBUG(sc->ccb->ccb_h.path, CAM_DEBUG_TRACE,
 	    ("%s(fn=%d addr=%#0x wr=%d b_count=%u blksz=%u buf=%p incr=%d)\n",
 	    __func__, fn, addr, wr, b_count, blksz, buffer, incaddr));
@@ -563,7 +558,7 @@ sdiob_attach(device_t dev)
 	 * Do this before any child gets a chance to attach.
 	 */
 	for (i = 0; i < sc->cardinfo.num_funcs; i++) {
-		sc->child[i] = device_add_child(dev, NULL, -1);
+		sc->child[i] = device_add_child(dev, NULL, DEVICE_UNIT_ANY);
 		if (sc->child[i] == NULL) {
 			device_printf(dev, "%s: failed to add child\n", __func__);
 			return (ENXIO);
@@ -928,7 +923,7 @@ sdio_newbus_sim_add(struct sdiob_softc *sc)
 	    __func__, sc, sc->periph, sc->periph->sim));
 
 	if (sc->dev == NULL)
-		sc->dev = BUS_ADD_CHILD(pdev, 0, SDIOB_NAME_S, -1);
+		sc->dev = BUS_ADD_CHILD(pdev, 0, SDIOB_NAME_S, DEVICE_UNIT_ANY);
 	if (sc->dev == NULL)
 		return (ENXIO);
 	device_set_softc(sc->dev, sc);
@@ -982,9 +977,6 @@ sdiobdiscover(void *context, int pending)
 
 	if (sc->ccb == NULL)
 		sc->ccb = xpt_alloc_ccb();
-	else
-		memset(sc->ccb, 0, sizeof(*sc->ccb));
-	xpt_setup_ccb(&sc->ccb->ccb_h, periph->path, CAM_PRIORITY_NONE);
 
 	/*
 	 * Read CCCR and FBR of each function, get manufacturer and device IDs,

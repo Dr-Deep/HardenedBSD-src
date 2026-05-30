@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2010 The FreeBSD Foundation
  * Copyright (c) 2008 John Birrell (jb@freebsd.org)
@@ -28,8 +28,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef	_LIBPROC_H_
@@ -107,11 +105,9 @@ typedef enum {
 	REG_RVAL2
 } proc_reg_t;
 
-#define SIG2STR_MAX	8
-
 typedef struct lwpstatus {
 	int pr_why;
-#define PR_REQUESTED	1
+#define PR_REQUESTED	1	/* not implemented */
 #define PR_FAULTED	2
 #define PR_SYSENTRY	3
 #define PR_SYSEXIT	4

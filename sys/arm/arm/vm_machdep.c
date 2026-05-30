@@ -37,13 +37,8 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	from: @(#)vm_machdep.c	7.3 (Berkeley) 5/13/91
  *	Utah $Hdr: vm_machdep.c 1.16.1.1 89/06/23$
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -102,18 +97,14 @@ cpu_fork(struct thread *td1, struct proc *p2, struct thread *td2, int flags)
 	if ((flags & RFPROC) == 0)
 		return;
 
-	/* Point the pcb to the top of the stack */
-	pcb2 = (struct pcb *)
-	    (td2->td_kstack + td2->td_kstack_pages * PAGE_SIZE) - 1;
 #ifdef VFP
 	/* Store actual state of VFP */
 	if (curthread == td1) {
-		critical_enter();
-		vfp_store(&td1->td_pcb->pcb_vfpstate, false);
-		critical_exit();
+		if ((td1->td_pcb->pcb_fpflags & PCB_FP_STARTED) != 0)
+			vfp_save_state(td1, td1->td_pcb);
 	}
 #endif
-	td2->td_pcb = pcb2;
+	pcb2 = td2->td_pcb;
 
 	/* Clone td1's pcb */
 	bcopy(td1->td_pcb, pcb2, sizeof(*pcb2));
@@ -122,8 +113,7 @@ cpu_fork(struct thread *td1, struct proc *p2, struct thread *td2, int flags)
 	mdp2 = &p2->p_md;
 	bcopy(&td1->td_proc->p_md, mdp2, sizeof(*mdp2));
 
-	/* Point the frame to the stack in front of pcb and copy td1's frame */
-	td2->td_frame = (struct trapframe *)pcb2 - 1;
+	/* Copy td1's frame */
 	*td2->td_frame = *td1->td_frame;
 
 	/*
@@ -135,11 +125,12 @@ cpu_fork(struct thread *td1, struct proc *p2, struct thread *td2, int flags)
 	pcb2->pcb_regs.sf_r4 = (register_t)fork_return;
 	pcb2->pcb_regs.sf_r5 = (register_t)td2;
 	pcb2->pcb_regs.sf_lr = (register_t)fork_trampoline;
-	pcb2->pcb_regs.sf_sp = STACKALIGN(td2->td_frame);
+	pcb2->pcb_regs.sf_sp = (register_t)STACKALIGN(td2->td_frame);
 	pcb2->pcb_regs.sf_tpidrurw = (register_t)get_tls();
 
-	pcb2->pcb_vfpcpu = -1;
-	pcb2->pcb_vfpstate.fpscr = initial_fpscr;
+#ifdef VFP
+	vfp_new_thread(td2, td1, true);
+#endif
 
 	tf = td2->td_frame;
 	tf->tf_spsr &= ~PSR_C;
@@ -149,16 +140,6 @@ cpu_fork(struct thread *td1, struct proc *p2, struct thread *td2, int flags)
 	/* Setup to release spin count in fork_exit(). */
 	td2->td_md.md_spinlock_count = 1;
 	td2->td_md.md_saved_cspr = PSR_SVC32_MODE;
-}
-
-void
-cpu_thread_swapin(struct thread *td)
-{
-}
-
-void
-cpu_thread_swapout(struct thread *td)
-{
 }
 
 void
@@ -177,11 +158,9 @@ cpu_set_syscall_retval(struct thread *td, int error)
 		/*
 		 * Reconstruct the pc to point at the swi.
 		 */
-#if __ARM_ARCH >= 7
 		if ((frame->tf_spsr & PSR_T) != 0)
 			frame->tf_pc -= THUMB_INSN_SIZE;
 		else
-#endif
 			frame->tf_pc -= INSN_SIZE;
 		break;
 	case EJUSTRETURN:
@@ -211,10 +190,14 @@ cpu_copy_thread(struct thread *td, struct thread *td0)
 	td->td_pcb->pcb_regs.sf_r4 = (register_t)fork_return;
 	td->td_pcb->pcb_regs.sf_r5 = (register_t)td;
 	td->td_pcb->pcb_regs.sf_lr = (register_t)fork_trampoline;
-	td->td_pcb->pcb_regs.sf_sp = STACKALIGN(td->td_frame);
+	td->td_pcb->pcb_regs.sf_sp = (register_t)STACKALIGN(td->td_frame);
 
 	td->td_frame->tf_spsr &= ~PSR_C;
 	td->td_frame->tf_r0 = 0;
+
+#ifdef VFP
+	vfp_new_thread(td, td0, false);
+#endif
 
 	/* Setup to release spin count in fork_exit(). */
 	td->td_md.md_spinlock_count = 1;
@@ -225,7 +208,7 @@ cpu_copy_thread(struct thread *td, struct thread *td0)
  * Set that machine state for performing an upcall that starts
  * the entry function with the given argument.
  */
-void
+int
 cpu_set_upcall(struct thread *td, void (*entry)(void *), void *arg,
 	stack_t *stack)
 {
@@ -237,10 +220,11 @@ cpu_set_upcall(struct thread *td, void (*entry)(void *), void *arg,
 	tf->tf_spsr = PSR_USR32_MODE;
 	if ((register_t)entry & 1)
 		tf->tf_spsr |= PSR_T;
+	return (0);
 }
 
 int
-cpu_set_user_tls(struct thread *td, void *tls_base)
+cpu_set_user_tls(struct thread *td, void *tls_base, int thr_flags __unused)
 {
 
 	td->td_pcb->pcb_regs.sf_tpidrurw = (register_t)tls_base;
@@ -257,8 +241,12 @@ cpu_thread_exit(struct thread *td)
 void
 cpu_thread_alloc(struct thread *td)
 {
-	td->td_pcb = (struct pcb *)(td->td_kstack + td->td_kstack_pages *
-	    PAGE_SIZE) - 1;
+}
+
+void
+cpu_thread_new_kstack(struct thread *td)
+{
+	td->td_pcb = (struct pcb *)td_kstack_top(td) - 1;
 	/*
 	 * Ensure td_frame is aligned to an 8 byte boundary as it will be
 	 * placed into the stack pointer which must be 8 byte aligned in
@@ -291,6 +279,13 @@ cpu_fork_kthread_handler(struct thread *td, void (*func)(void *), void *arg)
 }
 
 void
+cpu_update_pcb(struct thread *td)
+{
+	MPASS(td == curthread);
+	td->td_pcb->pcb_regs.sf_tpidrurw = (register_t)get_tls();
+}
+
+void
 cpu_exit(struct thread *td)
 {
 }
@@ -308,4 +303,9 @@ cpu_procctl(struct thread *td __unused, int idtype __unused, id_t id __unused,
 {
 
 	return (EINVAL);
+}
+
+void
+cpu_sync_core(void)
+{
 }

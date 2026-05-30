@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2017 The FreeBSD Foundation
  *
@@ -26,12 +26,7 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -143,8 +138,7 @@ chipc_gpio_attach(device_t dev)
 
 	CC_GPIO_LOCK_INIT(sc);
 
-	sc->mem_rid = 0;
-	sc->mem_res = bhnd_alloc_resource_any(dev, SYS_RES_MEMORY, &sc->mem_rid,
+	sc->mem_res = bhnd_alloc_resource_any(dev, SYS_RES_MEMORY, 0,
 	    RF_ACTIVE|RF_SHAREABLE);
 	if (sc->mem_res == NULL) {
 		device_printf(dev, "failed to allocate chipcommon registers\n");
@@ -178,11 +172,13 @@ chipc_gpio_attach(device_t dev)
 	if (CC_GPIO_QUIRK(sc, NO_GPIOC)) {
 		sc->gpiobus = NULL;
 	} else {
-		if ((sc->gpiobus = gpiobus_attach_bus(dev)) == NULL) {
+		if ((sc->gpiobus = gpiobus_add_bus(dev)) == NULL) {
 			device_printf(dev, "failed to attach gpiobus\n");
 			error = ENXIO;
 			goto failed;
 		}
+
+		bus_attach_children(dev);
 	}
 
 	/* Register as the bus GPIO provider */
@@ -198,8 +194,7 @@ failed:
 	device_delete_children(dev);
 
 	if (sc->mem_res != NULL) {
-		bhnd_release_resource(dev, SYS_RES_MEMORY, sc->mem_rid,
-		    sc->mem_res);
+		bhnd_release_resource(dev, sc->mem_res);
 	}
 
 	CC_GPIO_LOCK_DESTROY(sc);
@@ -221,7 +216,7 @@ chipc_gpio_detach(device_t dev)
 	if ((error = bhnd_deregister_provider(dev, BHND_SERVICE_ANY)))
 		return (error);
 
-	bhnd_release_resource(dev, SYS_RES_MEMORY, sc->mem_rid, sc->mem_res);
+	bhnd_release_resource(dev, sc->mem_res);
 	CC_GPIO_LOCK_DESTROY(sc);
 
 	return (0);

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * This file and its contents are supplied under the terms of the
  * Common Development and Distribution License ("CDDL"), version 1.0.
@@ -152,6 +153,11 @@ main(int argc, char *argv[])
 		n = strtoull(argv[0], NULL, 0);
 
 	fd = open(filename, O_RDWR|O_CREAT, 0666);
+	if (fd == -1) {
+		(void) fprintf(stderr, "open(%s) failed: %s\n", filename,
+		    strerror(errno));
+		exit(EXIT_FAILURE);
+	}
 	err = fstat(fd, &ss);
 	if (err != 0) {
 		(void) fprintf(stderr,

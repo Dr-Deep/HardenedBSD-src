@@ -30,9 +30,6 @@
  *      from BSDI kern.c,v 1.2 1998/11/25 22:38:27 don Exp
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/mount.h>
 #include <sys/queue.h>
@@ -42,6 +39,7 @@ __FBSDID("$FreeBSD$");
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
+#include <assert.h>
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -235,17 +233,29 @@ void
 set_auth(CLIENT *cl, struct xucred *xucred)
 {
 	int ngroups;
+	gid_t *groups;
 
-	ngroups = xucred->cr_ngroups - 1;
+	/*
+	 * Exclude the first element if it is actually the egid, but account for
+	 * the possibility that we could eventually exclude the egid from the
+	 * exported group list some day.
+	 */
+	ngroups = xucred->cr_ngroups;
+	groups = &xucred->cr_groups[0];
+	if (groups == &xucred->cr_gid) {
+		assert(ngroups > 0);
+		ngroups--;
+		groups++;
+	}
 	if (ngroups > NGRPS)
 		ngroups = NGRPS;
         if (cl->cl_auth != NULL)
                 cl->cl_auth->ah_ops->ah_destroy(cl->cl_auth);
         cl->cl_auth = authunix_create(hostname,
                         xucred->cr_uid,
-                        xucred->cr_groups[0],
+                        xucred->cr_gid,
                         ngroups,
-                        &xucred->cr_groups[1]);
+                        groups);
 }
 
 
@@ -572,15 +582,10 @@ void
 show(LOCKD_MSG *mp)
 {
 	static char hex[] = "0123456789abcdef";
-	struct fid *fidp;
-	fsid_t *fsidp;
 	size_t len;
 	u_int8_t *p, *t, buf[NFS_SMALLFH*3+1];
 
 	syslog(LOG_DEBUG, "process ID: %lu\n", (long)mp->lm_msg_ident.pid);
-
-	fsidp = (fsid_t *)&mp->lm_fh;
-	fidp = (struct fid *)((u_int8_t *)&mp->lm_fh + sizeof(fsid_t));
 
 	for (t = buf, p = (u_int8_t *)mp->lm_fh,
 	    len = mp->lm_fh_len;

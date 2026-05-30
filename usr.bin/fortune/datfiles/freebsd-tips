@@ -1,5 +1,6 @@
 Any user that is a member of the wheel group can use "su -" to simulate
-a root login. You can add a user to the wheel group by editing /etc/group.
+a root login. You can add a user to the wheel group with:
+pw groupmod -n wheel -m user_name 
 		-- Konstantinos Konstantinidis <kkonstan@duth.gr>
 %
 By pressing "Scroll Lock" you can use the arrow keys to scroll backward
@@ -179,7 +180,7 @@ directory sizes.
 nc(1) (or netcat) is useful not only for redirecting input/output to
 TCP or UDP connections, but also for proxying them with inetd(8).
 %
-sh (the default Bourne shell in FreeBSD) supports command-line editing.  Just
+sh (the default POSIX shell in FreeBSD) supports command-line editing.  Just
 ``set -o emacs'' or ``set -o vi'' to enable it. Use "<TAB>" key to complete
 paths.
 %
@@ -387,7 +388,7 @@ You can make a log of your terminal session with script(1).
 You can often get answers to your questions about FreeBSD by searching in the
 FreeBSD mailing list archives at
 
-	http://freebsd.markmail.org
+	https://lists.freebsd.org/search
 %
 You can open up a new split-screen window in (n)vi with :N or :E and then
 use ^w to switch between the two.
@@ -414,7 +415,7 @@ if you leave the shell idle for more than 30 minutes.
 %
 You can use aliases to decrease the amount of typing you need to do to get
 commands you commonly use.  Examples of fairly popular aliases include (in
-Bourne shell style, as in /bin/sh, bash, ksh, and zsh):
+POSIX shell style, as in /bin/sh, bash, ksh, and zsh):
 
 	alias lf="ls -FA"
 	alias ll="ls -lA"
@@ -532,9 +533,10 @@ Run "etcupdate extract" once when your sources match your running system, then r
 Do you want to do a binary upgrade of your running FreeBSD installation? Use freebsd-update(8).
 
 To install updates and patches for the running branch use
-# freebsd-update fetch install
+# freebsd-update fetch
+# freebsd-update install
 
-To upgrade to a newer release use
+Then, to upgrade to a newer release use
 # freebsd-update upgrade -r ${name_of_release}
 
 		-- Lars Engels <lme@FreeBSD.org>
@@ -553,7 +555,7 @@ Use "sysrc name=value" to add an entry and "sysrc -x name" to delete an entry.
 You can upload the dmesg of your system to help developers get an overview of commonly
 used hardware and peripherals for FreeBSD. Use the curl package to upload it like this:
 curl -v -d "nickname=$USER" -d "description=FreeBSD/$(uname -m) on \
-$(kenv smbios.system.maker) $(kenv smbios.system.product)" -d "do=addd" \
+$(kenv smbios.system.maker) $(kenv smbios.system.product)" -d "do=add" \
 --data-urlencode 'dmesg@/var/run/dmesg.boot' http://dmesgd.nycbug.org/index.cgi
 %
 Want to know how much memory (in bytes) your machine has installed? Let
@@ -832,7 +834,7 @@ $ sysctl -n hw.pagesize
 To establish a serial connection to anything including a USB device,
 nothing more than cu(1) is needed:
 
-$ cu -s 9600 -l /dev/ttyU0
+$ cu -s 115200 -l /dev/ttyU0
 
 		-- Daniel Ebdrup Jensen <debdrup@FreeBSD.org>
 %
@@ -842,4 +844,27 @@ kern.tty_info_kstacks to 0 (off), 1 (on), or 2 (verbose), e.g.:
 # sysctl kern.tty_info_kstacks=2
 
 		-- Michael Gmelin <grembo@FreeBSD.org>
+%
+To determine which fonts provide a particular Unicode character, fc-list from
+the fontconfig package may be helpful.  For example, if your friend complains
+that the emoji you sent won't display, run fc-list with the hex value of the
+character to determine which font your friend should install.
+
+$ fc-list ':charset=0x1F4A1'
+/usr/local/share/fonts/noto/NotoColorEmoji.ttf: Noto Color Emoji:style=Regular
+
+$ pkg which /usr/local/share/fonts/noto/NotoColorEmoji.ttf
+/usr/local/share/fonts/noto/NotoColorEmoji.ttf was installed by package noto-emoji-2.042
+%
+When netstat reports every 8 seconds, it tells traffic in bits per second:
+
+$ netstat -I bge0 8
+%
+Using vt(4) on a laptop? Try this sh(1) function. It provides an "h"
+command that prints the last 22 commands executed, the time, remaining
+battery life, and current working directory:
+
+h() { fc -l -22; printf "%s\n" "`date +%H:%M` -- `apm -l`% -- `pwd`"; }
+
+		-- Alexander Ziaee <ziaee@FreeBSD.org>
 %

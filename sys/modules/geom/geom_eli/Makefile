@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 .PATH: ${SRCTOP}/sys/geom/eli
 
 KMOD=	geom_eli
@@ -13,5 +11,7 @@ SRCS+=	g_eli_key_cache.c
 SRCS+=	g_eli_privacy.c
 SRCS+=	pkcs5v2.c
 SRCS+=	vnode_if.h
+
+TRIVIAL_VAR_AUTO_INIT_ZERO_SAFE=	yes
 
 .include <bsd.kmod.mk>

@@ -30,9 +30,6 @@
  *	Email:	bsdic@microsoft.com
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/conf.h>
@@ -624,7 +621,7 @@ hv_kvp_process_request(void *context, int pending)
 		} else {
 			if (!sc->daemon_busy) {
 
-				hv_kvp_log_info("%s: issuing qury to daemon\n", __func__);
+				hv_kvp_log_info("%s: issuing query to daemon\n", __func__);
 				mtx_lock(&sc->pending_mutex);
 				sc->req_timed_out = false;
 				sc->daemon_busy = true;
@@ -908,7 +905,7 @@ static device_method_t kvp_methods[] = {
 	DEVMETHOD(device_probe, hv_kvp_probe),
 	DEVMETHOD(device_attach, hv_kvp_attach),
 	DEVMETHOD(device_detach, hv_kvp_detach),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t kvp_driver = { "hvkvp", kvp_methods, sizeof(hv_kvp_sc)};

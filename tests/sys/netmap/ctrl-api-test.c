@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (C) 2018 Vincenzo Maffione
  *
@@ -23,8 +23,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -61,8 +59,6 @@
 #include <stddef.h>
 
 #ifdef __FreeBSD__
-#include "freebsd_test_suite/macros.h"
-
 static int
 eventfd(int x __unused, int y __unused)
 {
@@ -1012,15 +1008,33 @@ infinite_options(struct TestContext *ctx)
 {
 	struct nmreq_option opt;
 
-	printf("Testing infinite list of options on %s\n", ctx->ifname_ext);
+	printf("Testing infinite list of options on %s (invalid options)\n", ctx->ifname_ext);
 
-	opt.nro_reqtype = 1234;
+	memset(&opt, 0, sizeof(opt));
+	opt.nro_reqtype = NETMAP_REQ_OPT_MAX + 1;
 	push_option(&opt, ctx);
 	opt.nro_next = (uintptr_t)&opt;
 	if (port_register_hwall(ctx) >= 0)
 		return -1;
 	clear_options(ctx);
 	return (errno == EMSGSIZE ? 0 : -1);
+}
+
+static int
+infinite_options2(struct TestContext *ctx)
+{
+	struct nmreq_option opt;
+
+	printf("Testing infinite list of options on %s (valid options)\n", ctx->ifname_ext);
+
+	memset(&opt, 0, sizeof(opt));
+	opt.nro_reqtype = NETMAP_REQ_OPT_OFFSETS;
+	push_option(&opt, ctx);
+	opt.nro_next = (uintptr_t)&opt;
+	if (port_register_hwall(ctx) >= 0)
+		return -1;
+	clear_options(ctx);
+	return (errno == EINVAL ? 0 : -1);
 }
 
 #ifdef CONFIG_NETMAP_EXTMEM
@@ -1580,6 +1594,7 @@ sync_kloop_csb_enable(struct TestContext *ctx)
 	return sync_kloop_start_stop(ctx);
 }
 
+#if 0
 static int
 sync_kloop_conflict(struct TestContext *ctx)
 {
@@ -1624,6 +1639,14 @@ sync_kloop_conflict(struct TestContext *ctx)
 	/* Wait for one of the two threads to fail to start the kloop, to
 	 * avoid a race condition where th1 starts the loop and stops,
 	 * and after that th2 starts the loop successfully. */
+	/*
+	 * XXX: This doesn't fully close the race.  th2 might fail to
+	 * start executing since th1 can enter the kernel and hog the
+	 * CPU on a single-CPU system until the semaphore timeout
+	 * awakens this thread and it calls sync_kloop_stop.  Once th1
+	 * exits the kernel, th2 can finally run and will then loop
+	 * forever in the ioctl handler.
+	 */
 	clock_gettime(CLOCK_REALTIME, &to);
 	to.tv_sec += 2;
 	ret = sem_timedwait(&sem, &to);
@@ -1658,6 +1681,7 @@ sync_kloop_conflict(struct TestContext *ctx)
 	               ? 0
 	               : -1;
 }
+#endif
 
 static int
 sync_kloop_eventfds_mismatch(struct TestContext *ctx)
@@ -1787,7 +1811,6 @@ static struct nmreq_parse_test nmreq_parse_tests[] = {
 	{ "netmap:",			"",		NULL,		EINVAL, 0,		0,	0 },
 	{ "netmap:^",			"",		NULL,		EINVAL,	0,		0,	0 },
 	{ "netmap:{",			"",		NULL,		EINVAL,	0,		0,	0 },
-	{ "netmap:vale0:0",		NULL,		NULL,		EINVAL,	0,		0,	0 },
 	{ "eth0",			NULL,		NULL,		EINVAL, 0,		0,	0 },
 	{ "vale0:0",			"vale0:0",	"",		0,	NR_REG_ALL_NIC, 0,	0 },
 	{ "vale:0",			"vale:0",	"",		0,	NR_REG_ALL_NIC, 0,	0 },
@@ -1795,7 +1818,6 @@ static struct nmreq_parse_test nmreq_parse_tests[] = {
 	{ "valeXXX:YYY-4",		"valeXXX:YYY",	"",		0,	NR_REG_ONE_NIC, 4,	0 },
 	{ "netmapXXX:eth0",		NULL,		NULL,		EINVAL,	0,		0,	0 },
 	{ "netmap:14",			"14",		"",		0, 	NR_REG_ALL_NIC,	0,	0 },
-	{ "netmap:eth0&",		NULL,		NULL,		EINVAL, 0,		0,	0 },
 	{ "netmap:pipe{0",		"pipe{0",	"",		0,	NR_REG_ALL_NIC, 0,	0 },
 	{ "netmap:pipe{in",		"pipe{in",	"",		0,	NR_REG_ALL_NIC, 0,	0 },
 	{ "netmap:pipe{in-7",		"pipe{in",	"",		0,	NR_REG_ONE_NIC, 7,	0 },
@@ -1974,6 +1996,7 @@ nmreq_parsing(struct TestContext *ctx)
 			ret = -1;
 		}
 	}
+	ctx->nmctx = NULL;
 	return ret;
 }
 
@@ -2048,6 +2071,7 @@ static struct mytest tests[] = {
 	decltest(vale_polling_enable_disable),
 	decltest(unsupported_option),
 	decltest(infinite_options),
+	decltest(infinite_options2),
 #ifdef CONFIG_NETMAP_EXTMEM
 	decltest(extmem_option),
 	decltest(bad_extmem_option),
@@ -2063,7 +2087,9 @@ static struct mytest tests[] = {
 	decltest(sync_kloop_eventfds_all_direct_rx),
 	decltest(sync_kloop_nocsb),
 	decltest(sync_kloop_csb_enable),
+#if 0
 	decltest(sync_kloop_conflict),
+#endif
 	decltest(sync_kloop_eventfds_mismatch),
 	decltest(null_port),
 	decltest(null_port_all_zero),
@@ -2170,11 +2196,6 @@ main(int argc, char **argv)
 	int list = 0;
 	int opt;
 	int i;
-
-#ifdef __FreeBSD__
-	PLAIN_REQUIRE_KERNEL_MODULE("if_tap", 0);
-	PLAIN_REQUIRE_KERNEL_MODULE("netmap", 0);
-#endif
 
 	memset(&ctx_, 0, sizeof(ctx_));
 

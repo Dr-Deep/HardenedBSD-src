@@ -1,10 +1,6 @@
-# $FreeBSD$
-
-SHLIBDIR?=	/lib/casper
+SHLIBDIR?=	/lib
 
 .include <src.opts.mk>
-
-PACKAGE=	runtime
 
 SHLIB_MAJOR=	1
 INCSDIR?=	${INCLUDEDIR}/casper

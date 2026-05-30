@@ -31,12 +31,10 @@
  * Block storage I/O routines for U-Boot
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/disk.h>
-#include <machine/stdarg.h>
+#include <sys/stdarg.h>
+
 #include <stand.h>
 
 #include "api_public.h"
@@ -91,6 +89,7 @@ struct devsw uboot_storage = {
 	.dv_print = stor_print,
 	.dv_cleanup = stor_cleanup,
 	.dv_fmtdev = disk_fmtdev,
+	.dv_parsedev = disk_parsedev,
 };
 
 static int

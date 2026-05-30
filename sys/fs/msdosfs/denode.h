@@ -1,4 +1,3 @@
-/* $FreeBSD$ */
 /*	$NetBSD: denode.h,v 1.25 1997/11/17 15:36:28 ws Exp $	*/
 
 /*-
@@ -163,7 +162,7 @@ struct denode {
 	u_long de_FileSize;	/* size of file in bytes */
 	struct fatcache de_fc[FC_SIZE];	/* FAT cache */
 	u_quad_t de_modrev;	/* Revision level for lease. */
-	uint64_t de_inode;	/* Inode number (really byte offset of direntry) */
+	uint64_t de_inode;	/* Inode number (really index of DOS style direntry) */
 };
 
 /*
@@ -213,10 +212,16 @@ struct denode {
 	     ((dep)->de_Attributes & ATTR_DIRECTORY) ? 0 : (dep)->de_FileSize), \
 	 putushort((dp)->deHighClust, (dep)->de_StartCluster >> 16))
 
-#if defined(_KERNEL) || defined(MAKEFS)
+#if defined(_KERNEL) || defined(_WANT_MSDOSFS_INTERNALS)
 
 #define	VTODE(vp)	((struct denode *)(vp)->v_data)
 #define	DETOV(de)	((de)->de_vnode)
+
+#define DETOI(pmp, cn, off)						\
+	((cn) == MSDOSFSROOT						\
+	    ? (((uint64_t)(off) >> 5))					\
+	    : (((((uint64_t)pmp->pm_bpcluster * ((cn) - 2) + (off))) >> 5) \
+		+ pmp->pm_RootDirEnts))
 
 #define	DETIMES(dep, acc, mod, cre) do {				\
 	if ((dep)->de_flag & DE_UPDATE) {				\
@@ -289,5 +294,5 @@ int removede(struct denode *pdep, struct denode *dep);
 int detrunc(struct denode *dep, u_long length, int flags, struct ucred *cred);
 int doscheckpath( struct denode *source, struct denode *target,
     daddr_t *wait_scn);
-#endif	/* _KERNEL || MAKEFS */
+#endif	/* _KERNEL || _WANT_MSDOSFS_INTERNALS */
 #endif	/* !_FS_MSDOSFS_DENODE_H_ */

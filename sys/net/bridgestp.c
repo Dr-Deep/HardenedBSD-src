@@ -1,7 +1,7 @@
 /*	$NetBSD: bridgestp.c,v 1.5 2003/11/28 08:56:48 keihan Exp $	*/
 
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2000 Jason L. Wright (jason@thought.net)
  * Copyright (c) 2006 Andrew Thompson (thompsa@FreeBSD.org)
@@ -36,9 +36,6 @@
  * ISO/IEC 802.1D-2004, June 9, 2004.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/mbuf.h>
@@ -55,10 +52,12 @@ __FBSDID("$FreeBSD$");
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_private.h>
 #include <net/if_dl.h>
 #include <net/if_types.h>
 #include <net/if_llc.h>
 #include <net/if_media.h>
+#include <net/if_bridgevar.h>
 #include <net/vnet.h>
 
 #include <netinet/in.h>
@@ -88,7 +87,7 @@ __FBSDID("$FreeBSD$");
 
 const uint8_t bstp_etheraddr[] = { 0x01, 0x80, 0xc2, 0x00, 0x00, 0x00 };
 
-LIST_HEAD(, bstp_state) bstp_list;
+LIST_HEAD(, bstp_state) bstp_list = LIST_HEAD_INITIALIZER(bstp_list);
 static struct mtx	bstp_list_mtx;
 
 static void	bstp_transmit(struct bstp_state *, struct bstp_port *);
@@ -2061,6 +2060,7 @@ bstp_reinit(struct bstp_state *bs)
 	mif = NULL;
 	bridgeptr = LIST_FIRST(&bs->bs_bplist)->bp_ifp->if_bridge;
 	KASSERT(bridgeptr != NULL, ("Invalid bridge pointer"));
+	KASSERT(bridge_same_p != NULL, ("if_bridge not loaded"));
 	/*
 	 * Search through the Ethernet adapters and find the one with the
 	 * lowest value. Make sure the adapter which we take the MAC address
@@ -2072,7 +2072,7 @@ bstp_reinit(struct bstp_state *bs)
 		if (ifp->if_type != IFT_ETHER && ifp->if_type != IFT_L2VLAN)
 			continue;	/* Not Ethernet */
 
-		if (ifp->if_bridge != bridgeptr)
+		if (!bridge_same_p(ifp->if_bridge, bridgeptr))
 			continue;	/* Not part of our bridge */
 
 		if (bstp_addr_cmp(IF_LLADDR(ifp), llzero) == 0)
@@ -2139,7 +2139,6 @@ bstp_modevent(module_t mod, int type, void *data)
 	switch (type) {
 	case MOD_LOAD:
 		mtx_init(&bstp_list_mtx, "bridgestp list", NULL, MTX_DEF);
-		LIST_INIT(&bstp_list);
 		break;
 	case MOD_UNLOAD:
 		mtx_destroy(&bstp_list_mtx);

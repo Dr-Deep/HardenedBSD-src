@@ -34,8 +34,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _LIBUTIL_H_
@@ -88,10 +86,17 @@ struct termios;
 struct winsize;
 
 __BEGIN_DECLS
-char	*auth_getval(const char *_name);
 void	clean_environment(const char * const *_white,
 	    const char * const *_more_white);
-int	expand_number(const char *_buf, uint64_t *_num);
+int	expand_number(const char *_buf, int64_t *_num);
+int	expand_unsigned(const char *_buf, uint64_t *_num);
+#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L) ||	\
+	__has_extension(c_generic_selections)
+#define expand_number(_buf, _num)					\
+	_Generic((_num),						\
+		 uint64_t *: expand_unsigned,				\
+		 default: expand_number)((_buf), (_num))
+#endif
 int	extattr_namespace_to_string(int _attrnamespace, char **_string);
 int	extattr_string_to_namespace(const char *_string, int *_attrnamespace);
 int	flopen(const char *_path, int _flags, ...);
@@ -135,7 +140,7 @@ int	realhostname(char *_host, size_t _hsize, const struct in_addr *_ip);
 int	realhostname_sa(char *_host, size_t _hsize, struct sockaddr *_addr,
 	    int _addrlen);
 int	_secure_path(const char *_path, uid_t _uid, gid_t _gid);
-void	trimdomain(char *_fullhost, int _hostsize);
+void	trimdomain(char *_fullhost, size_t _hostsize);
 const char *
 	uu_lockerr(int _uu_lockresult);
 int	uu_lock(const char *_ttyname);
@@ -208,6 +213,20 @@ const char *
 int	quota_read(struct quotafile *_qf, struct dqblk *_dqb, int _id);
 int	quota_write_limits(struct quotafile *_qf, struct dqblk *_dqb, int _id);
 int	quota_write_usage(struct quotafile *_qf, struct dqblk *_dqb, int _id);
+#endif
+
+#ifdef _SYS_CPUSET_H_
+int	cpuset_parselist(const char *list, cpuset_t *mask);
+#define CPUSET_PARSE_OK			0
+#define CPUSET_PARSE_GETAFFINITY	-1
+#define CPUSET_PARSE_ERROR		-2
+#define CPUSET_PARSE_OUT_OF_RANGE	-3
+#define CPUSET_PARSE_GETDOMAIN		-4
+#define CPUSET_PARSE_INVALID_CPU	CPUSET_PARSE_OUT_OF_RANGE /* backwards compat */
+#endif
+
+#ifdef _SYS_DOMAINSET_H_
+int	domainset_parselist(const char *list, domainset_t *mask, int *policyp);
 #endif
 
 __END_DECLS

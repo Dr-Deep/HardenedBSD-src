@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2000-2001 Boris Popov
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #ifndef _FS_SMBFS_NODE_H_
 #define _FS_SMBFS_NODE_H_
@@ -95,7 +93,7 @@ u_int32_t smbfs_hash(const u_char *name, int nmlen);
 
 int  smbfs_getpages(struct vop_getpages_args *);
 int  smbfs_putpages(struct vop_putpages_args *);
-int  smbfs_readvnode(struct vnode *vp, struct uio *uiop, struct ucred *cred);
+int  smbfs_readvnode(struct vnode *vp, struct uio *uiop, struct ucred *cred, int *eofp);
 int  smbfs_writevnode(struct vnode *vp, struct uio *uiop, struct ucred *cred, int ioflag);
 void smbfs_attr_cacheenter(struct vnode *vp, struct smbfattr *fap);
 int  smbfs_attr_cachelookup(struct vnode *vp ,struct vattr *va);

@@ -22,8 +22,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef	_DEV_EVDEV_EVDEV_H
@@ -64,12 +62,14 @@ extern int evdev_rcpt_mask;
  * 0 - do not extract horizontal wheel movement (default).
  * 1 - ums(4) horizontal wheel encoding. T-axis is mapped to buttons 6 and 7
  * 2 - psm(4) wheels encoding: z = 1,-1 - vert. wheel, z = 2,-2 - horiz. wheel
+ * 3 - wsp(4) horizontal and vertical encoding. T-axis is mapped to button 5.
  */
 enum
 {
 	EVDEV_SYSMOUSE_T_AXIS_NONE = 0,
 	EVDEV_SYSMOUSE_T_AXIS_UMS = 1,
 	EVDEV_SYSMOUSE_T_AXIS_PSM = 2,
+	EVDEV_SYSMOUSE_T_AXIS_WSP = 3,
 };
 extern int evdev_sysmouse_t_axis;
 
@@ -153,7 +153,9 @@ void evdev_support_sw(struct evdev_dev *, uint16_t);
 void evdev_set_repeat_params(struct evdev_dev *, uint16_t, int);
 int evdev_set_report_size(struct evdev_dev *, size_t);
 void evdev_set_flag(struct evdev_dev *, uint16_t);
+void evdev_set_cdev_mode(struct evdev_dev *, uid_t, gid_t, int);
 void *evdev_get_softc(struct evdev_dev *);
+bool evdev_is_grabbed(struct evdev_dev *);
 
 /* Multitouch related functions: */
 int evdev_mt_id_to_slot(struct evdev_dev *, int32_t);

@@ -1,34 +1,30 @@
 /* Copyright 1988,1990,1993,1994 by Paul Vixie
  * All rights reserved
+ */
+
+/*
+ * Copyright (c) 1997 by Internet Software Consortium
  *
- * Distribute freely, except: don't remove my name from the source or
- * documentation (don't take credit for my work), mark your changes (don't
- * get me blamed for your possible bugs), don't alter or remove this
- * notice.  May be sold if buildable source is provided to buyer.  No
- * warrantee of any kind, express or implied, is included with this
- * software; use at your own risk, responsibility for damages (if any) to
- * anyone resulting from the use of this software rests entirely with the
- * user.
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
  *
- * Send bug reports, bug fixes, enhancements, requests, flames, etc., and
- * I'll try to keep a version up to date.  I can be reached as follows:
- * Paul Vixie          <paul@vix.com>          uunet!decwrl!vixie!paul
+ * THE SOFTWARE IS PROVIDED "AS IS" AND INTERNET SOFTWARE CONSORTIUM DISCLAIMS
+ * ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL INTERNET SOFTWARE
+ * CONSORTIUM BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL
+ * DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR
+ * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS
+ * ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS
+ * SOFTWARE.
  */
 
 #if !defined(lint) && !defined(LINT)
 static const char rcsid[] =
-  "$FreeBSD$";
+    "$Id: do_command.c,v 1.3 1998/08/14 00:32:39 vixie Exp $";
 #endif
-
 
 #include "cron.h"
-#include <sys/signal.h>
-#if defined(sequent)
-# include <sys/universe.h>
-#endif
-#if defined(SYSLOG)
-# include <syslog.h>
-#endif
 #if defined(LOGIN_CAP)
 # include <login_cap.h>
 #endif
@@ -37,17 +33,13 @@ static const char rcsid[] =
 # include <security/openpam.h>
 #endif
 
-
 static void		child_process(entry *, user *);
-
 static WAIT_T		wait_on_child(PID_T, const char *);
 
 extern char	*environ;
 
 void
-do_command(e, u)
-	entry	*e;
-	user	*u;
+do_command(entry *e, user *u)
 {
 	pid_t pid;
 
@@ -60,7 +52,7 @@ do_command(e, u)
 	 */
 	switch ((pid = fork())) {
 	case -1:
-		log_it("CRON",getpid(),"error","can't fork");
+		log_it("CRON", getpid(), "error", "can't fork");
 		if (e->flags & INTERVAL)
 			e->lastexit = time(NULL);
 		break;
@@ -84,22 +76,63 @@ do_command(e, u)
 	Debug(DPROC, ("[%d] main process returning to work\n", getpid()))
 }
 
+#ifdef PAM
+static void
+pam_cleanup(pam_handle_t **pamhp, int *session_opened, int *cred_established,
+    char ***pam_envp, const char *usernm, pid_t pid, int log_errors,
+    int end_status)
+{
+	int pam_err;
+
+	if (*pamhp == NULL)
+		return;
+	if (*session_opened) {
+		pam_err = pam_close_session(*pamhp, PAM_SILENT);
+		if (log_errors && pam_err != PAM_SUCCESS) {
+			log_it(usernm, pid, "SESSION-CLOSE",
+			    pam_strerror(*pamhp, pam_err));
+		}
+		*session_opened = 0;
+	}
+	if (*cred_established) {
+		pam_err = pam_setcred(*pamhp, PAM_DELETE_CRED);
+		if (log_errors && pam_err != PAM_SUCCESS) {
+			log_it(usernm, pid, "CRED-DELETE",
+			    pam_strerror(*pamhp, pam_err));
+		}
+		*cred_established = 0;
+	}
+	if (*pam_envp != NULL) {
+		openpam_free_envlist(*pam_envp);
+		*pam_envp = NULL;
+	}
+	pam_end(*pamhp, end_status);
+	*pamhp = NULL;
+}
+#endif
+
 
 static void
-child_process(e, u)
-	entry	*e;
-	user	*u;
+child_process(entry *e, user *u)
 {
-	int		stdin_pipe[2], stdout_pipe[2];
-	register char	*input_data;
-	char		*usernm, *mailto, *mailfrom;
-	PID_T		jobpid, stdinjob, mailpid;
-	register FILE	*mail;
-	register int	bytes = 1;
-	int		status = 0;
-	const char	*homedir = NULL;
+	int stdin_pipe[2], stdout_pipe[2];
+	char *input_data;
+	const char *usernm, *mailto, *mailfrom, *mailcc, *mailbcc;
+	PID_T jobpid, stdinjob, mailpid;
+	FILE *mail;
+	int bytes = 1;
+	int status = 0;
+	const char *homedir = NULL;
+#ifdef PAM
+	pam_handle_t *pamh = NULL;
+	int pam_err = PAM_SUCCESS;
+	int pam_session_opened = 0;
+	int pam_cred_established = 0;
+	/* Keep PAM env list in the middle process for the grandchild to use. */
+	char **pam_envp = NULL;
+#endif
 # if defined(LOGIN_CAP)
-	struct passwd	*pwd;
+	struct passwd *pwd;
 	login_cap_t *lc;
 # endif
 
@@ -114,6 +147,8 @@ child_process(e, u)
 	 */
 	usernm = env_get("LOGNAME", e->envp);
 	mailto = env_get("MAILTO", e->envp);
+	mailcc = env_get("MAILCC", e->envp);
+	mailbcc = env_get("MAILBCC", e->envp);
 	mailfrom = env_get("MAILFROM", e->envp);
 
 #ifdef PAM
@@ -123,8 +158,6 @@ child_process(e, u)
 	 * as any user.
 	 */
 	if (strcmp(u->name, SYS_NAME)) {	/* not equal */
-		pam_handle_t *pamh = NULL;
-		int pam_err;
 		struct pam_conv pamc = {
 			.conv = openpam_nullconv,
 			.appdata_ptr = NULL
@@ -147,36 +180,71 @@ child_process(e, u)
 			exit(ERROR_EXIT);
 		}
 
+		pam_err = pam_set_item(pamh, PAM_TTY, "cron");
+		if (pam_err != PAM_SUCCESS) {
+			log_it("CRON", getpid(), "error", "can't set PAM_TTY");
+			pam_cleanup(&pamh, &pam_session_opened,
+			    &pam_cred_established, &pam_envp, usernm,
+			    getpid(), 0, pam_err);
+			exit(ERROR_EXIT);
+		}
+
 		pam_err = pam_acct_mgmt(pamh, PAM_SILENT);
 		/* Expired password shouldn't prevent the job from running. */
 		if (pam_err != PAM_SUCCESS && pam_err != PAM_NEW_AUTHTOK_REQD) {
 			log_it(usernm, getpid(), "USER", "account unavailable");
+			pam_cleanup(&pamh, &pam_session_opened,
+			    &pam_cred_established, &pam_envp, usernm,
+			    getpid(), 0, pam_err);
 			exit(ERROR_EXIT);
 		}
 
-		pam_end(pamh, pam_err);
+		pam_err = pam_setcred(pamh, PAM_ESTABLISH_CRED);
+		if (pam_err != PAM_SUCCESS) {
+			log_it(usernm, getpid(), "CRED",
+			    pam_strerror(pamh, pam_err));
+			pam_cleanup(&pamh, &pam_session_opened,
+			    &pam_cred_established, &pam_envp, usernm,
+			    getpid(), 0, pam_err);
+			exit(ERROR_EXIT);
+		}
+		pam_cred_established = 1;
+
+		/* Establish the session while still root in the middle process. */
+		pam_err = pam_open_session(pamh, PAM_SILENT);
+		if (pam_err != PAM_SUCCESS) {
+			log_it(usernm, getpid(), "SESSION",
+			    pam_strerror(pamh, pam_err));
+			pam_cleanup(&pamh, &pam_session_opened,
+			    &pam_cred_established, &pam_envp, usernm,
+			    getpid(), 0, pam_err);
+			exit(ERROR_EXIT);
+		}
+		pam_session_opened = 1;
+
+		/* Collect PAM env now; apply only in grandchild before exec. */
+		pam_envp = pam_getenvlist(pamh);
 	}
 #endif
 
-#ifdef USE_SIGCHLD
 	/* our parent is watching for our death by catching SIGCHLD.  we
 	 * do not care to watch for our children's deaths this way -- we
 	 * use wait() explicitly.  so we have to disable the signal (which
 	 * was inherited from the parent).
 	 */
 	(void) signal(SIGCHLD, SIG_DFL);
-#else
-	/* on system-V systems, we are ignoring SIGCLD.  we have to stop
-	 * ignoring it now or the wait() in cron_pclose() won't work.
-	 * because of this, we have to wait() for our children here, as well.
-	 */
-	(void) signal(SIGCLD, SIG_DFL);
-#endif /*BSD*/
 
 	/* create some pipes to talk to our future child
 	 */
 	if (pipe(stdin_pipe) != 0 || pipe(stdout_pipe) != 0) {
 		log_it("CRON", getpid(), "error", "can't pipe");
+#ifdef PAM
+		if (pamh != NULL && strcmp(u->name, SYS_NAME)) {
+			pam_cleanup(&pamh, &pam_session_opened,
+			    &pam_cred_established, &pam_envp, usernm,
+			    getpid(), 1, pam_err);
+		}
+#endif
 		exit(ERROR_EXIT);
 	}
 
@@ -191,14 +259,15 @@ child_process(e, u)
 	 * If there are escaped %'s, remove the escape character.
 	 */
 	/*local*/{
-		register int escaped = FALSE;
-		register int ch;
-		register char *p;
+		int escaped = FALSE;
+		int ch;
+		char *p;
 
-		for (input_data = p = e->cmd; (ch = *input_data);
+		for (input_data = p = e->cmd;
+		     (ch = *input_data) != '\0';
 		     input_data++, p++) {
 			if (p != input_data)
-			    *p = ch;
+				*p = ch;
 			if (escaped) {
 				if (ch == '%' || ch == '\\')
 					*--p = ch;
@@ -221,13 +290,24 @@ child_process(e, u)
 	 */
 	switch (jobpid = fork()) {
 	case -1:
-		log_it("CRON",getpid(),"error","can't fork");
+		log_it("CRON", getpid(), "error", "can't fork");
+#ifdef PAM
+		if (pamh != NULL && strcmp(u->name, SYS_NAME)) {
+			pam_cleanup(&pamh, &pam_session_opened,
+			    &pam_cred_established, &pam_envp, usernm,
+			    getpid(), 1, pam_err);
+		}
+#endif
 		exit(ERROR_EXIT);
 		/*NOTREACHED*/
 	case 0:
 		Debug(DPROC, ("[%d] grandchild process fork()'ed\n",
 			      getpid()))
 
+#ifdef PAM
+		/* Grandchild runs the user job; PAM handle remains in parent. */
+		pamh = NULL;
+#endif
 		if (e->uid == ROOT_UID)
 			Jitter = RootJitter;
 		if (Jitter != 0) {
@@ -316,13 +396,11 @@ child_process(e, u)
 				    "error", "setgid failed");
 				_exit(ERROR_EXIT);
 			}
-# if defined(BSD)
 			if (initgroups(usernm, e->gid) != 0) {
 				log_it(usernm, getpid(),
 				    "error", "initgroups failed");
 				_exit(ERROR_EXIT);
 			}
-# endif
 			if (setlogin(usernm) != 0) {
 				log_it(usernm, getpid(),
 				    "error", "setlogin failed");
@@ -346,8 +424,8 @@ child_process(e, u)
 		 * the homedir given by the pw entry otherwise.
 		 *
 		 * If !LOGIN_CAP, then HOME is always set in e->envp.
-		 *
-		 * XXX: probably should also consult PAM.
+		 * PAM environment is applied later for the job; we do not
+		 * use it for cwd to avoid changing historical behavior.
 		 */
 		{
 			char	*new_home = env_get("HOME", e->envp);
@@ -368,6 +446,29 @@ child_process(e, u)
 			char	*shell = env_get("SHELL", e->envp);
 			char	**p;
 
+#ifdef PAM
+			if (pam_envp != NULL) {
+				char **pp;
+
+				/* Apply PAM-provided env only to the job process. */
+				for (pp = pam_envp; *pp != NULL; pp++) {
+					/*
+					 * Hand off each PAM string directly to the
+					 * environment; this process must not free
+					 * pam_envp after putenv() since the strings
+					 * must persist until exec. The parent will
+					 * free its copy after fork.
+					 */
+					if (putenv(*pp) != 0) {
+						warn("putenv");
+						_exit(ERROR_EXIT);
+					}
+				}
+				/* Free the pointer array; strings stay for exec. */
+				free(pam_envp);
+				pam_envp = NULL;
+			}
+#endif
 			/* Apply the environment from the entry, overriding
 			 * existing values (this will always set LOGNAME and
 			 * SHELL). putenv should not fail unless malloc does.
@@ -417,6 +518,14 @@ child_process(e, u)
 		break;
 	}
 
+#ifdef PAM
+	if (jobpid > 0 && pam_envp != NULL) {
+		/* Parent doesn't need PAM env list after the fork. */
+		openpam_free_envlist(pam_envp);
+		pam_envp = NULL;
+	}
+#endif
+
 	/* middle process, child of original cron, parent of process running
 	 * the user's command.
 	 */
@@ -441,10 +550,10 @@ child_process(e, u)
 	 */
 
 	if (*input_data && (stdinjob = fork()) == 0) {
-		register FILE	*out = fdopen(stdin_pipe[WRITE_PIPE], "w");
-		register int	need_newline = FALSE;
-		register int	escaped = FALSE;
-		register int	ch;
+		FILE *out = fdopen(stdin_pipe[WRITE_PIPE], "w");
+		int need_newline = FALSE;
+		int escaped = FALSE;
+		int ch;
 
 		if (out == NULL) {
 			warn("fdopen failed in child2");
@@ -463,7 +572,7 @@ child_process(e, u)
 		 *	%  -> \n
 		 *	\x -> \x	for all x != %
 		 */
-		while ((ch = *input_data++)) {
+		while ((ch = *input_data++) != '\0') {
 			if (escaped) {
 				if (ch != '%')
 					putc('\\', out);
@@ -506,8 +615,8 @@ child_process(e, u)
 	Debug(DPROC, ("[%d] child reading output from grandchild\n", getpid()))
 
 	/*local*/{
-		register FILE	*in = fdopen(stdout_pipe[READ_PIPE], "r");
-		register int	ch;
+		FILE *in = fdopen(stdout_pipe[READ_PIPE], "r");
+		int ch;
 
 		if (in == NULL) {
 			warn("fdopen failed in child");
@@ -527,7 +636,7 @@ child_process(e, u)
 			 */
 			if (mailto == NULL) {
 				/* MAILTO not present, set to USER,
-				 * unless globally overriden.
+				 * unless globally overridden.
 				 */
 				if (defmailto)
 					mailto = defmailto;
@@ -543,17 +652,20 @@ child_process(e, u)
 			 */
 
 			if (mailto) {
-				register char	**env;
-				auto char	mailcmd[MAX_COMMAND];
-				auto char	hostname[MAXHOSTNAMELEN];
+				char	**env;
+				char	mailcmd[MAX_COMMAND];
+				char	hostname[MAXHOSTNAMELEN];
 
 				if (gethostname(hostname, MAXHOSTNAMELEN) == -1)
 					hostname[0] = '\0';
 				hostname[sizeof(hostname) - 1] = '\0';
-				(void) snprintf(mailcmd, sizeof(mailcmd),
-					       MAILARGS, MAILCMD);
+				if (snprintf(mailcmd, sizeof(mailcmd), MAILFMT,
+				    MAILARG) >= sizeof(mailcmd)) {
+					warnx("mail command too long");
+					(void) _exit(ERROR_EXIT);
+				}
 				if (!(mail = cron_popen(mailcmd, "w", e, &mailpid))) {
-					warn("%s", MAILCMD);
+					warn("%s", mailcmd);
 					(void) _exit(ERROR_EXIT);
 				}
 				if (mailfrom == NULL || *mailfrom == '\0')
@@ -563,13 +675,15 @@ child_process(e, u)
 					fprintf(mail, "From: Cron Daemon <%s>\n",
 					    mailfrom);
 				fprintf(mail, "To: %s\n", mailto);
+				fprintf(mail, "CC: %s\n", mailcc);
+				fprintf(mail, "BCC: %s\n", mailbcc);
 				fprintf(mail, "Subject: Cron <%s@%s> %s\n",
 					usernm, first_word(hostname, "."),
 					e->cmd);
-# if defined(MAIL_DATE)
+#ifdef MAIL_DATE
 				fprintf(mail, "Date: %s\n",
 					arpadate(&TargetTime));
-# endif /* MAIL_DATE */
+#endif /*MAIL_DATE*/
 				for (env = e->envp;  *env;  env++)
 					fprintf(mail, "X-Cron-Env: <%s>\n",
 						*env);
@@ -602,7 +716,7 @@ child_process(e, u)
 	/* wait for children to die.
 	 */
 	if (jobpid > 0) {
-		WAIT_T	waiter;
+		WAIT_T waiter;
 
 		waiter = wait_on_child(jobpid, "grandchild command job");
 
@@ -618,7 +732,6 @@ child_process(e, u)
 			(void)fclose(mail);
 			mail = NULL;
 		}
-
 
 		/* only close pipe if we opened it -- i.e., we're
 		 * mailing...
@@ -653,12 +766,21 @@ child_process(e, u)
 
 	if (*input_data && stdinjob > 0)
 		wait_on_child(stdinjob, "grandchild stdinjob");
+
+#ifdef PAM
+	if (pamh != NULL && strcmp(u->name, SYS_NAME)) {
+		/* Close the PAM session after the job finishes. */
+		pam_cleanup(&pamh, &pam_session_opened, &pam_cred_established,
+		    &pam_envp, usernm, getpid(), 1, PAM_SUCCESS);
+	}
+#endif
 }
 
 static WAIT_T
-wait_on_child(PID_T childpid, const char *name) {
-	WAIT_T	waiter;
-	PID_T	pid;
+wait_on_child(PID_T childpid, const char *name)
+{
+	WAIT_T waiter;
+	PID_T pid;
 
 	Debug(DPROC, ("[%d] waiting for %s (%d) to finish\n",
 		getpid(), name, childpid))

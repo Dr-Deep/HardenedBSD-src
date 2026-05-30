@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2010 Luigi Rizzo, Riccardo Panicucci, Universita` di Pisa
  * All rights reserved
@@ -28,8 +28,6 @@
 
 /*
  * internal dummynet APIs.
- *
- * $FreeBSD$
  */
 
 #ifndef _IP_DN_PRIVATE_H
@@ -376,7 +374,6 @@ struct dn_pkt_tag {
 	uint64_t output_time;	/* when the pkt is due for delivery*/
 	uint16_t if_index;
 	uint16_t if_idxgen;
-	struct _ip6dn_args ip6opt;	/* XXX ipv6 options	*/
 	uint16_t iphdr_off;	/* IP header offset for mtodo()	*/
 };
 
@@ -393,6 +390,15 @@ enum {
 	PROTO_IPV4 =	0x08,
 	PROTO_IPV6 =	0x10,
 	PROTO_IFB =	0x0c, /* layer2 + ifbridge */
+};
+
+/*
+ * States for the Packet Loss Rate Gilbert-Elliott
+ * channel model
+ */
+enum {
+	PLR_STATE_G = 0,
+	PLR_STATE_B,
 };
 
 //extern struct dn_parms V_dn_cfg;
@@ -431,15 +437,7 @@ struct copy_args {
 };
 
 struct sockopt;
-int ip_dummynet_compat(struct sockopt *sopt);
-int dummynet_get(struct sockopt *sopt, void **compat);
-int dn_c_copy_q (void *_ni, void *arg);
-int dn_c_copy_pipe(struct dn_schk *s, struct copy_args *a, int nq);
-int dn_c_copy_fs(struct dn_fsk *f, struct copy_args *a, int nq);
-int dn_compat_copy_queue(struct copy_args *a, void *_o);
-int dn_compat_copy_pipe(struct copy_args *a, void *_o);
-int copy_data_helper_compat(void *_o, void *_arg);
-int dn_compat_calc_size(void);
+int dummynet_get(struct sockopt *sopt);
 int do_config(void *p, size_t l);
 
 /* function to drain idle object */

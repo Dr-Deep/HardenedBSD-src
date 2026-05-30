@@ -26,8 +26,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef __DEV_NVDIMM_VAR_H__
@@ -81,7 +79,7 @@ _Static_assert(sizeof(struct nvdimm_label) == 256, "Incorrect layout");
 typedef uint32_t nfit_handle_t;
 
 enum nvdimm_acpi_ivar {
-	NVDIMM_ROOT_IVAR_ACPI_HANDLE,
+	NVDIMM_ROOT_IVAR_ACPI_HANDLE = BUS_IVARS_PRIVATE,
 	NVDIMM_ROOT_IVAR_DEVICE_HANDLE,
 	NVDIMM_ROOT_IVAR_MAX,
 };

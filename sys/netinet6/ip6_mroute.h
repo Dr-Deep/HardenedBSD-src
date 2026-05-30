@@ -29,7 +29,6 @@
  * SUCH DAMAGE.
  *
  *	$KAME: ip6_mroute.h,v 1.19 2001/06/14 06:12:55 suz Exp $
- * $FreeBSD$
  */
 
 /*	BSDI ip_mroute.h,v 2.5 1996/10/11 16:01:48 pjd Exp	*/
@@ -48,6 +47,9 @@
 
 #ifndef _NETINET6_IP6_MROUTE_H_
 #define _NETINET6_IP6_MROUTE_H_
+
+#include <sys/_param.h>
+#include <sys/types.h>
 
 /*
  * Multicast Routing set/getsockopt commands.
@@ -271,11 +273,25 @@ struct rtdetq {		/* XXX: rtdetq is also defined in ip_mroute.h */
 #endif
 
 #define MAX_UPQ6	4		/* max. no of pkts in upcall Q */
+#endif /* _KERNEL || KERNEL */
 
+#ifdef _KERNEL
+VNET_DECLARE(bool, ip6_mrouting_enabled);
+#define	V_ip6_mrouting_enabled	VNET(ip6_mrouting_enabled)
+
+struct ifnet;
+struct ip6_hdr;
+struct mbuf;
+struct socket;
+struct sockopt;
+
+extern int	(*ip6_mforward)(struct ip6_hdr *, struct ifnet *,
+		    struct mbuf *);
 extern int	(*ip6_mrouter_set)(struct socket *so, struct sockopt *sopt);
 extern int	(*ip6_mrouter_get)(struct socket *so, struct sockopt *sopt);
-extern int	(*ip6_mrouter_done)(void);
-extern int	(*mrt6_ioctl)(u_long, caddr_t);
+extern void	(*ip6_mrouter_done)(struct socket *so);
+
+extern int	(*mrt6_ioctl)(u_long, caddr_t, int);
 #endif /* _KERNEL */
 
 #endif /* !_NETINET6_IP6_MROUTE_H_ */

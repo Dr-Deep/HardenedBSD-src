@@ -1,7 +1,7 @@
 /*	$NetBSD: tmpfs_vfsops.c,v 1.10 2005/12/11 12:24:29 christos Exp $	*/
 
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2005 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -43,10 +43,8 @@
  * allocate and release resources.
  */
 
+#include "opt_ddb.h"
 #include "opt_tmpfs.h"
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -91,12 +89,8 @@ static int	tmpfs_fhtovp(struct mount *, struct fid *, int,
 static int	tmpfs_statfs(struct mount *, struct statfs *);
 
 static const char *tmpfs_opts[] = {
-	"from", "size", "maxfilesize", "inodes", "uid", "gid", "mode", "export",
-	"union", "nonc", "nomtime", NULL
-};
-
-static const char *tmpfs_updateopts[] = {
-	"from", "export", "nomtime", "size", NULL
+	"from", "easize", "size", "maxfilesize", "inodes", "uid", "gid", "mode",
+	"export", "union", "nonc", "nomtime", "nosymfollow", "pgread", NULL
 };
 
 static int
@@ -210,7 +204,7 @@ again:
 			continue;
 		}
 		vm = vmspace_acquire_ref(p);
-		_PHOLD_LITE(p);
+		_PHOLD(p);
 		PROC_UNLOCK(p);
 		if (vm == NULL) {
 			PRELE(p);
@@ -245,7 +239,7 @@ again:
 				VM_OBJECT_RUNLOCK(object);
 				continue;
 			}
-			vp = object->un_pager.swp.swp_tmpfs;
+			vp = VM_TO_TMPFS_VP(object);
 			if (vp->v_mount != mp) {
 				VM_OBJECT_RUNLOCK(object);
 				continue;
@@ -327,11 +321,12 @@ tmpfs_mount(struct mount *mp)
 	    sizeof(struct tmpfs_dirent) + sizeof(struct tmpfs_node));
 	struct tmpfs_mount *tmp;
 	struct tmpfs_node *root;
+	struct vfsoptlist *opts;
 	int error;
-	bool nomtime, nonc;
+	bool nomtime, nonc, pgread;
 	/* Size counters. */
 	u_quad_t pages;
-	off_t nodes_max, size_max, maxfilesize;
+	off_t nodes_max, size_max, maxfilesize, ea_max_size;
 
 	/* Root node attributes. */
 	uid_t root_uid;
@@ -340,41 +335,71 @@ tmpfs_mount(struct mount *mp)
 
 	struct vattr va;
 
-	if (vfs_filteropt(mp->mnt_optnew, tmpfs_opts))
+	opts = mp->mnt_optnew;
+	if (vfs_filteropt(opts, tmpfs_opts))
 		return (EINVAL);
 
 	if (mp->mnt_flag & MNT_UPDATE) {
-		/* Only support update mounts for certain options. */
-		if (vfs_filteropt(mp->mnt_optnew, tmpfs_updateopts) != 0)
-			return (EOPNOTSUPP);
 		tmp = VFS_TO_TMPFS(mp);
-		if (vfs_getopt_size(mp->mnt_optnew, "size", &size_max) == 0) {
-			/*
-			 * On-the-fly resizing is not supported (yet). We still
-			 * need to have "size" listed as "supported", otherwise
-			 * trying to update fs that is listed in fstab with size
-			 * parameter, say trying to change rw to ro or vice
-			 * versa, would cause vfs_filteropt() to bail.
-			 */
-			if (size_max != tmp->tm_size_max)
-				return (EOPNOTSUPP);
-		}
-		if (vfs_flagopt(mp->mnt_optnew, "ro", NULL, 0) &&
-		    !tmp->tm_ronly) {
+
+		/*
+		 * These options cannot (yet) be modified on the fly, but
+		 * mount(8) will still pass them when remounting, so we
+		 * will silently ignore them as long as the value is
+		 * unchanged.
+		 */
+		if (vfs_scanopt(opts, "gid", "%d", &root_gid) == 1 &&
+		    root_gid != tmp->tm_root->tn_gid)
+			return (EOPNOTSUPP);
+		if (vfs_scanopt(opts, "uid", "%d", &root_uid) == 1 &&
+		    root_uid != tmp->tm_root->tn_uid)
+			return (EOPNOTSUPP);
+		if (vfs_scanopt(opts, "mode", "%ho", &root_mode) == 1 &&
+		    (root_mode & S_IFMT) != (tmp->tm_root->tn_mode & S_IFMT))
+			return (EOPNOTSUPP);
+		if (vfs_getopt_size(opts, "inodes", &nodes_max) == 0 &&
+		    nodes_max != 0 && nodes_max != tmp->tm_nodes_max)
+			return (EOPNOTSUPP);
+		if (vfs_getopt_size(opts, "size", &size_max) == 0 &&
+		    size_max != 0 && size_max != tmp->tm_size_max)
+			return (EOPNOTSUPP);
+		if (vfs_getopt_size(opts, "maxfilesize", &maxfilesize) == 0 &&
+		    maxfilesize != 0 && maxfilesize != tmp->tm_maxfilesize)
+			return (EOPNOTSUPP);
+		if (tmp->tm_nonc !=
+		    (vfs_getopt(opts, "nonc", NULL, NULL) == 0))
+			return (EOPNOTSUPP);
+		if (tmp->tm_pgread !=
+		    (vfs_getopt(opts, "pgread", NULL, NULL) == 0))
+			return (EOPNOTSUPP);
+
+		/*
+		 * These options can be modified.
+		 */
+		if (vfs_getopt_size(opts, "easize", &ea_max_size) != 0)
+			tmp->tm_ea_memory_max = ea_max_size;
+		tmp->tm_nomtime = (vfs_getopt(opts, "nomtime", NULL, 0) == 0);
+
+		/*
+		 * Handle read-write to read-only or vice versa.
+		 */
+		if (vfs_flagopt(opts, "ro", NULL, 0) && !tmp->tm_ronly) {
 			/* RW -> RO */
 			return (tmpfs_rw_to_ro(mp));
-		} else if (!vfs_flagopt(mp->mnt_optnew, "ro", NULL, 0) &&
-		    tmp->tm_ronly) {
+		}
+		if (!vfs_flagopt(opts, "ro", NULL, 0) && tmp->tm_ronly) {
 			/* RO -> RW */
 			tmp->tm_ronly = 0;
 			MNT_ILOCK(mp);
 			mp->mnt_flag &= ~MNT_RDONLY;
 			MNT_IUNLOCK(mp);
 		}
-		tmp->tm_nomtime = vfs_getopt(mp->mnt_optnew, "nomtime", NULL,
-		    0) == 0;
+
+		/*
+		 * Check if fast path lookup is still supported.
+		 */
 		MNT_ILOCK(mp);
-		if ((mp->mnt_flag & MNT_UNION) == 0) {
+		if (!tmp->tm_nonc && (mp->mnt_flag & MNT_UNION) == 0) {
 			mp->mnt_kern_flag |= MNTK_FPLOOKUP;
 		} else {
 			mp->mnt_kern_flag &= ~MNTK_FPLOOKUP;
@@ -390,22 +415,25 @@ tmpfs_mount(struct mount *mp)
 		return (error);
 
 	if (mp->mnt_cred->cr_ruid != 0 ||
-	    vfs_scanopt(mp->mnt_optnew, "gid", "%d", &root_gid) != 1)
+	    vfs_scanopt(opts, "gid", "%d", &root_gid) != 1)
 		root_gid = va.va_gid;
 	if (mp->mnt_cred->cr_ruid != 0 ||
-	    vfs_scanopt(mp->mnt_optnew, "uid", "%d", &root_uid) != 1)
+	    vfs_scanopt(opts, "uid", "%d", &root_uid) != 1)
 		root_uid = va.va_uid;
 	if (mp->mnt_cred->cr_ruid != 0 ||
-	    vfs_scanopt(mp->mnt_optnew, "mode", "%ho", &root_mode) != 1)
+	    vfs_scanopt(opts, "mode", "%ho", &root_mode) != 1)
 		root_mode = va.va_mode;
-	if (vfs_getopt_size(mp->mnt_optnew, "inodes", &nodes_max) != 0)
+	if (vfs_getopt_size(opts, "inodes", &nodes_max) != 0)
 		nodes_max = 0;
-	if (vfs_getopt_size(mp->mnt_optnew, "size", &size_max) != 0)
+	if (vfs_getopt_size(opts, "size", &size_max) != 0)
 		size_max = 0;
-	if (vfs_getopt_size(mp->mnt_optnew, "maxfilesize", &maxfilesize) != 0)
+	if (vfs_getopt_size(opts, "maxfilesize", &maxfilesize) != 0)
 		maxfilesize = 0;
-	nonc = vfs_getopt(mp->mnt_optnew, "nonc", NULL, NULL) == 0;
-	nomtime = vfs_getopt(mp->mnt_optnew, "nomtime", NULL, NULL) == 0;
+	if (vfs_getopt_size(opts, "easize", &ea_max_size) != 0)
+		ea_max_size = 0;
+	nonc = vfs_getopt(opts, "nonc", NULL, NULL) == 0;
+	nomtime = vfs_getopt(opts, "nomtime", NULL, NULL) == 0;
+	pgread = vfs_getopt(opts, "pgread", NULL, NULL) == 0;
 
 	/* Do not allow mounts if we do not have enough memory to preserve
 	 * the minimum reserved pages. */
@@ -442,8 +470,11 @@ tmpfs_mount(struct mount *mp)
 	mtx_init(&tmp->tm_allnode_lock, "tmpfs allnode lock", NULL, MTX_DEF);
 	tmp->tm_nodes_max = nodes_max;
 	tmp->tm_nodes_inuse = 0;
+	tmp->tm_ea_memory_inuse = 0;
 	tmp->tm_refcount = 1;
 	tmp->tm_maxfilesize = maxfilesize > 0 ? maxfilesize : OFF_MAX;
+	tmp->tm_ea_memory_max = ea_max_size > 0 ?
+	    ea_max_size : TMPFS_EA_MEMORY_RESERVED;
 	LIST_INIT(&tmp->tm_nodes_used);
 
 	tmp->tm_size_max = size_max;
@@ -453,6 +484,7 @@ tmpfs_mount(struct mount *mp)
 	tmp->tm_ronly = (mp->mnt_flag & MNT_RDONLY) != 0;
 	tmp->tm_nonc = nonc;
 	tmp->tm_nomtime = nomtime;
+	tmp->tm_pgread = pgread;
 
 	/* Allocate the root node. */
 	error = tmpfs_alloc_node(mp, tmp, VDIR, root_uid, root_gid,
@@ -535,10 +567,6 @@ tmpfs_unmount(struct mount *mp, int mntflags)
 	tmpfs_free_tmp(tmp);
 	vfs_write_resume(mp, VR_START_WRITE);
 
-	MNT_ILOCK(mp);
-	mp->mnt_flag &= ~MNT_LOCAL;
-	MNT_IUNLOCK(mp);
-
 	return (0);
 }
 
@@ -556,7 +584,11 @@ tmpfs_free_tmp(struct tmpfs_mount *tmp)
 	TMPFS_UNLOCK(tmp);
 
 	mtx_destroy(&tmp->tm_allnode_lock);
-	MPASS(tmp->tm_pages_used == 0);
+	/*
+	 * We cannot assert that tmp->tm_pages_used == 0 there,
+	 * because tmpfs vm_objects might be still mapped by some
+	 * process and outlive the mount due to reference counting.
+	 */
 	MPASS(tmp->tm_nodes_inuse == 0);
 
 	free(tmp, M_TMPFSMNT);
@@ -577,29 +609,25 @@ static int
 tmpfs_fhtovp(struct mount *mp, struct fid *fhp, int flags,
     struct vnode **vpp)
 {
-	struct tmpfs_fid_data tfd;
+	struct tmpfs_fid_data *tfd;
 	struct tmpfs_mount *tmp;
 	struct tmpfs_node *node;
 	int error;
 
-	if (fhp->fid_len != sizeof(tfd))
+	if (fhp->fid_len != sizeof(*tfd))
 		return (EINVAL);
 
-	/*
-	 * Copy from fid_data onto the stack to avoid unaligned pointer use.
-	 * See the comment in sys/mount.h on struct fid for details.
-	 */
-	memcpy(&tfd, fhp->fid_data, fhp->fid_len);
+	tfd = (struct tmpfs_fid_data *)fhp;
 
 	tmp = VFS_TO_TMPFS(mp);
 
-	if (tfd.tfd_id >= tmp->tm_nodes_max)
+	if (tfd->tfd_id >= tmp->tm_nodes_max)
 		return (EINVAL);
 
 	TMPFS_LOCK(tmp);
 	LIST_FOREACH(node, &tmp->tm_nodes_used, tn_entries) {
-		if (node->tn_id == tfd.tfd_id &&
-		    node->tn_gen == tfd.tfd_gen) {
+		if (node->tn_id == tfd->tfd_id &&
+		    node->tn_gen == tfd->tfd_gen) {
 			tmpfs_ref_node(node);
 			break;
 		}
@@ -696,3 +724,45 @@ struct vfsops tmpfs_vfsops = {
 	.vfs_uninit =			tmpfs_uninit,
 };
 VFS_SET(tmpfs_vfsops, tmpfs, VFCF_JAIL);
+
+#ifdef DDB
+#include <ddb/ddb.h>
+
+static void
+db_print_tmpfs(struct mount *mp, struct tmpfs_mount *tmp)
+{
+	db_printf("mp %p (%s) tmp %p\n", mp,
+	    mp->mnt_stat.f_mntonname, tmp);
+	db_printf(
+	    "\tsize max %ju pages max %lu pages used %lu\n"
+	    "\tinodes max %ju inodes inuse %ju ea inuse %ju refcount %ju\n"
+	    "\tmaxfilesize %ju r%c %snamecache %smtime\n",
+	    (uintmax_t)tmp->tm_size_max, tmp->tm_pages_max, tmp->tm_pages_used,
+	    (uintmax_t)tmp->tm_nodes_max, (uintmax_t)tmp->tm_nodes_inuse,
+	    (uintmax_t)tmp->tm_ea_memory_inuse, (uintmax_t)tmp->tm_refcount,
+	    (uintmax_t)tmp->tm_maxfilesize,
+	    tmp->tm_ronly ? 'o' : 'w', tmp->tm_nonc ? "no" : "",
+	    tmp->tm_nomtime ? "no" : "");
+}
+
+DB_SHOW_COMMAND(tmpfs, db_show_tmpfs)
+{
+	struct mount *mp;
+	struct tmpfs_mount *tmp;
+
+	if (have_addr) {
+		mp = (struct mount *)addr;
+		tmp = VFS_TO_TMPFS(mp);
+		db_print_tmpfs(mp, tmp);
+		return;
+	}
+
+	TAILQ_FOREACH(mp, &mountlist, mnt_list) {
+		if (strcmp(mp->mnt_stat.f_fstypename, tmpfs_vfsconf.vfc_name) ==
+		    0) {
+			tmp = VFS_TO_TMPFS(mp);
+			db_print_tmpfs(mp, tmp);
+		}
+	}
+}
+#endif	/* DDB */

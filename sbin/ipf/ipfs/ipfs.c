@@ -1,4 +1,3 @@
-/*	$FreeBSD$	*/
 
 /*
  * Copyright (C) 2012 by Darren Reed.
@@ -31,9 +30,6 @@
 #include "ipf.h"
 #include "netinet/ipl.h"
 
-#if !defined(lint)
-static const char rcsid[] = "@(#)$Id$";
-#endif
 
 #ifndef	IPF_SAVEDIR
 # define	IPF_SAVEDIR	"/var/db/ipf"
@@ -580,7 +576,7 @@ int readnat(int fd, char *file)
 
 		in = (nat_save_t *)malloc(ipn.ipn_dsize);
 		if (in == NULL) {
-			fprintf(stderr, "nat:cannot malloc nat save atruct\n");
+			fprintf(stderr, "nat:cannot malloc nat save struct\n");
 			goto freenathead;
 		}
 

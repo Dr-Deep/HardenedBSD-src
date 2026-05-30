@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2013 Dmitry Chagin <dchagin@FreeBSD.org>
  *
@@ -25,13 +25,9 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
-#include <sys/kernel.h>
-#include <sys/sdt.h>
 #include <sys/systm.h>
+#include <sys/sdt.h>
 #include <sys/proc.h>
 
 /*
@@ -60,8 +56,6 @@ UNIMPLEMENTED(query_module);	/* Added in Linux 2.2 removed in 2.6. */
 UNIMPLEMENTED(security);
 UNIMPLEMENTED(vserver);
 
-DUMMY(setfsuid);
-DUMMY(setfsgid);
 DUMMY(vhangup);
 DUMMY(pivot_root);
 DUMMY(adjtimex);
@@ -78,11 +72,6 @@ DUMMY(kexec_load);
 DUMMY(add_key);
 DUMMY(request_key);
 DUMMY(keyctl);
-/* Linux 2.6.13: */
-DUMMY(ioprio_set);
-DUMMY(ioprio_get);
-DUMMY(inotify_add_watch);
-DUMMY(inotify_rm_watch);
 /* Linux 2.6.16: */
 DUMMY(migrate_pages);
 DUMMY(unshare);
@@ -93,7 +82,6 @@ DUMMY(vmsplice);
 DUMMY(move_pages);
 /* Linux 2.6.27: */
 DUMMY(signalfd4);
-DUMMY(inotify_init1);
 /* Linux 2.6.31: */
 DUMMY(perf_event_open);
 /* Linux 2.6.36: */
@@ -106,8 +94,6 @@ DUMMY(setns);
 /* Linux 3.2: */
 DUMMY(process_vm_readv);
 DUMMY(process_vm_writev);
-/* Linux 3.5: */
-DUMMY(kcmp);
 /* Linux 3.8: */
 DUMMY(finit_module);
 DUMMY(sched_setattr);
@@ -118,8 +104,6 @@ DUMMY(bpf);
 DUMMY(execveat);
 /* Linux 4.2: */
 DUMMY(userfaultfd);
-/* Linux 4.3: */
-DUMMY(membarrier);
 /* Linux 4.4: */
 DUMMY(mlock2);
 /* Linux 4.6: */
@@ -129,43 +113,42 @@ DUMMY(pwritev2);
 DUMMY(pkey_mprotect);
 DUMMY(pkey_alloc);
 DUMMY(pkey_free);
+/* Linux 4.18: */
+DUMMY(io_pgetevents);
+/* Linux 5.1: */
+DUMMY(pidfd_send_signal);
+DUMMY(io_uring_setup);
+DUMMY(io_uring_enter);
+DUMMY(io_uring_register);
+/* Linux 5.2: */
 DUMMY(open_tree);
 DUMMY(move_mount);
 DUMMY(fsopen);
 DUMMY(fsconfig);
 DUMMY(fsmount);
 DUMMY(fspick);
+/* Linux 5.3: */
 DUMMY(pidfd_open);
-DUMMY(close_range);
+/* Linux 5.6: */
 DUMMY(openat2);
 DUMMY(pidfd_getfd);
+/* Linux 5.10: */
 DUMMY(process_madvise);
+/* Linux 5.12: */
 DUMMY(mount_setattr);
-/* Linux 4.18: */
-DUMMY(io_pgetevents);
-/* Linux 5.0: */
-DUMMY(pidfd_send_signal);
-DUMMY(io_uring_setup);
-DUMMY(io_uring_enter);
-DUMMY(io_uring_register);
-
-#define DUMMY_XATTR(s)						\
-int								\
-linux_ ## s ## xattr(						\
-    struct thread *td, struct linux_ ## s ## xattr_args *arg)	\
-{								\
-								\
-	return (EOPNOTSUPP);					\
-}
-DUMMY_XATTR(set);
-DUMMY_XATTR(lset);
-DUMMY_XATTR(fset);
-DUMMY_XATTR(get);
-DUMMY_XATTR(lget);
-DUMMY_XATTR(fget);
-DUMMY_XATTR(list);
-DUMMY_XATTR(llist);
-DUMMY_XATTR(flist);
-DUMMY_XATTR(remove);
-DUMMY_XATTR(lremove);
-DUMMY_XATTR(fremove);
+/* Linux 5.13: */
+DUMMY(landlock_create_ruleset);
+DUMMY(landlock_add_rule);
+DUMMY(landlock_restrict_self);
+/* Linux 5.14: */
+DUMMY(memfd_secret);
+DUMMY(quotactl_fd);
+/* Linux 5.15: */
+DUMMY(process_mrelease);
+/* Linux 5.16: */
+DUMMY(futex_waitv);
+DUMMY(set_mempolicy_home_node);
+/* Linux 6.5: */
+DUMMY(cachestat);
+/* Linux 6.6: */
+DUMMY(fchmodat2);

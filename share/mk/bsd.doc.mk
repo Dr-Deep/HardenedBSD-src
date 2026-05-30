@@ -1,6 +1,3 @@
-#	from: @(#)bsd.doc.mk	5.3 (Berkeley) 1/2/91
-# $FreeBSD$
-#
 # The include file <bsd.doc.mk> handles installing BSD troff documents.
 #
 #
@@ -85,7 +82,7 @@ TRFLAGS+=	-t
 .if !defined(TAGS) || ! ${TAGS:Mpackage=*}
 TAGS+=		package=${PACKAGE:Uutilities}
 .endif
-TAG_ARGS=	-T ${TAGS:[*]:S/ /,/g}
+TAG_ARGS=	-T ${TAGS:ts,:[*]}
 .endif
 
 DCOMPRESS_EXT?=	${COMPRESS_EXT}

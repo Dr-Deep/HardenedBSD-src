@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2021 Christos Margiolis <christos@FreeBSD.org>
+ * Copyright (c) 2021-2026 Christos Margiolis <christos@FreeBSD.org>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -18,8 +18,6 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
- *
- * $FreeBSD$
  */
 
 #include <err.h>
@@ -42,22 +40,14 @@ static void printall(struct mixer *, int);
 static void printminfo(struct mixer *, int);
 static void printdev(struct mixer *, int);
 static void printrecsrc(struct mixer *, int); /* XXX: change name */
+static int set_dunit(struct mixer *, int);
 /* Control handlers */
-static int mod_dunit(struct mix_dev *, void *);
 static int mod_volume(struct mix_dev *, void *);
 static int mod_mute(struct mix_dev *, void *);
 static int mod_recsrc(struct mix_dev *, void *);
 static int print_volume(struct mix_dev *, void *);
 static int print_mute(struct mix_dev *, void *);
 static int print_recsrc(struct mix_dev *, void *);
-
-static const mix_ctl_t ctl_dunit = {
-	.parent_dev	= NULL,
-	.id		= -1,
-	.name		= "default_unit",
-	.mod		= mod_dunit,
-	.print		= NULL
-};
 
 int
 main(int argc, char *argv[])
@@ -76,9 +66,12 @@ main(int argc, char *argv[])
 			aflag = 1;
 			break;
 		case 'd':
+			if (strncmp(optarg, "pcm", 3) == 0)
+				optarg += 3;
+			errno = 0;
 			dunit = strtol(optarg, NULL, 10);
 			if (errno == EINVAL || errno == ERANGE)
-				err(1, "strtol");
+				err(1, "strtol(%s)", optarg);
 			dflag = 1;
 			break;
 		case 'f':
@@ -102,11 +95,11 @@ main(int argc, char *argv[])
 	/* Print all mixers and exit. */
 	if (aflag) {
 		if ((n = mixer_get_nmixers()) < 0)
-			err(1, "mixer_get_nmixers");
+			errx(1, "no mixers present in the system");
 		for (i = 0; i < n; i++) {
-			(void)snprintf(buf, sizeof(buf), "/dev/mixer%d", i);
+			(void)mixer_get_path(buf, sizeof(buf), i);
 			if ((m = mixer_open(buf)) == NULL)
-				err(1, "mixer_open: %s", buf);
+				continue;
 			initctls(m);
 			if (sflag)
 				printrecsrc(m, oflag);
@@ -121,12 +114,25 @@ main(int argc, char *argv[])
 	}
 
 	if ((m = mixer_open(name)) == NULL)
-		err(1, "mixer_open: %s", name);
+		errx(1, "%s: no such mixer", name);
 
 	initctls(m);
 
-	if (dflag && ctl_dunit.mod(m->dev, &dunit) < 0)
-		goto parse;
+	if (dflag) {
+		if (set_dunit(m, dunit) < 0)
+			goto parse;
+		else {
+			/*
+			 * Open current mixer since we changed the default
+			 * unit, otherwise we'll print and apply changes to the
+			 * old one.
+			 */
+			(void)mixer_close(m);
+			if ((m = mixer_open(NULL)) == NULL)
+				errx(1, "cannot open default mixer");
+			initctls(m);
+		}
+	}
 	if (sflag) {
 		printrecsrc(m, oflag);
 		(void)mixer_close(m);
@@ -135,7 +141,9 @@ main(int argc, char *argv[])
 
 parse:
 	while (argc > 0) {
-		if ((p = strdup(*argv)) == NULL)
+		char *orig;
+
+		if ((orig = p = strdup(*argv)) == NULL)
 			err(1, "strdup(%s)", *argv);
 
 		/* Check if we're using the shorthand syntax for volume setting. */
@@ -188,7 +196,7 @@ parse:
 		/* Input: `dev.control=val`. */
 		cp->mod(cp->parent_dev, valstr);
 next:
-		free(p);
+		free(orig);
 		argc--;
 		argv++;
 	}
@@ -203,8 +211,8 @@ next:
 static void __dead2
 usage(void)
 {
-	fprintf(stderr, "usage: %1$s [-f device] [-d unit] [-os] [dev[.control[=value]]] ...\n"
-	    "       %1$s [-d unit] [-os] -a\n"
+	fprintf(stderr, "usage: %1$s [-f device] [-d pcmN | N] [-os] [dev[.control[=value]]] ...\n"
+	    "       %1$s [-os] -a\n"
 	    "       %1$s -h\n", getprogname());
 	exit(1);
 }
@@ -222,7 +230,7 @@ initctls(struct mixer *m)
 	}
 	if (rc) {
 		(void)mixer_close(m);
-		err(1, "cannot make controls");
+		errx(1, "cannot make mixer controls");
 	}
 }
 
@@ -316,20 +324,19 @@ printrecsrc(struct mixer *m, int oflag)
 }
 
 static int
-mod_dunit(struct mix_dev *d, void *p)
+set_dunit(struct mixer *m, int dunit)
 {
-	int dunit = *((int *)p);
 	int n;
 
 	if ((n = mixer_get_dunit()) < 0) {
 		warn("cannot get default unit");
 		return (-1);
 	}
-	if (mixer_set_dunit(d->parent_mixer, dunit) < 0) {
-		warn("cannot set default unit to: %d", dunit);
+	if (mixer_set_dunit(m, dunit) < 0) {
+		warn("cannot set default unit to %d", dunit);
 		return (-1);
 	}
-	printf("%s: %d -> %d\n", ctl_dunit.name, n, dunit);
+	printf("default_unit: %d -> %d\n", n, dunit);
 
 	return (0);
 }
@@ -421,26 +428,33 @@ mod_mute(struct mix_dev *d, void *p)
 	m = d->parent_mixer;
 	cp = mixer_get_ctl(m->dev, C_MUT);
 	val = p;
-	switch (*val) {
-	case '0':
+	if (strncmp(val, "off", strlen(val)) == 0) {
 		opt = MIX_UNMUTE;
-		break;
-	case '1':
+	} else if (strncmp(val, "0", strlen(val)) == 0) {
+		warnx("%s: deprecated: use \"off\" instead", val);
+		opt = MIX_UNMUTE;
+	} else if (strncmp(val, "on", strlen(val)) == 0) {
 		opt = MIX_MUTE;
-		break;
-	case '^':
+	} else if (strncmp(val, "1", strlen(val)) == 0) {
+		warnx("%s: deprecated: use \"on\" instead", val);
+		opt = MIX_MUTE;
+	} else if (strncmp(val, "toggle", strlen(val)) == 0) {
 		opt = MIX_TOGGLEMUTE;
-		break;
-	default:
-		warnx("%c: no such modifier", *val);
+	} else if (strncmp(val, "^", strlen(val)) == 0) {
+		warnx("%s: deprecated: use \"toggle\" instead", val);
+		opt = MIX_TOGGLEMUTE;
+	} else {
+		warnx("%s: no such modifier", val);
 		return (-1);
 	}
 	n = MIX_ISMUTE(m, m->dev->devno);
 	if (mixer_set_mute(m, opt) < 0)
-		warn("%s.%s=%c", m->dev->name, cp->name, *val);
+		warn("%s.%s=%s", m->dev->name, cp->name, val);
 	else
-		printf("%s.%s: %d -> %d\n",
-		    m->dev->name, cp->name, n, MIX_ISMUTE(m, m->dev->devno));
+		printf("%s.%s: %s -> %s\n",
+		    m->dev->name, cp->name,
+		    n ? "on" : "off",
+		    MIX_ISMUTE(m, m->dev->devno) ? "on" : "off");
 
 	return (0);
 }
@@ -456,29 +470,38 @@ mod_recsrc(struct mix_dev *d, void *p)
 	m = d->parent_mixer;
 	cp = mixer_get_ctl(m->dev, C_SRC);
 	val = p;
-	switch (*val) {
-	case '+':
+	if (strncmp(val, "add", strlen(val)) == 0) {
 		opt = MIX_ADDRECSRC;
-		break;
-	case '-':
+	} else if (strncmp(val, "+", strlen(val)) == 0) {
+		warnx("%s: deprecated: use \"add\" instead", val);
+		opt = MIX_ADDRECSRC;
+	} else if (strncmp(val, "remove", strlen(val)) == 0) {
 		opt = MIX_REMOVERECSRC;
-		break;
-	case '=':
+	} else if (strncmp(val, "-", strlen(val)) == 0) {
+		warnx("%s: deprecated: use \"remove\" instead", val);
+		opt = MIX_REMOVERECSRC;
+	} else if (strncmp(val, "set", strlen(val)) == 0) {
 		opt = MIX_SETRECSRC;
-		break;
-	case '^':
+	} else if (strncmp(val, "=", strlen(val)) == 0) {
+		warnx("%s: deprecated: use \"set\" instead", val);
+		opt = MIX_SETRECSRC;
+	} else if (strncmp(val, "toggle", strlen(val)) == 0) {
 		opt = MIX_TOGGLERECSRC;
-		break;
-	default:
-		warnx("%c: no such modifier", *val);
+	} else if (strncmp(val, "^", strlen(val)) == 0) {
+		warnx("%s: deprecated: use \"toggle\" instead", val);
+		opt = MIX_TOGGLERECSRC;
+	} else {
+		warnx("%s: no such modifier", val);
 		return (-1);
 	}
 	n = MIX_ISRECSRC(m, m->dev->devno);
 	if (mixer_mod_recsrc(m, opt) < 0)
-		warn("%s.%s=%c", m->dev->name, cp->name, *val);
+		warn("%s.%s=%s", m->dev->name, cp->name, val);
 	else
-		printf("%s.%s: %d -> %d\n",
-		    m->dev->name, cp->name, n, MIX_ISRECSRC(m, m->dev->devno));
+		printf("%s.%s: %s -> %s\n",
+		    m->dev->name, cp->name,
+		    n ? "add" : "remove",
+		    MIX_ISRECSRC(m, m->dev->devno) ? "add" : "remove");
 
 	return (0);
 }
@@ -501,7 +524,8 @@ print_mute(struct mix_dev *d, void *p)
 	struct mixer *m = d->parent_mixer;
 	const char *ctl_name = p;
 
-	printf("%s.%s=%d\n", m->dev->name, ctl_name, MIX_ISMUTE(m, m->dev->devno));
+	printf("%s.%s=%s\n", m->dev->name, ctl_name,
+	    MIX_ISMUTE(m, m->dev->devno) ? "on" : "off");
 
 	return (0);
 }
@@ -514,7 +538,7 @@ print_recsrc(struct mix_dev *d, void *p)
 
 	if (!MIX_ISRECSRC(m, m->dev->devno))
 		return (-1);
-	printf("%s.%s=+\n", m->dev->name, ctl_name);
+	printf("%s.%s=add\n", m->dev->name, ctl_name);
 
 	return (0);
 }

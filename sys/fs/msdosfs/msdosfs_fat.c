@@ -1,4 +1,3 @@
-/* $FreeBSD$ */
 /*	$NetBSD: msdosfs_fat.c,v 1.28 1997/11/17 15:36:49 ws Exp $	*/
 
 /*-
@@ -89,11 +88,17 @@ static void
 fatblock(struct msdosfsmount *pmp, u_long ofs, u_long *bnp, u_long *sizep,
     u_long *bop)
 {
-	u_long bn, size;
+	u_long bn, size, fatblocksec;
 
+	fatblocksec = pmp->pm_fatblocksec;
+	if (FAT12(pmp) && fatblocksec % 3 != 0) {
+		fatblocksec *= 3;
+		if (fatblocksec % 6 == 0)
+			fatblocksec /= 2;
+	}
 	bn = ofs / pmp->pm_fatblocksize * pmp->pm_fatblocksec;
-	size = min(pmp->pm_fatblocksec, pmp->pm_FATsecs - bn)
-	    * DEV_BSIZE;
+	size = roundup(ulmin(fatblocksec, pmp->pm_FATsecs - bn) * DEV_BSIZE,
+	    pmp->pm_BlkPerSec * DEV_BSIZE);
 	bn += pmp->pm_fatblk + pmp->pm_curfat * pmp->pm_FATsecs;
 
 	if (bnp)
@@ -129,7 +134,7 @@ pcbmap(struct denode *dep, u_long findcn, daddr_t *bnp, u_long *cnp, int *sp)
 	int error;
 	u_long i;
 	u_long cn;
-	u_long prevcn = 0; /* XXX: prevcn could be used unititialized */
+	u_long prevcn = 0; /* XXX: prevcn could be used uninitialized */
 	u_long byteoffset;
 	u_long bn;
 	u_long bo;
@@ -756,7 +761,7 @@ clusteralloc1(struct msdosfsmount *pmp, u_long start, u_long count,
 {
 	u_long idx;
 	u_long len, newst, foundl, cn, l;
-	u_long foundcn = 0; /* XXX: foundcn could be used unititialized */
+	u_long foundcn = 0; /* XXX: foundcn could be used uninitialized */
 	u_int map;
 
 	MSDOSFS_ASSERT_MP_LOCKED(pmp);

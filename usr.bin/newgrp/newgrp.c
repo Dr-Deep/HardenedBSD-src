@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2002 Tim J. Robbins.
  * All rights reserved.
@@ -29,9 +29,6 @@
 /*
  * newgrp -- change to a new group
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
 
@@ -189,7 +186,7 @@ addgroup(const char *grpname)
 		}
 	}
 
-	ngrps_max = sysconf(_SC_NGROUPS_MAX) + 1;
+	ngrps_max = sysconf(_SC_NGROUPS_MAX);
 	if ((grps = malloc(sizeof(gid_t) * ngrps_max)) == NULL)
 		err(1, "malloc");
 	if ((ngrps = getgroups(ngrps_max, (gid_t *)grps)) < 0) {
@@ -197,7 +194,12 @@ addgroup(const char *grpname)
 		goto end;
 	}
 
-	/* Remove requested gid from supp. list if it exists. */
+	/*
+	 * Remove requested gid from supp. list if it exists and doesn't match
+	 * our prior egid -- this exception is to avoid providing the user a
+	 * means to get rid of a group that could be used for, e.g., negative
+	 * permissions.
+	 */
 	if (grp->gr_gid != egid && inarray(grp->gr_gid, grps, ngrps)) {
 		for (i = 0; i < ngrps; i++)
 			if (grps[i] == grp->gr_gid)
@@ -220,10 +222,9 @@ addgroup(const char *grpname)
 		goto end;
 	}
 	PRIV_END;
-	grps[0] = grp->gr_gid;
 
 	/* Add old effective gid to supp. list if it does not exist. */
-	if (egid != grp->gr_gid && !inarray(egid, grps, ngrps)) {
+	if (!inarray(egid, grps, ngrps)) {
 		if (ngrps == ngrps_max)
 			warnx("too many groups");
 		else {

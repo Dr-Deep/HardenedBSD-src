@@ -1,3 +1,6 @@
+.\"-
+.\" SPDX-License-Identifier: BSD-2-Clause
+.\"
 .\" Copyright (c) 2004-2005 Pawel Jakub Dawidek <pjd@FreeBSD.org>
 .\" All rights reserved.
 .\"
@@ -22,24 +25,24 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
-.Dd January 19, 2022
+.Dd February 5, 2026
 .Dt GEOM 8
 .Os
 .Sh NAME
 .Nm geom
-.Nd "universal control utility for GEOM classes"
+.Nd universal control utility for GEOM classes
 .Sh SYNOPSIS
 .Nm
 .Ar class
 .Cm help
 .Nm
+.Op Fl -libxo
 .Ar class
 .Cm list
 .Op Fl a
 .Op Ar name ...
 .Nm
+.Op Fl -libxo
 .Ar class
 .Cm status
 .Op Fl ags
@@ -62,13 +65,13 @@ The
 .Nm
 utility is used to control various GEOM classes.
 A class has to be aware of
-.Xr geom 8
+.Nm
 communication methods, but there are also some standard commands
 which can be used for existing
-.Xr geom 8
+.Nm
 unaware classes.
 Here is the list of standard commands:
-.Bl -tag -width ".Cm status"
+.Bl -tag -width indent
 .It Cm help
 List all available commands for the given class.
 .It Cm list
@@ -76,7 +79,7 @@ Print detailed information (within the given class) about all geoms
 (if no additional arguments were specified) or the given geoms.
 This command is only available if the given class exists in the kernel.
 Additional options include:
-.Bl -tag -width ".Fl a"
+.Bl -tag -width "-a"
 .It Fl a
 Print information for geoms without providers.
 .El
@@ -86,9 +89,11 @@ Print general information (within the given class) about all geoms
 This command is only available if the given class exists in the kernel.
 .Pp
 Additional options include:
-.Bl -tag -width ".Fl s"
+.Bl -tag -width "-s"
 .It Fl a
-When used with -g, print status for geoms without providers.
+When used with
+.Fl g ,
+print status for geoms without providers.
 .It Fl g
 Report statuses for geoms instead of providers.
 .It Fl s
@@ -109,12 +114,19 @@ kernel module.
 .El
 .Pp
 Additional options include:
-.Bl -tag -width ".Cm status"
+.Bl -tag -width indent
 .It Fl p Ar provider-name
 Print detailed information about the geom which provides
 .Ar provider-name .
 .It Fl t
 Display geoms hierarchy as a tree.
+.It Fl -libxo
+Generate output via
+.Xr libxo 3
+in a selection of different human and machine readable formats.
+See
+.Xr xo_options 7
+for details on command line arguments.
 .El
 .Pp
 Class-specific commands are implemented as shared libraries which
@@ -127,49 +139,23 @@ When a class-specific shared library exists, a direct utility should also be
 available under the name of
 .Nm g Ns Ar class .
 .Pp
-Currently available classes which are aware of
-.Xr geom 8 :
+Currently, classes aware of
+.Nm
+are:
 .Pp
-.Bl -bullet -offset indent -compact
-.It
-CACHE
-.It
-CONCAT
-.It
-ELI
-.It
-JOURNAL
-.It
-LABEL
-.It
-MIRROR
-.It
-MOUNTVER
-.It
-MULTIPATH
-.It
-NOP
-.It
-PART
-.It
-RAID
-.It
-RAID3
-.It
-SCHED
-.It
-SHSEC
-.It
-STRIPE
-.It
-UNION
-.It
-VIRSTOR
+.Bl -column "* MULTIPATH" "* MULTIPATH" "* MULTIPATH" -offset indent
+.It \(bu CACHE Ta \(bu MIRROR Ta \(bu SCHED
+.It \(bu CONCAT Ta \(bu MOUNTVER Ta \(bu SHSEC 
+.It \(bu DISK Ta \(bu MULTIPATH Ta \(bu STRIPE
+.It \(bu ELI Ta \(bu NOP Ta \(bu UNION
+.It \(bu JOURNAL Ta \(bu PART Ta \(bu VFS
+.It \(bu LABEL Ta \(bu RAID Ta \(bu VIRSTOR
+.It \(bu MD Ta \(bu RAID3
 .El
 .Sh ENVIRONMENT
 The following environment variables affect the execution of
 .Nm :
-.Bl -tag -width ".Ev GEOM_LIBRARY_PATH"
+.Bl -tag -width "GEOM_LIBRARY_PATH"
 .It Ev GEOM_LIBRARY_PATH
 Specifies the path where shared libraries are stored instead of
 .Pa /lib/geom/ .
@@ -182,7 +168,10 @@ The following example shows how to set up a stripe on three disks for automatic
 configuration:
 .Bd -literal -offset indent
 geom stripe label -v -s 65536 data /dev/da0 /dev/da1 /dev/da2
+.Ed
+.Pp
 or:
+.Bd -literal -offset indent
 gstripe label -v -s 65536 data /dev/da0 /dev/da1 /dev/da2
 .Ed
 .Pp
@@ -198,6 +187,7 @@ geom md unload
 .Sh SEE ALSO
 .Xr libgeom 3 ,
 .Xr geom 4 ,
+.Xr xo_options 7 ,
 .Xr gcache 8 ,
 .Xr gconcat 8 ,
 .Xr geli 8 ,
@@ -209,7 +199,6 @@ geom md unload
 .Xr gnop 8 ,
 .Xr gpart 8 ,
 .Xr graid3 8 ,
-.Xr gsched 8 ,
 .Xr gshsec 8 ,
 .Xr gstripe 8 ,
 .Xr gunion 8 ,

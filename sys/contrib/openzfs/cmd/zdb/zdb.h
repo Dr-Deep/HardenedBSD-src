@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -28,6 +29,6 @@
 #define	_ZDB_H
 
 void dump_intent_log(zilog_t *);
-extern uint8_t dump_opt[256];
+extern uint8_t dump_opt[512];
 
 #endif	/* _ZDB_H */

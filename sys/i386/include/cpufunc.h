@@ -27,8 +27,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -65,15 +63,6 @@ bsfl(u_int mask)
 	return (result);
 }
 
-static __inline __pure2 u_int
-bsrl(u_int mask)
-{
-	u_int	result;
-
-	__asm("bsrl %1,%0" : "=r" (result) : "rm" (mask) : "cc");
-	return (result);
-}
-
 static __inline void
 clflush(u_long addr)
 {
@@ -85,7 +74,7 @@ static __inline void
 clflushopt(u_long addr)
 {
 
-	__asm __volatile(".byte 0x66;clflush %0" : : "m" (*(char *)addr));
+	__asm __volatile("clflushopt %0" : : "m" (*(char *)addr));
 }
 
 static __inline void
@@ -103,14 +92,6 @@ disable_intr(void)
 
 #ifdef _KERNEL
 static __inline void
-do_cpuid(u_int ax, u_int *p)
-{
-	__asm __volatile("cpuid"
-	    : "=a" (p[0]), "=b" (p[1]), "=c" (p[2]), "=d" (p[3])
-	    :  "0" (ax));
-}
-
-static __inline void
 cpuid_count(u_int ax, u_int cx, u_int *p)
 {
 	__asm __volatile("cpuid"
@@ -118,18 +99,6 @@ cpuid_count(u_int ax, u_int cx, u_int *p)
 	    :  "0" (ax), "c" (cx));
 }
 #else
-static __inline void
-do_cpuid(u_int ax, u_int *p)
-{
-	__asm __volatile(
-	    "pushl\t%%ebx\n\t"
-	    "cpuid\n\t"
-	    "movl\t%%ebx,%1\n\t"
-	    "popl\t%%ebx"
-	    : "=a" (p[0]), "=DS" (p[1]), "=c" (p[2]), "=d" (p[3])
-	    :  "0" (ax));
-}
-
 static __inline void
 cpuid_count(u_int ax, u_int cx, u_int *p)
 {
@@ -142,6 +111,12 @@ cpuid_count(u_int ax, u_int cx, u_int *p)
 	    :  "0" (ax), "c" (cx));
 }
 #endif
+
+static __inline void
+do_cpuid(u_int ax, u_int *p)
+{
+	cpuid_count(ax, 0, p);
+}
 
 static __inline void
 enable_intr(void)
@@ -179,48 +154,6 @@ sfence(void)
 {
 	__asm __volatile("sfence" : : : "memory");
 }
-
-#ifdef _KERNEL
-
-#define	HAVE_INLINE_FFS
-
-static __inline __pure2 int
-ffs(int mask)
-{
-	/*
-	 * Note that gcc-2's builtin ffs would be used if we didn't declare
-	 * this inline or turn off the builtin.  The builtin is faster but
-	 * broken in gcc-2.4.5 and slower but working in gcc-2.5 and later
-	 * versions.
-	 */
-	 return (mask == 0 ? mask : (int)bsfl((u_int)mask) + 1);
-}
-
-#define	HAVE_INLINE_FFSL
-
-static __inline __pure2 int
-ffsl(long mask)
-{
-	return (ffs((int)mask));
-}
-
-#define	HAVE_INLINE_FLS
-
-static __inline __pure2 int
-fls(int mask)
-{
-	return (mask == 0 ? mask : (int)bsrl((u_int)mask) + 1);
-}
-
-#define	HAVE_INLINE_FLSL
-
-static __inline __pure2 int
-flsl(long mask)
-{
-	return (fls((int)mask));
-}
-
-#endif /* _KERNEL */
 
 static __inline void
 halt(void)

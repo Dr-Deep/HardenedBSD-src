@@ -65,7 +65,7 @@
  * Queues.
  *
  * Register interface and Memory-based circular buffer queues are used
- * to inferface SMMU.
+ * to interface SMMU.
  *
  * These are a Command queue for commands to send to the SMMU and an Event
  * queue for event/fault reports from the SMMU. Optionally PRI queue is
@@ -89,9 +89,6 @@
 
 #include "opt_platform.h"
 #include "opt_acpi.h"
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/bitstring.h>
@@ -148,6 +145,9 @@ __FBSDID("$FreeBSD$");
 #define	Q_OVF(p)		((p) & (1 << 31)) /* Event queue overflowed */
 
 #define	SMMU_Q_ALIGN		(64 * 1024)
+
+#define		MAXADDR_48BIT	0xFFFFFFFFFFFFUL
+#define		MAXADDR_52BIT	0xFFFFFFFFFFFFFUL
 
 static struct resource_spec smmu_spec[] = {
 	{ SYS_RES_MEMORY, 0, RF_ACTIVE },
@@ -307,15 +307,6 @@ smmu_write_ack(struct smmu_softc *sc, uint32_t reg,
 	}
 
 	return (0);
-}
-
-static inline int
-ilog2(long x)
-{
-
-	KASSERT(x > 0 && powerof2(x), ("%s: invalid arg %ld", __func__, x));
-
-	return (flsl(x) - 1);
 }
 
 static int
@@ -837,7 +828,7 @@ smmu_init_cd(struct smmu_softc *sc, struct smmu_domain *domain)
 	uint64_t val;
 	vm_size_t size;
 	struct smmu_cd *cd;
-	pmap_t p;
+	struct smmu_pmap *p;
 
 	size = 1 * (CD_DWORDS << 3);
 
@@ -856,7 +847,6 @@ smmu_init_cd(struct smmu_softc *sc, struct smmu_domain *domain)
 		return (ENXIO);
 	}
 
-	cd->size = size;
 	cd->paddr = vtophys(cd->vaddr);
 
 	ptr = cd->vaddr;
@@ -872,8 +862,8 @@ smmu_init_cd(struct smmu_softc *sc, struct smmu_domain *domain)
 	val |= ((64 - sc->ias) << CD0_T0SZ_S);
 	val |= CD0_IPS_48BITS;
 
-	paddr = p->pm_l0_paddr & CD1_TTB0_M;
-	KASSERT(paddr == p->pm_l0_paddr, ("bad allocation 1"));
+	paddr = p->sp_l0_paddr & CD1_TTB0_M;
+	KASSERT(paddr == p->sp_l0_paddr, ("bad allocation 1"));
 
 	ptr[1] = paddr;
 	ptr[2] = 0;
@@ -970,10 +960,6 @@ smmu_init_strtab_2lvl(struct smmu_softc *sc)
 	sz = strtab->num_l1_entries * sizeof(struct l1_desc);
 
 	strtab->l1 = malloc(sz, M_SMMU, M_WAITOK | M_ZERO);
-	if (strtab->l1 == NULL) {
-		contigfree(strtab->vaddr, l1size, M_SMMU);
-		return (ENOMEM);
-	}
 
 	reg = STRTAB_BASE_CFG_FMT_2LVL;
 	reg |= size << STRTAB_BASE_CFG_LOG2SIZE_S;
@@ -1023,7 +1009,6 @@ smmu_init_l1_entry(struct smmu_softc *sc, int sid)
 	size = 1 << (STRTAB_SPLIT + ilog2(STRTAB_STE_DWORDS) + 3);
 
 	l1_desc->span = STRTAB_SPLIT + 1;
-	l1_desc->size = size;
 	l1_desc->va = contigmalloc(size, M_SMMU,
 	    M_WAITOK | M_ZERO,	/* flags */
 	    0,			/* low */
@@ -1066,7 +1051,7 @@ smmu_deinit_l1_entry(struct smmu_softc *sc, int sid)
 	*addr = 0;
 
 	l1_desc = &strtab->l1[sid >> STRTAB_SPLIT];
-	contigfree(l1_desc->va, l1_desc->size, M_SMMU);
+	free(l1_desc->va, M_SMMU);
 }
 
 static int
@@ -1356,7 +1341,7 @@ smmu_check_features(struct smmu_softc *sc)
 	switch (reg & IDR0_TTENDIAN_M) {
 	case IDR0_TTENDIAN_MIXED:
 		if (bootverbose)
-			device_printf(sc->dev, "Mixed endianess supported.\n");
+			device_printf(sc->dev, "Mixed endianness supported.\n");
 		sc->features |= SMMU_FEATURE_TT_LE;
 		sc->features |= SMMU_FEATURE_TT_BE;
 		break;
@@ -1652,7 +1637,7 @@ smmu_unmap(device_t dev, struct iommu_domain *iodom,
 	dprintf("%s: %lx, %ld, domain %d\n", __func__, va, size, domain->asid);
 
 	for (i = 0; i < size; i += PAGE_SIZE) {
-		if (pmap_smmu_remove(&domain->p, va) == 0) {
+		if (smmu_pmap_remove(&domain->p, va) == 0) {
 			/* pmap entry removed, invalidate TLB. */
 			smmu_tlbi_va(sc, va, domain->asid);
 		} else {
@@ -1687,7 +1672,7 @@ smmu_map(device_t dev, struct iommu_domain *iodom,
 
 	for (i = 0; size > 0; size -= PAGE_SIZE) {
 		pa = VM_PAGE_TO_PHYS(ma[i++]);
-		error = pmap_smmu_enter(&domain->p, va, pa, prot, 0);
+		error = smmu_pmap_enter(&domain->p, va, pa, prot, 0);
 		if (error)
 			return (error);
 		smmu_tlbi_va(sc, va, domain->asid);
@@ -1702,6 +1687,7 @@ smmu_map(device_t dev, struct iommu_domain *iodom,
 static struct iommu_domain *
 smmu_domain_alloc(device_t dev, struct iommu_unit *iommu)
 {
+	struct iommu_domain *iodom;
 	struct smmu_domain *domain;
 	struct smmu_unit *unit;
 	struct smmu_softc *sc;
@@ -1712,23 +1698,21 @@ smmu_domain_alloc(device_t dev, struct iommu_unit *iommu)
 
 	unit = (struct smmu_unit *)iommu;
 
-	domain = malloc(sizeof(*domain), M_SMMU, M_WAITOK | M_ZERO);
-
 	error = smmu_asid_alloc(sc, &new_asid);
 	if (error) {
-		free(domain, M_SMMU);
 		device_printf(sc->dev,
 		    "Could not allocate ASID for a new domain.\n");
 		return (NULL);
 	}
 
+	domain = malloc(sizeof(*domain), M_SMMU, M_WAITOK | M_ZERO);
 	domain->asid = (uint16_t)new_asid;
 
-	iommu_pmap_pinit(&domain->p);
-	PMAP_LOCK_INIT(&domain->p);
+	smmu_pmap_pinit(&domain->p);
 
 	error = smmu_init_cd(sc, domain);
 	if (error) {
+		smmu_asid_free(sc, domain->asid);
 		free(domain, M_SMMU);
 		device_printf(sc->dev, "Could not initialize CD\n");
 		return (NULL);
@@ -1742,7 +1726,15 @@ smmu_domain_alloc(device_t dev, struct iommu_unit *iommu)
 	LIST_INSERT_HEAD(&unit->domain_list, domain, next);
 	IOMMU_UNLOCK(iommu);
 
-	return (&domain->iodom);
+	iodom = &domain->iodom;
+
+	/*
+	 * Use 48-bit address space regardless of VAX bit
+	 * as we need 64k IOMMU_PAGE_SIZE for 52-bit space.
+	 */
+	iodom->end = MAXADDR_48BIT;
+
+	return (iodom);
 }
 
 static void
@@ -1760,13 +1752,13 @@ smmu_domain_free(device_t dev, struct iommu_domain *iodom)
 
 	cd = domain->cd;
 
-	iommu_pmap_remove_pages(&domain->p);
-	iommu_pmap_release(&domain->p);
+	smmu_pmap_remove_pages(&domain->p);
+	smmu_pmap_release(&domain->p);
 
 	smmu_tlbi_asid(sc, domain->asid);
 	smmu_asid_free(sc, domain->asid);
 
-	contigfree(cd->vaddr, cd->size, M_SMMU);
+	free(cd->vaddr, M_SMMU);
 	free(cd, M_SMMU);
 
 	free(domain, M_SMMU);
@@ -1787,57 +1779,22 @@ smmu_set_buswide(device_t dev, struct smmu_domain *domain,
 	return (0);
 }
 
-#ifdef DEV_ACPI
 static int
-smmu_pci_get_sid_acpi(device_t child, u_int *xref0, u_int *sid0)
-{
-	uint16_t rid;
-	u_int xref;
-	int seg;
-	int err;
-	int sid;
-
-	seg = pci_get_domain(child);
-	rid = pci_get_rid(child);
-
-	err = acpi_iort_map_pci_smmuv3(seg, rid, &xref, &sid);
-	if (err == 0) {
-		if (sid0)
-			*sid0 = sid;
-		if (xref0)
-			*xref0 = xref;
-	}
-
-	return (err);
-}
-#endif
-
-#ifdef FDT
-static int
-smmu_pci_get_sid_fdt(device_t child, u_int *xref0, u_int *sid0)
+smmu_pci_get_sid(device_t child, uintptr_t *xref0, u_int *sid0)
 {
 	struct pci_id_ofw_iommu pi;
-	uint64_t base, size;
-	phandle_t node;
-	u_int xref;
 	int err;
 
 	err = pci_get_id(child, PCI_ID_OFW_IOMMU, (uintptr_t *)&pi);
 	if (err == 0) {
-		/* Our xref is memory base address. */
-		node = OF_node_from_xref(pi.xref);
-		fdt_regsize(node, &base, &size);
-		xref = base;
-
 		if (sid0)
 			*sid0 = pi.id;
 		if (xref0)
-			*xref0 = xref;
+			*xref0 = pi.xref;
 	}
 
 	return (err);
 }
-#endif
 
 static struct iommu_ctx *
 smmu_ctx_alloc(device_t dev, struct iommu_domain *iodom, device_t child,
@@ -1868,7 +1825,6 @@ smmu_ctx_init(device_t dev, struct iommu_ctx *ioctx)
 	struct iommu_domain *iodom;
 	struct smmu_softc *sc;
 	struct smmu_ctx *ctx;
-	devclass_t pci_class;
 	u_int sid;
 	int err;
 
@@ -1879,13 +1835,8 @@ smmu_ctx_init(device_t dev, struct iommu_ctx *ioctx)
 	domain = ctx->domain;
 	iodom = (struct iommu_domain *)domain;
 
-	pci_class = devclass_find("pci");
-	if (device_get_devclass(device_get_parent(ctx->dev)) == pci_class) {
-#ifdef DEV_ACPI
-		err = smmu_pci_get_sid_acpi(ctx->dev, NULL, &sid);
-#else
-		err = smmu_pci_get_sid_fdt(ctx->dev, NULL, &sid);
-#endif
+	if (is_pci_device(ctx->dev)) {
+		err = smmu_pci_get_sid(ctx->dev, NULL, &sid);
 		if (err)
 			return (err);
 
@@ -1910,7 +1861,7 @@ smmu_ctx_init(device_t dev, struct iommu_ctx *ioctx)
 
 	smmu_init_ste(sc, domain->cd, ctx->sid, ctx->bypass);
 
-	if (device_get_devclass(device_get_parent(ctx->dev)) == pci_class)
+	if (is_pci_device((ctx->dev)))
 		if (iommu_is_buswide_ctx(iodom->iommu, pci_get_bus(ctx->dev)))
 			smmu_set_buswide(dev, domain, ctx);
 
@@ -1991,16 +1942,12 @@ static int
 smmu_find(device_t dev, device_t child)
 {
 	struct smmu_softc *sc;
-	u_int xref;
+	uintptr_t xref;
 	int err;
 
 	sc = device_get_softc(dev);
 
-#ifdef DEV_ACPI
-	err = smmu_pci_get_sid_acpi(child, &xref, NULL);
-#else
-	err = smmu_pci_get_sid_fdt(child, &xref, NULL);
-#endif
+	err = smmu_pci_get_sid(child, &xref, NULL);
 	if (err)
 		return (ENOENT);
 

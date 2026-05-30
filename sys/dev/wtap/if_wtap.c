@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2010-2011 Monthadar Al Jaberi, TerraNet AB
  * All rights reserved.
@@ -30,16 +30,11 @@
  * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGES.
- *
- * $FreeBSD$
  */
 #include "if_wtapvar.h"
 #include <sys/uio.h>    /* uio struct */
-#include <sys/jail.h>
 #include <net/if_var.h>
-#include <net/vnet.h>
 
-#include <net80211/ieee80211_ratectl.h>
 #include "if_medium.h"
 #include "wtap_hal/hal.h"
 
@@ -397,13 +392,13 @@ wtap_vap_create(struct ieee80211com *ic, const char name[IFNAMSIZ],
 	ieee80211_vap_attach(vap, ieee80211_media_change,
 	    ieee80211_media_status, mac);
 	avp->av_dev = make_dev(&wtap_cdevsw, 0, UID_ROOT, GID_WHEEL, 0600,
-	    "%s", (const char *)vap->iv_ifp->if_xname);
+	    "%s", if_name(vap->iv_ifp));
 	avp->av_dev->si_drv1 = sc;
 	callout_init(&avp->av_swba, 0);
 
 	/* TODO this is a hack to force it to choose the rate we want */
 	ni = ieee80211_ref_node(vap->iv_bss);
-	ni->ni_txrate = 130;
+	ieee80211_node_set_txrate_ht_mcsrate(ni, 2);
 	ieee80211_free_node(ni);
 	return vap;
 }
@@ -495,12 +490,12 @@ wtap_inject(struct wtap_softc *sc, struct mbuf *m)
 static void
 wtap_rx_proc(void *arg, int npending)
 {
-	struct epoch_tracker et;
 	struct wtap_softc *sc = (struct wtap_softc *)arg;
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct mbuf *m;
 	struct ieee80211_node *ni;
 	struct wtap_buf *bf;
+	int8_t rssi, nf;
 
 #if 0
 	DWTAP_PRINTF("%s\n", __func__);
@@ -535,6 +530,15 @@ wtap_rx_proc(void *arg, int npending)
 #endif
 
 		/*
+		 * Use arbitrary but sane values, and do the correct conversion
+		 * for net80211 using 0.5 dBm values relative to the noise floor.
+		 */
+		nf = -95;
+		rssi = 42;
+		rssi -= nf;
+		rssi *= 2;
+
+		/*
 		 * Locate the node for sender, track state, and then
 		 * pass the (referenced) node up to the 802.11 layer
 		 * for its use.
@@ -542,18 +546,16 @@ wtap_rx_proc(void *arg, int npending)
 		ni = ieee80211_find_rxnode_withkey(ic,
 		    mtod(m, const struct ieee80211_frame_min *),
 		    IEEE80211_KEYIX_NONE);
-		NET_EPOCH_ENTER(et);
 		if (ni != NULL) {
 			/*
 			 * Sending station is known, dispatch directly.
 			 */
-			ieee80211_input(ni, m, 1<<7, 10);
+			ieee80211_input(ni, m, rssi, nf);
 			ieee80211_free_node(ni);
 		} else {
-			ieee80211_input_all(ic, m, 1<<7, 10);
+			ieee80211_input_all(ic, m, rssi, nf);
 		}
-		NET_EPOCH_EXIT(et);
-
+		
 		/* The mbufs are freed by the Net80211 stack */
 		free(bf, M_WTAP_RXBUF);
 	}
@@ -600,7 +602,7 @@ wtap_transmit(struct ieee80211com *ic, struct mbuf *m)
 	struct wtap_vap *avp = WTAP_VAP(vap);
 
 	if(ni == NULL){
-		printf("m->m_pkthdr.rcvif is NULL we cant radiotap_tx\n");
+		printf("m->m_pkthdr.rcvif is NULL we can't radiotap_tx\n");
 	}else{
 		if (ieee80211_radiotap_active_vap(vap))
 			ieee80211_radiotap_tx(vap, m);
@@ -622,8 +624,7 @@ wtap_node_alloc(struct ieee80211vap *vap, const uint8_t mac[IEEE80211_ADDR_LEN])
 	    M_NOWAIT|M_ZERO);
 	if (ni == NULL)
 		return (NULL);
-
-	ni->ni_txrate = 130;
+	ieee80211_node_set_txrate_ht_mcsrate(ni, 2);
 	return ni;
 }
 

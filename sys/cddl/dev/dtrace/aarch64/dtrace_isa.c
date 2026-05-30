@@ -18,8 +18,6 @@
  * information: Portions Copyright [yyyy] [name of copyright owner]
  *
  * CDDL HEADER END
- *
- * $FreeBSD$
  */
 /*
  * Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
@@ -29,6 +27,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/dtrace_impl.h>
 #include <sys/kernel.h>
 #include <sys/stack.h>
 #include <sys/pcpu.h>
@@ -48,14 +47,10 @@
 #include <ddb/ddb.h>
 #include <sys/kdb.h>
 
+#include <cddl/dev/dtrace/dtrace_cddl.h>
+
 #include "regset.h"
 
-/*
- * Wee need some reasonable default to prevent backtrace code
- * from wandering too far
- */
-#define	MAX_FUNCTION_SIZE 0x10000
-#define	MAX_PROLOGUE_SIZE 0x100
 #define	MAX_USTACK_DEPTH  2048
 
 uint8_t dtrace_fuword8_nocheck(void *);
@@ -139,7 +134,7 @@ dtrace_getustack_common(uint64_t *pcstack, int pcstack_limit, uintptr_t pc,
 			break;
 
 		pc = dtrace_fuword64((void *)(fp +
-		    offsetof(struct arm64_frame, f_retaddr)));
+		    offsetof(struct unwind_state, pc)));
 		fp = dtrace_fuword64((void *)fp);
 
 		if (fp == oldfp) {
@@ -233,10 +228,22 @@ zero:
 int
 dtrace_getustackdepth(void)
 {
+	proc_t *p = curproc;
+	struct trapframe *tf;
+	uintptr_t pc, fp;
+	int n = 0;
 
-	printf("IMPLEMENT ME: %s\n", __func__);
+	if (p == NULL || (tf = curthread->td_frame) == NULL)
+		return (0);
 
-	return (0);
+	if (DTRACE_CPUFLAG_ISSET(CPU_DTRACE_FAULT))
+		return (-1);
+
+	pc = tf->tf_elr;
+	fp = tf->tf_x[29];
+	n += dtrace_getustack_common(NULL, 0, pc, fp);
+
+	return (n);
 }
 
 void
@@ -246,14 +253,37 @@ dtrace_getufpstack(uint64_t *pcstack, uint64_t *fpstack, int pcstack_limit)
 	printf("IMPLEMENT ME: %s\n", __func__);
 }
 
-/*ARGSUSED*/
 uint64_t
-dtrace_getarg(int arg, int aframes)
+dtrace_getarg(int arg, int aframes __unused)
 {
+	struct trapframe *tf;
 
-	printf("IMPLEMENT ME: %s\n", __func__);
+	/*
+	 * We only handle invop providers here.
+	 */
+	if ((tf = curthread->t_dtrace_trapframe) == NULL) {
+		DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
+		return (0);
+	} else if (arg < 8) {
+		return (tf->tf_x[arg]);
+	} else {
+		uintptr_t p;
+		uint64_t val;
 
-	return (0);
+		p = (tf->tf_sp + (arg - 8) * sizeof(uint64_t));
+		if ((p & 7) != 0) {
+			DTRACE_CPUFLAG_SET(CPU_DTRACE_BADALIGN);
+			cpu_core[curcpu].cpuc_dtrace_illval = p;
+			return (0);
+		}
+		if (!kstack_contains(curthread, p, sizeof(uint64_t))) {
+			DTRACE_CPUFLAG_SET(CPU_DTRACE_BADADDR);
+			cpu_core[curcpu].cpuc_dtrace_illval = p;
+			return (0);
+		}
+		memcpy(&val, (void *)p, sizeof(uint64_t));
+		return (val);
+	}
 }
 
 int
@@ -284,12 +314,22 @@ dtrace_getstackdepth(int aframes)
 }
 
 ulong_t
-dtrace_getreg(struct trapframe *rp, uint_t reg)
+dtrace_getreg(struct trapframe *frame, uint_t reg)
 {
-
-	printf("IMPLEMENT ME: %s\n", __func__);
-
-	return (0);
+	switch (reg) {
+	case REG_X0 ... REG_X29:
+		return (frame->tf_x[reg]);
+	case REG_LR:
+		return (frame->tf_lr);
+	case REG_SP:
+		return (frame->tf_sp);
+	case REG_PC:
+		return (frame->tf_elr);
+	default:
+		DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
+		return (0);
+	}
+	/* NOTREACHED */
 }
 
 static int

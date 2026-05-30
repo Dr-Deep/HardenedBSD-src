@@ -22,15 +22,13 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _OPENSOLARIS_SYS_CMN_ERR_H_
 #define	_OPENSOLARIS_SYS_CMN_ERR_H_
 
 #include <sys/systm.h>
-#include <machine/stdarg.h>
+#include <sys/stdarg.h>
 
 #ifdef	__cplusplus
 extern "C" {

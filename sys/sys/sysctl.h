@@ -30,16 +30,17 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)sysctl.h	8.1 (Berkeley) 6/2/93
- * $FreeBSD$
  */
 
 #ifndef _SYS_SYSCTL_H_
 #define	_SYS_SYSCTL_H_
 
 #ifdef _KERNEL
+#include <sys/types.h>
+#include <sys/_null.h>
+#include <sys/kassert.h>
 #include <sys/queue.h>
+#include <sys/tree.h>
 #endif
 
 /*
@@ -175,20 +176,25 @@ struct sysctl_req {
 	int		 flags;
 };
 
-SLIST_HEAD(sysctl_oid_list, sysctl_oid);
+struct sysctl_oid;
+
+/* RB Tree handling */
+RB_HEAD(sysctl_oid_list, sysctl_oid);
 
 /*
  * This describes one "oid" in the MIB tree.  Potentially more nodes can
  * be hidden behind it, expanded by the handler.
  */
 struct sysctl_oid {
-	struct sysctl_oid_list oid_children;
-	struct sysctl_oid_list *oid_parent;
-	SLIST_ENTRY(sysctl_oid) oid_link;
+	struct sysctl_oid_list	oid_children;
+	struct sysctl_oid_list*	oid_parent;
+	RB_ENTRY(sysctl_oid) oid_link;
+	/* Sort key for all siblings, and lookup key for userland */
 	int		 oid_number;
 	u_int		 oid_kind;
 	void		*oid_arg1;
 	intmax_t	 oid_arg2;
+	/* Must be unique amongst all siblings. */
 	const char	*oid_name;
 	int		(*oid_handler)(SYSCTL_HANDLER_ARGS);
 	const char	*oid_fmt;
@@ -197,6 +203,19 @@ struct sysctl_oid {
 	const char	*oid_descr;
 	const char	*oid_label;
 };
+
+static inline int
+cmp_sysctl_oid(struct sysctl_oid *a, struct sysctl_oid *b)
+{
+	if (a->oid_number > b->oid_number)
+		return (1);
+	else if (a->oid_number < b->oid_number)
+		return (-1);
+	else
+		return (0);
+}
+
+RB_PROTOTYPE(sysctl_oid_list, sysctl_oid, oid_link, cmp_sysctl_oid);
 
 #define	SYSCTL_IN(r, p, l)	(r->newfunc)(r, p, l)
 #define	SYSCTL_OUT(r, p, l)	(r->oldfunc)(r, p, l)
@@ -277,7 +296,7 @@ TAILQ_HEAD(sysctl_ctx_list, sysctl_ctx_entry);
 #define	SYSCTL_OID_RAW(id, parent_child_head, nbr, name, kind, a1, a2, handler, fmt, descr, label) \
 	struct sysctl_oid id = {					\
 		.oid_parent = (parent_child_head),			\
-		.oid_children = SLIST_HEAD_INITIALIZER(&id.oid_children), \
+		.oid_children = RB_INITIALIZER(&id.oid_children), \
 		.oid_number = (nbr),					\
 		.oid_kind = (kind),					\
 		.oid_arg1 = (a1),					\
@@ -379,14 +398,14 @@ TAILQ_HEAD(sysctl_ctx_list, sysctl_ctx_entry);
 #define	SYSCTL_CONST_STRING(parent, nbr, name, access, arg, descr)	\
 	SYSCTL_OID(parent, nbr, name, CTLTYPE_STRING | CTLFLAG_MPSAFE | (access),\
 	    __DECONST(char *, arg), 0, sysctl_handle_string, "A", descr); \
-	CTASSERT(!(access & CTLFLAG_WR));				\
+	CTASSERT(!((access) & CTLFLAG_WR));				\
 	CTASSERT(((access) & CTLTYPE) == 0 ||				\
 	    ((access) & SYSCTL_CT_ASSERT_MASK) == CTLTYPE_STRING)
 
 #define	SYSCTL_ADD_CONST_STRING(ctx, parent, nbr, name, access, arg, descr) \
 ({									\
 	char *__arg = __DECONST(char *, arg);				\
-	CTASSERT(!(access & CTLFLAG_WR));				\
+	CTASSERT(!((access) & CTLFLAG_WR));				\
 	CTASSERT(((access) & CTLTYPE) == 0 ||				\
 	    ((access) & SYSCTL_CT_ASSERT_MASK) == CTLTYPE_STRING);	\
 	sysctl_add_oid(ctx, parent, nbr, name, CTLTYPE_STRING | 	\
@@ -740,8 +759,8 @@ TAILQ_HEAD(sysctl_ctx_list, sysctl_ctx_entry);
 /* Oid for an array of counter(9)s.  The pointer and length must be non zero. */
 #define	SYSCTL_COUNTER_U64_ARRAY(parent, nbr, name, access, ptr, len, descr) \
 	SYSCTL_OID(parent, nbr, name,					\
-	    CTLTYPE_OPAQUE | CTLFLAG_MPSAFE | CTLFLAG_STATS | (access),	\
-	    (ptr), (len), sysctl_handle_counter_u64_array, "S", descr);	\
+	    CTLTYPE_U64 | CTLFLAG_MPSAFE | CTLFLAG_STATS | (access),	\
+	    (ptr), (len), sysctl_handle_counter_u64_array, "QU", descr);\
 	CTASSERT((((access) & CTLTYPE) == 0 ||				\
 	    ((access) & SYSCTL_CT_ASSERT_MASK) == CTLTYPE_OPAQUE) &&	\
 	    sizeof(counter_u64_t) == sizeof(*(ptr)) &&			\
@@ -850,7 +869,7 @@ TAILQ_HEAD(sysctl_ctx_list, sysctl_ctx_entry);
 /* OID expressing a sbintime_t as microseconds */
 #define	SYSCTL_SBINTIME_USEC(parent, nbr, name, access, ptr, descr)	\
 	SYSCTL_OID(parent, nbr, name,					\
-	    CTLTYPE_INT | CTLFLAG_MPSAFE | CTLFLAG_RD | (access),	\
+	    CTLTYPE_S64 | CTLFLAG_MPSAFE | CTLFLAG_RD | (access),	\
 	    (ptr), 0, sysctl_usec_to_sbintime, "Q", descr);		\
 	CTASSERT(((access) & CTLTYPE) == 0 ||				\
 	    ((access) & SYSCTL_CT_ASSERT_MASK) == CTLTYPE_S64)
@@ -860,7 +879,7 @@ TAILQ_HEAD(sysctl_ctx_list, sysctl_ctx_entry);
 	CTASSERT(((access) & CTLTYPE) == 0 ||				\
 	    ((access) & SYSCTL_CT_ASSERT_MASK) == CTLTYPE_S64);		\
 	sysctl_add_oid(ctx, parent, nbr, name,				\
-	    CTLTYPE_INT | CTLFLAG_MPSAFE | CTLFLAG_RD | (access),	\
+	    CTLTYPE_S64 | CTLFLAG_MPSAFE | CTLFLAG_RD | (access),	\
 	    __ptr, 0, sysctl_usec_to_sbintime, "Q", __DESCR(descr),	\
 	    NULL);							\
 })
@@ -868,7 +887,7 @@ TAILQ_HEAD(sysctl_ctx_list, sysctl_ctx_entry);
 /* OID expressing a sbintime_t as milliseconds */
 #define	SYSCTL_SBINTIME_MSEC(parent, nbr, name, access, ptr, descr)	\
 	SYSCTL_OID(parent, nbr, name,					\
-	    CTLTYPE_INT | CTLFLAG_MPSAFE | CTLFLAG_RD | (access),	\
+	    CTLTYPE_S64 | CTLFLAG_MPSAFE | CTLFLAG_RD | (access),	\
 	    (ptr), 0, sysctl_msec_to_sbintime, "Q", descr);		\
 	CTASSERT(((access) & CTLTYPE) == 0 ||				\
 	    ((access) & SYSCTL_CT_ASSERT_MASK) == CTLTYPE_S64)
@@ -878,7 +897,7 @@ TAILQ_HEAD(sysctl_ctx_list, sysctl_ctx_entry);
 	CTASSERT(((access) & CTLTYPE) == 0 ||				\
 	    ((access) & SYSCTL_CT_ASSERT_MASK) == CTLTYPE_S64);		\
 	sysctl_add_oid(ctx, parent, nbr, name,				\
-	    CTLTYPE_INT | CTLFLAG_MPSAFE | CTLFLAG_RD | (access),	\
+	    CTLTYPE_S64 | CTLFLAG_MPSAFE | CTLFLAG_RD | (access),	\
 	    __ptr, 0, sysctl_msec_to_sbintime, "Q", __DESCR(descr),	\
 	    NULL);							\
 })
@@ -901,6 +920,9 @@ TAILQ_HEAD(sysctl_ctx_list, sysctl_ctx_entry);
 	    NULL);							\
 })
 
+#define	SYSCTL_FOREACH(oidp, list) \
+	RB_FOREACH(oidp, sysctl_oid_list, list)
+
 /*
  * A macro to generate a read-only sysctl to indicate the presence of optional
  * kernel features.
@@ -908,6 +930,32 @@ TAILQ_HEAD(sysctl_ctx_list, sysctl_ctx_entry);
 #define	FEATURE(name, desc)						\
 	SYSCTL_INT_WITH_LABEL(_kern_features, OID_AUTO, name,		\
 	    CTLFLAG_RD | CTLFLAG_CAPRD, SYSCTL_NULL_INT_PTR, 1, desc, "feature")
+/* Same for the dynamic registration. */
+#define	FEATURE_ADD(name, desc)						\
+	sysctl_add_oid(NULL, SYSCTL_CHILDREN(&sysctl___kern_features),	\
+	    OID_AUTO, name,						\
+	    CTLFLAG_RD | CTLFLAG_CAPRD | CTLTYPE_INT | CTLFLAG_MPSAFE,	\
+	    NULL, 1, sysctl_handle_int, "I", desc, "feature");
+
+/*
+ * Adding new leaves to the 'debug.sizeof' MIB tree for ad-hoc reasons is
+ * discouraged, and in particular for reporting to developers the size of some
+ * kernel structures, which can be obtained by the following alternative means:
+ * 1. In GDB, load a full kernel image and use 'print(sizeof(struct XXX))'.
+ *    Alternatively, use 'ptype/o struct XXX' to additionally get the offsets
+ *    and size of all structure's fields.
+ * 2. If the structure is allocated from UMA, then 'vmstat -z' reports its size
+ *    (the mapping between structure types and zones is usually
+ *    straightforward).
+ */
+/* Generates a read-only sysctl reporting the size of an object/structure. */
+#define SYSCTL_SIZEOF(name, expr)					\
+	SYSCTL_INT(_debug_sizeof, OID_AUTO, name, CTLFLAG_RD,		\
+	    SYSCTL_NULL_INT_PTR, sizeof(expr),				\
+	    "sizeof(" __STRING(expr) ")");
+/* Same, specialized for structures. */
+#define SYSCTL_SIZEOF_STRUCT(struct_name)				\
+	SYSCTL_SIZEOF(struct_name, struct struct_name)
 
 #endif /* _KERNEL */
 
@@ -952,7 +1000,7 @@ TAILQ_HEAD(sysctl_ctx_list, sysctl_ctx_entry);
 #define	KERN_HOSTNAME		10	/* string: hostname */
 #define	KERN_HOSTID		11	/* int: host identifier */
 #define	KERN_CLOCKRATE		12	/* struct: struct clockrate */
-#define	KERN_VNODE		13	/* struct: vnode structures */
+/* was: #define	KERN_VNODE	13	; disabled in 2003 and removed in 2023 */
 #define	KERN_PROC		14	/* struct: process entries */
 #define	KERN_FILE		15	/* struct: file entries */
 #define	KERN_PROF		16	/* node: kernel profiling info */
@@ -1017,6 +1065,8 @@ TAILQ_HEAD(sysctl_ctx_list, sysctl_ctx_entry);
 #define	KERN_PROC_NFDS		43	/* number of open file descriptors */
 #define	KERN_PROC_SIGFASTBLK	44	/* address of fastsigblk magic word */
 #define	KERN_PROC_VM_LAYOUT	45	/* virtual address space layout info */
+#define	KERN_PROC_RLIMIT_USAGE	46	/* array of rlim_t */
+#define	KERN_PROC_KQUEUE	47	/* array of struct kinfo_knote */
 
 /*
  * KERN_IPC identifiers
@@ -1131,10 +1181,10 @@ SYSCTL_DECL(_security);
 SYSCTL_DECL(_security_bsd);
 SYSCTL_DECL(_hardening);
 
-extern char	machine[];
-extern char	osrelease[];
-extern char	ostype[];
-extern char	kern_ident[];
+extern const char	machine[];
+extern const char	osrelease[];
+extern const char	ostype[];
+extern const char	kern_ident[];
 
 /* Dynamic oid handling */
 struct sysctl_oid *sysctl_add_oid(struct sysctl_ctx_list *clist,

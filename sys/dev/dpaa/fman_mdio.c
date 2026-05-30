@@ -24,9 +24,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
@@ -49,17 +46,15 @@ __FBSDID("$FreeBSD$");
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
-#include <contrib/ncsw/inc/Peripherals/fm_ext.h>
-
 #include "fman.h"
 #include "miibus_if.h"
 
 #define MDIO_LOCK()	mtx_lock(&sc->sc_lock)
 #define MDIO_UNLOCK()	mtx_unlock(&sc->sc_lock)
-#define	MDIO_WRITE4(sc,r,v) \
-	bus_space_write_4(&bs_be_tag, sc->sc_handle, sc->sc_offset + r, v)
+#define	MDIO_WRITE4(sc, r, v) \
+	bus_write_4(sc->sc_res, r, v)
 #define	MDIO_READ4(sc, r) \
-	bus_space_read_4(&bs_be_tag, sc->sc_handle, sc->sc_offset + r)
+	bus_read_4(sc->sc_res, r)
 
 #define	MDIO_MIIMCFG	0x0
 #define	MDIO_MIIMCOM	0x4
@@ -79,8 +74,7 @@ static int pqmdio_miibus_writereg(device_t dev, int phy, int reg, int value);
 
 struct pqmdio_softc {
 	struct mtx sc_lock;
-	bus_space_handle_t sc_handle;
-	int sc_offset;
+	struct resource *sc_res;
 };
 
 static device_method_t pqmdio_methods[] = {
@@ -93,7 +87,7 @@ static device_method_t pqmdio_methods[] = {
 	DEVMETHOD(miibus_readreg,	pqmdio_miibus_readreg),
 	DEVMETHOD(miibus_writereg,	pqmdio_miibus_writereg),
 
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static struct ofw_compat_data mdio_compat_data[] = {
@@ -126,13 +120,12 @@ static int
 pqmdio_fdt_attach(device_t dev)
 {
 	struct pqmdio_softc *sc;
-	rman_res_t start, count;
 
 	sc = device_get_softc(dev);
 
-	fman_get_bushandle(device_get_parent(dev), &sc->sc_handle);
-	bus_get_resource(dev, SYS_RES_MEMORY, 0, &start, &count);
-	sc->sc_offset = start;
+	sc->sc_res = bus_alloc_resource_any(dev, SYS_RES_MEMORY, 0, RF_ACTIVE);
+
+	OF_device_register_xref(OF_xref_from_node(ofw_bus_get_node(dev)), dev);
 
 	mtx_init(&sc->sc_lock, device_get_nameunit(dev), "QorIQ MDIO lock",
 	    MTX_DEF);
@@ -204,7 +197,8 @@ pqmdio_miibus_writereg(device_t dev, int phy, int reg, int value)
 	return (0);
 }
 
-DRIVER_MODULE(pqmdio, fman, pqmdio_driver, 0, 0);
+EARLY_DRIVER_MODULE(pqmdio, fman, pqmdio_driver, 0, 0,
+    BUS_PASS_SUPPORTDEV);
 DRIVER_MODULE(miibus, pqmdio, miibus_driver, 0, 0);
 MODULE_DEPEND(pqmdio, miibus, 1, 1, 1);
 

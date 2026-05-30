@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2007 Pawel Jakub Dawidek <pjd@FreeBSD.org>
  * All rights reserved.
@@ -104,6 +105,8 @@ typedef	u_longlong_t	u_offset_t;
 typedef	u_longlong_t	len_t;
 
 typedef	longlong_t	diskaddr_t;
+
+typedef void		zidmap_t;
 
 #include <sys/debug.h>
 #endif	/* !_OPENSOLARIS_SYS_TYPES_H_ */

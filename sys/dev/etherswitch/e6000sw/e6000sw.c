@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
+#include "opt_platform.h"
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -47,8 +47,12 @@ __FBSDID("$FreeBSD$");
 #include <dev/mii/mii.h>
 #include <dev/mii/miivar.h>
 
+#ifdef FDT
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
+#else
+#include <sys/stdarg.h>
+#endif
 
 #include "e6000swreg.h"
 #include "etherswitch_if.h"
@@ -62,6 +66,7 @@ MALLOC_DEFINE(M_E6000SW, "e6000sw", "e6000sw switch");
 #define	E6000SW_UNLOCK(_sc)		sx_unlock(&(_sc)->sx)
 #define	E6000SW_LOCK_ASSERT(_sc, _what)	sx_assert(&(_sc)->sx, (_what))
 #define	E6000SW_TRYLOCK(_sc)		sx_tryxlock(&(_sc)->sx)
+#define	E6000SW_LOCKED(_sc)		sx_xlocked(&(_sc)->sx)
 #define	E6000SW_WAITREADY(_sc, _reg, _bit)				\
     e6000sw_waitready((_sc), REG_GLOBAL, (_reg), (_bit))
 #define	E6000SW_WAITREADY2(_sc, _reg, _bit)				\
@@ -74,14 +79,17 @@ MALLOC_DEFINE(M_E6000SW, "e6000sw", "e6000sw switch");
 
 typedef struct e6000sw_softc {
 	device_t		dev;
+#ifdef FDT
 	phandle_t		node;
+#endif
 
 	struct sx		sx;
-	struct ifnet		*ifp[E6000SW_MAX_PORTS];
+	if_t ifp[E6000SW_MAX_PORTS];
 	char			*ifname[E6000SW_MAX_PORTS];
 	device_t		miibus[E6000SW_MAX_PORTS];
 	struct taskqueue	*sc_tq;
 	struct timeout_task	sc_tt;
+	bool			is_shutdown;
 
 	int			vlans[E6000SW_NUM_VLANS];
 	uint32_t		swid;
@@ -104,8 +112,10 @@ static etherswitch_info_t etherswitch_info = {
 
 static void e6000sw_identify(driver_t *, device_t);
 static int e6000sw_probe(device_t);
+#ifdef FDT
 static int e6000sw_parse_fixed_link(e6000sw_softc_t *, phandle_t, uint32_t);
 static int e6000sw_parse_ethernet(e6000sw_softc_t *, phandle_t, uint32_t);
+#endif
 static int e6000sw_attach(device_t);
 static int e6000sw_detach(device_t);
 static int e6000sw_read_xmdio(device_t, int, int, int);
@@ -136,8 +146,8 @@ static int e6000sw_vtu_flush(e6000sw_softc_t *);
 static int e6000sw_vtu_update(e6000sw_softc_t *, int, int, int, int, int);
 static __inline void e6000sw_writereg(e6000sw_softc_t *, int, int, int);
 static __inline uint32_t e6000sw_readreg(e6000sw_softc_t *, int, int);
-static int e6000sw_ifmedia_upd(struct ifnet *);
-static void e6000sw_ifmedia_sts(struct ifnet *, struct ifmediareq *);
+static int e6000sw_ifmedia_upd(if_t);
+static void e6000sw_ifmedia_sts(if_t, struct ifmediareq *);
 static int e6000sw_atu_mac_table(device_t, e6000sw_softc_t *, struct atu_opt *,
     int);
 static int e6000sw_get_pvid(e6000sw_softc_t *, int, int *);
@@ -161,8 +171,8 @@ static device_method_t e6000sw_methods[] = {
 	DEVMETHOD(bus_add_child,		device_add_child_ordered),
 
 	/* mii interface */
-	DEVMETHOD(miibus_readreg,		e6000sw_readphy_locked),
-	DEVMETHOD(miibus_writereg,		e6000sw_writephy_locked),
+	DEVMETHOD(miibus_readreg,		e6000sw_readphy),
+	DEVMETHOD(miibus_writereg,		e6000sw_writephy),
 
 	/* etherswitch interface */
 	DEVMETHOD(etherswitch_getinfo,		e6000sw_getinfo),
@@ -186,17 +196,17 @@ DEFINE_CLASS_0(e6000sw, e6000sw_driver, e6000sw_methods,
     sizeof(e6000sw_softc_t));
 
 DRIVER_MODULE(e6000sw, mdio, e6000sw_driver, 0, 0);
-DRIVER_MODULE(etherswitch, e6000sw, etherswitch_driver, 0, 0);
 DRIVER_MODULE(miibus, e6000sw, miibus_driver, 0, 0);
+DRIVER_MODULE_ORDERED(etherswitch, e6000sw, etherswitch_driver, 0, 0, SI_ORDER_ANY);
 MODULE_DEPEND(e6000sw, mdio, 1, 1, 1);
-
+MODULE_DEPEND(e6000sw, etherswitch, 1, 1, 1);
 
 static void
 e6000sw_identify(driver_t *driver, device_t parent)
 {
 
-	if (device_find_child(parent, "e6000sw", -1) == NULL)
-		BUS_ADD_CHILD(parent, 0, "e6000sw", -1);
+	if (device_find_child(parent, "e6000sw", DEVICE_UNIT_ANY) == NULL)
+		BUS_ADD_CHILD(parent, 0, "e6000sw", DEVICE_UNIT_ANY);
 }
 
 static int
@@ -204,9 +214,17 @@ e6000sw_probe(device_t dev)
 {
 	e6000sw_softc_t *sc;
 	const char *description;
+#ifdef FDT
 	phandle_t switch_node;
+#else
+	int is_6190 = 0;
+	int is_6190x = 0;
+#endif
 
 	sc = device_get_softc(dev);
+	sc->dev = dev;
+
+#ifdef FDT
 	switch_node = ofw_bus_find_compatible(OF_finddevice("/"),
 	    "marvell,mv88e6085");
 	if (switch_node == 0) {
@@ -226,12 +244,36 @@ e6000sw_probe(device_t dev)
 	if (bootverbose)
 		device_printf(dev, "Found switch_node: 0x%x\n", switch_node);
 
-	sc->dev = dev;
 	sc->node = switch_node;
 
 	if (OF_getencprop(sc->node, "reg", &sc->sw_addr,
 	    sizeof(sc->sw_addr)) < 0)
 		return (ENXIO);
+#else
+	if (resource_int_value(device_get_name(sc->dev),
+	    device_get_unit(sc->dev), "addr", &sc->sw_addr) != 0)
+		return (ENXIO);
+	if (resource_int_value(device_get_name(sc->dev),
+	    device_get_unit(sc->dev), "is6190", &is_6190) != 0) {
+		/*
+		 * Check "is8190" to keep backward compatibility with
+		 * older setups.
+		 */
+		resource_int_value(device_get_name(sc->dev),
+		    device_get_unit(sc->dev), "is8190", &is_6190);
+	}
+	resource_int_value(device_get_name(sc->dev),
+	    device_get_unit(sc->dev), "is6190x", &is_6190x);
+		if (is_6190 != 0 && is_6190x != 0) {
+			device_printf(dev,
+			    "Cannot configure conflicting variants (6190 / 6190x)\n");
+			return (ENXIO);
+		}
+	if (is_6190 != 0)
+		sc->swid = MV88E6190;
+	else if (is_6190x != 0)
+		sc->swid = MV88E6190X;
+#endif
 	if (sc->sw_addr < 0 || sc->sw_addr > 32)
 		return (ENXIO);
 
@@ -260,6 +302,10 @@ e6000sw_probe(device_t dev)
 		description = "Marvell 88E6352";
 		sc->num_ports = 7;
 		break;
+	case MV88E6171:
+		description = "Marvell 88E6171";
+		sc->num_ports = 7;
+		break;
 	case MV88E6172:
 		description = "Marvell 88E6172";
 		sc->num_ports = 7;
@@ -272,6 +318,10 @@ e6000sw_probe(device_t dev)
 		description = "Marvell 88E6190";
 		sc->num_ports = 11;
 		break;
+	case MV88E6190X:
+		description = "Marvell 88E6190X";
+		sc->num_ports = 11;
+		break;
 	default:
 		device_printf(dev, "Unrecognized device, id 0x%x.\n", sc->swid);
 		return (ENXIO);
@@ -282,6 +332,7 @@ e6000sw_probe(device_t dev)
 	return (BUS_PROBE_DEFAULT);
 }
 
+#ifdef FDT
 static int
 e6000sw_parse_fixed_link(e6000sw_softc_t *sc, phandle_t node, uint32_t port)
 {
@@ -301,7 +352,7 @@ e6000sw_parse_fixed_link(e6000sw_softc_t *sc, phandle_t node, uint32_t port)
 			return (ENXIO);
 		}
 		if (speed == 2500 && (MVSWITCH(sc, MV88E6141) ||
-		     MVSWITCH(sc, MV88E6341) || MVSWITCH(sc, MV88E6190)))
+		     MVSWITCH(sc, MV88E6341) || MVSWITCH(sc, MV88E6190) || MVSWITCH(sc, MV88E6190X)))
 			sc->fixed25_mask |= (1 << port);
 	}
 
@@ -357,6 +408,63 @@ e6000sw_parse_child_fdt(e6000sw_softc_t *sc, phandle_t child, int *pport)
 
 	return (0);
 }
+#else
+
+static int
+e6000sw_check_hint_val(device_t dev, int *val, char *fmt, ...)
+{
+	char *resname;
+	int err, len;
+	va_list ap;
+
+	len = min(strlen(fmt) * 2, 128);
+	if (len == 0)
+		return (-1);
+	resname = malloc(len, M_E6000SW, M_WAITOK);
+	memset(resname, 0, len);
+	va_start(ap, fmt);
+	vsnprintf(resname, len - 1, fmt, ap);
+	va_end(ap);
+	err = resource_int_value(device_get_name(dev), device_get_unit(dev),
+	    resname, val);
+	free(resname, M_E6000SW);
+
+	return (err);
+}
+
+static int
+e6000sw_parse_hinted_port(e6000sw_softc_t *sc, int port)
+{
+	int err, val;
+
+	err = e6000sw_check_hint_val(sc->dev, &val, "port%ddisabled", port);
+	if (err == 0 && val != 0)
+		return (1);
+
+	err = e6000sw_check_hint_val(sc->dev, &val, "port%dcpu", port);
+	if (err == 0 && val != 0) {
+		sc->cpuports_mask |= (1 << port);
+		sc->fixed_mask |= (1 << port);
+		if (bootverbose)
+			device_printf(sc->dev, "CPU port at %d\n", port);
+	}
+	err = e6000sw_check_hint_val(sc->dev, &val, "port%dspeed", port);
+	if (err == 0 && val != 0) {
+		sc->fixed_mask |= (1 << port);
+		if (val == 2500)
+			sc->fixed25_mask |= (1 << port);
+	}
+
+	if (bootverbose) {
+		if ((sc->fixed_mask & (1 << port)) != 0)
+			device_printf(sc->dev, "fixed port at %d\n", port);
+		else
+			device_printf(sc->dev, "PHY at port %d\n", port);
+	}
+
+	return (0);
+}
+#endif
 
 static int
 e6000sw_init_interface(e6000sw_softc_t *sc, int port)
@@ -366,11 +474,9 @@ e6000sw_init_interface(e6000sw_softc_t *sc, int port)
 	snprintf(name, IFNAMSIZ, "%sport", device_get_nameunit(sc->dev));
 
 	sc->ifp[port] = if_alloc(IFT_ETHER);
-	if (sc->ifp[port] == NULL)
-		return (ENOMEM);
-	sc->ifp[port]->if_softc = sc;
-	sc->ifp[port]->if_flags |= IFF_UP | IFF_BROADCAST |
-	    IFF_DRV_RUNNING | IFF_SIMPLEX;
+	if_setsoftc(sc->ifp[port], sc);
+	if_setflagbits(sc->ifp[port], IFF_UP | IFF_BROADCAST |
+	    IFF_DRV_RUNNING | IFF_SIMPLEX, 0);
 	sc->ifname[port] = malloc(strlen(name) + 1, M_E6000SW, M_NOWAIT);
 	if (sc->ifname[port] == NULL) {
 		if_free(sc->ifp[port]);
@@ -427,7 +533,9 @@ e6000sw_attach(device_t dev)
 {
 	bool sgmii;
 	e6000sw_softc_t *sc;
+#ifdef FDT
 	phandle_t child, ports;
+#endif
 	int err, port;
 	uint32_t reg;
 
@@ -449,7 +557,7 @@ e6000sw_attach(device_t dev)
 
 	E6000SW_LOCK(sc);
 	e6000sw_setup(dev, sc);
-	ports = ofw_bus_find_child(sc->node, "ports");
+
 	sc->sc_tq = taskqueue_create("e6000sw_taskq", M_NOWAIT,
 	    taskqueue_thread_enqueue, &sc->sc_tq);
 
@@ -457,6 +565,8 @@ e6000sw_attach(device_t dev)
 	taskqueue_start_threads(&sc->sc_tq, 1, PI_NET, "%s taskq",
 	    device_get_nameunit(dev));
 
+#ifdef FDT
+	ports = ofw_bus_find_child(sc->node, "ports");
 	if (ports == 0) {
 		device_printf(dev, "failed to parse DTS: no ports found for "
 		    "switch\n");
@@ -465,11 +575,19 @@ e6000sw_attach(device_t dev)
 	}
 
 	for (child = OF_child(ports); child != 0; child = OF_peer(child)) {
+		if (!ofw_bus_node_status_okay(child))
+			continue;
 		err = e6000sw_parse_child_fdt(sc, child, &port);
 		if (err != 0) {
 			device_printf(sc->dev, "failed to parse DTS\n");
 			goto out_fail;
 		}
+#else
+	for (port = 0; port < sc->num_ports; port++) {
+		err = e6000sw_parse_hinted_port(sc, port);
+		if (err != 0)
+			continue;
+#endif
 
 		/* Port is in use. */
 		sc->ports_mask |= (1 << port);
@@ -500,22 +618,26 @@ e6000sw_attach(device_t dev)
 				reg |= PSC_CONTROL_SPD2500;
 			else
 				reg |= PSC_CONTROL_SPD1000;
-			if (MVSWITCH(sc, MV88E6190) &&
+			if ((MVSWITCH(sc, MV88E6190) ||
+			    MVSWITCH(sc, MV88E6190X)) &&
 			    e6000sw_is_fixed25port(sc, port))
 				reg |= PSC_CONTROL_ALT_SPD;
 			reg |= PSC_CONTROL_FORCED_DPX | PSC_CONTROL_FULLDPX |
 			    PSC_CONTROL_FORCED_LINK | PSC_CONTROL_LINK_UP |
 			    PSC_CONTROL_FORCED_SPD;
-			if (!MVSWITCH(sc, MV88E6190))
+			if (!MVSWITCH(sc, MV88E6190) &&
+			    !MVSWITCH(sc, MV88E6190X))
 				reg |= PSC_CONTROL_FORCED_FC | PSC_CONTROL_FC_ON;
 			if (MVSWITCH(sc, MV88E6141) ||
 			    MVSWITCH(sc, MV88E6341) ||
-			    MVSWITCH(sc, MV88E6190))
+			    MVSWITCH(sc, MV88E6190) ||
+			    MVSWITCH(sc, MV88E6190X))
 				reg |= PSC_CONTROL_FORCED_EEE;
 			e6000sw_writereg(sc, REG_PORT(sc, port), PSC_CONTROL,
 			    reg);
 			/* Power on the SERDES interfaces. */
-			if (MVSWITCH(sc, MV88E6190) &&
+			if ((MVSWITCH(sc, MV88E6190) ||
+			    MVSWITCH(sc, MV88E6190X)) &&
 			    (port == 9 || port == 10)) {
 				if (e6000sw_is_fixed25port(sc, port))
 					sgmii = false;
@@ -546,14 +668,15 @@ e6000sw_attach(device_t dev)
 		device_printf(dev, "switch is ready.\n");
 	E6000SW_UNLOCK(sc);
 
-	bus_generic_probe(dev);
-	bus_generic_attach(dev);
+	bus_identify_children(dev);
+	bus_attach_children(dev);
 
 	taskqueue_enqueue_timeout(sc->sc_tq, &sc->sc_tt, hz);
 
 	return (0);
 
 out_fail:
+	E6000SW_UNLOCK(sc);
 	e6000sw_detach(dev);
 
 	return (err);
@@ -647,17 +770,20 @@ e6000sw_write_xmdio(device_t dev, int phy, int devaddr, int devreg, int val)
 	return (0);
 }
 
-static int e6000sw_readphy(device_t dev, int phy, int reg)
+static int
+e6000sw_readphy(device_t dev, int phy, int reg)
 {
 	e6000sw_softc_t *sc;
-	int ret;
+	int locked, ret;
 
 	sc = device_get_softc(dev);
-	E6000SW_LOCK_ASSERT(sc, SA_UNLOCKED);
 
-	E6000SW_LOCK(sc);
+	locked = E6000SW_LOCKED(sc);
+	if (!locked)
+		E6000SW_LOCK(sc);
 	ret = e6000sw_readphy_locked(dev, phy, reg);
-	E6000SW_UNLOCK(sc);
+	if (!locked)
+		E6000SW_UNLOCK(sc);
 
 	return (ret);
 }
@@ -698,17 +824,20 @@ e6000sw_readphy_locked(device_t dev, int phy, int reg)
 	return (val & PHY_DATA_MASK);
 }
 
-static int e6000sw_writephy(device_t dev, int phy, int reg, int data)
+static int
+e6000sw_writephy(device_t dev, int phy, int reg, int data)
 {
 	e6000sw_softc_t *sc;
-	int ret;
+	int locked, ret;
 
 	sc = device_get_softc(dev);
-	E6000SW_LOCK_ASSERT(sc, SA_UNLOCKED);
 
-	E6000SW_LOCK(sc);
+	locked = E6000SW_LOCKED(sc);
+	if (!locked)
+		E6000SW_LOCK(sc);
 	ret = e6000sw_writephy_locked(dev, phy, reg, data);
-	E6000SW_UNLOCK(sc);
+	if (!locked)
+		E6000SW_UNLOCK(sc);
 
 	return (ret);
 }
@@ -743,18 +872,25 @@ e6000sw_writephy_locked(device_t dev, int phy, int reg, int data)
 static int
 e6000sw_detach(device_t dev)
 {
-	int phy;
+	int error, phy;
 	e6000sw_softc_t *sc;
 
 	sc = device_get_softc(dev);
 
-	if (device_is_attached(dev))
-		taskqueue_drain_timeout(sc->sc_tq, &sc->sc_tt);
+	E6000SW_LOCK(sc);
+	sc->is_shutdown = true;
+	if (sc->sc_tq != NULL) {
+		while (taskqueue_cancel_timeout(sc->sc_tq, &sc->sc_tt, NULL) != 0)
+			taskqueue_drain_timeout(sc->sc_tq, &sc->sc_tt);
+	}
+	E6000SW_UNLOCK(sc);
+
+	error = bus_generic_detach(dev);
+	if (error != 0)
+		return (error);
 
 	if (sc->sc_tq != NULL)
 		taskqueue_free(sc->sc_tq);
-
-	device_delete_children(dev);
 
 	sx_destroy(&sc->sx);
 	for (phy = 0; phy < sc->num_ports; phy++) {
@@ -957,7 +1093,7 @@ e6000sw_init_vlan(struct e6000sw_softc *sc)
 		ret &= ~(PORT_CONTROL_EGRESS | PORT_CONTROL_FRAME);
 		e6000sw_writereg(sc, REG_PORT(sc, port), PORT_CONTROL, ret);
 
-		/* Set the the 802.1q mode. */
+		/* Set the 802.1q mode. */
 		ret = e6000sw_readreg(sc, REG_PORT(sc, port), PORT_CONTROL2);
 		ret &= ~PORT_CONTROL2_DOT1Q;
 		if (sc->vlan_mode == ETHERSWITCH_VLAN_DOT1Q)
@@ -1272,21 +1408,27 @@ e6000sw_getvgroup(device_t dev, etherswitch_vlangroup_t *vg)
 static __inline struct mii_data*
 e6000sw_miiforphy(e6000sw_softc_t *sc, unsigned int phy)
 {
+	device_t mii_dev;
 
 	if (!e6000sw_is_phyport(sc, phy))
 		return (NULL);
+	mii_dev = sc->miibus[phy];
+	if (mii_dev == NULL)
+		return (NULL);
+	if (device_get_state(mii_dev) != DS_ATTACHED)
+		return (NULL);
 
-	return (device_get_softc(sc->miibus[phy]));
+	return (device_get_softc(mii_dev));
 }
 
 static int
-e6000sw_ifmedia_upd(struct ifnet *ifp)
+e6000sw_ifmedia_upd(if_t ifp)
 {
 	e6000sw_softc_t *sc;
 	struct mii_data *mii;
 
-	sc = ifp->if_softc;
-	mii = e6000sw_miiforphy(sc, ifp->if_dunit);
+	sc = if_getsoftc(ifp);
+	mii = e6000sw_miiforphy(sc, if_getdunit(ifp));
 	if (mii == NULL)
 		return (ENXIO);
 	mii_mediachg(mii);
@@ -1295,13 +1437,13 @@ e6000sw_ifmedia_upd(struct ifnet *ifp)
 }
 
 static void
-e6000sw_ifmedia_sts(struct ifnet *ifp, struct ifmediareq *ifmr)
+e6000sw_ifmedia_sts(if_t ifp, struct ifmediareq *ifmr)
 {
 	e6000sw_softc_t *sc;
 	struct mii_data *mii;
 
-	sc = ifp->if_softc;
-	mii = e6000sw_miiforphy(sc, ifp->if_dunit);
+	sc = if_getsoftc(ifp);
+	mii = e6000sw_miiforphy(sc, if_getdunit(ifp));
 
 	if (mii == NULL)
 		return;
@@ -1479,6 +1621,12 @@ e6000sw_tick(void *arg, int p __unused)
 	E6000SW_LOCK_ASSERT(sc, SA_UNLOCKED);
 
 	E6000SW_LOCK(sc);
+
+	if (sc->is_shutdown) {
+		E6000SW_UNLOCK(sc);
+		return;
+	}
+
 	for (port = 0; port < sc->num_ports; port++) {
 		/* Tick only on PHY ports */
 		if (!e6000sw_is_portenabled(sc, port) ||
@@ -1496,6 +1644,17 @@ e6000sw_tick(void *arg, int p __unused)
 		    &mii->mii_media_status, &mii->mii_media_active);
 
 		LIST_FOREACH(miisc, &mii->mii_phys, mii_list) {
+			/*
+			 * Note: this is sometimes NULL during PHY
+			 * enumeration, although that shouldn't be
+			 * happening /after/ tick runs. To work
+			 * around this whilst the problem is being
+			 * debugged, just do a NULL check here and
+			 * continue.
+			 */
+			if (mii->mii_media.ifm_cur == NULL)
+				continue;
+
 			if (IFM_INST(mii->mii_media.ifm_cur->ifm_media)
 			    != miisc->mii_inst)
 				continue;
@@ -1503,6 +1662,7 @@ e6000sw_tick(void *arg, int p __unused)
 		}
 	}
 	E6000SW_UNLOCK(sc);
+	taskqueue_enqueue_timeout(sc->sc_tq, &sc->sc_tt, hz);
 }
 
 static void

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -158,8 +159,8 @@ kcf_prov_tab_rem_provider(crypto_provider_id_t prov_id)
 	 * at that time.
 	 */
 
-	KCF_PROV_REFRELE(prov_desc);
 	KCF_PROV_IREFRELE(prov_desc);
+	KCF_PROV_REFRELE(prov_desc);
 
 	return (CRYPTO_SUCCESS);
 }

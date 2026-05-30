@@ -22,8 +22,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /** @file drm_sysctl.c
  * Implementation of various sysctls for controlling DRM behavior and reporting
  * debug information.
@@ -78,7 +76,7 @@ int drm_sysctl_init(struct drm_device *dev)
 
 	/* Find the next free slot under hw.dri */
 	i = 0;
-	SLIST_FOREACH(oid, SYSCTL_CHILDREN(drioid), oid_link) {
+	SYSCTL_FOREACH(oid, SYSCTL_CHILDREN(drioid)) {
 		if (i <= oid->oid_arg2)
 			i = oid->oid_arg2 + 1;
 	}
@@ -288,8 +286,16 @@ static int drm_bufs_info DRM_SYSCTL_HANDLER_ARGS
 	}
 	DRM_SPINLOCK(&dev->dma_lock);
 	tempdma = *dma;
+	if (sizeof(int) * dma->buf_count < dma->buf_count) {
+		DRM_UNLOCK(dev);
+		return 0;
+	}
 	templists = malloc(sizeof(int) * dma->buf_count, DRM_MEM_DRIVER,
 	    M_NOWAIT);
+	if (templists == NULL) {
+		DRM_UNLOCK(dev);
+		return 0;
+	}
 	for (i = 0; i < dma->buf_count; i++)
 		templists[i] = dma->buflist[i]->list;
 	dma = &tempdma;

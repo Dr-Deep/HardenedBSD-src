@@ -30,20 +30,6 @@
  * SUCH DAMAGE.
  */
 
-#ifndef lint
-static const char copyright[] =
-"@(#) Copyright (c) 1989, 1993\n\
-	The Regents of the University of California.  All rights reserved.\n";
-#endif /* not lint */
-
-#ifndef lint
-#if 0
-static char sccsid[] = "@(#)primes.c	8.5 (Berkeley) 5/10/95";
-#endif
-static const char rcsid[] =
- "$FreeBSD$";
-#endif /* not lint */
-
 /*
  * primes - generate a table of primes between two values
  *
@@ -255,6 +241,10 @@ primes(ubig start, ubig stop)
 		if (p <= pr_limit) {
 			return;
 		}
+		/*
+		 * the next odd number after the largest prime in the
+		 * precomputed list
+		 */
 		start = *pr_limit+2;
 	}
 
@@ -299,9 +289,12 @@ primes(ubig start, ubig stop)
 			} else {
 				q = &table[mod ? factor-(mod/2) : 0];
 			}
-			/* sive for our current factor */
+			/* sieve for our current factor */
 			for ( ; q < tab_lim; q += factor) {
 				*q = '\0'; /* sieve out a spot */
+			}
+			if (p > pr_limit) {
+				break;
 			}
 			factor = *p++;
 		} while (factor <= fact_lim);

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2019 Emmanuel Vadot <manu@FreeBSD.org>
  *
@@ -26,9 +26,6 @@
  *
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
@@ -38,8 +35,8 @@ __FBSDID("$FreeBSD$");
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
-#include <dev/extres/syscon/syscon.h>
-#include <dev/extres/regulator/regulator.h>
+#include <dev/syscon/syscon.h>
+#include <dev/regulator/regulator.h>
 
 #include "syscon_if.h"
 
@@ -166,11 +163,16 @@ rk_iodomain_set(struct rk_iodomain_softc *sc)
 	regulator_t supply;
 	uint32_t reg = 0;
 	uint32_t mask = 0;
-	int uvolt, i;
+	int uvolt, i, rv;
 
 	for (i = 0; i < sc->conf->nsupply; i++) {
-		if (regulator_get_by_ofw_property(sc->dev, sc->node,
-		    sc->conf->supply[i].name, &supply) != 0) {
+		rv = regulator_get_by_ofw_property(sc->dev, sc->node,
+		    sc->conf->supply[i].name, &supply);
+
+		if (rv == ENOENT)
+			continue;
+
+		if (rv != 0) {
 			device_printf(sc->dev,
 			    "Cannot get property for regulator %s\n",
 			    sc->conf->supply[i].name);
@@ -301,4 +303,4 @@ static driver_t rk_iodomain_driver = {
 };
 
 EARLY_DRIVER_MODULE(rk_iodomain, simplebus, rk_iodomain_driver, 0, 0,
-    BUS_PASS_INTERRUPT + BUS_PASS_ORDER_MIDDLE);
+    BUS_PASS_INTERRUPT + BUS_PASS_ORDER_LAST);

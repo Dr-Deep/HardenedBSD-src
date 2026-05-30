@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2022, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2026, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -363,18 +363,42 @@ DtInsertCompilerIds (
         return;
     }
 
-    /* Walk to the Compiler fields at the end of the header */
+    /* Walk to the Compiler fields at the end of the header, with safety checks */
+
+    if (!FieldList)
+    {
+        DtError (ASL_WARNING, ASL_MSG_MALFORMED_HEADER, NULL, NULL);
+        return;
+    }
 
     Next = FieldList;
     for (i = 0; i < 7; i++)
     {
+        if (!Next || !Next->Next)
+        {
+            /* Malformed/short header: cannot insert compiler IDs */
+            DtError (ASL_WARNING, ASL_MSG_MALFORMED_HEADER, FieldList, NULL);
+            return;
+        }
         Next = Next->Next;
+    }
+
+    /* Ensure both Creator ID and Revision fields exist */
+    if (!Next || !Next->Next)
+    {
+        DtError (ASL_WARNING, ASL_MSG_MALFORMED_HEADER, FieldList, NULL);
+        return;
     }
 
     Next->Value = ASL_CREATOR_ID;
     Next->Flags = DT_FIELD_NOT_ALLOCATED;
 
     Next = Next->Next;
+    if (!Next)
+    {
+        DtError (ASL_WARNING, ASL_MSG_MALFORMED_HEADER, FieldList, NULL);
+        return;
+    }
     Next->Value = VersionString;
     Next->Flags = DT_FIELD_NOT_ALLOCATED;
 }
@@ -449,6 +473,48 @@ DtCompileDataTable (
 
         DtSetTableLength ();
         return (Status);
+    }
+
+    /*
+     * If the first field is named "CDAT Table Length" (not "Signature"),
+     * assume that we have a CDAT table (whose table header does not have
+     * a signature). Instead, the TableLength field is where the
+     * signature would (normally) be.
+     */
+    else if (!strcmp ((*FieldList)->Name, "CDAT Table Length"))
+    {
+        /* No longer true: (However, use this technique in the disassembler)
+         * We are assuming that there
+         * should be at least one non-ASCII byte in the 4-character
+         * Signature field, (At least the high-order byte should be zero).
+         */
+        Status = DtCompileTable (FieldList, AcpiDmTableInfoCdatTableHdr,
+            &AslGbl_RootTable);
+        if (ACPI_FAILURE (Status))
+        {
+            return (Status);
+        }
+
+        /* Compile the CDAT */
+
+        DtPushSubtable (AslGbl_RootTable);
+        Status = DtCompileCdat ((void **) FieldList);
+        if (ACPI_FAILURE (Status))
+        {
+            return (Status);
+        }
+
+        /*
+         * Set the overall table length and the table checksum.
+         * The entire compiled table (including the CDAT table header with
+         * the table length and checksum) is in AslGbl_RootTable->Buffer.
+         */
+        DtSetTableLength ();
+        DtSetTableChecksum (&ACPI_CAST_PTR (ACPI_TABLE_CDAT, AslGbl_RootTable->Buffer)->Checksum);
+
+        DtDumpFieldList (RootField);
+        DtDumpSubtableList ();
+        return (AE_OK);
     }
 
     /*

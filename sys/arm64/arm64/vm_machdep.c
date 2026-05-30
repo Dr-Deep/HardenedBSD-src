@@ -27,11 +27,8 @@
 
 #include "opt_platform.h"
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
-#include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/kernel.h>
 #include <sys/limits.h>
 #include <sys/proc.h>
 #include <sys/sf_buf.h>
@@ -56,6 +53,15 @@ __FBSDID("$FreeBSD$");
 #endif
 
 #include <dev/psci/psci.h>
+
+/*
+ * psci.c is "default" in ARM64 kernel config files
+ * psci_reset will do nothing until/unless the psci device probes/attaches.
+ * Therefore, it is safe to default the cpu_reset_hook to psci_reset.
+ */
+cpu_reset_hook_t cpu_reset_hook = psci_reset;
+
+static uma_zone_t pcb_zone;
 
 /*
  * Finish a fork operation, with process p2 nearly set up.
@@ -85,29 +91,25 @@ cpu_fork(struct thread *td1, struct proc *p2, struct thread *td2, int flags)
 #endif
 	}
 
-	pcb2 = (struct pcb *)(td2->td_kstack +
-	    td2->td_kstack_pages * PAGE_SIZE) - 1;
-
-	td2->td_pcb = pcb2;
+	pcb2 = td2->td_pcb;
 	bcopy(td1->td_pcb, pcb2, sizeof(*pcb2));
 
 	/* Clear the debug register state. */
 	bzero(&pcb2->pcb_dbg_regs, sizeof(pcb2->pcb_dbg_regs));
 
 	ptrauth_fork(td2, td1);
+	mte_fork(td2, td1);
 
-	tf = (struct trapframe *)STACKALIGN((struct trapframe *)pcb2 - 1);
+	tf = td2->td_frame;
 	bcopy(td1->td_frame, tf, sizeof(*tf));
 	tf->tf_x[0] = 0;
 	tf->tf_x[1] = 0;
 	tf->tf_spsr = td1->td_frame->tf_spsr & (PSR_M_32 | PSR_DAIF);
 
-	td2->td_frame = tf;
-
 	/* Set the return value registers for fork() */
-	td2->td_pcb->pcb_x[19] = (uintptr_t)fork_return;
-	td2->td_pcb->pcb_x[20] = (uintptr_t)td2;
-	td2->td_pcb->pcb_lr = (uintptr_t)fork_trampoline;
+	td2->td_pcb->pcb_x[PCB_X19] = (uintptr_t)fork_return;
+	td2->td_pcb->pcb_x[PCB_X20] = (uintptr_t)td2;
+	td2->td_pcb->pcb_x[PCB_LR] = (uintptr_t)fork_trampoline;
 	td2->td_pcb->pcb_sp = (uintptr_t)td2->td_frame;
 
 	vfp_new_thread(td2, td1, true);
@@ -115,6 +117,11 @@ cpu_fork(struct thread *td1, struct proc *p2, struct thread *td2, int flags)
 	/* Setup to release spin count in fork_exit(). */
 	td2->td_md.md_spinlock_count = 1;
 	td2->td_md.md_saved_daif = PSR_DAIF_DEFAULT;
+
+	/* Copy the TCR_EL1 value */
+	td2->td_proc->p_md.md_tcr = td1->td_proc->p_md.md_tcr;
+
+	td2->td_md.md_sctlr = td1->td_md.md_sctlr;
 
 #if defined(PERTHREAD_SSP)
 	/* Set the new canary */
@@ -126,21 +133,11 @@ void
 cpu_reset(void)
 {
 
-	psci_reset();
+	cpu_reset_hook();
 
 	printf("cpu_reset failed");
 	while(1)
 		__asm volatile("wfi" ::: "memory");
-}
-
-void
-cpu_thread_swapin(struct thread *td)
-{
-}
-
-void
-cpu_thread_swapout(struct thread *td)
-{
 }
 
 void
@@ -183,9 +180,9 @@ cpu_copy_thread(struct thread *td, struct thread *td0)
 	bcopy(td0->td_frame, td->td_frame, sizeof(struct trapframe));
 	bcopy(td0->td_pcb, td->td_pcb, sizeof(struct pcb));
 
-	td->td_pcb->pcb_x[19] = (uintptr_t)fork_return;
-	td->td_pcb->pcb_x[20] = (uintptr_t)td;
-	td->td_pcb->pcb_lr = (uintptr_t)fork_trampoline;
+	td->td_pcb->pcb_x[PCB_X19] = (uintptr_t)fork_return;
+	td->td_pcb->pcb_x[PCB_X20] = (uintptr_t)td;
+	td->td_pcb->pcb_x[PCB_LR] = (uintptr_t)fork_trampoline;
 	td->td_pcb->pcb_sp = (uintptr_t)td->td_frame;
 
 	/* Update VFP state for the new thread */
@@ -195,6 +192,8 @@ cpu_copy_thread(struct thread *td, struct thread *td0)
 	td->td_md.md_spinlock_count = 1;
 	td->td_md.md_saved_daif = PSR_DAIF_DEFAULT;
 
+	td->td_md.md_sctlr = td0->td_md.md_sctlr;
+
 #if defined(PERTHREAD_SSP)
 	/* Set the new canary */
 	arc4random_buf(&td->td_md.md_canary, sizeof(td->td_md.md_canary));
@@ -202,13 +201,14 @@ cpu_copy_thread(struct thread *td, struct thread *td0)
 
 	/* Generate new pointer authentication keys. */
 	ptrauth_copy_thread(td, td0);
+	mte_copy_thread(td, td0);
 }
 
 /*
  * Set that machine state for performing an upcall that starts
  * the entry function with the given argument.
  */
-void
+int
 cpu_set_upcall(struct thread *td, void (*entry)(void *), void *arg,
 	stack_t *stack)
 {
@@ -216,17 +216,22 @@ cpu_set_upcall(struct thread *td, void (*entry)(void *), void *arg,
 
 	/* 32bits processes use r13 for sp */
 	if (td->td_frame->tf_spsr & PSR_M_32) {
-		tf->tf_x[13] = STACKALIGN((uintptr_t)stack->ss_sp + stack->ss_size);
+		tf->tf_x[13] = STACKALIGN((uintptr_t)stack->ss_sp +
+		    stack->ss_size);
 		if ((register_t)entry & 1)
 			tf->tf_spsr |= PSR_T;
 	} else
-		tf->tf_sp = STACKALIGN((uintptr_t)stack->ss_sp + stack->ss_size);
+		tf->tf_sp = STACKALIGN((uintptr_t)stack->ss_sp +
+		    stack->ss_size);
 	tf->tf_elr = (register_t)entry;
 	tf->tf_x[0] = (register_t)arg;
+	tf->tf_x[29] = 0;
+	tf->tf_lr = 0;
+	return (0);
 }
 
 int
-cpu_set_user_tls(struct thread *td, void *tls_base)
+cpu_set_user_tls(struct thread *td, void *tls_base, int thr_flags __unused)
 {
 	struct pcb *pcb;
 
@@ -259,17 +264,21 @@ cpu_thread_exit(struct thread *td)
 void
 cpu_thread_alloc(struct thread *td)
 {
-
-	td->td_pcb = (struct pcb *)(td->td_kstack +
-	    td->td_kstack_pages * PAGE_SIZE) - 1;
-	td->td_frame = (struct trapframe *)STACKALIGN(
-	    (struct trapframe *)td->td_pcb - 1);
+	td->td_pcb = uma_zalloc(pcb_zone, M_WAITOK);
 	ptrauth_thread_alloc(td);
+	mte_thread_alloc(td);
+}
+
+void
+cpu_thread_new_kstack(struct thread *td)
+{
+	td->td_frame = (struct trapframe *)td_kstack_top(td) - 1;
 }
 
 void
 cpu_thread_free(struct thread *td)
 {
+	uma_zfree(pcb_zone, td->td_pcb);
 }
 
 void
@@ -287,8 +296,16 @@ void
 cpu_fork_kthread_handler(struct thread *td, void (*func)(void *), void *arg)
 {
 
-	td->td_pcb->pcb_x[19] = (uintptr_t)func;
-	td->td_pcb->pcb_x[20] = (uintptr_t)arg;
+	td->td_pcb->pcb_x[PCB_X19] = (uintptr_t)func;
+	td->td_pcb->pcb_x[PCB_X20] = (uintptr_t)arg;
+}
+
+void
+cpu_update_pcb(struct thread *td)
+{
+	MPASS(td == curthread);
+	td->td_pcb->pcb_tpidr_el0 = READ_SPECIALREG(tpidr_el0);
+	td->td_pcb->pcb_tpidrro_el0 = READ_SPECIALREG(tpidrro_el0);
 }
 
 void
@@ -310,3 +327,22 @@ cpu_procctl(struct thread *td __unused, int idtype __unused, id_t id __unused,
 
 	return (EINVAL);
 }
+
+void
+cpu_sync_core(void)
+{
+	/*
+	 * Do nothing. According to ARM ARMv8 D1.11 Exception return
+	 * If FEAT_ExS is not implemented, or if FEAT_ExS is
+	 * implemented and the SCTLR_ELx.EOS field is set, exception
+	 * return from ELx is a context synchronization event.
+	 */
+}
+
+static void
+pcbinit(void *dummy __unused)
+{
+	pcb_zone = uma_zcreate("pcb", sizeof(struct pcb), NULL, NULL, NULL,
+	    NULL, UMA_ALIGNOF(struct pcb), 0);
+}
+SYSINIT(pcbinit, SI_SUB_INTRINSIC, SI_ORDER_ANY, pcbinit, NULL);

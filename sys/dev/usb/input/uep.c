@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright 2010, Gleb Smirnoff <glebius@FreeBSD.org>
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -519,9 +517,9 @@ uep_close(struct usb_fifo *fifo, int fflags)
 
 static device_method_t uep_methods[] = {
 	DEVMETHOD(device_probe, uep_probe),
-       	DEVMETHOD(device_attach, uep_attach),
+	DEVMETHOD(device_attach, uep_attach),
 	DEVMETHOD(device_detach, uep_detach),
-	{ 0, 0 },
+	DEVMETHOD_END
 };
 
 static driver_t uep_driver = {

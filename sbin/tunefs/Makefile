@@ -1,16 +1,11 @@
-#	@(#)Makefile	8.1 (Berkeley) 6/5/93
-# $FreeBSD$
+.include <src.opts.mk>
 
-PACKAGE=runtime
+PACKAGE=ufs
 PROG=	tunefs
-SRCS=	tunefs.c getmntopts.c
-LIBADD=	ufs
+LIBADD=	ufs util
 MAN=	tunefs.8
 
-MOUNT=	${SRCTOP}/sbin/mount
-CFLAGS+=	-I${MOUNT}
-.PATH:	${MOUNT}
-
-WARNS?=	3
+HAS_TESTS=
+SUBDIR.${MK_TESTS}=	tests
 
 .include <bsd.prog.mk>

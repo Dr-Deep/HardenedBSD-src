@@ -38,7 +38,6 @@
  * Costa Mesa, CA 92626
  */
 
-/* $FreeBSD$ */
 
 #include "oce_if.h"
 
@@ -472,7 +471,7 @@ oce_read_mac_addr(POCE_SOFTC sc, uint32_t if_id,
 		goto error;
 	}
 
-	/* copy the mac addres in the output parameter */
+	/* copy the mac address in the output parameter */
 	mac->size_of_struct = fwcmd->params.rsp.mac.size_of_struct;
 	bcopy(&fwcmd->params.rsp.mac.mac_addr[0], &mac->mac_addr[0],
 		mac->size_of_struct);
@@ -1008,7 +1007,7 @@ error:
  * @param *stats        pointer to where to store statistics
  * @param reset_stats   resets statistics of set
  * @returns             0 on success, EIO on failure
- * @note                command depricated in Lancer
+ * @note                command deprecated in Lancer
  */
 #define OCE_MBOX_GET_NIC_STATS(sc, pstats_dma_mem, version) 				\
 int 											\

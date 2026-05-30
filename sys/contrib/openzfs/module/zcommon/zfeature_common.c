@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -25,7 +26,7 @@
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  * Copyright (c) 2014, Nexenta Systems, Inc. All rights reserved.
  * Copyright (c) 2017, Intel Corporation.
- * Copyright (c) 2019, Klara Inc.
+ * Copyright (c) 2019, 2024, Klara, Inc.
  * Copyright (c) 2019, Allan Jude
  */
 
@@ -696,6 +697,19 @@ zpool_feature_init(void)
 	    ZFEATURE_FLAG_MOS, ZFEATURE_TYPE_BOOLEAN, NULL, sfeatures);
 
 	{
+		static const spa_feature_t draid_fdomain_deps[] = {
+			SPA_FEATURE_DRAID,
+			SPA_FEATURE_NONE
+		};
+		zfeature_register(SPA_FEATURE_DRAID_FAIL_DOMAINS,
+		    "com.seagate:draid_failure_domains",
+		    "draid_failure_domains",
+		    "Support for failure domains in dRAID",
+		    ZFEATURE_FLAG_MOS, ZFEATURE_TYPE_BOOLEAN,
+		    draid_fdomain_deps, sfeatures);
+	}
+
+	{
 		static const spa_feature_t zilsaxattr_deps[] = {
 			SPA_FEATURE_EXTENSIBLE_DATASET,
 			SPA_FEATURE_NONE
@@ -723,6 +737,90 @@ zpool_feature_init(void)
 		    "BLAKE3 hash algorithm.",
 		    ZFEATURE_FLAG_PER_DATASET, ZFEATURE_TYPE_BOOLEAN,
 		    blake3_deps, sfeatures);
+	}
+
+	zfeature_register(SPA_FEATURE_BLOCK_CLONING,
+	    "com.fudosecurity:block_cloning", "block_cloning",
+	    "Support for block cloning via Block Reference Table.",
+	    ZFEATURE_FLAG_READONLY_COMPAT, ZFEATURE_TYPE_BOOLEAN, NULL,
+	    sfeatures);
+
+	zfeature_register(SPA_FEATURE_BLOCK_CLONING_ENDIAN,
+	    "com.truenas:block_cloning_endian", "block_cloning_endian",
+	    "Fixes BRT ZAP endianness on new pools.",
+	    ZFEATURE_FLAG_READONLY_COMPAT, ZFEATURE_TYPE_BOOLEAN, NULL,
+	    sfeatures);
+
+	zfeature_register(SPA_FEATURE_AVZ_V2,
+	    "com.klarasystems:vdev_zaps_v2", "vdev_zaps_v2",
+	    "Support for root vdev ZAP.",
+	    ZFEATURE_FLAG_MOS, ZFEATURE_TYPE_BOOLEAN, NULL,
+	    sfeatures);
+
+	{
+		static const spa_feature_t redact_list_spill_deps[] = {
+			SPA_FEATURE_REDACTION_BOOKMARKS,
+			SPA_FEATURE_NONE
+		};
+		zfeature_register(SPA_FEATURE_REDACTION_LIST_SPILL,
+		    "com.delphix:redaction_list_spill", "redaction_list_spill",
+		    "Support for increased number of redaction_snapshot "
+		    "arguments in zfs redact.", 0, ZFEATURE_TYPE_BOOLEAN,
+		    redact_list_spill_deps, sfeatures);
+	}
+
+	zfeature_register(SPA_FEATURE_RAIDZ_EXPANSION,
+	    "org.openzfs:raidz_expansion", "raidz_expansion",
+	    "Support for raidz expansion",
+	    ZFEATURE_FLAG_MOS, ZFEATURE_TYPE_BOOLEAN, NULL, sfeatures);
+
+	zfeature_register(SPA_FEATURE_FAST_DEDUP,
+	    "com.klarasystems:fast_dedup", "fast_dedup",
+	    "Support for advanced deduplication",
+	    ZFEATURE_FLAG_READONLY_COMPAT, ZFEATURE_TYPE_BOOLEAN, NULL,
+	    sfeatures);
+
+	{
+		static const spa_feature_t longname_deps[] = {
+			SPA_FEATURE_EXTENSIBLE_DATASET,
+			SPA_FEATURE_NONE
+		};
+		zfeature_register(SPA_FEATURE_LONGNAME,
+		    "org.zfsonlinux:longname", "longname",
+		    "support filename up to 1024 bytes",
+		    ZFEATURE_FLAG_PER_DATASET, ZFEATURE_TYPE_BOOLEAN,
+		    longname_deps, sfeatures);
+	}
+
+	{
+		static const spa_feature_t large_microzap_deps[] = {
+			SPA_FEATURE_EXTENSIBLE_DATASET,
+			SPA_FEATURE_LARGE_BLOCKS,
+			SPA_FEATURE_NONE
+		};
+		zfeature_register(SPA_FEATURE_LARGE_MICROZAP,
+		    "com.klarasystems:large_microzap", "large_microzap",
+		    "Support for microzaps larger than 128KB.",
+		    ZFEATURE_FLAG_PER_DATASET | ZFEATURE_FLAG_READONLY_COMPAT,
+		    ZFEATURE_TYPE_BOOLEAN, large_microzap_deps, sfeatures);
+	}
+
+	zfeature_register(SPA_FEATURE_DYNAMIC_GANG_HEADER,
+	    "com.klarasystems:dynamic_gang_header", "dynamic_gang_header",
+	    "Support for dynamically sized gang headers",
+	    ZFEATURE_FLAG_MOS | ZFEATURE_FLAG_NO_UPGRADE,
+	    ZFEATURE_TYPE_BOOLEAN, NULL, sfeatures);
+
+	{
+		static const spa_feature_t physical_rewrite_deps[] = {
+			SPA_FEATURE_EXTENSIBLE_DATASET,
+			SPA_FEATURE_NONE
+		};
+		zfeature_register(SPA_FEATURE_PHYSICAL_REWRITE,
+		    "com.truenas:physical_rewrite", "physical_rewrite",
+		    "Support for preserving logical birth time during rewrite.",
+		    ZFEATURE_FLAG_READONLY_COMPAT | ZFEATURE_FLAG_PER_DATASET,
+		    ZFEATURE_TYPE_BOOLEAN, physical_rewrite_deps, sfeatures);
 	}
 
 	zfs_mod_list_supported_free(sfeatures);

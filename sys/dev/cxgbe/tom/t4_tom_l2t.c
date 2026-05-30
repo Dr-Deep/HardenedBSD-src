@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2012 Chelsio Communications, Inc.
  * All rights reserved.
@@ -26,8 +26,6 @@
  * SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_inet.h"
 #include "opt_inet6.h"
 
@@ -42,6 +40,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/mutex.h>
 #include <sys/rwlock.h>
 #include <sys/socket.h>
+#include <sys/socketvar.h>
 #include <sys/sbuf.h>
 #include <sys/taskqueue.h>
 #include <net/if.h>
@@ -50,6 +49,8 @@ __FBSDID("$FreeBSD$");
 #include <net/if_vlan_var.h>
 #include <net/route.h>
 #include <netinet/in.h>
+#include <netinet/in_pcb.h>
+#include <netinet/tcp_var.h>
 #include <netinet/toecore.h>
 
 #include "common/common.h"
@@ -211,20 +212,18 @@ update_entry(struct adapter *sc, struct l2t_entry *e, uint8_t *lladdr,
 
 		e->state = L2T_STATE_STALE;
 
-	} else {
+	} else if (e->state == L2T_STATE_RESOLVING ||
+	    e->state == L2T_STATE_FAILED ||
+	    memcmp(e->dmac, lladdr, ETHER_ADDR_LEN)) {
 
-		if (e->state == L2T_STATE_RESOLVING ||
-		    e->state == L2T_STATE_FAILED ||
-		    memcmp(e->dmac, lladdr, ETHER_ADDR_LEN)) {
+		/* unresolved -> resolved; or dmac changed */
 
-			/* unresolved -> resolved; or dmac changed */
-
-			memcpy(e->dmac, lladdr, ETHER_ADDR_LEN);
-			e->vlan = vtag;
-			t4_write_l2e(e, 1);
-		}
+		memcpy(e->dmac, lladdr, ETHER_ADDR_LEN);
+		e->vlan = vtag;
+		if (t4_write_l2e(e, 1) == 0)
+			e->state = L2T_STATE_VALID;
+	} else
 		e->state = L2T_STATE_VALID;
-	}
 }
 
 static int
@@ -290,7 +289,10 @@ again:
 			mtx_unlock(&e->lock);
 			goto again;
 		}
-		arpq_enqueue(e, wr);
+		if (!hw_all_ok(sc))
+			free(wr, M_CXGBE);
+		else
+			arpq_enqueue(e, wr);
 		mtx_unlock(&e->lock);
 
 		if (resolve_entry(sc, e) == EWOULDBLOCK)
@@ -317,18 +319,23 @@ do_l2t_write_rpl2(struct sge_iq *iq, const struct rss_header *rss,
 {
 	struct adapter *sc = iq->adapter;
 	const struct cpl_l2t_write_rpl *rpl = (const void *)(rss + 1);
-	unsigned int tid = GET_TID(rpl);
-	unsigned int idx = tid % L2T_SIZE;
+	const u_int hwidx = GET_TID(rpl) & ~(F_SYNC_WR | V_TID_QID(M_TID_QID));
+	const bool sync = GET_TID(rpl) & F_SYNC_WR;
 
-	if (__predict_false(rpl->status != CPL_ERR_NONE)) {
-		log(LOG_ERR,
-		    "Unexpected L2T_WRITE_RPL (%u) for entry at hw_idx %u\n",
-		    rpl->status, idx);
+	MPASS(iq->abs_id == G_TID_QID(GET_TID(rpl)));
+
+	if (__predict_false(hwidx < sc->vres.l2t.start) ||
+	    __predict_false(hwidx >= sc->vres.l2t.start + sc->vres.l2t.size) ||
+	    __predict_false(rpl->status != CPL_ERR_NONE)) {
+		CH_ERR(sc, "%s: hwidx %u, rpl %u, sync %u; L2T st %u, sz %u\n",
+		       __func__, hwidx, rpl->status, sync, sc->vres.l2t.start,
+		       sc->vres.l2t.size);
 		return (EINVAL);
 	}
 
-	if (tid & F_SYNC_WR) {
-		struct l2t_entry *e = &sc->l2t->l2tab[idx - sc->vres.l2t.start];
+	if (sync) {
+		const u_int idx = hwidx - sc->vres.l2t.start;
+		struct l2t_entry *e = &sc->l2t->l2tab[idx];
 
 		mtx_lock(&e->lock);
 		if (e->state != L2T_STATE_SWITCHING) {
@@ -349,12 +356,12 @@ do_l2t_write_rpl2(struct sge_iq *iq, const struct rss_header *rss,
  * top of the real cxgbe interface.
  */
 struct l2t_entry *
-t4_l2t_get(struct port_info *pi, struct ifnet *ifp, struct sockaddr *sa)
+t4_l2t_get(struct port_info *pi, if_t ifp, struct sockaddr *sa)
 {
 	struct l2t_entry *e;
 	struct adapter *sc = pi->adapter;
 	struct l2t_data *d = sc->l2t;
-	u_int hash, smt_idx = pi->port_id;
+	u_int hash;
 	uint16_t vid, pcp, vtag;
 
 	KASSERT(sa->sa_family == AF_INET || sa->sa_family == AF_INET6,
@@ -363,20 +370,23 @@ t4_l2t_get(struct port_info *pi, struct ifnet *ifp, struct sockaddr *sa)
 
 	vid = VLAN_NONE;
 	pcp = 0;
-	if (ifp->if_type == IFT_L2VLAN) {
+	if (if_gettype(ifp) == IFT_L2VLAN) {
 		VLAN_TAG(ifp, &vid);
 		VLAN_PCP(ifp, &pcp);
-	} else if (ifp->if_pcp != IFNET_PCP_NONE) {
+	} else if ((pcp = if_getpcp(ifp)) != IFNET_PCP_NONE)
 		vid = 0;
-		pcp = ifp->if_pcp;
-	}
+	else
+		pcp = 0;
 	vtag = EVL_MAKETAG(vid, pcp, 0);
 
-	hash = l2_hash(d, sa, ifp->if_index);
+	hash = l2_hash(d, sa, if_getindex(ifp));
 	rw_wlock(&d->lock);
+	if (__predict_false(d->l2t_stopped)) {
+		e = NULL;
+		goto done;
+	}
 	for (e = d->l2tab[hash].first; e; e = e->next) {
-		if (l2_cmp(sa, e) == 0 && e->ifp == ifp && e->vlan == vtag &&
-		    e->smt_idx == smt_idx) {
+		if (l2_cmp(sa, e) == 0 && e->ifp == ifp && e->vlan == vtag) {
 			l2t_hold(d, e);
 			goto done;
 		}
@@ -392,9 +402,8 @@ t4_l2t_get(struct port_info *pi, struct ifnet *ifp, struct sockaddr *sa)
 		e->state = L2T_STATE_RESOLVING;
 		l2_store(sa, e);
 		e->ifp = ifp;
-		e->smt_idx = smt_idx;
 		e->hash = hash;
-		e->lport = pi->lport;
+		e->hw_port = pi->hw_port;
 		e->wrq = &sc->sge.ctrlq[pi->port_id];
 		e->iqid = sc->sge.ofld_rxq[pi->vi[0].first_ofld_rxq].iq.abs_id;
 		atomic_store_rel_int(&e->refcnt, 1);
@@ -411,7 +420,7 @@ done:
  * into the HW L2 table.
  */
 void
-t4_l2_update(struct toedev *tod, struct ifnet *ifp, struct sockaddr *sa,
+t4_l2_update(struct toedev *tod, if_t ifp, struct sockaddr *sa,
     uint8_t *lladdr, uint16_t vtag)
 {
 	struct adapter *sc = tod->tod_softc;
@@ -421,18 +430,22 @@ t4_l2_update(struct toedev *tod, struct ifnet *ifp, struct sockaddr *sa,
 
 	KASSERT(d != NULL, ("%s: no L2 table", __func__));
 
-	hash = l2_hash(d, sa, ifp->if_index);
+	hash = l2_hash(d, sa, if_getindex(ifp));
 	rw_rlock(&d->lock);
+	if (__predict_false(d->l2t_stopped))
+		goto done;
 	for (e = d->l2tab[hash].first; e; e = e->next) {
 		if (l2_cmp(sa, e) == 0 && e->ifp == ifp) {
 			mtx_lock(&e->lock);
 			if (atomic_load_acq_int(&e->refcnt))
 				goto found;
-			e->state = L2T_STATE_STALE;
+			if (e->state == L2T_STATE_VALID)
+				e->state = L2T_STATE_STALE;
 			mtx_unlock(&e->lock);
 			break;
 		}
 	}
+done:
 	rw_runlock(&d->lock);
 
 	/*

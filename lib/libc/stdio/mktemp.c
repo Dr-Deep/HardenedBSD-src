@@ -29,12 +29,6 @@
  * SUCH DAMAGE.
  */
 
-#if defined(LIBC_SCCS) && !defined(lint)
-static char sccsid[] = "@(#)mktemp.c	8.1 (Berkeley) 6/4/93";
-#endif /* LIBC_SCCS and not lint */
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "namespace.h"
 #include <sys/param.h>
 #include <sys/stat.h>
@@ -127,7 +121,7 @@ _gettemp(int dfd, char *path, int *doopen, int domkdir, int slen, int oflags)
 
 	if ((doopen != NULL && domkdir) || slen < 0 ||
 	    (oflags & ~(O_APPEND | O_DIRECT | O_SHLOCK | O_EXLOCK | O_SYNC |
-	    O_CLOEXEC)) != 0) {
+	    O_CLOEXEC | O_CLOFORK)) != 0) {
 		errno = EINVAL;
 		return (0);
 	}

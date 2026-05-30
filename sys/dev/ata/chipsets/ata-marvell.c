@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1998 - 2008 Søren Schmidt <sos@FreeBSD.org>
  * All rights reserved.
@@ -26,9 +26,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/module.h>
 #include <sys/systm.h>
@@ -40,9 +37,9 @@ __FBSDID("$FreeBSD$");
 #include <sys/lock.h>
 #include <sys/mutex.h>
 #include <sys/sema.h>
+#include <sys/stdarg.h>
 #include <sys/taskqueue.h>
 #include <vm/uma.h>
-#include <machine/stdarg.h>
 #include <machine/resource.h>
 #include <machine/bus.h>
 #include <sys/rman.h>
@@ -128,10 +125,10 @@ ata_marvell_chipinit(device_t dev)
 		return ENXIO;
 	/* Create AHCI subdevice if AHCI part present. */
 	if (ctlr->chip->cfg1) {
-	    	child = device_add_child(dev, NULL, -1);
+		child = device_add_child(dev, NULL, DEVICE_UNIT_ANY);
 		if (child != NULL) {
 		    device_set_ivars(child, (void *)(intptr_t)-1);
-		    bus_generic_attach(dev);
+		    bus_attach_children(dev);
 		}
 	}
         ctlr->ch_attach = ata_marvell_ch_attach;

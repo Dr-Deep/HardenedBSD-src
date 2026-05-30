@@ -32,9 +32,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/types.h>
 
 #include <stdlib.h>
@@ -42,13 +39,6 @@ __FBSDID("$FreeBSD$");
 #include "debug.h"
 #include "rtld.h"
 #include "rtld_printf.h"
-
-/*
- * It is possible for the compiler to emit relocations for unaligned data.
- * We handle this situation with these inlines.
- */
-#define	RELOC_ALIGNED_P(x) \
-	(((uintptr_t)(x) & (sizeof(void *) - 1)) == 0)
 
 uint64_t
 set_gp(Obj_Entry *obj)
@@ -155,10 +145,20 @@ reloc_plt(Obj_Entry *obj, int flags __unused, RtldLockState *lockstate __unused)
 	for (rela = obj->pltrela; rela < relalim; rela++) {
 		Elf_Addr *where;
 
-		assert(ELF_R_TYPE(rela->r_info) == R_RISCV_JUMP_SLOT);
-
 		where = (Elf_Addr *)(obj->relocbase + rela->r_offset);
-		*where += (Elf_Addr)obj->relocbase;
+
+		switch (ELF_R_TYPE(rela->r_info)) {
+		case R_RISCV_JUMP_SLOT:
+			*where += (Elf_Addr)obj->relocbase;
+			break;
+		case R_RISCV_IRELATIVE:
+			obj->irelative = true;
+			break;
+		default:
+			_rtld_error("Unknown relocation type %u in PLT",
+			    (unsigned int)ELF_R_TYPE(rela->r_info));
+			return (-1);
+		}
 	}
 
 	return (0);
@@ -190,6 +190,11 @@ reloc_jmpslots(Obj_Entry *obj, int flags, RtldLockState *lockstate)
 				return (-1);
 			}
 
+			if (ELF_ST_TYPE(def->st_info) == STT_GNU_IFUNC) {
+				obj->gnu_ifunc = true;
+				continue;
+			}
+
 			*where = (Elf_Addr)(defobj->relocbase + def->st_value);
 			break;
 		default:
@@ -202,30 +207,89 @@ reloc_jmpslots(Obj_Entry *obj, int flags, RtldLockState *lockstate)
 	return (0);
 }
 
-int
-reloc_iresolve(Obj_Entry *obj __unused,
-    struct Struct_RtldLockState *lockstate __unused)
+static void
+reloc_iresolve_one(Obj_Entry *obj, const Elf_Rela *rela,
+    RtldLockState *lockstate)
 {
+	Elf_Addr *where, target, *ptr;
 
-	/* XXX not implemented */
+	ptr = (Elf_Addr *)(obj->relocbase + rela->r_addend);
+	where = (Elf_Addr *)(obj->relocbase + rela->r_offset);
+	lock_release(rtld_bind_lock, lockstate);
+	target = call_ifunc_resolver(ptr);
+	wlock_acquire(rtld_bind_lock, lockstate);
+	*where = target;
+}
+
+int
+reloc_iresolve(Obj_Entry *obj, struct Struct_RtldLockState *lockstate)
+{
+	const Elf_Rela *relalim;
+	const Elf_Rela *rela;
+
+	if (!obj->irelative)
+		return (0);
+
+	obj->irelative = false;
+	relalim = (const Elf_Rela *)((const char *)obj->pltrela +
+	    obj->pltrelasize);
+	for (rela = obj->pltrela; rela < relalim; rela++) {
+		if (ELF_R_TYPE(rela->r_info) == R_RISCV_IRELATIVE)
+			reloc_iresolve_one(obj, rela, lockstate);
+	}
 	return (0);
 }
 
 int
-reloc_iresolve_nonplt(Obj_Entry *obj __unused,
-    struct Struct_RtldLockState *lockstate __unused)
+reloc_iresolve_nonplt(Obj_Entry *obj, struct Struct_RtldLockState *lockstate)
 {
+	const Elf_Rela *relalim;
+	const Elf_Rela *rela;
 
-	/* XXX not implemented */
+	if (!obj->irelative_nonplt)
+		return (0);
+
+	obj->irelative_nonplt = false;
+	relalim = (const Elf_Rela *)((const char *)obj->rela + obj->relasize);
+	for (rela = obj->rela; rela < relalim; rela++) {
+		if (ELF_R_TYPE(rela->r_info) == R_RISCV_IRELATIVE)
+			reloc_iresolve_one(obj, rela, lockstate);
+	}
 	return (0);
 }
 
 int
-reloc_gnu_ifunc(Obj_Entry *obj __unused, int flags __unused,
-   struct Struct_RtldLockState *lockstate __unused)
+reloc_gnu_ifunc(Obj_Entry *obj, int flags,
+   struct Struct_RtldLockState *lockstate)
 {
+	const Elf_Rela *relalim;
+	const Elf_Rela *rela;
+	Elf_Addr *where, target;
+	const Elf_Sym *def;
+	const Obj_Entry *defobj;
 
-	/* XXX not implemented */
+	if (!obj->gnu_ifunc)
+		return (0);
+
+	relalim = (const Elf_Rela *)((const char *)obj->pltrela + obj->pltrelasize);
+	for (rela = obj->pltrela; rela < relalim; rela++) {
+		if (ELF_R_TYPE(rela->r_info) == R_RISCV_JUMP_SLOT) {
+			where = (Elf_Addr *)(obj->relocbase + rela->r_offset);
+			def = find_symdef(ELF_R_SYM(rela->r_info), obj, &defobj,
+			    SYMLOOK_IN_PLT | flags, NULL, lockstate);
+			if (def == NULL)
+				return (-1);
+			if (ELF_ST_TYPE(def->st_info) != STT_GNU_IFUNC)
+				continue;
+
+			lock_release(rtld_bind_lock, lockstate);
+			target = (Elf_Addr)rtld_resolve_ifunc(defobj, def);
+			wlock_acquire(rtld_bind_lock, lockstate);
+			reloc_jmpslot(where, target, defobj, obj,
+			    (const Elf_Rel *)rela);
+		}
+	}
+	obj->gnu_ifunc = false;
 	return (0);
 }
 
@@ -235,7 +299,8 @@ reloc_jmpslot(Elf_Addr *where, Elf_Addr target,
     const Elf_Rel *rel)
 {
 
-	assert(ELF_R_TYPE(rel->r_info) == R_RISCV_JUMP_SLOT);
+	assert(ELF_R_TYPE(rel->r_info) == R_RISCV_JUMP_SLOT ||
+	    ELF_R_TYPE(rel->r_info) == R_RISCV_IRELATIVE);
 
 	if (*where != target && !ld_bind_not)
 		*where = target;
@@ -254,12 +319,8 @@ reloc_non_plt(Obj_Entry *obj, Obj_Entry *obj_rtld, int flags,
 	const Elf_Rela *rela;
 	const Elf_Sym *def;
 	SymCache *cache;
-	Elf_Addr *where;
+	Elf_Addr *where, symval;
 	unsigned long symnum;
-
-	if ((flags & SYMLOOK_IFUNC) != 0)
-		/* XXX not implemented */
-		return (0);
 
 	/*
 	 * The dynamic loader may be called from a thread, we have
@@ -288,8 +349,27 @@ reloc_non_plt(Obj_Entry *obj, Obj_Entry *obj_rtld, int flags,
 			if (def == NULL)
 				return (-1);
 
-			*where = (Elf_Addr)(defobj->relocbase + def->st_value +
-			    rela->r_addend);
+			/*
+			 * If symbol is IFUNC, only perform relocation
+			 * when caller allowed it by passing
+			 * SYMLOOK_IFUNC flag.  Skip the relocations
+			 * otherwise.
+			 */
+			if (ELF_ST_TYPE(def->st_info) == STT_GNU_IFUNC) {
+				if ((flags & SYMLOOK_IFUNC) == 0) {
+					obj->non_plt_gnu_ifunc = true;
+					continue;
+				}
+				symval = (Elf_Addr)rtld_resolve_ifunc(defobj,
+				    def);
+			} else {
+				if ((flags & SYMLOOK_IFUNC) != 0)
+					continue;
+				symval = (Elf_Addr)(defobj->relocbase +
+				    def->st_value);
+			}
+
+			*where = symval + rela->r_addend;
 			break;
 		case R_RISCV_TLS_DTPMOD64:
 			def = find_symdef(symnum, obj, &defobj, flags, cache,
@@ -317,23 +397,6 @@ reloc_non_plt(Obj_Entry *obj, Obj_Entry *obj_rtld, int flags,
 			    lockstate);
 			if (def == NULL)
 				return (-1);
-			/*
-			 * We lazily allocate offsets for static TLS as we
-			 * see the first relocation that references the
-			 * TLS block. This allows us to support (small
-			 * amounts of) static TLS in dynamically loaded
-			 * modules. If we run out of space, we generate an
-			 * error.
-			 */
-			if (!defobj->tls_done) {
-				if (!allocate_tls_offset(
-				    __DECONST(Obj_Entry *, defobj))) {
-					_rtld_error(
-					    "%s: No space available for static "
-					    "Thread Local Storage", obj->path);
-					return (-1);
-				}
-			}
 
 			*where += (Elf_Addr)(def->st_value + rela->r_addend
 			    - TLS_DTV_OFFSET);
@@ -352,7 +415,7 @@ reloc_non_plt(Obj_Entry *obj, Obj_Entry *obj_rtld, int flags,
 			 * modules. If we run out of space, we generate an
 			 * error.
 			 */
-			if (!defobj->tls_done) {
+			if (!defobj->tls_static) {
 				if (!allocate_tls_offset(
 				    __DECONST(Obj_Entry *, defobj))) {
 					_rtld_error(
@@ -368,6 +431,9 @@ reloc_non_plt(Obj_Entry *obj, Obj_Entry *obj_rtld, int flags,
 		case R_RISCV_RELATIVE:
 			*where = (Elf_Addr)(obj->relocbase + rela->r_addend);
 			break;
+		case R_RISCV_IRELATIVE:
+			obj->irelative_nonplt = true;
+			break;
 		default:
 			rtld_printf("%s: Unhandled relocation %lu\n",
 			    obj->path, ELF_R_TYPE(rela->r_info));
@@ -378,10 +444,13 @@ reloc_non_plt(Obj_Entry *obj, Obj_Entry *obj_rtld, int flags,
 	return (0);
 }
 
-void
-ifunc_init(Elf_Auxinfo aux_info[__min_size(AT_COUNT)] __unused)
-{
+unsigned long elf_hwcap;
 
+void
+ifunc_init(Elf_Auxinfo *aux_info[__min_size(AT_COUNT)])
+{
+	if (aux_info[AT_HWCAP] != NULL)
+		elf_hwcap = aux_info[AT_HWCAP]->a_un.a_val;
 }
 
 void
@@ -394,7 +463,7 @@ allocate_initial_tls(Obj_Entry *objs)
 	 * use.
 	 */
 	tls_static_space = tls_last_offset + tls_last_size +
-	    RTLD_STATIC_TLS_EXTRA;
+	    ld_static_tls_extra;
 
 	_tcb_set(allocate_tls(objs, NULL, TLS_TCB_SIZE, TLS_TCB_ALIGN));
 }
@@ -402,11 +471,6 @@ allocate_initial_tls(Obj_Entry *objs)
 void *
 __tls_get_addr(tls_index* ti)
 {
-	uintptr_t **dtvp;
-	void *p;
-
-	dtvp = &_tcb_get()->tcb_dtv;
-	p = tls_get_addr_common(dtvp, ti->ti_module, ti->ti_offset);
-
-	return ((char*)p + TLS_DTV_OFFSET);
+	return (tls_get_addr_common(_tcb_get(), ti->ti_module, ti->ti_offset +
+	    TLS_DTV_OFFSET));
 }

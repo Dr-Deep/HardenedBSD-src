@@ -1,5 +1,5 @@
 #
-# SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+# SPDX-License-Identifier: BSD-2-Clause
 #
 # Copyright (c) 2019 Rob Wing
 #
@@ -24,7 +24,6 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 
 # The code for the following tests was copied from the
 # bectl tests found in src/sbin/bectl/tests, modified as needed.
@@ -175,6 +174,15 @@ libbe_create_body()
 	# the child dataset should exist
 	atf_check -o not-empty \
 		  zfs list "${zpool}/ROOT/relative-snap/usr"
+
+	# test empty BE creation.
+	atf_check $prog "${zpool}/ROOT" \
+		empty \
+		ignored \
+		0
+	# the dataset should exist
+	atf_check -o not-empty \
+		zfs list "${zpool}/ROOT/empty"
 }
 
 libbe_create_cleanup()

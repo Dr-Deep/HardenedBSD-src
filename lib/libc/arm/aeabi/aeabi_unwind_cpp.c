@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (C) 2011 Andrew Turner
  * All rights reserved.
@@ -27,17 +27,14 @@
  *
  */
 
+#include <sys/param.h>
+
 /*
  * Provide an implementation of __aeabi_unwind_cpp_pr{0,1,2}. These are
  * required by libc but are implemented in libgcc_eh.a which we don't link
- * against. The libgcc_eh.a version will be called so we call abort to
+ * against. The libgcc_eh.a version will be called so we trap to
  * check this.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
-#include <stdlib.h>
 
 void __aeabi_unwind_cpp_pr0(void) __hidden;
 void __aeabi_unwind_cpp_pr1(void) __hidden;
@@ -46,18 +43,18 @@ void __aeabi_unwind_cpp_pr2(void) __hidden;
 void
 __aeabi_unwind_cpp_pr0(void)
 {
-	abort();
+	__builtin_trap();
 }
 
 void
 __aeabi_unwind_cpp_pr1(void)
 {
-	abort();
+	__builtin_trap();
 }
 
 void
 __aeabi_unwind_cpp_pr2(void)
 {
-	abort();
+	__builtin_trap();
 }
 

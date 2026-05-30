@@ -15,8 +15,6 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT
  * OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- * $FreeBSD$
  */
 
 #ifndef _RES_DEBUG_H_
@@ -25,7 +23,7 @@
 #ifndef DEBUG
 #   define Dprint(cond, args) /*empty*/
 #   define DprintQ(cond, args, query, size) /*empty*/
-#   define Aerror(statp, file, string, error, address) /*empty*/
+#   define Aerror(statp, file, string, error, address, alen) /*empty*/
 #   define Perror(statp, file, string, error) /*empty*/
 #else
 #   define Dprint(cond, args) if (cond) {fprintf args;} else {}

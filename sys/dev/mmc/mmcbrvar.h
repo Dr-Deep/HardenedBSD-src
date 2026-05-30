@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2006 Bernd Walter.  All rights reserved.
  * Copyright (c) 2006 M. Warner Losh <imp@FreeBSD.org>
@@ -50,8 +50,6 @@
  * herein shall be construed as an obligation by the SD Group, the SD-3C LLC
  * or the SD Card Association to disclose or distribute any technical
  * information, know-how or other confidential information to any third party.
- *
- * $FreeBSD$
  */
 
 #ifndef DEV_MMC_MMCBRVAR_H
@@ -62,6 +60,7 @@
 #include "mmcbr_if.h"
 
 enum mmcbr_device_ivars {
+    MMCBR_IVAR_BUS_TYPE = BUS_IVARS_PRIVATE,
     MMCBR_IVAR_BUS_MODE,
     MMCBR_IVAR_BUS_WIDTH,
     MMCBR_IVAR_CHIP_SELECT,
@@ -112,6 +111,17 @@ mmcbr_get_retune_req(device_t dev)
 	if (__predict_false(BUS_READ_IVAR(device_get_parent(dev), dev,
 	    MMCBR_IVAR_RETUNE_REQ, &v) != 0))
 		return (retune_req_none);
+	return ((int)v);
+}
+
+static int __inline
+mmcbr_get_bus_type(device_t dev)
+{
+	uintptr_t v;
+
+	if (__predict_false(BUS_READ_IVAR(device_get_parent(dev), dev,
+	    MMCBR_IVAR_BUS_TYPE, &v) != 0))
+		return (bus_type_default);
 	return ((int)v);
 }
 

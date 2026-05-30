@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2011 NetApp, Inc.
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -47,6 +45,7 @@
 #include <pthread.h>
 #include <unistd.h>
 
+#include "bhyverun.h"
 #include "mevent.h"
 
 #define TEST_PORT	4321
@@ -141,7 +140,7 @@ echoer(void *param)
 	mev = mevent_add(fd, EVF_READ, echoer_callback, &sync);
 	if (mev == NULL) {
 		printf("Could not allocate echoer event\n");
-		exit(4);
+		exit(BHYVE_EXIT_ERROR);
 	}
 
 	while (!pthread_cond_wait(&sync.e_cond, &sync.e_mt)) {
@@ -199,7 +198,7 @@ acceptor(void *param)
 
 	if ((s = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
 		perror("cannot create socket");
-		exit(4);
+		exit(BHYVE_EXIT_ERROR);
 	}
 
 	sin.sin_len = sizeof(sin);
@@ -209,12 +208,12 @@ acceptor(void *param)
 
 	if (bind(s, (struct sockaddr *)&sin, sizeof(sin)) < 0) {
 		perror("cannot bind socket");
-		exit(4);
+		exit(BHYVE_EXIT_ERROR);
 	}
 
 	if (listen(s, 1) < 0) {
 		perror("cannot listen socket");
-		exit(4);
+		exit(BHYVE_EXIT_ERROR);
 	}
 
 	(void) mevent_add(s, EVF_READ, acceptor_callback, NULL);

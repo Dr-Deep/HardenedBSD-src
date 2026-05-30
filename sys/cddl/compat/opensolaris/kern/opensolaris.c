@@ -22,11 +22,8 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * $FreeBSD$
- *
  */
 
-#include <sys/cdefs.h>
 #include <sys/param.h>
 #include <sys/conf.h>
 #include <sys/cpuvar.h>
@@ -70,7 +67,7 @@ opensolaris_load(void *dummy)
 SYSINIT(opensolaris_register, SI_SUB_OPENSOLARIS, SI_ORDER_FIRST, opensolaris_load, NULL);
 
 static void
-opensolaris_unload(void)
+opensolaris_unload(void *dummy __unused)
 {
 	mutex_destroy(&cpu_lock);
 }

@@ -33,8 +33,6 @@
  * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  *
- * $FreeBSD$
- *
  */
 
 #include <sys/param.h>
@@ -305,8 +303,8 @@ SBP_DEBUG(0)
 	printf("sbp_identify\n");
 END_DEBUG
 
-	if (device_find_child(parent, "sbp", -1) == NULL)
-		BUS_ADD_CHILD(parent, 0, "sbp", -1);
+	if (device_find_child(parent, "sbp", DEVICE_UNIT_ANY) == NULL)
+		BUS_ADD_CHILD(parent, 0, "sbp", DEVICE_UNIT_ANY);
 }
 
 /*
@@ -2837,7 +2835,7 @@ static device_method_t sbp_methods[] = {
 	DEVMETHOD(device_detach,	sbp_detach),
 	DEVMETHOD(device_shutdown,	sbp_shutdown),
 
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t sbp_driver = {

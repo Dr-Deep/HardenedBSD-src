@@ -1,9 +1,7 @@
-# $FreeBSD$
-
 .include <src.opts.mk>
 
-WARNS?= 3
-PACKAGE=runtime
+WARNS?= 6
+PACKAGE=devd
 CONFGROUPS=	CONFS DEVD
 CONFS=	devd.conf
 DEVD=	devmatch.conf
@@ -12,11 +10,55 @@ DEVDDIR=	/etc/devd
 DEVD+=	asus.conf
 .endif
 
+.if ${MK_AUTOFS} != "no"
+CONFGROUPS+=		AUTOFS
+AUTOFSDIR=		${DEVDDIR}
+AUTOFS+=		autofs.conf
+AUTOFSPACKAGE=		autofs
+.endif
+
+CONFGROUPS+=		DHCLIENT
+DHCLIENTDIR=		${DEVDDIR}
+DHCLIENT+=		dhclient.conf
+DHCLIENTPACKAGE=	dhclient
+
+.if ${MACHINE} == "i386" || ${MACHINE} == "amd64" || \
+    ${MACHINE} == "arm64"
+CONFGROUPS+=		POWERPROFILE
+POWERPROFILEDIR=	${DEVDDIR}
+POWERPROFILE+=		power_profile.conf
+POWERPROFILEPACKAGE=	acpi
+.endif
+
+CONFGROUPS+=		CONSOLE
+CONSOLEDIR=		${DEVDDIR}
+CONSOLE+=		moused.conf syscons.conf
+CONSOLEPACKAGE=		console-tools
+
+.if ${MK_BLUETOOTH} != "no"
+CONFGROUPS+=		BLUETOOTH
+BLUETOOTHDIR=		${DEVDDIR}
+BLUETOOTH+=		bluetooth.conf
+BLUETOOTHPACKAGE=	bluetooth
+.endif
+
 .if ${MK_HYPERV} != "no"
 CONFGROUPS+=	HYPERV
 HYPERVDIR=${DEVDDIR}
 HYPERV+=	hyperv.conf
 HYPERVPACKAGE=	hyperv-tools
+.endif
+
+CONFGROUPS+=		NVME
+NVMEDIR=		${DEVDDIR}
+NVME+=			nvmf.conf
+NVMEPACKAGE=		nvme-tools
+
+.if ${MK_SOUND} != "no"
+CONFGROUPS+=		SND
+SNDDIR=			${DEVDDIR}
+SND=			snd.conf
+SNDPACKAGE=		sound
 .endif
 
 .if ${MK_USB} != "no"
@@ -34,10 +76,6 @@ DEVD+=	zfs.conf
 PROG_CXX=devd
 SRCS=	devd.cc token.l parse.y y.tab.h
 MAN=	devd.8 devd.conf.5
-
-.if ${MK_DEVD_PIE} == "no"
-NO_SHARED?=YES
-.endif
 
 LIBADD=	util
 

@@ -1,5 +1,4 @@
 
-/* @(#)e_fmod.c 1.3 95/01/18 */
 /*
  * ====================================================
  * Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
@@ -11,11 +10,8 @@
  * ====================================================
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /* 
- * __ieee754_fmod(x,y)
+ * fmod(x,y)
  * Return x mod y in exact arithmetic
  * Method: shift and subtract
  */
@@ -28,16 +24,16 @@ __FBSDID("$FreeBSD$");
 static const double one = 1.0, Zero[] = {0.0, -0.0,};
 
 double
-__ieee754_fmod(double x, double y)
+fmod(double x, double y)
 {
-	int32_t n,hx,hy,hz,ix,iy,sx,i;
-	u_int32_t lx,ly,lz;
+	int32_t hx, hy, hz, ix, iy, n, sx;
+	u_int32_t lx, ly, lz;
 
 	EXTRACT_WORDS(hx,lx,x);
 	EXTRACT_WORDS(hy,ly,y);
 	sx = hx&0x80000000;		/* sign of x */
-	hx ^=sx;		/* |x| */
-	hy &= 0x7fffffff;	/* |y| */
+	hx ^= sx;			/* |x| */
+	hy &= 0x7fffffff;		/* |y| */
 
     /* purge off exception values */
 	if((hy|ly)==0||(hx>=0x7ff00000)||	/* y=0,or x not finite */
@@ -50,22 +46,16 @@ __ieee754_fmod(double x, double y)
 	}
 
     /* determine ix = ilogb(x) */
-	if(hx<0x00100000) {	/* subnormal x */
-	    if(hx==0) {
-		for (ix = -1043, i=lx; i>0; i<<=1) ix -=1;
-	    } else {
-		for (ix = -1022,i=(hx<<11); i>0; i<<=1) ix -=1;
-	    }
-	} else ix = (hx>>20)-1023;
+	if(hx<0x00100000)
+	    ix = subnormal_ilogb(hx, lx);
+	else
+	    ix = (hx>>20)-1023;
 
     /* determine iy = ilogb(y) */
-	if(hy<0x00100000) {	/* subnormal y */
-	    if(hy==0) {
-		for (iy = -1043, i=ly; i>0; i<<=1) iy -=1;
-	    } else {
-		for (iy = -1022,i=(hy<<11); i>0; i<<=1) iy -=1;
-	    }
-	} else iy = (hy>>20)-1023;
+	if(hy<0x00100000)
+	    iy = subnormal_ilogb(hy, ly);
+	else
+	    iy = (hy>>20)-1023;
 
     /* set up {hx,lx}, {hy,ly} and align y to x */
 	if(ix >= -1022) 

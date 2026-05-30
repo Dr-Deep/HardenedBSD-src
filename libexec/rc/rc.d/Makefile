@@ -1,11 +1,10 @@
-# $FreeBSD$
-
 .include <src.opts.mk>
 
 CONFDIR=	/etc/rc.d
 CONFGROUPS=	CONFS
 CONFSPACKAGE=	rc
 
+# Files which are always installed and go in the -rc package.
 CONFS=	DAEMON \
 	FILESYSTEMS \
 	LOGIN \
@@ -13,91 +12,55 @@ CONFS=	DAEMON \
 	SERVERS \
 	adjkerntz \
 	bgfsck \
-	${_blacklistd} \
 	bridge \
 	cfumass \
 	cleanvar \
 	cleartmp \
-	cron \
-	ctld \
 	ddb \
 	defaultroute \
-	devd \
 	devfs \
-	devmatch \
-	dhclient \
 	dmesg \
 	dumpon \
 	fsck \
-	gbde \
-	geli \
-	geli2 \
-	ggated \
-	gptboot \
 	growfs \
+	growfs_fstab \
 	hostid \
 	hostid_save \
 	hostname \
 	iovctl \
 	ip6addrctl \
 	ipsec \
-	${_kadmind} \
-	${_kdc} \
-	${_kfd} \
 	kld \
 	kldxref \
-	${_kpasswdd} \
 	ldconfig \
 	linux \
 	local \
 	localpkg \
-	lockd \
-	mixer \
 	motd \
 	mountcritlocal \
 	mountcritremote \
 	mountlate \
 	mdconfig \
 	mdconfig2 \
-	mountd \
 	msgs \
-	natd \
 	netif \
 	netoptions \
 	netwait \
-	newsyslog \
-	nfsclient \
-	nfscbd \
-	nfsd \
-	nfsuserd \
-	nisdomain \
-	${_nscd} \
-	ntpdate \
-	${_opensm} \
+	noshutdown \
 	os-release \
-	pf \
-	pflog \
-	pfsync \
-	powerd \
-	ppp \
-	pppoed \
 	pwcheck \
 	quota \
 	random \
 	rarpd \
 	rctl \
-	resolv \
 	root \
-	route6d \
 	routing \
 	rpcbind \
 	rtadvd \
 	rtsold \
-	rwho \
 	savecore \
 	securelevel \
 	serial \
-	statd \
 	static_arp \
 	static_ndp \
 	stf \
@@ -105,234 +68,320 @@ CONFS=	DAEMON \
 	swaplate \
 	sysctl \
 	sysctl_lastload \
-	syslogd \
 	sysvipc \
 	tmp \
 	ugidfw \
-	${_utx} \
 	var \
+	var_run \
 	watchdogd
 
-.if ${MK_NIS} != "no"
-CONFS+=	ypbind \
-	ypldap \
-	yppasswdd \
-	ypserv \
-	ypset \
-	ypupdated \
-	ypxfrd
-.endif
+# Groups for files which don't go in -rc, or which depend on src.conf knobs.
 
+.if ${MK_ACCT} != "no" || ${MK_UTMPX} != "no"
+CONFGROUPS+=			ACCT
+ACCTPACKAGE=			acct
 .if ${MK_ACCT} != "no"
-CONFGROUPS+=	ACCT
-ACCT+=		accounting
-ACCTPACKAGE=	acct
+ACCT=		accounting
+.endif
+.if ${MK_UTMPX} != "no"
+ACCT+=		utx
+.endif
 .endif
 
-.if ${MK_ACPI} != "no"
-CONFGROUPS+=	ACPI
+.if ${MACHINE} == "i386" || ${MACHINE} == "amd64" || \
+    ${MACHINE} == "arm64"
+CONFGROUPS.${MK_ACPI}+=		ACPI
+ACPIPACKAGE=			acpi
 ACPI=		power_profile
-ACPIPACKAGE=	acpi
 .endif
 
-.if ${MK_APM} != "no"
-CONFGROUPS+=	APM
-APM+=		apm
 .if ${MACHINE} == "i386"
-APM+=		apmd
-.endif
-APMPACKAGE=	apm
-.endif
-
-.if ${MK_AUDIT} != "no"
-CONFGROUPS+=	AUDIT
-AUDIT+=		auditd
-AUDIT+=		auditdistd
-AUDITPACKAGE=	rc
+CONFGROUPS.${MK_APM}+=		APM
+APMPACKAGE=			apm
+APM=		apm \
+		apmd
 .endif
 
-.if ${MK_AUTOFS} != "no"
-CONFS+=		automount
-CONFS+=		automountd
-CONFS+=		autounmountd
-.endif
+CONFGROUPS.${MK_AUDIT}+=	AUDIT
+AUDITPACKAGE=			audit
+AUDIT=		auditd \
+		auditdistd
 
-.if ${MK_BLACKLIST} != "no"
-_blacklistd+=	blacklistd
-.endif
+CONFGROUPS.${MK_AUTOFS}+=	AUTOFS
+AUTOFSPACKAGE=			autofs
+AUTOFS=		automount \
+		automountd \
+		autounmountd
 
-.if ${MK_BLUETOOTH} != "no"
-CONFGROUPS+=	BLUETOOTH
-BLUETOOTH+=	bluetooth \
+CONFGROUPS.${MK_BLOCKLIST}+=	BLOCKLIST
+BLOCKLISTPACKAGE=		blocklist
+BLOCKLIST=	blacklistd \
+		blocklistd
+
+CONFGROUPS.${MK_BLUETOOTH}+=	BLUETOOTH
+BLUETOOTHPACKAGE=		bluetooth
+BLUETOOTH=	bluetooth \
 		bthidd \
 		hcsecd \
 		rfcomm_pppd_server \
 		sdpd \
 		ubthidhci
-BLUETOOTHPACKAGE=	bluetooth
-.endif
 
-.if ${MK_BOOTPARAMD} != "no"
-CONFS+=		bootparams
-.endif
+CONFGROUPS.${MK_BOOTPARAMD}+=	BOOTPARAMD
+BOOTPARAMD=	bootparams
 
-.if ${MK_BSNMP} != "no"
-CONFGROUPS+=	BSNMP
-BSNMP+=		bsnmpd
-BSNMPPACKAGE=	bsnmp
-.endif
+CONFGROUPS.${MK_BSNMP}+=	BSNMP
+BSNMPPACKAGE=			bsnmp
+BSNMP=		bsnmpd
 
-.if ${MK_CCD} != "no"
-CONFS+=		ccd
-.endif
+CONFGROUPS.${MK_CCD}+=		CCD
+CCDPACKAGE=			ccdconfig
+CCD=		ccd
 
-.if ${MK_FTP} != "no"
-CONFS+=		ftpd
-.endif
+CONFGROUPS+=			DEVD
+DEVDPACKAGE=			devd
+DEVD=		devd
 
-.if ${MK_GSSAPI} != "no"
-CONFGROUPS+=	GSSD
+CONFGROUPS+=			DEVMATCH
+DEVMATCHPACKAGE=		devmatch
+DEVMATCH=	devmatch
+
+CONFGROUPS+=			DHCLIENT
+DHCLIENTPACKAGE=		dhclient
+DHCLIENT=	dhclient
+
+CONFGROUPS+=			CRON
+CRONPACKAGE=			cron
+CRON=		cron
+
+CONFGROUPS+=			CTL
+CTLPACKAGE=			ctl
+CTL=		ctld
+
+CONFGROUPS+=			GEOM
+GEOMPACKAGE=			geom
+GEOM=		geli \
+		geli2 \
+		gptboot
+
+CONFGROUPS+=			GGATED
+GGATEDPACKAGE=			ggate
+GGATED=		ggated
+
+CONFGROUPS.${MK_KERBEROS_SUPPORT}+=GSSD
+GSSDPACKAGE=			gssd
 GSSD=		gssd
-GSSDPACKAGE=	kerberos
-.endif
 
-.if ${MK_HAST} != "no"
-CONFGROUPS+=	HAST
+CONFGROUPS.${MK_HAST}+=		HAST
+HASTPACKAGE=			hast
 HAST=		hastd
-HASTPACKAGE=	hast
-.endif
 
-.if ${MK_INETD} != "no"
-CONFS+=		inetd
-.endif
+CONFGROUPS.${MK_INETD}+=	INETD
+INETDPACKAGE=			inetd
+INETD=		inetd
 
-.if ${MK_IPFILTER} != "no"
-CONFS+=	ipfilter \
-	ipfs \
-	ipmon \
-	ipnat \
-	ippool
-.endif
+CONFGROUPS.${MK_IPFILTER}+=	IPF
+IPFPACKAGE=			ipf
+IPF=		ipfilter \
+		ipfs \
+		ipmon \
+		ipnat \
+		ippool
 
-.if ${MK_IPFW} != "no"
-CONFS+=		ipfw
+CONFGROUPS.${MK_IPFW}+=		IPFW
+IPFWPACKAGE=			ipfw
+IPFW=		ipfw \
+		dnctl
 .if ${MK_NETGRAPH} != "no"
-CONFS+=		ipfw_netflow
-.endif
-.endif
-
-.if ${MK_ISCSI} != "no"
-CONFS+=		iscsictl
-CONFS+=		iscsid
+IPFW+=		ipfw_netflow
 .endif
 
-.if ${MK_JAIL} != "no"
-CONFGROUPS+=	JAIL
-JAIL+=		jail
-JAILPACKAGE=	jail
-.endif
+CONFGROUPS.${MK_ISCSI}+=	ISCSI
+ISCSIPACKAGE=			iscsi
+ISCSI=		iscsictl \
+		iscsid
 
-.if ${MK_LEGACY_CONSOLE} != "no"
-CONFS+=		moused
-CONFS+=		syscons
-.endif
+# natd is only built when ipfw is built
+CONFGROUPS.${MK_IPFW}+=		NATD
+NATDPACKAGE=			natd
+NATD=		natd
 
-.if ${MK_LPR} != "no"
-CONFS+=		lpd
-.endif
+CONFGROUPS.${MK_JAIL}+=		JAIL
+JAILPACKAGE=			jail
+JAIL=		jail
+
+CONFGROUPS.${MK_LPR}+=		LP
+LPPACKAGE=			lp
+LP=		lpd
+
+CONFGROUPS+=			NEWSYSLOG
+NEWSYSLOGPACKAGE=		newsyslog
+NEWSYSLOG=	newsyslog
+
+CONFGROUPS+=			NFS
+NFSPACKAGE=			nfs
+NFS=		lockd \
+		mountd \
+		nfscbd \
+		nfsclient \
+		nfsd \
+		nfsuserd \
+		statd
+
+CONFGROUPS.${MK_NIS}+=		NIS
+NISPACKAGE=			yp
+NIS=		ypbind \
+		ypldap \
+		yppasswdd \
+		ypserv \
+		ypset \
+		ypupdated \
+		ypxfrd \
+		nisdomain
+
+CONFGROUPS.${MK_NS_CACHING}+=	NSCD
+NSCD=		nscd
+
+CONFGROUPS.${MK_NTP}+=		NTP
+NTPPACKAGE=			ntp
+NTP=		ntpd \
+		ntpdate
+
+CONFGROUPS.${MK_NUAGEINIT}+=	NUAGEINIT
+NUAGEINITPACKAGE=		nuageinit
+NUAGEINIT=	nuageinit \
+		nuageinit_post_net \
+		nuageinit_user_data_script
+
+CONFGROUPS.${MK_OFED_EXTRA}+=	OPENSM
+OPENSM=	opensm
+
+CONFGROUPS.${MK_PF}+=		PF
+PFPACKAGE=			pf
+PF=		pf \
+		pflog \
+		pfsync \
+		ftp-proxy
+
+CONFGROUPS+=			POWERD
+POWERDPACKAGE=			powerd
+POWERD=		powerd
+
+CONFGROUPS.${MK_PPP}+=		PPP
+PPPPACKAGE=			ppp
+PPP=		ppp
+
+CONFGROUPS+=			PPPOED
+PPPOEDPACKAGE=			ppp
+PPPOED=		pppoed
+
+CONFGROUPS+=			SYSLOGD
+SYSLOGDPACKAGE=			syslogd
+SYSLOGD=	syslogd
+
+CONFGROUPS+=			RCMDS
+RCMDSPACKAGE=			rcmds
+RCMDS=		rwho
+
+CONFGROUPS+=			RESOLVCONF
+RESOLVCONFPACKAGE=		resolvconf
+RESOLVCONF=	resolv
+
+CONFGROUPS.${MK_SENDMAIL}+=	SENDMAIL
+SENDMAILPACKAGE=		sendmail
+SENDMAIL=	sendmail
+
+CONFGROUPS.${MK_OPENSSH}+=	SSH
+SSHPACKAGE=			ssh
+SSH=		sshd
+
+CONFGROUPS.${MK_UNBOUND}+=	UNBOUND
+UNBOUNDPACKAGE=			local-unbound
+UNBOUND=	local_unbound
+
+CONFGROUPS.${MK_VI}+=		VI
+VIPACKAGE=			vi
+VI=		virecover
+
+CONFGROUPS.${MK_SOUND}+=	SOUND
+SOUNDPACKAGE=			sound
+SOUND=		mixer \
+		virtual_oss
+
+CONFGROUPS.${MK_WIRELESS}+=	HOSTAPD
+HOSTAPDPACKAGE=			hostapd
+HOSTAPD=	hostapd
+
+CONFGROUPS.${MK_WIRELESS}+=	WPA
+WPAPACKAGE=			wpa
+WPA=		wpa_supplicant
+
+CONFGROUPS.${MK_ZFS}+=		ZFS
+ZFSPACKAGE=			zfs
+ZFS=		zfs \
+		zfsbe \
+		zfsd \
+		zfskeys \
+		zpool \
+		zpoolreguid \
+		zpoolupgrade \
+		zvol
+
+CONFGROUPS.${MK_LEGACY_CONSOLE}+=SYSCONS
+SYSCONSPACKAGE=			console-tools
+SYSCONS=	moused \
+		msconvd \
+		syscons
 
 .if ${MK_KERBEROS} != "no"
-CONFS+=		ipropd_master
-CONFS+=		ipropd_slave
-_kadmind=	kadmind
-_kdc=		kdc
-_kfd=		kfd
-_kpasswdd=	kpasswdd
+.if ${MK_MITKRB5} == "no"
 
-DIRS+=	VAR_HEMIDAL
+# Heimdal rc scripts
+CONFGROUPS+=	HEIMDAL
+HEIMDAL=	ipropd_master \
+		ipropd_slave \
+		kadmind \
+		kdc \
+		kfd \
+		kpasswdd
+HEIMDALPACKAGE=	kerberos
+
+DIRS+=		VAR_HEMIDAL
 VAR_HEMIDAL=	/var/heimdal
 VAR_HEMIDAL_MODE=	700
+
+.else	# ${MK_MITKRB5} != "no"
+
+# MIT KRB5 rc scripts
+CONFGROUPS+=	KRB5
+KRB5=		kadmind \
+		kdc
+KRB5PACKAGE=	kerberos-kdc
+
+.endif	# ${MK_MITKRB5}
+.endif	# ${MK_KERBEROS}
+
+.if ${MK_OPENSSL} != "no" && ${MK_OPENSSL_KTLS} != "no"
+CONFGROUPS+=			KTLS
+KTLS=	tlsclntd \
+	tlsservd
 .endif
 
-.if ${MK_MAIL} != "no"
-CONFS+=		othermta
-.endif
+.if ${MK_INET6} != "no" || ${MK_ROUTED} != "no"
+CONFGROUPS+=	RIP
+RIPPACKAGE=	rip
 
-.if ${MK_NS_CACHING} != "no"
-_nscd=		nscd
+.if ${MK_INET6} != "no"
+RIP+=		route6d
 .endif
-
-.if ${MK_NTP} != "no"
-CONFS+=		ntpd
-.endif
-
-.if ${MK_OFED} != "no"
-_opensm=	opensm
-.endif
-
-.if ${MK_OPENSSL} != "no"
-CONFS+=		keyserv
-.if ${MK_OPENSSL_KTLS} != "no"
-CONFS+=		tlsclntd \
-		tlsservd
-.endif
-.endif
-
-.if ${MK_OPENSSH} != "no"
-CONFGROUPS+=	SSH
-SSH=		sshd
-SSHPACKAGE=	ssh
-.endif
-
-.if ${MK_PF} != "no"
-CONFS+=		ftp-proxy
-.endif
-
 .if ${MK_ROUTED} != "no"
-CONFS+=		routed
+RIP+=		routed
+.endif
 .endif
 
-.if ${MK_SENDMAIL} != "no"
-CONFGROUPS+=	SMRCD
-SMRCD=		sendmail
-SMRCDPACKAGE=	sendmail
-.endif
-
-.if ${MK_UNBOUND} != "no"
-CONFGROUPS+=	UNBOUND
-UNBOUND+=	local_unbound
-UNBOUNDPACKAGE=	unbound
-.endif
-
-.if ${MK_UTMPX} != "no"
-_utx=		utx
-.endif
-
-.if ${MK_VI} != "no"
-CONFGROUPS+=	VI
-VI+=		virecover
-VIPACKAGE=	vi
-.endif
-
-.if ${MK_WIRELESS} != "no"
-CONFS+=		hostapd
-CONFS+=		wpa_supplicant
-.endif
-
-.if ${MK_ZFS} != "no"
-CONFGROUPS+=	ZFS
-ZFS+=		zfs
-ZFS+=		zfsbe
-ZFS+=		zfsd
-ZFS+=		zfskeys
-ZFS+=		zpool
-ZFS+=		zpoolreguid
-ZFS+=		zvol
-ZFSPACKAGE=	rc
-.endif
-
-.for fg in ${CONFGROUPS}
+.for fg in ${CONFGROUPS} ${CONFGROUPS.yes}
 ${fg}MODE?=	${BINMODE}
+${fg}PACKAGE?=	rc
 .endfor
 
 .include <bsd.prog.mk>

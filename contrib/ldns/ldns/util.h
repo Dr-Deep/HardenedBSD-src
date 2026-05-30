@@ -27,8 +27,8 @@ extern "C" {
 #define dprintf(X,Y) fprintf(stderr, (X), (Y))
 /* #define	dprintf(X, Y)  */
 
-#define LDNS_VERSION "1.7.0"
-#define LDNS_REVISION ((1<<16)|(7<<8)|(0))
+#define LDNS_VERSION "1.9.0"
+#define LDNS_REVISION ((1<<16)|(9<<8)|(0))
 
 /**
  * splint static inline workaround
@@ -72,8 +72,10 @@ ldns_read_uint16(const void *src)
 #ifdef ALLOW_UNALIGNED_ACCESSES
 	return ntohs(*(const uint16_t *) src);
 #else
+# ifndef __clang_analyzer__
 	const uint8_t *p = (const uint8_t *) src;
 	return ((uint16_t) p[0] << 8) | (uint16_t) p[1];
+# endif
 #endif
 }
 
@@ -88,6 +90,26 @@ ldns_read_uint32(const void *src)
 		| ((uint32_t) p[1] << 16)
 		| ((uint32_t) p[2] << 8)
 		|  (uint32_t) p[3]);
+#endif
+}
+
+INLINE uint64_t
+ldns_read_uint64(const void *src)
+{
+#ifdef ALLOW_UNALIGNED_ACCESSES
+	const uint32_t *p = (const uint32_t *) src;
+	return (  ((uint64_t) ntohl(src[0]) << 32)
+		|  (uint64_t) ntohl(src[1]));
+#else
+	const uint8_t *p = (const uint8_t *) src;
+	return (  ((uint64_t) p[0] << 56)
+		| ((uint64_t) p[1] << 48)
+		| ((uint64_t) p[2] << 40)
+		| ((uint64_t) p[3] << 32)
+		| ((uint64_t) p[4] << 24)
+		| ((uint64_t) p[5] << 16)
+		| ((uint64_t) p[6] << 8)
+		|  (uint64_t) p[7]);
 #endif
 }
 
@@ -274,19 +296,22 @@ time_t mktime_from_utc(const struct tm *tm);
 
 /**
  * The function interprets time as the number of seconds since epoch
- * with respect to now using serial arithmitics (rfc1982).
+ * with respect to now using serial arithmetics (rfc1982).
  * That number of seconds is then converted to broken-out time information.
  * This is especially useful when converting the inception and expiration
  * fields of RRSIG records.
  *
  * \param[in] time number of seconds since epoch (midnight, January 1st, 1970)
- *            to be intepreted as a serial arithmitics number relative to now.
+ *            to be interpreted as a serial arithmetics number relative to now.
  * \param[in] now number of seconds since epoch (midnight, January 1st, 1970)
  *            to which the time value is compared to determine the final value.
  * \param[out] result the struct with the broken-out time information
  * \return result on success or NULL on error
  */
-struct tm * ldns_serial_arithmitics_gmtime_r(int32_t time, time_t now, struct tm *result);
+struct tm * ldns_serial_arithmetics_gmtime_r(int32_t time, time_t now, struct tm *result);
+
+/* previously used wrong spelling */
+#define ldns_serial_arithmitics_gmtime_r ldns_serial_arithmetics_gmtime_r
  
 /**
  * Seed the random function.

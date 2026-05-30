@@ -31,14 +31,8 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- *	@(#)null_vnops.c	8.6 (Berkeley) 5/27/95
- *
  * Ancestors:
- *	@(#)lofs_vnops.c	1.2 (Berkeley) 6/18/92
  *	...and...
- *	@(#)null_vnodeops.c 1.20 92/07/07 UCLA Ficus project
- *
- * $FreeBSD$
  */
 
 /*
@@ -180,6 +174,8 @@
 #include <sys/mount.h>
 #include <sys/mutex.h>
 #include <sys/namei.h>
+#include <sys/proc.h>
+#include <sys/smr.h>
 #include <sys/sysctl.h>
 #include <sys/vnode.h>
 #include <sys/stat.h>
@@ -191,9 +187,31 @@
 #include <vm/vm_object.h>
 #include <vm/vnode_pager.h>
 
+VFS_SMR_DECLARE;
+
 static int null_bug_bypass = 0;   /* for debugging: enables bypass printf'ing */
 SYSCTL_INT(_debug, OID_AUTO, nullfs_bug_bypass, CTLFLAG_RW, 
 	&null_bug_bypass, 0, "");
+
+/*
+ * Synchronize inotify flags with the lower vnode:
+ * - If the upper vnode has the flag set and the lower does not, then the lower
+ *   vnode is unwatched and the upper vnode does not need to go through
+ *   VOP_INOTIFY.
+ * - If the lower vnode is watched, then the upper vnode should go through
+ *   VOP_INOTIFY, so copy the flag up.
+ */
+static void
+null_copy_inotify(struct vnode *vp, struct vnode *lvp, short flag)
+{
+	if ((vn_irflag_read(vp) & flag) != 0) {
+		if (__predict_false((vn_irflag_read(lvp) & flag) == 0))
+			vn_irflag_unset(vp, flag);
+	} else if ((vn_irflag_read(lvp) & flag) != 0) {
+		if (__predict_false((vn_irflag_read(vp) & flag) == 0))
+			vn_irflag_set(vp, flag);
+	}
+}
 
 /*
  * This is the 10-Apr-92 bypass routine.
@@ -259,9 +277,9 @@ null_bypass(struct vop_generic_args *ap)
 		 * are of our type.  Check for and don't map any
 		 * that aren't.  (We must always map first vp or vclean fails.)
 		 */
-		if (i != 0 && (*this_vp_p == NULLVP ||
-		    (*this_vp_p)->v_op != &null_vnodeops)) {
-			old_vps[i] = NULLVP;
+		if (i != 0 && (*this_vp_p == NULL ||
+		    !null_is_nullfs_vnode(*this_vp_p))) {
+			old_vps[i] = NULL;
 		} else {
 			old_vps[i] = *this_vp_p;
 			*(vps_p[i]) = NULLVPTOLOWERVP(*this_vp_p);
@@ -292,7 +310,7 @@ null_bypass(struct vop_generic_args *ap)
 	 * with the modified argument structure.
 	 */
 	if (vps_p[0] != NULL && *vps_p[0] != NULL) {
-		error = VCALL(ap);
+		error = ap->a_desc->vdesc_call(ap);
 	} else {
 		printf("null_bypass: no map for %s\n", descp->vdesc_name);
 		error = EINVAL;
@@ -311,7 +329,10 @@ null_bypass(struct vop_generic_args *ap)
 			lvp = *(vps_p[i]);
 
 			/*
-			 * Get rid of the transient hold on lvp.
+			 * Get rid of the transient hold on lvp.  Copy inotify
+			 * flags up in case something is watching the lower
+			 * layer.
+			 *
 			 * If lowervp was unlocked during VOP
 			 * operation, nullfs upper vnode could have
 			 * been reclaimed, which changes its v_vnlock
@@ -319,7 +340,11 @@ null_bypass(struct vop_generic_args *ap)
 			 * must move lock ownership from lower to
 			 * upper (reclaimed) vnode.
 			 */
-			if (lvp != NULLVP) {
+			if (lvp != NULL) {
+				null_copy_inotify(old_vps[i], lvp,
+				    VIRF_INOTIFY);
+				null_copy_inotify(old_vps[i], lvp,
+				    VIRF_INOTIFY_PARENT);
 				if (VOP_ISLOCKED(lvp) == LK_EXCLUSIVE &&
 				    old_vps[i]->v_vnlock != lvp->v_vnlock) {
 					VOP_UNLOCK(lvp);
@@ -391,7 +416,7 @@ null_lookup(struct vop_lookup_args *ap)
 {
 	struct componentname *cnp = ap->a_cnp;
 	struct vnode *dvp = ap->a_dvp;
-	int flags = cnp->cn_flags;
+	uint64_t flags = cnp->cn_flags;
 	struct vnode *vp, *ldvp, *lvp;
 	struct mount *mp;
 	int error;
@@ -409,17 +434,25 @@ null_lookup(struct vop_lookup_args *ap)
 
 	/*
 	 * Renames in the lower mounts might create an inconsistent
-	 * configuration where lower vnode is moved out of the
-	 * directory tree remounted by our null mount.  Do not try to
-	 * handle it fancy, just avoid VOP_LOOKUP() with DOTDOT name
-	 * which cannot be handled by VOP, at least passing over lower
-	 * root.
+	 * configuration where lower vnode is moved out of the directory tree
+	 * remounted by our null mount.
+	 *
+	 * Do not try to handle it fancy, just avoid VOP_LOOKUP() with DOTDOT
+	 * name which cannot be handled by the VOP.
 	 */
-	if ((ldvp->v_vflag & VV_ROOT) != 0 && (flags & ISDOTDOT) != 0) {
-		KASSERT((dvp->v_vflag & VV_ROOT) == 0,
-		    ("ldvp %p fl %#x dvp %p fl %#x flags %#x",
-		    ldvp, ldvp->v_vflag, dvp, dvp->v_vflag, flags));
-		return (ENOENT);
+	if ((flags & ISDOTDOT) != 0) {
+		struct nameidata *ndp;
+
+		if ((ldvp->v_vflag & VV_ROOT) != 0) {
+			KASSERT((dvp->v_vflag & VV_ROOT) == 0,
+			    ("ldvp %p fl %#x dvp %p fl %#x flags %#jx",
+			    ldvp, ldvp->v_vflag, dvp, dvp->v_vflag,
+			    (uintmax_t)flags));
+			return (ENOENT);
+		}
+		ndp = vfs_lookup_nameidata(cnp);
+		if (ndp != NULL && vfs_lookup_isroot(ndp, ldvp))
+			return (ENOENT);
 	}
 
 	/*
@@ -465,7 +498,7 @@ null_lookup(struct vop_lookup_args *ap)
 	if ((error == 0 || error == EJUSTRETURN) && lvp != NULL) {
 		if (ldvp == lvp) {
 			*ap->a_vpp = dvp;
-			VREF(dvp);
+			vref(dvp);
 			vrele(lvp);
 		} else {
 			error = null_nodeget(mp, lvp, &vp);
@@ -534,7 +567,7 @@ null_setattr(struct vop_setattr_args *ap)
 		}
 	}
 
-	return (null_bypass((struct vop_generic_args *)ap));
+	return (null_bypass(&ap->a_gen));
 }
 
 /*
@@ -545,7 +578,7 @@ null_stat(struct vop_stat_args *ap)
 {
 	int error;
 
-	if ((error = null_bypass((struct vop_generic_args *)ap)) != 0)
+	if ((error = null_bypass(&ap->a_gen)) != 0)
 		return (error);
 
 	ap->a_sb->st_dev = ap->a_vp->v_mount->mnt_stat.f_fsid.val[0];
@@ -557,7 +590,7 @@ null_getattr(struct vop_getattr_args *ap)
 {
 	int error;
 
-	if ((error = null_bypass((struct vop_generic_args *)ap)) != 0)
+	if ((error = null_bypass(&ap->a_gen)) != 0)
 		return (error);
 
 	ap->a_vap->va_fsid = ap->a_vp->v_mount->mnt_stat.f_fsid.val[0];
@@ -590,7 +623,7 @@ null_access(struct vop_access_args *ap)
 			break;
 		}
 	}
-	return (null_bypass((struct vop_generic_args *)ap));
+	return (null_bypass(&ap->a_gen));
 }
 
 static int
@@ -616,7 +649,7 @@ null_accessx(struct vop_accessx_args *ap)
 			break;
 		}
 	}
-	return (null_bypass((struct vop_generic_args *)ap));
+	return (null_bypass(&ap->a_gen));
 }
 
 /*
@@ -636,7 +669,7 @@ null_remove(struct vop_remove_args *ap)
 	vp = ap->a_vp;
 	if (vrefcnt(vp) > 1) {
 		lvp = NULLVPTOLOWERVP(vp);
-		VREF(lvp);
+		vref(lvp);
 		vreleit = 1;
 	} else
 		vreleit = 0;
@@ -708,7 +741,8 @@ null_rename(struct vop_rename_args *ap)
 		ltvp = NULL;
 	}
 
-	error = VOP_RENAME(lfdvp, lfvp, ap->a_fcnp, ltdvp, ltvp, ap->a_tcnp);
+	error = VOP_RENAME(lfdvp, lfvp, ap->a_fcnp, ltdvp, ltvp, ap->a_tcnp,
+	    ap->a_flags);
 	vrele(fdvp);
 	vrele(fvp);
 	vrele(tdvp);
@@ -739,83 +773,111 @@ null_rmdir(struct vop_rmdir_args *ap)
 }
 
 /*
- * We need to process our own vnode lock and then clear the
- * interlock flag as it applies only to our vnode, not the
- * vnodes below us on the stack.
+ * We need to process our own vnode lock and then clear the interlock flag as
+ * it applies only to our vnode, not the vnodes below us on the stack.
+ *
+ * We have to hold the vnode here to solve a potential reclaim race.  If we're
+ * forcibly vgone'd while we still have refs, a thread could be sleeping inside
+ * the lowervp's vop_lock routine.  When we vgone we will drop our last ref to
+ * the lowervp, which would allow it to be reclaimed.  The lowervp could then
+ * be recycled, in which case it is not legal to be sleeping in its VOP.  We
+ * prevent it from being recycled by holding the vnode here.
  */
+static struct vnode *
+null_lock_prep_with_smr(struct vop_lock1_args *ap)
+{
+	struct null_node *nn;
+	struct vnode *lvp;
+
+	lvp = NULL;
+
+	vfs_smr_enter();
+
+	nn = VTONULL_SMR(ap->a_vp);
+	if (__predict_true(nn != NULL)) {
+		lvp = nn->null_lowervp;
+		if (lvp != NULL && !vhold_smr(lvp))
+			lvp = NULL;
+	}
+
+	vfs_smr_exit();
+	return (lvp);
+}
+
+static struct vnode *
+null_lock_prep_with_interlock(struct vop_lock1_args *ap)
+{
+	struct null_node *nn;
+	struct vnode *lvp;
+
+	ASSERT_VI_LOCKED(ap->a_vp, __func__);
+
+	ap->a_flags &= ~LK_INTERLOCK;
+
+	lvp = NULL;
+
+	nn = VTONULL(ap->a_vp);
+	if (__predict_true(nn != NULL)) {
+		lvp = nn->null_lowervp;
+		if (lvp != NULL)
+			vholdnz(lvp);
+	}
+	VI_UNLOCK(ap->a_vp);
+	return (lvp);
+}
+
 static int
 null_lock(struct vop_lock1_args *ap)
 {
-	struct vnode *vp = ap->a_vp;
-	int flags;
-	struct null_node *nn;
 	struct vnode *lvp;
-	int error;
+	int error, flags;
 
-	if ((ap->a_flags & LK_INTERLOCK) == 0)
-		VI_LOCK(vp);
-	else
-		ap->a_flags &= ~LK_INTERLOCK;
-	flags = ap->a_flags;
-	nn = VTONULL(vp);
-	/*
-	 * If we're still active we must ask the lower layer to
-	 * lock as ffs has special lock considerations in its
-	 * vop lock.
-	 */
-	if (nn != NULL && (lvp = NULLVPTOLOWERVP(vp)) != NULL) {
-		/*
-		 * We have to hold the vnode here to solve a potential
-		 * reclaim race.  If we're forcibly vgone'd while we
-		 * still have refs, a thread could be sleeping inside
-		 * the lowervp's vop_lock routine.  When we vgone we will
-		 * drop our last ref to the lowervp, which would allow it
-		 * to be reclaimed.  The lowervp could then be recycled,
-		 * in which case it is not legal to be sleeping in its VOP.
-		 * We prevent it from being recycled by holding the vnode
-		 * here.
-		 */
-		vholdnz(lvp);
-		VI_UNLOCK(vp);
-		error = VOP_LOCK(lvp, flags);
-
-		/*
-		 * We might have slept to get the lock and someone might have
-		 * clean our vnode already, switching vnode lock from one in
-		 * lowervp to v_lock in our own vnode structure.  Handle this
-		 * case by reacquiring correct lock in requested mode.
-		 */
-		if (VTONULL(vp) == NULL && error == 0) {
-			ap->a_flags &= ~LK_TYPE_MASK;
-			switch (flags & LK_TYPE_MASK) {
-			case LK_SHARED:
-				ap->a_flags |= LK_SHARED;
-				break;
-			case LK_UPGRADE:
-			case LK_EXCLUSIVE:
-				ap->a_flags |= LK_EXCLUSIVE;
-				break;
-			default:
-				panic("Unsupported lock request %d\n",
-				    ap->a_flags);
-			}
-			VOP_UNLOCK(lvp);
-			error = vop_stdlock(ap);
+	if (__predict_true((ap->a_flags & LK_INTERLOCK) == 0)) {
+		lvp = null_lock_prep_with_smr(ap);
+		if (__predict_false(lvp == NULL)) {
+			VI_LOCK(ap->a_vp);
+			lvp = null_lock_prep_with_interlock(ap);
 		}
-		vdrop(lvp);
 	} else {
-		VI_UNLOCK(vp);
-		error = vop_stdlock(ap);
+		lvp = null_lock_prep_with_interlock(ap);
 	}
 
+	ASSERT_VI_UNLOCKED(ap->a_vp, __func__);
+
+	if (__predict_false(lvp == NULL))
+		return (vop_stdlock(ap));
+
+	VNPASS(lvp->v_holdcnt > 0, lvp);
+	error = VOP_LOCK(lvp, ap->a_flags);
+	/*
+	 * We might have slept to get the lock and someone might have
+	 * clean our vnode already, switching vnode lock from one in
+	 * lowervp to v_lock in our own vnode structure.  Handle this
+	 * case by reacquiring correct lock in requested mode.
+	 */
+	if (VTONULL(ap->a_vp) == NULL && error == 0) {
+		VOP_UNLOCK(lvp);
+
+		flags = ap->a_flags;
+		ap->a_flags &= ~LK_TYPE_MASK;
+		switch (flags & LK_TYPE_MASK) {
+		case LK_SHARED:
+			ap->a_flags |= LK_SHARED;
+			break;
+		case LK_UPGRADE:
+		case LK_EXCLUSIVE:
+			ap->a_flags |= LK_EXCLUSIVE;
+			break;
+		default:
+			panic("Unsupported lock request %d\n",
+			    flags);
+		}
+		error = vop_stdlock(ap);
+	}
+	vdrop(lvp);
 	return (error);
 }
 
-/*
- * We need to process our own vnode unlock and then clear the
- * interlock flag as it applies only to our vnode, not the
- * vnodes below us on the stack.
- */
 static int
 null_unlock(struct vop_unlock_args *ap)
 {
@@ -824,11 +886,20 @@ null_unlock(struct vop_unlock_args *ap)
 	struct vnode *lvp;
 	int error;
 
+	/*
+	 * Contrary to null_lock, we don't need to hold the vnode around
+	 * unlock.
+	 *
+	 * We hold the lock, which means we can't be racing against vgone.
+	 *
+	 * At the same time VOP_UNLOCK promises to not touch anything after
+	 * it finishes unlock, just like we don't.
+	 *
+	 * vop_stdunlock for a doomed vnode matches doomed locking in null_lock.
+	 */
 	nn = VTONULL(vp);
 	if (nn != NULL && (lvp = NULLVPTOLOWERVP(vp)) != NULL) {
-		vholdnz(lvp);
 		error = VOP_UNLOCK(lvp);
-		vdrop(lvp);
 	} else {
 		error = vop_stdunlock(ap);
 	}
@@ -897,6 +968,7 @@ null_reclaim(struct vop_reclaim_args *ap)
 	struct vnode *vp;
 	struct null_node *xp;
 	struct vnode *lowervp;
+	short flags;
 
 	vp = ap->a_vp;
 	xp = VTONULL(vp);
@@ -926,13 +998,24 @@ null_reclaim(struct vop_reclaim_args *ap)
 	else if (vp->v_writecount < 0)
 		vp->v_writecount = 0;
 
+	/*
+	 * Undo the effects of null_copy_inotify(): setting VIRF_INOTIFY* causes
+	 * the VFS to invoke VOP_INOTIFY on the marked vnode, and for nullfs
+	 * vnodes this is bypassed to the lower vnode.  The inotify watch holds
+	 * a ref on the lower vnode, but not the upper vnode, so VOP_INOTIFY
+	 * must not be called on the upper vnode after this point.
+	 */
+	flags = vn_irflag_read(vp) & (VIRF_INOTIFY | VIRF_INOTIFY_PARENT);
+	if (flags != 0)
+		vn_irflag_unset_locked(vp, flags);
+
 	VI_UNLOCK(vp);
 
 	if ((xp->null_flags & NULLV_NOUNLOCK) != 0)
 		vunref(lowervp);
 	else
 		vput(lowervp);
-	free(xp, M_NULLFSNODE);
+	uma_zfree_smr(null_node_zone, xp);
 
 	return (0);
 }
@@ -1133,6 +1216,23 @@ null_vput_pair(struct vop_vput_pair_args *ap)
 	return (res);
 }
 
+static int
+null_getlowvnode(struct vop_getlowvnode_args *ap)
+{
+	struct vnode *vp, *vpl;
+
+	vp = ap->a_vp;
+	if (vn_lock(vp, LK_SHARED) != 0)
+		return (EBADF);
+
+	vpl = NULLVPTOLOWERVP(vp);
+	vhold(vpl);
+	VOP_UNLOCK(vp);
+	VOP_GETLOWVNODE(vpl, ap->a_vplp, ap->a_flags);
+	vdrop(vpl);
+	return (0);
+}
+
 /*
  * Global vfs data structures
  */
@@ -1145,6 +1245,7 @@ struct vop_vector null_vnodeops = {
 	.vop_bmap =		VOP_EOPNOTSUPP,
 	.vop_stat =		null_stat,
 	.vop_getattr =		null_getattr,
+	.vop_getlowvnode =	null_getlowvnode,
 	.vop_getwritemount =	null_getwritemount,
 	.vop_inactive =		null_inactive,
 	.vop_need_inactive =	null_need_inactive,
@@ -1165,5 +1266,14 @@ struct vop_vector null_vnodeops = {
 	.vop_vptofh =		null_vptofh,
 	.vop_add_writecount =	null_add_writecount,
 	.vop_vput_pair =	null_vput_pair,
+	.vop_copy_file_range =	VOP_PANIC,
 };
 VFS_VOP_VECTOR_REGISTER(null_vnodeops);
+
+struct vop_vector null_vnodeops_no_unp_bypass = {
+	.vop_default =		&null_vnodeops,
+	.vop_unp_bind =		vop_stdunp_bind,
+	.vop_unp_connect =	vop_stdunp_connect,
+	.vop_unp_detach =	vop_stdunp_detach,
+};
+VFS_VOP_VECTOR_REGISTER(null_vnodeops_no_unp_bypass);

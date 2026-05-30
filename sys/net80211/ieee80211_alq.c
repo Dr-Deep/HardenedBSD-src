@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2011 Adrian Chadd, Xenion Lty Ltd
  * All rights reserved.
@@ -24,11 +24,6 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-#ifdef __FreeBSD__
-__FBSDID("$FreeBSD$");
-#endif
 
 /*
  * net80211 fast-logging support, primarily for debugging.
@@ -84,7 +79,7 @@ ieee80211_alq_setlogging(int enable)
 		    ieee80211_alq_qsize, 0);
 		ieee80211_alq_lost = 0;
 		ieee80211_alq_logged = 0;
-		printf("net80211: logging to %s enabled; "
+		net80211_printf("net80211: logging to %s enabled; "
 		    "struct size %d bytes\n",
 		    ieee80211_alq_logfile,
 		    (int) sizeof(struct ieee80211_alq_rec));
@@ -92,7 +87,7 @@ ieee80211_alq_setlogging(int enable)
 		if (ieee80211_alq)
 			alq_close(ieee80211_alq);
 		ieee80211_alq = NULL;
-		printf("net80211: logging disabled\n");
+		net80211_printf("net80211: logging disabled\n");
 		error = 0;
 	}
 	return (error);

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2014 Dmitry Chagin <dchagin@FreeBSD.org>
  *
@@ -25,30 +25,26 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
-#include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/kernel.h>
-#include <sys/malloc.h>
-#include <sys/limits.h>
-#include <sys/lock.h>
-#include <sys/mutex.h>
-#include <sys/types.h>
-#include <sys/user.h>
+#include <sys/event.h>
+#include <sys/eventfd.h>
+#include <sys/errno.h>
 #include <sys/fcntl.h>
 #include <sys/file.h>
 #include <sys/filedesc.h>
 #include <sys/filio.h>
-#include <sys/stat.h>
-#include <sys/errno.h>
-#include <sys/event.h>
+#include <sys/kernel.h>
+#include <sys/limits.h>
+#include <sys/lock.h>
+#include <sys/malloc.h>
+#include <sys/mutex.h>
 #include <sys/poll.h>
 #include <sys/proc.h>
-#include <sys/uio.h>
+#include <sys/refcount.h>
 #include <sys/selinfo.h>
-#include <sys/eventfd.h>
+#include <sys/stat.h>
+#include <sys/uio.h>
+#include <sys/user.h>
 
 #include <security/audit/audit.h>
 
@@ -66,7 +62,7 @@ static fo_stat_t	eventfd_stat;
 static fo_close_t	eventfd_close;
 static fo_fill_kinfo_t	eventfd_fill_kinfo;
 
-static struct fileops eventfdops = {
+static const struct fileops eventfdops = {
 	.fo_read = eventfd_read,
 	.fo_write = eventfd_write,
 	.fo_truncate = invfo_truncate,
@@ -79,6 +75,7 @@ static struct fileops eventfdops = {
 	.fo_chown = invfo_chown,
 	.fo_sendfile = invfo_sendfile,
 	.fo_fill_kinfo = eventfd_fill_kinfo,
+	.fo_cmp = file_kcmp_generic,
 	.fo_flags = DFLAG_PASSABLE
 };
 
@@ -86,16 +83,19 @@ static void	filt_eventfddetach(struct knote *kn);
 static int	filt_eventfdread(struct knote *kn, long hint);
 static int	filt_eventfdwrite(struct knote *kn, long hint);
 
-static struct filterops eventfd_rfiltops = {
+static const struct filterops eventfd_rfiltops = {
 	.f_isfd = 1,
 	.f_detach = filt_eventfddetach,
-	.f_event = filt_eventfdread
+	.f_event = filt_eventfdread,
+	.f_copy = knote_triv_copy,
 };
 
-static struct filterops eventfd_wfiltops = {
+
+static const struct filterops eventfd_wfiltops = {
 	.f_isfd = 1,
 	.f_detach = filt_eventfddetach,
-	.f_event = filt_eventfdwrite
+	.f_event = filt_eventfdwrite,
+	.f_copy = knote_triv_copy,
 };
 
 struct eventfd {
@@ -103,6 +103,7 @@ struct eventfd {
 	uint32_t	efd_flags;
 	struct selinfo	efd_sel;
 	struct mtx	efd_lock;
+	unsigned int	efd_refcount;
 };
 
 int
@@ -120,6 +121,7 @@ eventfd_create_file(struct thread *td, struct file *fp, uint32_t initval,
 	efd->efd_count = initval;
 	mtx_init(&efd->efd_lock, "eventfd", NULL, MTX_DEF);
 	knlist_init_mtx(&efd->efd_sel.si_note, &efd->efd_lock);
+	refcount_init(&efd->efd_refcount, 1);
 
 	fflags = FREAD | FWRITE;
 	if ((flags & EFD_NONBLOCK) != 0)
@@ -129,16 +131,60 @@ eventfd_create_file(struct thread *td, struct file *fp, uint32_t initval,
 	return (0);
 }
 
+struct eventfd *
+eventfd_get(struct file *fp)
+{
+	struct eventfd *efd;
+
+	if (fp->f_data == NULL || fp->f_ops != &eventfdops)
+		return (NULL);
+
+	efd = fp->f_data;
+	refcount_acquire(&efd->efd_refcount);
+
+	return (efd);
+}
+
+void
+eventfd_put(struct eventfd *efd)
+{
+	if (!refcount_release(&efd->efd_refcount))
+		return;
+
+	seldrain(&efd->efd_sel);
+	knlist_destroy(&efd->efd_sel.si_note);
+	mtx_destroy(&efd->efd_lock);
+	free(efd, M_EVENTFD);
+}
+
+static void
+eventfd_wakeup(struct eventfd *efd)
+{
+	KNOTE_LOCKED(&efd->efd_sel.si_note, 0);
+	selwakeup(&efd->efd_sel);
+	wakeup(&efd->efd_count);
+}
+
+void
+eventfd_signal(struct eventfd *efd)
+{
+	mtx_lock(&efd->efd_lock);
+
+	if (efd->efd_count < UINT64_MAX)
+		efd->efd_count++;
+
+	eventfd_wakeup(efd);
+
+	mtx_unlock(&efd->efd_lock);
+}
+
 static int
 eventfd_close(struct file *fp, struct thread *td)
 {
 	struct eventfd *efd;
 
 	efd = fp->f_data;
-	seldrain(&efd->efd_sel);
-	knlist_destroy(&efd->efd_sel.si_note);
-	mtx_destroy(&efd->efd_lock);
-	free(efd, M_EVENTFD);
+	eventfd_put(efd);
 	return (0);
 }
 
@@ -219,9 +265,7 @@ retry:
 	if (error == 0) {
 		MPASS(UINT64_MAX - efd->efd_count > count);
 		efd->efd_count += count;
-		KNOTE_LOCKED(&efd->efd_sel.si_note, 0);
-		selwakeup(&efd->efd_sel);
-		wakeup(&efd->efd_count);
+		eventfd_wakeup(efd);
 	}
 	mtx_unlock(&efd->efd_lock);
 

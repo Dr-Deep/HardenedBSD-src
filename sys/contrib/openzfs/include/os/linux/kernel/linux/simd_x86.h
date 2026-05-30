@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -20,6 +21,7 @@
  */
 /*
  * Copyright (C) 2016 Gvozden Neskovic <neskovic@compeng.uni-frankfurt.de>.
+ * Copyright (c) 2026, TrueNAS.
  */
 
 /*
@@ -52,6 +54,8 @@
  *
  *	zfs_bmi1_available()
  *	zfs_bmi2_available()
+ *
+ *	zfs_shani_available()
  *
  *	zfs_avx512f_available()
  *	zfs_avx512cd_available()
@@ -136,13 +140,13 @@
  */
 #if defined(HAVE_KERNEL_FPU_INTERNAL)
 
+#ifndef XFEATURE_MASK_XTILE
 /*
- * For kernels not exporting *kfpu_{begin,end} we have to use inline assembly
- * with the XSAVE{,OPT,S} instructions, so we need the toolchain to support at
- * least XSAVE.
+ * For kernels where this doesn't exist yet, we still don't want to break
+ * by save/restoring this broken nonsense.
+ * See issue #14989 or Intel errata SPR4 for why
  */
-#if !defined(HAVE_XSAVE)
-#error "Toolchain needs to support the XSAVE assembler instruction"
+#define	XFEATURE_MASK_XTILE	0x60000
 #endif
 
 #include <linux/mm.h>
@@ -311,21 +315,25 @@ kfpu_begin(void)
 	 * FPU state to be correctly preserved and restored.
 	 */
 	uint8_t *state = zfs_kfpu_fpregs[smp_processor_id()];
-#if defined(HAVE_XSAVES)
+#if HAVE_SIMD(XSAVES)
 	if (static_cpu_has(X86_FEATURE_XSAVES)) {
-		kfpu_do_xsave("xsaves", state, ~0);
+		kfpu_do_xsave("xsaves", state, ~XFEATURE_MASK_XTILE);
 		return;
 	}
 #endif
-#if defined(HAVE_XSAVEOPT)
+#if HAVE_SIMD(XSAVEOPT)
 	if (static_cpu_has(X86_FEATURE_XSAVEOPT)) {
-		kfpu_do_xsave("xsaveopt", state, ~0);
+		kfpu_do_xsave("xsaveopt", state, ~XFEATURE_MASK_XTILE);
 		return;
 	}
 #endif
+#if HAVE_SIMD(XSAVE)
 	if (static_cpu_has(X86_FEATURE_XSAVE)) {
-		kfpu_do_xsave("xsave", state, ~0);
-	} else if (static_cpu_has(X86_FEATURE_FXSR)) {
+		kfpu_do_xsave("xsave", state, ~XFEATURE_MASK_XTILE);
+		return;
+	}
+#endif
+	if (static_cpu_has(X86_FEATURE_FXSR)) {
 		kfpu_save_fxsr(state);
 	} else {
 		kfpu_save_fsave(state);
@@ -372,15 +380,19 @@ static inline void
 kfpu_end(void)
 {
 	uint8_t  *state = zfs_kfpu_fpregs[smp_processor_id()];
-#if defined(HAVE_XSAVES)
+#if HAVE_SIMD(XSAVES)
 	if (static_cpu_has(X86_FEATURE_XSAVES)) {
-		kfpu_do_xrstor("xrstors", state, ~0);
+		kfpu_do_xrstor("xrstors", state, ~XFEATURE_MASK_XTILE);
 		goto out;
 	}
 #endif
+#if HAVE_SIMD(XSAVE)
 	if (static_cpu_has(X86_FEATURE_XSAVE)) {
-		kfpu_do_xrstor("xrstor", state, ~0);
-	} else if (static_cpu_has(X86_FEATURE_FXSR)) {
+		kfpu_do_xrstor("xrstor", state, ~XFEATURE_MASK_XTILE);
+		goto out;
+	}
+#endif
+	if (static_cpu_has(X86_FEATURE_FXSR)) {
 		kfpu_restore_fxsr(state);
 	} else {
 		kfpu_restore_fsave(state);
@@ -428,15 +440,9 @@ zfs_xgetbv(uint32_t index)
 static inline boolean_t
 __simd_state_enabled(const uint64_t state)
 {
-	boolean_t has_osxsave;
 	uint64_t xcr0;
 
-#if defined(X86_FEATURE_OSXSAVE)
-	has_osxsave = !!boot_cpu_has(X86_FEATURE_OSXSAVE);
-#else
-	has_osxsave = B_FALSE;
-#endif
-	if (!has_osxsave)
+	if (!boot_cpu_has(X86_FEATURE_OSXSAVE))
 		return (B_FALSE);
 
 	xcr0 = zfs_xgetbv(0);
@@ -527,11 +533,7 @@ zfs_avx2_available(void)
 static inline boolean_t
 zfs_bmi1_available(void)
 {
-#if defined(X86_FEATURE_BMI1)
 	return (!!boot_cpu_has(X86_FEATURE_BMI1));
-#else
-	return (B_FALSE);
-#endif
 }
 
 /*
@@ -540,11 +542,7 @@ zfs_bmi1_available(void)
 static inline boolean_t
 zfs_bmi2_available(void)
 {
-#if defined(X86_FEATURE_BMI2)
 	return (!!boot_cpu_has(X86_FEATURE_BMI2));
-#else
-	return (B_FALSE);
-#endif
 }
 
 /*
@@ -553,11 +551,7 @@ zfs_bmi2_available(void)
 static inline boolean_t
 zfs_aes_available(void)
 {
-#if defined(X86_FEATURE_AES)
 	return (!!boot_cpu_has(X86_FEATURE_AES));
-#else
-	return (B_FALSE);
-#endif
 }
 
 /*
@@ -566,11 +560,7 @@ zfs_aes_available(void)
 static inline boolean_t
 zfs_pclmulqdq_available(void)
 {
-#if defined(X86_FEATURE_PCLMULQDQ)
 	return (!!boot_cpu_has(X86_FEATURE_PCLMULQDQ));
-#else
-	return (B_FALSE);
-#endif
 }
 
 /*
@@ -579,11 +569,48 @@ zfs_pclmulqdq_available(void)
 static inline boolean_t
 zfs_movbe_available(void)
 {
-#if defined(X86_FEATURE_MOVBE)
 	return (!!boot_cpu_has(X86_FEATURE_MOVBE));
+}
+
+/*
+ * Check if VAES instruction set is available
+ */
+static inline boolean_t
+zfs_vaes_available(void)
+{
+	return (!!boot_cpu_has(X86_FEATURE_VAES));
+}
+
+/*
+ * Check if VPCLMULQDQ instruction set is available
+ */
+static inline boolean_t
+zfs_vpclmulqdq_available(void)
+{
+	return (!!boot_cpu_has(X86_FEATURE_VPCLMULQDQ));
+}
+
+/*
+ * Check if SHA512 instructions are available
+ * Kernel added X86_FEATURE_SHA512 in 6.13 (torvalds/linux@a0423af92cb3)
+ */
+static inline boolean_t
+zfs_sha512ext_available(void)
+{
+#if defined(X86_FEATURE_SHA512)
+	return (!!boot_cpu_has(X86_FEATURE_SHA512));
 #else
 	return (B_FALSE);
 #endif
+}
+
+/*
+ * Check if SHA_NI instruction set is available
+ */
+static inline boolean_t
+zfs_shani_available(void)
+{
+	return (!!boot_cpu_has(X86_FEATURE_SHA_NI));
 }
 
 /*
@@ -598,7 +625,7 @@ zfs_movbe_available(void)
  * AVX512DQ	Double-word and Quadword Instructions
  * AVX512VL	Vector Length Extensions
  *
- * AVX512IFMA	Integer Fused Multiply Add (Not supported by kernel 4.4)
+ * AVX512IFMA	Integer Fused Multiply Add
  * AVX512VBMI	Vector Byte Manipulation Instructions
  */
 
@@ -608,12 +635,7 @@ zfs_movbe_available(void)
 static inline boolean_t
 zfs_avx512f_available(void)
 {
-	boolean_t has_avx512 = B_FALSE;
-
-#if defined(X86_FEATURE_AVX512F)
-	has_avx512 = !!boot_cpu_has(X86_FEATURE_AVX512F);
-#endif
-	return (has_avx512 && __zmm_enabled());
+	return (boot_cpu_has(X86_FEATURE_AVX512F) && __zmm_enabled());
 }
 
 /*
@@ -622,13 +644,7 @@ zfs_avx512f_available(void)
 static inline boolean_t
 zfs_avx512cd_available(void)
 {
-	boolean_t has_avx512 = B_FALSE;
-
-#if defined(X86_FEATURE_AVX512CD)
-	has_avx512 = boot_cpu_has(X86_FEATURE_AVX512F) &&
-	    boot_cpu_has(X86_FEATURE_AVX512CD);
-#endif
-	return (has_avx512 && __zmm_enabled());
+	return (zfs_avx512f_available() && boot_cpu_has(X86_FEATURE_AVX512F));
 }
 
 /*
@@ -637,13 +653,7 @@ zfs_avx512cd_available(void)
 static inline boolean_t
 zfs_avx512er_available(void)
 {
-	boolean_t has_avx512 = B_FALSE;
-
-#if defined(X86_FEATURE_AVX512ER)
-	has_avx512 = boot_cpu_has(X86_FEATURE_AVX512F) &&
-	    boot_cpu_has(X86_FEATURE_AVX512ER);
-#endif
-	return (has_avx512 && __zmm_enabled());
+	return (zfs_avx512f_available() && boot_cpu_has(X86_FEATURE_AVX512ER));
 }
 
 /*
@@ -652,13 +662,7 @@ zfs_avx512er_available(void)
 static inline boolean_t
 zfs_avx512pf_available(void)
 {
-	boolean_t has_avx512 = B_FALSE;
-
-#if defined(X86_FEATURE_AVX512PF)
-	has_avx512 = boot_cpu_has(X86_FEATURE_AVX512F) &&
-	    boot_cpu_has(X86_FEATURE_AVX512PF);
-#endif
-	return (has_avx512 && __zmm_enabled());
+	return (zfs_avx512f_available() && boot_cpu_has(X86_FEATURE_AVX512PF));
 }
 
 /*
@@ -667,14 +671,7 @@ zfs_avx512pf_available(void)
 static inline boolean_t
 zfs_avx512bw_available(void)
 {
-	boolean_t has_avx512 = B_FALSE;
-
-#if defined(X86_FEATURE_AVX512BW)
-	has_avx512 = boot_cpu_has(X86_FEATURE_AVX512F) &&
-	    boot_cpu_has(X86_FEATURE_AVX512BW);
-#endif
-
-	return (has_avx512 && __zmm_enabled());
+	return (zfs_avx512f_available() && boot_cpu_has(X86_FEATURE_AVX512BW));
 }
 
 /*
@@ -683,13 +680,7 @@ zfs_avx512bw_available(void)
 static inline boolean_t
 zfs_avx512dq_available(void)
 {
-	boolean_t has_avx512 = B_FALSE;
-
-#if defined(X86_FEATURE_AVX512DQ)
-	has_avx512 = boot_cpu_has(X86_FEATURE_AVX512F) &&
-	    boot_cpu_has(X86_FEATURE_AVX512DQ);
-#endif
-	return (has_avx512 && __zmm_enabled());
+	return (zfs_avx512f_available() && boot_cpu_has(X86_FEATURE_AVX512DQ));
 }
 
 /*
@@ -698,13 +689,7 @@ zfs_avx512dq_available(void)
 static inline boolean_t
 zfs_avx512vl_available(void)
 {
-	boolean_t has_avx512 = B_FALSE;
-
-#if defined(X86_FEATURE_AVX512VL)
-	has_avx512 = boot_cpu_has(X86_FEATURE_AVX512F) &&
-	    boot_cpu_has(X86_FEATURE_AVX512VL);
-#endif
-	return (has_avx512 && __zmm_enabled());
+	return (zfs_avx512f_available() && boot_cpu_has(X86_FEATURE_AVX512VL));
 }
 
 /*
@@ -713,13 +698,8 @@ zfs_avx512vl_available(void)
 static inline boolean_t
 zfs_avx512ifma_available(void)
 {
-	boolean_t has_avx512 = B_FALSE;
-
-#if defined(X86_FEATURE_AVX512IFMA)
-	has_avx512 = boot_cpu_has(X86_FEATURE_AVX512F) &&
-	    boot_cpu_has(X86_FEATURE_AVX512IFMA);
-#endif
-	return (has_avx512 && __zmm_enabled());
+	return (zfs_avx512f_available() &&
+	    boot_cpu_has(X86_FEATURE_AVX512IFMA));
 }
 
 /*
@@ -728,13 +708,8 @@ zfs_avx512ifma_available(void)
 static inline boolean_t
 zfs_avx512vbmi_available(void)
 {
-	boolean_t has_avx512 = B_FALSE;
-
-#if defined(X86_FEATURE_AVX512VBMI)
-	has_avx512 = boot_cpu_has(X86_FEATURE_AVX512F) &&
-	    boot_cpu_has(X86_FEATURE_AVX512VBMI);
-#endif
-	return (has_avx512 && __zmm_enabled());
+	return (zfs_avx512f_available() &&
+	    boot_cpu_has(X86_FEATURE_AVX512VBMI));
 }
 
 #endif /* defined(__x86) */

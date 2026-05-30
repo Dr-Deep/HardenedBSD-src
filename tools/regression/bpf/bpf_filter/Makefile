@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 TEST_CASES?=	test0001 test0002 test0003 test0004	\
 		test0005 test0006 test0007 test0008	\
 		test0009 test0010 test0011 test0012	\
@@ -65,7 +63,7 @@ all:		${TEST_CASES}
 .if defined(BPF_BENCHMARK)
 	@-time ${.CURDIR}/${TEST}
 .else
-	@-env MALLOC_OPTIONS=J ${.CURDIR}/${TEST}
+	@-env MALLOC_CONF=junk:true ${.CURDIR}/${TEST}
 .endif
 	@rm -f ${.CURDIR}/${TEST}
 .endfor

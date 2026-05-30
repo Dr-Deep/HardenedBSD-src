@@ -44,8 +44,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _SECURITY_MAC_MAC_INTERNAL_H_
@@ -59,19 +57,18 @@
 #include <sys/rmlock.h>
 
 /*
- * MAC Framework sysctl namespace.
- */
-#ifdef SYSCTL_DECL
-SYSCTL_DECL(_security_mac);
-#endif /* SYSCTL_DECL */
-
-/*
  * MAC Framework SDT DTrace probe namespace, macros for declaring entry
  * point probes, macros for invoking them.
  */
 #ifdef SDT_PROVIDER_DECLARE
 SDT_PROVIDER_DECLARE(mac);		/* MAC Framework-level events. */
 SDT_PROVIDER_DECLARE(mac_framework);	/* Entry points to MAC. */
+
+#define	MAC_CHECK_PROBE_DEFINE5(name, arg0, arg1, arg2, arg3, arg4)	\
+	SDT_PROBE_DEFINE6(mac_framework, , name, mac__check__err,	\
+	    "int", arg0, arg1, arg2, arg3, arg4);			\
+	SDT_PROBE_DEFINE6(mac_framework, , name, mac__check__ok,	\
+	    "int", arg0, arg1, arg2, arg3, arg4);
 
 #define	MAC_CHECK_PROBE_DEFINE4(name, arg0, arg1, arg2, arg3)		\
 	SDT_PROBE_DEFINE5(mac_framework, , name, mac__check__err,	\
@@ -97,18 +94,20 @@ SDT_PROVIDER_DECLARE(mac_framework);	/* Entry points to MAC. */
 	SDT_PROBE_DEFINE2(mac_framework, , name, mac__check__ok,	\
 	    "int", arg0);
 
-#define	MAC_CHECK_PROBE4(name, error, arg0, arg1, arg2, arg3)	do {	\
+#define	MAC_CHECK_PROBE5(name, error, arg0, arg1, arg2, arg3, arg4) do { \
 	if (SDT_PROBES_ENABLED()) {					\
 		if (error) {						\
-			SDT_PROBE5(mac_framework, , name, mac__check__err,\
-			    error, arg0, arg1, arg2, arg3);		\
+			SDT_PROBE6(mac_framework, , name, mac__check__err,\
+			    error, arg0, arg1, arg2, arg3, arg4);	\
 		} else {						\
-			SDT_PROBE5(mac_framework, , name, mac__check__ok,\
-			    0, arg0, arg1, arg2, arg3);			\
+			SDT_PROBE6(mac_framework, , name, mac__check__ok,\
+			    0, arg0, arg1, arg2, arg3, arg4);		\
 		}							\
 	}								\
 } while (0)
 
+#define	MAC_CHECK_PROBE4(name, error, arg0, arg1, arg2, arg3)		\
+	MAC_CHECK_PROBE5(name, error, arg0, arg1, arg2, arg3, 0)
 #define	MAC_CHECK_PROBE3(name, error, arg0, arg1, arg2)			\
 	MAC_CHECK_PROBE4(name, error, arg0, arg1, arg2, 0)
 #define	MAC_CHECK_PROBE2(name, error, arg0, arg1)			\
@@ -186,6 +185,7 @@ struct label {
 #define	MPC_OBJECT_SYSVSHM		0x0000000000020000
 #define	MPC_OBJECT_SYNCACHE		0x0000000000040000
 #define	MPC_OBJECT_IP6Q			0x0000000000080000
+#define	MPC_OBJECT_PRISON		0x0000000000100000
 
 /*
  * MAC Framework global variables.
@@ -212,7 +212,7 @@ void		 mac_labelzone_init(void);
 
 void	mac_init_label(struct label *label);
 void	mac_destroy_label(struct label *label);
-int	mac_check_structmac_consistent(struct mac *mac);
+int	mac_check_structmac_consistent(const struct mac *mac);
 int	mac_allocate_slot(void);
 
 /*
@@ -242,8 +242,11 @@ struct label	*mac_cred_label_alloc(void);
 void		 mac_cred_label_free(struct label *label);
 struct label	*mac_pipe_label_alloc(void);
 void		 mac_pipe_label_free(struct label *label);
+struct label	*mac_prison_label_alloc(int flags);
+void		 mac_prison_label_free(struct label *label);
 struct label	*mac_socket_label_alloc(int flag);
 void		 mac_socket_label_free(struct label *label);
+void		 mac_socketpeer_label_free(struct label *label);
 struct label	*mac_vnode_label_alloc(void);
 void		 mac_vnode_label_free(struct label *label);
 
@@ -259,6 +262,17 @@ void	mac_pipe_copy_label(struct label *src, struct label *dest);
 int	mac_pipe_externalize_label(struct label *label, char *elements,
 	    char *outbuf, size_t outbuflen);
 int	mac_pipe_internalize_label(struct label *label, char *string);
+
+int	mac_prison_label_set(struct ucred *cred, struct prison *pr,
+	    struct label *label);
+int	mac_prison_check_relabel(struct ucred *cred, struct prison *pr,
+	    struct label *newlabel);
+void	mac_prison_copy_label(struct label *src, struct label *dest);
+int	mac_prison_externalize_label(struct label *label, char *elements,
+	    char *outbuf, size_t outbuflen);
+int	mac_prison_internalize_label(struct label *label, char *string);
+void	mac_prison_relabel(struct ucred *cred, struct prison *pr,
+	    struct label *newlabel);
 
 int	mac_socket_label_set(struct ucred *cred, struct socket *so,
 	    struct label *label);

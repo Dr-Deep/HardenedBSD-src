@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2021-2022 Alexander V. Chernikov
  *
@@ -26,15 +26,14 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 #include "opt_inet.h"
 #include "opt_inet6.h"
-#include "opt_route.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/malloc.h>
 #include <sys/socket.h>
+#include <sys/jail.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
 #include <sys/rmlock.h>
@@ -48,7 +47,6 @@ __FBSDID("$FreeBSD$");
 #include <net/route/nhop.h>
 #include <netinet/in.h>
 #include <netinet6/scope6_var.h>
-#include <netinet6/in6_var.h>
 
 #include <vm/uma.h>
 
@@ -106,21 +104,19 @@ static void
 destroy_rtentry(struct rtentry *rt)
 {
 #ifdef VIMAGE
+	const struct weightened_nhop *wn;
 	struct nhop_object *nh = rt->rt_nhop;
+	uint32_t num_nhops;
 
 	/*
 	 * At this moment rnh, nh_control may be already freed.
 	 * nhop interface may have been migrated to a different vnet.
 	 * Use vnet stored in the nexthop to delete the entry.
 	 */
-#ifdef ROUTE_MPATH
 	if (NH_IS_NHGRP(nh)) {
-		const struct weightened_nhop *wn;
-		uint32_t num_nhops;
 		wn = nhgrp_get_nhops((struct nhgrp_object *)nh, &num_nhops);
 		nh = wn[0].nh;
 	}
-#endif
 	CURVNET_SET(nhop_get_vnet(nh));
 #endif
 
@@ -154,8 +150,7 @@ rt_free(struct rtentry *rt)
 
 	KASSERT(rt != NULL, ("%s: NULL rt", __func__));
 
-	epoch_call(net_epoch_preempt, destroy_rtentry_epoch,
-	    &rt->rt_epoch_ctx);
+	NET_EPOCH_CALL(destroy_rtentry_epoch, &rt->rt_epoch_ctx);
 }
 
 void
@@ -197,6 +192,29 @@ rt_get_rnd(const struct rtentry *rt, struct route_nhop_data *rnd)
 {
 	rnd->rnd_nhop = rt->rt_nhop;
 	rnd->rnd_weight = rt->rt_weight;
+}
+
+/*
+ * If the process in in jail w/o VNET, export only host routes for the
+ *  addresses assigned to the jail.
+ * Otherwise, allow exporting the entire table.
+ */
+bool
+rt_is_exportable(const struct rtentry *rt, struct ucred *cred)
+{
+	if (!rt_is_host(rt)) {
+		/*
+		 * Performance optimisation: only host routes are allowed
+		 * in the jail w/o vnet.
+		 */
+		if (jailed_without_vnet(cred))
+			return (false);
+	} else {
+		if (prison_if(cred, rt_key_const(rt)) != 0)
+			return (false);
+	}
+
+	return (true);
 }
 
 #ifdef INET

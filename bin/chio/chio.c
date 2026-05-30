@@ -1,5 +1,7 @@
 /*	$NetBSD: chio.c,v 1.6 1998/01/04 23:53:58 thorpej Exp $ */
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1996 Jason R. Thorpe <thorpej@and.com>
  * All rights reserved.
  *
@@ -32,18 +34,8 @@
  */
 /*
  * Additional Copyright (c) 1997, by Matthew Jacob, for NASA/Ames Research Ctr.
- * Addidional Copyright (c) 2000, by C. Stephen Gunn, Waterspout Communications
+ * Additional Copyright (c) 2000, by C. Stephen Gunn, Waterspout Communications
  */
-
-#if 0
-#ifndef lint
-static const char copyright[] =
-	"@(#) Copyright (c) 1996 Jason R. Thorpe.  All rights reserved.";
-#endif /* not lint */
-#endif
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/chio.h> 
@@ -60,7 +52,7 @@ __FBSDID("$FreeBSD$");
 #include "defs.h"
 #include "pathnames.h"
 
-static	void usage(void);
+static	void usage(void) __dead2;
 static	void cleanup(void);
 static	u_int16_t parse_element_type(char *);
 static	u_int16_t parse_element_unit(char *);
@@ -427,7 +419,7 @@ do_position(const char *cname, int argc, char **argv)
 
 /* ARGSUSED */
 static int
-do_params(const char *cname, int argc, char **argv)
+do_params(const char *cname, int argc, char **argv __unused)
 {
 	struct changer_params data;
 	int picker;
@@ -470,7 +462,7 @@ do_params(const char *cname, int argc, char **argv)
 
 /* ARGSUSED */
 static int
-do_getpicker(const char *cname, int argc, char **argv)
+do_getpicker(const char *cname, int argc, char **argv __unused)
 {
 	int picker;
 

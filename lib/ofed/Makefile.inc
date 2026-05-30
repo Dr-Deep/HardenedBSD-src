@@ -1,3 +1,4 @@
-# $FreeBSD$
+PACKAGE?=	rdma
+LIB_PACKAGE=
 
 WARNS?=	0

@@ -25,8 +25,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -84,12 +82,15 @@
  * from VGA colors to console colors, while we are reading RGB data.
  */
 
-#include <sys/cdefs.h>
 #include <sys/param.h>
+#include <assert.h>
 #include <stand.h>
 #include <teken.h>
 #include <gfx_fb.h>
 #include <sys/font.h>
+#include <sys/splash.h>
+#include <sys/linker.h>
+#include <sys/module.h>
 #include <sys/stdint.h>
 #include <sys/endian.h>
 #include <pnglite.h>
@@ -98,9 +99,12 @@
 #if defined(EFI)
 #include <efi.h>
 #include <efilib.h>
+#include <Protocol/GraphicsOutput.h>
 #else
 #include <vbe.h>
 #endif
+
+#include "modinfo.h"
 
 /* VGA text mode does use bold font. */
 #if !defined(VGA_8X16_FONT)
@@ -159,6 +163,14 @@ static const int vga_to_cons_colors[NCOLORS] = {
 	8,  9, 10, 11,  12, 13, 14, 15
 };
 
+/*
+ * It is reported very slow console draw in some systems.
+ * in order to exclude buggy gop->Blt(), we want option
+ * to use direct draw to framebuffer and avoid gop->Blt.
+ * Can be toggled with "gop" command.
+ */
+bool ignore_gop_blt = false;
+
 struct text_pixel *screen_buffer;
 #if defined(EFI)
 static EFI_GRAPHICS_OUTPUT_BLT_PIXEL *GlyphBuffer;
@@ -182,6 +194,7 @@ gfx_framework_init(void)
 	 * Setup font list to have builtin font.
 	 */
 	(void) insert_font(NULL, FONT_BUILTIN);
+	gfx_interp_ref();	/* Draw in the gfx interpreter for this thing */
 }
 
 static uint8_t *
@@ -219,6 +232,68 @@ gfx_parse_mode_str(char *str, int *x, int *y, int *depth)
 	}
 
 	return (true);
+}
+
+/*
+ * Returns true if we set the color from pre-existing environment, false if
+ * just used existing defaults.
+ */
+static bool
+gfx_fb_evalcolor(const char *envname, teken_color_t *cattr,
+    ev_sethook_t sethook, ev_unsethook_t unsethook)
+{
+	const char *ptr;
+	char env[10];
+	int eflags = EV_VOLATILE | EV_NOKENV;
+	bool from_env = false;
+
+	ptr = getenv(envname);
+	if (ptr != NULL) {
+		*cattr = strtol(ptr, NULL, 10);
+
+		/*
+		 * If we can't unset the value, then it's probably hooked
+		 * properly and we can just carry on.  Otherwise, we want to
+		 * reinitialize it so that we can hook it for the console that
+		 * we're resetting defaults for.
+		 */
+		if (unsetenv(envname) != 0)
+			return (true);
+		from_env = true;
+
+		/*
+		 * If we're carrying over an existing value, we *do* want that
+		 * to propagate to the kenv.
+		 */
+		eflags &= ~EV_NOKENV;
+	}
+
+	snprintf(env, sizeof(env), "%d", *cattr);
+	env_setenv(envname, eflags, env, sethook, unsethook);
+
+	return (from_env);
+}
+
+void
+gfx_fb_setcolors(teken_attr_t *attr, ev_sethook_t sethook,
+     ev_unsethook_t unsethook)
+{
+	bool need_setattr = false;
+
+	/*
+	 * On first run, we setup an environment hook to process any color
+	 * changes.  If the env is already set, we pick up fg and bg color
+	 * values from the environment.
+	 */
+	if (gfx_fb_evalcolor("teken.fg_color", &attr->ta_fgcolor,
+	    sethook, unsethook))
+		need_setattr = true;
+	if (gfx_fb_evalcolor("teken.bg_color", &attr->ta_bgcolor,
+	    sethook, unsethook))
+		need_setattr = true;
+
+	if (need_setattr)
+		teken_set_defattr(&gfx_state.tg_teken, attr);
 }
 
 static uint32_t
@@ -782,7 +857,7 @@ gfxfb_blt(void *BltBuffer, GFXFB_BLT_OPERATION BltOperation,
 	int rv;
 #if defined(EFI)
 	EFI_STATUS status;
-	EFI_GRAPHICS_OUTPUT *gop = gfx_state.tg_private;
+	EFI_GRAPHICS_OUTPUT_PROTOCOL *gop;
 	EFI_TPL tpl;
 
 	/*
@@ -792,7 +867,10 @@ gfxfb_blt(void *BltBuffer, GFXFB_BLT_OPERATION BltOperation,
 	 * done as they are provided by protocols that disappear when exit
 	 * boot services.
 	 */
-	if (gop != NULL && boot_services_active) {
+	if (gfx_state.tg_fb_type == FB_GOP && !ignore_gop_blt &&
+	    boot_services_active) {
+		assert(gfx_state.tg_private != NULL);
+		gop = gfx_state.tg_private;
 		tpl = BS->RaiseTPL(TPL_NOTIFY);
 		switch (BltOperation) {
 		case GfxFbBltVideoFill:
@@ -990,6 +1068,8 @@ gfx_fb_fill(void *arg, const teken_rect_t *r, teken_char_t c,
 	teken_pos_t p;
 	struct text_pixel *row;
 
+	TSENTER();
+
 	/* remove the cursor */
 	if (state->tg_cursor_visible)
 		gfx_fb_cursor_draw(state, &state->tg_cursor, false);
@@ -1015,6 +1095,8 @@ gfx_fb_fill(void *arg, const teken_rect_t *r, teken_char_t c,
 		c = teken_get_cursor(&state->tg_teken);
 		gfx_fb_cursor_draw(state, c, true);
 	}
+
+	TSEXIT();
 }
 
 static void
@@ -1190,7 +1272,7 @@ gfx_fb_copy_line(teken_gfx_t *state, int ncol, teken_pos_t *s, teken_pos_t *d)
 			screen_buffer[doffset + x] = screen_buffer[soffset + x];
 			if (mark) {
 				/* update end point */
-				sr.tr_end.tp_col = s->tp_col + x;;
+				sr.tr_end.tp_col = s->tp_col + x;
 			} else {
 				/* set up new rectangle */
 				mark = true;
@@ -2039,7 +2121,8 @@ gfx_get_ppi(void)
  * not smaller than calculated size value.
  */
 static vt_font_bitmap_data_t *
-gfx_get_font(void)
+gfx_get_font(teken_unit_t rows, teken_unit_t cols, teken_unit_t height,
+    teken_unit_t width)
 {
 	unsigned ppi, size;
 	vt_font_bitmap_data_t *font = NULL;
@@ -2062,6 +2145,14 @@ gfx_get_font(void)
 	size = roundup(size * 2, 10) / 10;
 
 	STAILQ_FOREACH(fl, &fonts, font_next) {
+		/*
+		 * Skip too large fonts.
+		 */
+		font = fl->font_data;
+		if (height / font->vfbd_height < rows ||
+		    width / font->vfbd_width < cols)
+			continue;
+
 		next = STAILQ_NEXT(fl, font_next);
 
 		/*
@@ -2069,7 +2160,6 @@ gfx_get_font(void)
 		 * we have our font. Make sure, it actually is loaded.
 		 */
 		if (next == NULL || next->font_data->vfbd_height < size) {
-			font = fl->font_data;
 			if (font->vfbd_font == NULL ||
 			    fl->font_flags == FONT_RELOAD) {
 				if (fl->font_load != NULL &&
@@ -2078,6 +2168,7 @@ gfx_get_font(void)
 			}
 			break;
 		}
+		font = NULL;
 	}
 
 	return (font);
@@ -2108,7 +2199,7 @@ set_font(teken_unit_t *rows, teken_unit_t *cols, teken_unit_t h, teken_unit_t w)
 	}
 
 	if (font == NULL)
-		font = gfx_get_font();
+		font = gfx_get_font(*rows, *cols, h, w);
 
 	if (font != NULL) {
 		*rows = height / font->vfbd_height;
@@ -2919,4 +3010,146 @@ gfx_get_edid_resolution(struct vesa_edid_info *edid, edid_res_list_t *res)
 		}
 	}
 	return (!TAILQ_EMPTY(res));
+}
+
+vm_offset_t
+build_font_module(vm_offset_t addr)
+{
+	vt_font_bitmap_data_t *bd;
+	struct vt_font *fd;
+	struct preloaded_file *fp;
+	size_t size;
+	uint32_t checksum;
+	int i;
+	struct font_info fi;
+	struct fontlist *fl;
+	uint64_t fontp;
+
+	if (STAILQ_EMPTY(&fonts))
+		return (addr);
+
+	/* We can't load first */
+	if ((file_findfile(NULL, NULL)) == NULL) {
+		printf("Can not load font module: %s\n",
+		    "the kernel is not loaded");
+		return (addr);
+	}
+
+	/* helper pointers */
+	bd = NULL;
+	STAILQ_FOREACH(fl, &fonts, font_next) {
+		if (gfx_state.tg_font.vf_width == fl->font_data->vfbd_width &&
+		    gfx_state.tg_font.vf_height == fl->font_data->vfbd_height) {
+			/*
+			 * Kernel does have better built in font.
+			 */
+			if (fl->font_flags == FONT_BUILTIN)
+				return (addr);
+
+			bd = fl->font_data;
+			break;
+		}
+	}
+	if (bd == NULL)
+		return (addr);
+	fd = bd->vfbd_font;
+
+	fi.fi_width = fd->vf_width;
+	checksum = fi.fi_width;
+	fi.fi_height = fd->vf_height;
+	checksum += fi.fi_height;
+	fi.fi_bitmap_size = bd->vfbd_uncompressed_size;
+	checksum += fi.fi_bitmap_size;
+
+	size = roundup2(sizeof (struct font_info), 8);
+	for (i = 0; i < VFNT_MAPS; i++) {
+		fi.fi_map_count[i] = fd->vf_map_count[i];
+		checksum += fi.fi_map_count[i];
+		size += fd->vf_map_count[i] * sizeof (struct vfnt_map);
+		size += roundup2(size, 8);
+	}
+	size += bd->vfbd_uncompressed_size;
+
+	fi.fi_checksum = -checksum;
+
+	fp = file_findfile(NULL, md_kerntype);
+	if (fp == NULL)
+		panic("can't find kernel file");
+
+	fontp = addr;
+	addr += archsw.arch_copyin(&fi, addr, sizeof (struct font_info));
+	addr = roundup2(addr, 8);
+
+	/* Copy maps. */
+	for (i = 0; i < VFNT_MAPS; i++) {
+		if (fd->vf_map_count[i] != 0) {
+			addr += archsw.arch_copyin(fd->vf_map[i], addr,
+			    fd->vf_map_count[i] * sizeof (struct vfnt_map));
+			addr = roundup2(addr, 8);
+		}
+	}
+
+	/* Copy the bitmap. */
+	addr += archsw.arch_copyin(fd->vf_bytes, addr, fi.fi_bitmap_size);
+
+	/* Looks OK so far; populate control structure */
+	file_addmetadata(fp, MODINFOMD_FONT, sizeof(fontp), &fontp);
+	return (addr);
+}
+
+vm_offset_t
+build_splash_module(vm_offset_t addr, int type)
+{
+	struct preloaded_file *fp;
+	struct splash_info si;
+	const char *splash;
+	png_t png;
+	uint64_t splashp;
+	int error;
+
+	/* We can't load first */
+	if ((file_findfile(NULL, NULL)) == NULL) {
+		printf("Can not load splash module: %s\n",
+		    "the kernel is not loaded");
+		return (addr);
+	}
+
+	fp = file_findfile(NULL, md_kerntype);
+	if (fp == NULL)
+		panic("can't find kernel file");
+
+	if (type == SPLASH_STARTUP)
+		splash = getenv("splash");
+	if (type == SPLASH_SHUTDOWN)
+		splash = getenv("shutdown_splash");
+
+	if (splash == NULL)
+		return (addr);
+
+	/* Parse png */
+	if ((error = png_open(&png, splash)) != PNG_NO_ERROR) {
+		return (addr);
+	}
+
+	si.si_width = png.width;
+	si.si_height = png.height;
+	si.si_depth = png.bpp;
+	splashp = addr;
+	addr += archsw.arch_copyin(&si, addr, sizeof (struct splash_info));
+	addr = roundup2(addr, 8);
+
+	/* Copy the bitmap. */
+	addr += archsw.arch_copyin(png.image, addr, png.png_datalen);
+
+	if (type == SPLASH_STARTUP) {
+		printf("Loading splash ok\n");
+		file_addmetadata(fp, MODINFOMD_SPLASH,
+		    sizeof(splashp), &splashp);
+	}
+	if (type == SPLASH_SHUTDOWN) {
+		printf("Loading shutdown splash ok\n");
+		file_addmetadata(fp, MODINFOMD_SHTDWNSPLASH,
+		    sizeof(splashp), &splashp);
+	}
+	return (addr);
 }

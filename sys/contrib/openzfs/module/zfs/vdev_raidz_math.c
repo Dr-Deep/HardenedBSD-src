@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -22,6 +23,7 @@
  * Copyright (C) 2016 Gvozden Nešković. All rights reserved.
  */
 
+#include <sys/simd.h>
 #include <sys/zfs_context.h>
 #include <sys/types.h>
 #include <sys/zio.h>
@@ -29,7 +31,6 @@
 #include <sys/zfs_debug.h>
 #include <sys/vdev_raidz.h>
 #include <sys/vdev_raidz_impl.h>
-#include <sys/simd.h>
 
 /* Opaque implementation with NULL methods to represent original methods */
 static const raidz_impl_ops_t vdev_raidz_original_impl = {
@@ -46,19 +47,19 @@ static raidz_impl_ops_t vdev_raidz_fastest_impl = {
 static const raidz_impl_ops_t *const raidz_all_maths[] = {
 	&vdev_raidz_original_impl,
 	&vdev_raidz_scalar_impl,
-#if defined(__x86_64) && defined(HAVE_SSE2)	/* only x86_64 for now */
+#if defined(__x86_64) && HAVE_SIMD(SSE2)	/* only x86_64 for now */
 	&vdev_raidz_sse2_impl,
 #endif
-#if defined(__x86_64) && defined(HAVE_SSSE3)	/* only x86_64 for now */
+#if defined(__x86_64) && HAVE_SIMD(SSSE3)	/* only x86_64 for now */
 	&vdev_raidz_ssse3_impl,
 #endif
-#if defined(__x86_64) && defined(HAVE_AVX2)	/* only x86_64 for now */
+#if defined(__x86_64) && HAVE_SIMD(AVX2)	/* only x86_64 for now */
 	&vdev_raidz_avx2_impl,
 #endif
-#if defined(__x86_64) && defined(HAVE_AVX512F)	/* only x86_64 for now */
+#if defined(__x86_64) && HAVE_SIMD(AVX512F)	/* only x86_64 for now */
 	&vdev_raidz_avx512f_impl,
 #endif
-#if defined(__x86_64) && defined(HAVE_AVX512BW)	/* only x86_64 for now */
+#if defined(__x86_64) && HAVE_SIMD(AVX512BW)	/* only x86_64 for now */
 	&vdev_raidz_avx512bw_impl,
 #endif
 #if defined(__aarch64__) && !defined(__FreeBSD__)
@@ -81,7 +82,7 @@ static boolean_t raidz_math_initialized = B_FALSE;
 
 #define	RAIDZ_IMPL_READ(i)	(*(volatile uint32_t *) &(i))
 
-static uint32_t zfs_vdev_raidz_impl = IMPL_SCALAR;
+uint32_t zfs_vdev_raidz_impl = IMPL_SCALAR;
 static uint32_t user_sel_impl = IMPL_FASTEST;
 
 /* Hold all supported implementations */
@@ -285,17 +286,17 @@ raidz_math_kstat_headers(char *buf, size_t size)
 {
 	ASSERT3U(size, >=, RAIDZ_KSTAT_LINE_LEN);
 
-	ssize_t off = snprintf(buf, size, "%-17s", "implementation");
+	ssize_t off = kmem_scnprintf(buf, size, "%-17s", "implementation");
 
 	for (int i = 0; i < ARRAY_SIZE(raidz_gen_name); i++)
-		off += snprintf(buf + off, size - off, "%-16s",
+		off += kmem_scnprintf(buf + off, size - off, "%-16s",
 		    raidz_gen_name[i]);
 
 	for (int i = 0; i < ARRAY_SIZE(raidz_rec_name); i++)
-		off += snprintf(buf + off, size - off, "%-16s",
+		off += kmem_scnprintf(buf + off, size - off, "%-16s",
 		    raidz_rec_name[i]);
 
-	(void) snprintf(buf + off, size - off, "\n");
+	(void) kmem_scnprintf(buf + off, size - off, "\n");
 
 	return (0);
 }
@@ -311,34 +312,35 @@ raidz_math_kstat_data(char *buf, size_t size, void *data)
 	ASSERT3U(size, >=, RAIDZ_KSTAT_LINE_LEN);
 
 	if (cstat == fstat) {
-		off += snprintf(buf + off, size - off, "%-17s", "fastest");
+		off += kmem_scnprintf(buf + off, size - off, "%-17s",
+		    "fastest");
 
 		for (i = 0; i < ARRAY_SIZE(raidz_gen_name); i++) {
 			int id = fstat->gen[i];
-			off += snprintf(buf + off, size - off, "%-16s",
+			off += kmem_scnprintf(buf + off, size - off, "%-16s",
 			    raidz_supp_impl[id]->name);
 		}
 		for (i = 0; i < ARRAY_SIZE(raidz_rec_name); i++) {
 			int id = fstat->rec[i];
-			off += snprintf(buf + off, size - off, "%-16s",
+			off += kmem_scnprintf(buf + off, size - off, "%-16s",
 			    raidz_supp_impl[id]->name);
 		}
 	} else {
 		ptrdiff_t id = cstat - raidz_impl_kstats;
 
-		off += snprintf(buf + off, size - off, "%-17s",
+		off += kmem_scnprintf(buf + off, size - off, "%-17s",
 		    raidz_supp_impl[id]->name);
 
 		for (i = 0; i < ARRAY_SIZE(raidz_gen_name); i++)
-			off += snprintf(buf + off, size - off, "%-16llu",
+			off += kmem_scnprintf(buf + off, size - off, "%-16llu",
 			    (u_longlong_t)cstat->gen[i]);
 
 		for (i = 0; i < ARRAY_SIZE(raidz_rec_name); i++)
-			off += snprintf(buf + off, size - off, "%-16llu",
+			off += kmem_scnprintf(buf + off, size - off, "%-16llu",
 			    (u_longlong_t)cstat->rec[i]);
 	}
 
-	(void) snprintf(buf + off, size - off, "\n");
+	(void) kmem_scnprintf(buf + off, size - off, "\n");
 
 	return (0);
 }
@@ -632,39 +634,30 @@ vdev_raidz_impl_set(const char *val)
 	return (err);
 }
 
-#if defined(_KERNEL) && defined(__linux__)
+#if defined(_KERNEL)
 
-static int
-zfs_vdev_raidz_impl_set(const char *val, zfs_kernel_param_t *kp)
-{
-	return (vdev_raidz_impl_set(val));
-}
-
-static int
-zfs_vdev_raidz_impl_get(char *buffer, zfs_kernel_param_t *kp)
+int
+vdev_raidz_impl_get(char *buffer, size_t size)
 {
 	int i, cnt = 0;
 	char *fmt;
 	const uint32_t impl = RAIDZ_IMPL_READ(zfs_vdev_raidz_impl);
 
-	ASSERT(raidz_math_initialized);
-
 	/* list mandatory options */
 	for (i = 0; i < ARRAY_SIZE(math_impl_opts) - 2; i++) {
 		fmt = (impl == math_impl_opts[i].sel) ? "[%s] " : "%s ";
-		cnt += sprintf(buffer + cnt, fmt, math_impl_opts[i].name);
+		cnt += kmem_scnprintf(buffer + cnt, size - cnt, fmt,
+		    math_impl_opts[i].name);
 	}
 
 	/* list all supported implementations */
 	for (i = 0; i < raidz_supp_impl_cnt; i++) {
 		fmt = (i == impl) ? "[%s] " : "%s ";
-		cnt += sprintf(buffer + cnt, fmt, raidz_supp_impl[i]->name);
+		cnt += kmem_scnprintf(buffer + cnt, size - cnt, fmt,
+		    raidz_supp_impl[i]->name);
 	}
 
 	return (cnt);
 }
 
-module_param_call(zfs_vdev_raidz_impl, zfs_vdev_raidz_impl_set,
-    zfs_vdev_raidz_impl_get, NULL, 0644);
-MODULE_PARM_DESC(zfs_vdev_raidz_impl, "Select raidz implementation.");
 #endif

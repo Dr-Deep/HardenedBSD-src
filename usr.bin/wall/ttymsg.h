@@ -1,5 +1,4 @@
-/* $FreeBSD$ */
 
 #define	TTYMSG_IOV_MAX	32
 
-const char	*ttymsg(struct iovec *, int, const char *, int);
+int ttymsg(struct iovec *, int, const char *, int, bool);

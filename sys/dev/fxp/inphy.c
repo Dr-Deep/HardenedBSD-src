@@ -31,8 +31,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * driver for Intel 82553 and 82555 PHYs
  */
@@ -65,7 +63,7 @@ static device_method_t inphy_methods[] = {
 	DEVMETHOD(device_attach,	inphy_attach),
 	DEVMETHOD(device_detach,	mii_phy_detach),
 	DEVMETHOD(device_shutdown,	bus_generic_shutdown),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t inphy_driver = {

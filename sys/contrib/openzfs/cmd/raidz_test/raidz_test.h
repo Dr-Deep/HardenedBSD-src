@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -71,7 +72,7 @@ typedef struct raidz_test_opts {
 
 static const raidz_test_opts_t rto_opts_defaults = {
 	.rto_ashift = 9,
-	.rto_offset = 1ULL << 0,
+	.rto_offset = 0,
 	.rto_dcols = 8,
 	.rto_dsize = 1<<19,
 	.rto_v = D_ALL,
@@ -118,8 +119,5 @@ static inline size_t ilog2(size_t a)
 void init_zio_abd(zio_t *zio);
 
 void run_raidz_benchmark(void);
-
-struct raidz_map *vdev_raidz_map_alloc_expanded(abd_t *, uint64_t, uint64_t,
-    uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
 #endif /* RAIDZ_TEST_H */

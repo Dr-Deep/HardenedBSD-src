@@ -33,7 +33,6 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 
 OPENPAM=	${SRCTOP}/contrib/openpam
 .PATH: ${OPENPAM}/include ${OPENPAM}/lib/libpam ${OPENPAM}/doc/man
@@ -43,9 +42,7 @@ OPENPAM=	${SRCTOP}/contrib/openpam
 SHLIB=	pam
 .endif
 
-PACKAGE=	runtime
-
-MK_PROFILE=no
+LIB_PACKAGE=
 
 SRCS=	openpam_asprintf.c \
 	openpam_borrow_cred.c \
@@ -151,11 +148,12 @@ MAN?=	openpam.3 \
 	pam_strerror.3 \
 	pam_verror.3 \
 	pam_vinfo.3 \
-	pam_vprompt.3 \
-	pam.conf.5
+	pam_vprompt.3
 
-MLINKS?=	pam.conf.5 pam.d.5
+MANNODEV?=	pam.conf.5
+MANNODEVLINKS?=	pam.conf.5 pam.d.5
 
+CFLAGS+= -DLOCALBASE=\"${LOCALBASE:U/usr/local}\"
 CFLAGS+= -I${OPENPAM}/include
 CFLAGS+= -DLIB_MAJ=${SHLIB_MAJOR}
 CFLAGS+= -DHAVE_DLFUNC=1

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -107,6 +108,10 @@
 #include <sys/avl.h>
 #include <sys/cmn_err.h>
 #include <sys/mod.h>
+
+#ifndef _KERNEL
+#include <string.h>
+#endif
 
 /*
  * Walk from one node to the previous valued node (ie. an infix walk
@@ -220,7 +225,7 @@ avl_nearest(avl_tree_t *tree, avl_index_t where, int direction)
 	size_t off = tree->avl_offset;
 
 	if (node == NULL) {
-		ASSERT(tree->avl_root == NULL);
+		ASSERT0P(tree->avl_root);
 		return (NULL);
 	}
 	data = AVL_NODE2DATA(node, off);
@@ -473,7 +478,7 @@ avl_insert(avl_tree_t *tree, void *new_data, avl_index_t where)
 	size_t off = tree->avl_offset;
 
 #ifdef _LP64
-	ASSERT(((uintptr_t)new_data & 0x7) == 0);
+	ASSERT0(((uintptr_t)new_data & 0x7));
 #endif
 
 	node = AVL_DATA2NODE(new_data, off);
@@ -490,10 +495,10 @@ avl_insert(avl_tree_t *tree, void *new_data, avl_index_t where)
 	AVL_SETBALANCE(node, 0);
 	AVL_SETPARENT(node, parent);
 	if (parent != NULL) {
-		ASSERT(parent->avl_child[which_child] == NULL);
+		ASSERT0P(parent->avl_child[which_child]);
 		parent->avl_child[which_child] = node;
 	} else {
-		ASSERT(tree->avl_root == NULL);
+		ASSERT0P(tree->avl_root);
 		tree->avl_root = node;
 	}
 	/*
@@ -603,7 +608,7 @@ avl_insert_here(
 		ASSERT(diff > 0 ? child == 1 : child == 0);
 #endif
 	}
-	ASSERT(node->avl_child[child] == NULL);
+	ASSERT0P(node->avl_child[child]);
 
 	avl_insert(tree, new_data, AVL_MKINDEX(node, child));
 }
@@ -695,7 +700,7 @@ avl_remove(avl_tree_t *tree, void *data)
 		 */
 		tmp = *node;
 
-		*node = *delete;
+		memcpy(node, delete, sizeof (*node));
 		if (node->avl_child[left] == node)
 			node->avl_child[left] = &tmp;
 
@@ -876,7 +881,7 @@ avl_create(avl_tree_t *tree, int (*compar) (const void *, const void *),
 	ASSERT(size > 0);
 	ASSERT(size >= offset + sizeof (avl_node_t));
 #ifdef _LP64
-	ASSERT((offset & 0x7) == 0);
+	ASSERT0((offset & 0x7));
 #endif
 
 	tree->avl_compar = compar;
@@ -892,8 +897,8 @@ void
 avl_destroy(avl_tree_t *tree)
 {
 	ASSERT(tree);
-	ASSERT(tree->avl_numnodes == 0);
-	ASSERT(tree->avl_root == NULL);
+	ASSERT0(tree->avl_numnodes);
+	ASSERT0P(tree->avl_root);
 }
 
 

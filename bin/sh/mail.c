@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -30,14 +32,6 @@
  * SUCH DAMAGE.
  */
 
-#ifndef lint
-#if 0
-static char sccsid[] = "@(#)mail.c	8.2 (Berkeley) 5/4/95";
-#endif
-#endif /* not lint */
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Routines to check for mail.  (Perhaps make part of main.c?)
  */
@@ -63,7 +57,7 @@ static time_t mailtime[MAXMBOXES];	/* times of mailboxes */
 
 /*
  * Print appropriate message(s) if mail has arrived.  If the argument is
- * nozero, then the value of MAIL has changed, so we just update the
+ * non-zero, then the value of MAIL has changed, so we just update the
  * values.
  */
 

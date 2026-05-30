@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2015 Tycho Nightingale <tycho.nightingale@pluribusnetworks.com>
  * All rights reserved.
@@ -24,16 +24,16 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _RFB_H_
 #define	_RFB_H_
 
+#include <sys/socket.h>
+
 #define	RFB_PORT	5900
 
-int	rfb_init(const char *hostname, int port, int wait,
+int	rfb_init(sa_family_t family, const char *hostname, int port, int wait,
 	    const char *password);
 
 #endif /* _RFB_H_ */

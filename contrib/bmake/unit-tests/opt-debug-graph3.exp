@@ -4,7 +4,7 @@ false
 false
 *** Error code 1 (continuing)
 `all' not remade because of errors.
-#*** Input graph:
+#*** Begin input graph for pass 3 in <curdir>:
 # made-target, made, type OP_DEPENDS|OP_PHONY|OP_HAS_COMMANDS|OP_DEPS_FOUND|OP_MARK, flags REMAKE|DONE_ALLSRC
 #
 # *** MAIN TARGET ***
@@ -55,12 +55,15 @@ all             : made-target error-target aborted-target
 .MAKE            = <details omitted>
 .MAKE.DEPENDFILE = <details omitted>
 .MAKE.GID        = <details omitted>
+.MAKE.JOBS.C     = <details omitted>
 .MAKE.LEVEL      = <details omitted>
+.MAKE.LEVEL.ENV  = MAKELEVEL
 .MAKE.MAKEFILES  = <details omitted>
 .MAKE.MAKEFILE_PREFERENCE = <details omitted>
 .MAKE.OS         = <details omitted>
 .MAKE.PID        = <details omitted>
 .MAKE.PPID       = <details omitted>
+.MAKE.SAVE_DOLLARS = <details omitted>
 .MAKE.UID        = <details omitted>
 .MAKEFLAGS       =  -r -k -d g3
 .MAKEOVERRIDES   = # (empty)
@@ -74,7 +77,6 @@ MACHINE_ARCH     = <details omitted>
 MAKE             = <details omitted>
 MFLAGS           =   -r -k -d g3
 #*** Command-line Variables:
-.MAKE.LEVEL.ENV  = MAKELEVEL
 .SHELL           = <details omitted>
 
 #*** Directory Cache:
@@ -84,7 +86,8 @@ MFLAGS           =   -r -k -d g3
 
 #*** Suffixes:
 #*** Transformations:
+#*** End input graph for pass 3 in <curdir>:
 
 Stop.
-make: stopped in unit-tests
+make: stopped making "all" in unit-tests
 exit status 1

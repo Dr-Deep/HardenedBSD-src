@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1998 Doug Rabson
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _ISA_ISAVAR_H_
@@ -105,7 +103,7 @@ struct isa_pnp_id {
 };
 
 enum isa_device_ivars {
-	ISA_IVAR_PORT,
+	ISA_IVAR_PORT = BUS_IVARS_PRIVATE,
 	ISA_IVAR_PORT_0 = ISA_IVAR_PORT,
 	ISA_IVAR_PORT_1,
 	ISA_IVAR_PORTSIZE,
@@ -130,7 +128,8 @@ enum isa_device_ivars {
 	ISA_IVAR_CONFIGATTR,
 	ISA_IVAR_PNP_CSN,
 	ISA_IVAR_PNP_LDN,
-	ISA_IVAR_PNPBIOS_HANDLE
+	ISA_IVAR_PNPBIOS_HANDLE,
+	ISA_IVAR_LAST
 };
 
 /*

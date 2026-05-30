@@ -24,9 +24,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/conf.h>
@@ -1049,7 +1046,7 @@ static device_method_t vss_methods[] = {
 	DEVMETHOD(device_probe, hv_vss_probe),
 	DEVMETHOD(device_attach, hv_vss_attach),
 	DEVMETHOD(device_detach, hv_vss_detach),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t vss_driver = { "hvvss", vss_methods, sizeof(hv_vss_sc)};

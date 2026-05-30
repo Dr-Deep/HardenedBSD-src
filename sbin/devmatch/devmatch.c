@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2017 Netflix, Inc.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -23,9 +25,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <ctype.h>
 #include <devinfo.h>
@@ -33,9 +32,11 @@ __FBSDID("$FreeBSD$");
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sysexits.h>
 #include <unistd.h>
 #include <sys/linker.h>
 #include <sys/module.h>
@@ -48,6 +49,7 @@ static struct option longopts[] = {
 	{ "dump",		no_argument,		NULL,	'd' },
 	{ "hints",		required_argument,	NULL,	'h' },
 	{ "nomatch",		required_argument,	NULL,	'p' },
+	{ "quiet",		no_argument,		NULL,	'q' },
 	{ "unbound",		no_argument,		NULL,	'u' },
 	{ "verbose",		no_argument,		NULL,	'v' },
 	{ NULL,			0,			NULL,	0 }
@@ -55,12 +57,13 @@ static struct option longopts[] = {
 
 #define	DEVMATCH_MAX_HITS 256
 
-static int all_flag;
-static int dump_flag;
+static bool all_flag;
+static bool  dump_flag;
 static char *linker_hints;
 static char *nomatch_str;
-static int unbound_flag;
-static int verbose_flag;
+static bool quiet_flag;
+static bool unbound_flag;
+static bool verbose_flag;
 
 static void *hints;
 static void *hints_end;
@@ -99,6 +102,9 @@ read_linker_hints(void)
 	size_t buflen, len;
 
 	if (linker_hints == NULL) {
+		void *all_hints = NULL;
+		size_t all_len = 0;
+
 		if (sysctlbyname("kern.module_path", NULL, &buflen, NULL, 0) < 0)
 			errx(1, "Can't find kernel module path.");
 		modpath = malloc(buflen);
@@ -108,20 +114,56 @@ read_linker_hints(void)
 			errx(1, "Can't find kernel module path.");
 		p = modpath;
 		while ((q = strsep(&p, ";")) != NULL) {
+			void *h;
+
 			snprintf(fn, sizeof(fn), "%s/linker.hints", q);
-			hints = read_hints(fn, &len);
-			if (hints == NULL)
+			h = read_hints(fn, &len);
+			if (h == NULL)
 				continue;
-			break;
+			if (len < sizeof(int) ||
+			    *(int *)(intptr_t)h != LINKER_HINTS_VERSION) {
+				free(h);
+				continue;
+			}
+			if (all_hints == NULL) {
+				all_hints = h;
+				all_len = len;
+			} else {
+				void *merged;
+
+				merged = realloc(all_hints, all_len + len - sizeof(int));
+				if (merged == NULL) {
+					free(h);
+					continue;
+				}
+				all_hints = merged;
+				memcpy((char *)all_hints + all_len,
+				    (char *)h + sizeof(int),
+				    len - sizeof(int));
+				all_len += len - sizeof(int);
+				free(h);
+			}
 		}
-		if (q == NULL)
-			errx(1, "Can't read linker hints file.");
+		hints = all_hints;
+		len = all_len;
+		if (hints == NULL) {
+			if (quiet_flag)
+				exit(EX_UNAVAILABLE);
+			else
+				errx(EX_UNAVAILABLE, "Can't read linker hints file.");
+		}
 	} else {
 		hints = read_hints(linker_hints, &len);
 		if (hints == NULL)
 			err(1, "Can't open %s for reading", fn);
 	}
 
+	if (len < sizeof(int)) {
+		warnx("Linker hints file too short.");
+		free(hints);
+		hints = NULL;
+		return;
+	}
 	if (*(int *)(intptr_t)hints != LINKER_HINTS_VERSION) {
 		warnx("Linker hints version %d doesn't match expected %d.",
 		    *(int *)(intptr_t)hints, LINKER_HINTS_VERSION);
@@ -402,7 +444,7 @@ search_hints(const char *bus, const char *dev, const char *pnpinfo)
 				else if (!notme) {
 					if (!unbound_flag) {
 						if (all_flag)
-							printf("%s: %s", *dev ? dev : "unattached", lastmod);
+							printf("%s: %s\n", *dev ? dev : "unattached", lastmod);
 						else
 							printf("%s\n", lastmod);
 						if (verbose_flag)
@@ -441,7 +483,7 @@ find_unmatched(struct devinfo_dev *dev, void *arg)
 			break;
 		if (!(dev->dd_flags & DF_ENABLED))
 			break;
-		if (dev->dd_flags & DF_ATTACHED_ONCE)
+		if (!all_flag && dev->dd_flags & DF_ATTACHED_ONCE)
 			break;
 		parent = devinfo_handle_to_device(dev->dd_parent);
 		bus = strdup(parent->dd_name);
@@ -565,14 +607,14 @@ main(int argc, char **argv)
 {
 	int ch;
 
-	while ((ch = getopt_long(argc, argv, "adh:p:uv",
+	while ((ch = getopt_long(argc, argv, "adh:p:quv",
 		    longopts, NULL)) != -1) {
 		switch (ch) {
 		case 'a':
-			all_flag++;
+			all_flag = true;
 			break;
 		case 'd':
-			dump_flag++;
+			dump_flag = true;
 			break;
 		case 'h':
 			linker_hints = optarg;
@@ -580,11 +622,14 @@ main(int argc, char **argv)
 		case 'p':
 			nomatch_str = optarg;
 			break;
+		case 'q':
+			quiet_flag = true;
+			break;
 		case 'u':
-			unbound_flag++;
+			unbound_flag = true;
 			break;
 		case 'v':
-			verbose_flag++;
+			verbose_flag = true;
 			break;
 		default:
 			usage();

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (C) 1996
  *	David L. Nugent.  All rights reserved.
@@ -25,11 +25,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#ifndef lint
-static const char rcsid[] =
-  "$FreeBSD$";
-#endif /* not lint */
 
 #include <sys/wait.h>
 
@@ -124,7 +119,7 @@ pw_update(struct passwd * pwd, char const * user)
 	 */
 	if (pw_mkdb(pw != NULL ? pw->pw_name : NULL) == -1) {
 		pw_fini();
-		err(1, "pw_mkdb()");
+		errx(1, "pw_mkdb()");
 	}
 	free(pw);
 	pw_fini();

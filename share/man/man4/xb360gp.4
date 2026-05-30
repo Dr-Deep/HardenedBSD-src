@@ -21,9 +21,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
-.Dd September 16, 2020
+.Dd November 30, 2025
 .Dt XB360GP 4
 .Os
 .Sh NAME
@@ -58,6 +56,9 @@ The
 device presents the game controller as a
 .Ar evdev
 type device.
+It is accessible to members of the
+.Em games
+group.
 .Sh SYSCTL VARIABLES
 The following variable is available as both
 .Xr sysctl 8
@@ -86,13 +87,13 @@ input event device node.
 The
 .Nm
 driver first appeared in
-.Fx 13.0.
+.Fx 13.0 .
 .Sh AUTHORS
 .An -nosplit
 The
 .Nm
 driver was written by
-.An Greg V Aq Mt greg@unrelenting.technology .
+.An Val Packett Aq Mt val@packett.cool .
 .Pp
 This manual page was written by
 .An Vladimir Kondratyev Aq Mt wulf@FreeBSD.org .

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2020 Amazon.com, Inc. or its affiliates.
  * All rights reserved.
@@ -25,9 +25,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -463,6 +460,9 @@ pl061_attach(device_t dev)
 		goto free_mem;
 	}
 
+	/* Mask all interrupts. They will be unmasked as needed later */
+	bus_write_1(sc->sc_mem_res, PL061_INTMASK, 0);
+
 	ret = bus_setup_intr(dev, sc->sc_irq_res, INTR_TYPE_MISC | INTR_MPSAFE,
 	    pl061_intr, NULL, sc, &sc->sc_irq_hdlr);
 	if (ret) {
@@ -487,14 +487,22 @@ pl061_attach(device_t dev)
 		}
 	}
 
-	sc->sc_busdev = gpiobus_attach_bus(dev);
-	if (sc->sc_busdev == NULL) {
-		device_printf(dev, "couldn't attach gpio bus\n");
+	mtx_init(&sc->sc_mtx, device_get_nameunit(dev), "pl061", MTX_SPIN);
+
+	if (sc->sc_xref != 0 && !intr_pic_register(dev, sc->sc_xref)) {
+		device_printf(dev, "couldn't register PIC\n");
+		PL061_LOCK_DESTROY(sc);
 		goto free_isrc;
 	}
 
-	mtx_init(&sc->sc_mtx, device_get_nameunit(dev), "pl061", MTX_SPIN);
+	sc->sc_busdev = gpiobus_add_bus(dev);
+	if (sc->sc_busdev == NULL) {
+		device_printf(dev, "couldn't attach gpio bus\n");
+		PL061_LOCK_DESTROY(sc);
+		goto free_isrc;
+	}
 
+	bus_attach_children(dev);
 	return (0);
 
 free_isrc:
@@ -503,6 +511,7 @@ free_isrc:
 	 * for (irq = 0; irq < PL061_NUM_GPIO; irq++)
 	 *	intr_isrc_deregister(PIC_INTR_ISRC(sc, irq));
 	*/
+	bus_teardown_intr(dev, sc->sc_irq_res, sc->sc_irq_hdlr);
 	bus_release_resource(dev, SYS_RES_IRQ, sc->sc_irq_rid,
 	    sc->sc_irq_res);
 free_pic:
@@ -549,8 +558,7 @@ static device_method_t pl061_methods[] = {
 
 	/* Bus interface */
 	DEVMETHOD(bus_setup_intr,	bus_generic_setup_intr),
-	DEVMETHOD(bus_activate_resource,	bus_generic_activate_resource),
-	DEVMETHOD(bus_deactivate_resource,	bus_generic_deactivate_resource),
+	DEVMETHOD(bus_teardown_intr,	bus_generic_teardown_intr),
 
 	/* GPIO protocol */
 	DEVMETHOD(gpio_get_bus,		pl061_get_bus),

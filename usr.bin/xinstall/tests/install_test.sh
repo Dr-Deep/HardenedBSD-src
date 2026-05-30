@@ -23,8 +23,23 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 #
+
+atf_test_case copy_to_empty
+copy_to_empty_body() {
+	printf 'test\n123\r456\r\n789\0z' >testf
+	atf_check -s not-exit:0 -e match:"empty string" \
+	    install testf ""
+}
+
+atf_test_case copy_to_nonexistent_dir
+copy_to_nonexistent_dir_body() {
+	local dir="/nonexistent"
+
+	printf 'test\n123\r456\r\n789\0z' >testf
+	atf_check -s not-exit:0 -e match:$dir": No such file or directory" \
+	    install testf $dir/testf
+}
 
 copy_to_nonexistent_with_opts() {
 	printf 'test\n123\r456\r\n789\0z' >testf
@@ -482,8 +497,61 @@ set_owner_group_mode_unpriv_body() {
 	atf_check_equal "$u:$g:10$cM" "$(stat -f"%u:%g:%p" testc)"
 }
 
+atf_test_case set_optional_exec
+set_optional_exec_head() {
+	atf_set "require.user" "unprivileged"
+}
+set_optional_exec_body()
+{
+	echo "abc" > testfile.src
+
+	atf_check install -d -m ug+rX testdir
+	atf_check test -x testdir
+
+	atf_check install -m ug+rX testfile.src testfile
+	atf_check test ! -x testfile
+}
+
+atf_test_case metalog
+metalog_head() {
+	atf_set "descr" "Test metalog generation"
+}
+metalog_body() {
+	atf_check install -M metalog -D dst -m 0755 -d dst
+	echo ". type=dir mode=0755" >expect
+	atf_check install -M metalog -D dst -m 0705 -d dst/dir
+	echo "./dir type=dir mode=0705" >>expect
+	atf_check -o save:file echo "Hello, world!"
+	atf_check install -M metalog -D dst -m 0604 file dst/dir
+	echo "./dir/file type=file mode=0604 size=14" >>expect
+	atf_check install -M metalog -D dst -lrs dir/file dst/"li nk"
+	echo "./li\040nk type=link mode=0755 link=dir/file" >>expect
+	atf_check mtree -f expect -p dst
+	atf_check -o file:expect cat metalog
+}
+
+atf_test_case digest
+digest_head() {
+	atf_set "descr" "Compute digest while copying"
+}
+digest_body() {
+	atf_check mkdir src dst
+	atf_check -e ignore dd if=/dev/random of=src/file bs=1m count=1
+	for alg in md5 rmd160 sha1 sha256 sha512 ; do
+		rm -f dst/file digest metalog
+		atf_check -o save:digest $alg -q src/file
+		atf_check install -M metalog -D dst -h $alg -m 0644 src/file dst
+		echo -n "./file type=file mode=0644 size=1048576 $alg=" >expect
+		cat digest >>expect
+		atf_check cmp src/file dst/file
+		atf_check -o file:expect cat metalog
+	done
+}
+
 atf_init_test_cases() {
+	atf_add_test_case copy_to_empty
 	atf_add_test_case copy_to_nonexistent
+	atf_add_test_case copy_to_nonexistent_dir
 	atf_add_test_case copy_to_nonexistent_safe
 	atf_add_test_case copy_to_nonexistent_comparing
 	atf_add_test_case copy_to_nonexistent_safe_comparing
@@ -524,4 +592,7 @@ atf_init_test_cases() {
 	atf_add_test_case mkdir_simple
 	atf_add_test_case set_owner_group_mode
 	atf_add_test_case set_owner_group_mode_unpriv
+	atf_add_test_case set_optional_exec
+	atf_add_test_case metalog
+	atf_add_test_case digest
 }

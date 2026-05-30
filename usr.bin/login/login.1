@@ -25,10 +25,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\"	@(#)login.1	8.2 (Berkeley) 5/5/94
-.\" $FreeBSD$
-.\"
-.Dd July 20, 2019
+.Dd December 14, 2025
 .Dt LOGIN 1
 .Os
 .Sh NAME
@@ -63,7 +60,7 @@ logged in user is logging in as themselves.
 .It Fl h
 Specify the host from which the connection was received.
 It is used by various daemons such as
-.Xr telnetd 8 .
+.Nm telnetd .
 This option may only be used by the super-user.
 .It Fl p
 By default,
@@ -90,7 +87,7 @@ file.
 .Pp
 Immediately after logging a user in,
 .Nm
-displays the system copyright notice, the date and time the user last
+displays the date and time the user last
 logged in, the message of the day as well as other information.
 If the file
 .Pa .hushlogin

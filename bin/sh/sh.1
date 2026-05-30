@@ -1,4 +1,6 @@
 .\"-
+.\" SPDX-License-Identifier: BSD-3-Clause
+.\"
 .\" Copyright (c) 1991, 1993
 .\"	The Regents of the University of California.  All rights reserved.
 .\"
@@ -29,10 +31,17 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\"	from: @(#)sh.1	8.6 (Berkeley) 5/4/95
-.\" $FreeBSD$
+.\" Portions of this text are reprinted and reproduced in electronic form
+.\" from IEEE Std 1003.1, 2004 Edition, Standard for Information Technology --
+.\" Portable Operating System Interface (POSIX), The Open Group Base
+.\" Specifications Issue 6, Copyright (C) 2001-2004 by the Institute of
+.\" Electrical and Electronics Engineers, Inc and The Open Group.  In the
+.\" event of any discrepancy between this version and the original IEEE and
+.\" The Open Group Standard, the original IEEE and The Open Group Standard is
+.\" the referee document.  The original Standard can be obtained online at
+.\"     http://www.opengroup.org/unix/online.html.
 .\"
-.Dd May 10, 2021
+.Dd February 17, 2026
 .Dt SH 1
 .Os
 .Sh NAME
@@ -40,14 +49,14 @@
 .Nd command interpreter (shell)
 .Sh SYNOPSIS
 .Nm
-.Op Fl /+abCEefhIimnPpTuVvx
+.Op Fl /+abCEefhIilmnPpTuVvx
 .Op Fl /+o Ar longname
 .Oo
 .Ar script
 .Op Ar arg ...
 .Oc
 .Nm
-.Op Fl /+abCEefhIimnPpTuVvx
+.Op Fl /+abCEefhIilmnPpTuVvx
 .Op Fl /+o Ar longname
 .Fl c Ar string
 .Oo
@@ -55,7 +64,7 @@
 .Op Ar arg ...
 .Oc
 .Nm
-.Op Fl /+abCEefhIimnPpTuVvx
+.Op Fl /+abCEefhIilmnPpTuVvx
 .Op Fl /+o Ar longname
 .Fl s
 .Op Ar arg ...
@@ -219,6 +228,8 @@ command line editor (disables the
 .Fl V
 option if it has been set;
 set automatically when interactive on terminals).
+See
+.Sx Command Line Editing .
 .It Fl e Li errexit
 Exit immediately if any untested command fails in non-interactive mode.
 The exit status of a command is considered to be
@@ -239,11 +250,9 @@ If a shell function is executed and its exit status is explicitly
 tested, all commands of the function are considered to be tested as
 well.
 .Pp
-It is recommended to check for failures explicitly
-instead of relying on
-.Fl e
-because it tends to behave in unexpected ways,
-particularly in larger scripts.
+Note that many commands return non-zero values to convey information other
+than errors, which can cause unexpected program termination with
+.Fl e .
 .It Fl f Li noglob
 Disable pathname expansion.
 .It Fl h Li trackall
@@ -254,11 +263,12 @@ Ignore
 from input when in interactive mode.
 .It Fl i Li interactive
 Force the shell to behave interactively.
+.It Fl l
+Force the shell to act as if it has been invoked as a login shell.
 .It Fl m Li monitor
-Turn on job control (set automatically when interactive).
-A new process group is created for each pipeline (called a job).
-It is possible to suspend jobs or to have them run in the foreground or
-in the background.
+Turn on job control (see
+.Sx Job Control ) .
+Set automatically when interactive.
 In a non-interactive shell,
 this option can be set even if no terminal is available
 and is useful to place processes in separate process groups.
@@ -329,6 +339,8 @@ Enable the built-in
 command line editor (disables
 .Fl E
 if it has been set).
+See
+.Sx Command Line Editing .
 .It Fl v Li verbose
 The shell writes its input to standard error
 as it is read.
@@ -1075,15 +1087,14 @@ or the end of the
 command.
 .Ss Grouping Commands Together
 Commands may be grouped by writing either
-.Pp
 .Sm off
-.Bd -literal -offset -ident
+.Bd -literal -offset indent
 .Po Ar list Pc
 .Ed
 .Sm on
 .Pp
 or
-.Bd -literal -offset -ident
+.Bd -literal -offset indent
 .No { Ar list ; }
 .Ed
 .Pp
@@ -1122,7 +1133,9 @@ and known jobs are cleared.
 Any changes do not affect the parent shell environment.
 .Pp
 A subshell environment may be implemented as a child process or differently.
-If job control is enabled in an interactive shell,
+If job control is enabled in an interactive shell
+(see
+.Sx Job Control ) ,
 commands grouped in parentheses can be suspended and continued as a unit.
 .Pp
 For compatibility with other shells,
@@ -1214,6 +1227,10 @@ It terminates the current executional scope, returning from the closest
 nested function or sourced script;
 if no function or sourced script is being executed,
 it exits the shell instance.
+If
+.Ar exitstatus
+is specified, the exit status is set to its value,
+otherwise it is set to the exit status of the last executed command.
 The
 .Ic return
 command is implemented as a special built-in command.
@@ -1428,6 +1445,16 @@ unless you are the superuser, in which case it defaults to
 may include any of the following formatting sequences,
 which are replaced by the given information:
 .Bl -tag -width indent
+.It Li \eD{format}
+The current time in
+.Xr strftime 3
+.Ar format .
+The braces are required.
+Empty
+.Ar format
+is equivalent to
+\&%X,
+national representation of the time.
 .It Li \eH
 This system's fully-qualified hostname (FQDN).
 .It Li \eh
@@ -1446,6 +1473,24 @@ for normal users and
 for superusers.
 .It Li \e\e
 A literal backslash.
+.It Li \e[
+Start of a sequence of non-printing characters (used, for example,
+to embed ANSI CSI sequences into the prompt).
+.It Li \e]
+End of a sequence of non-printing characters.
+.El
+.Pp
+The following special and non-printing characters are supported
+within the sequence of non-printing characters:
+.Bl -tag -width indent
+.It Li \ea
+Emits ASCII BEL (0x07, 007) character.
+.It Li \ee
+Emits ASCII ESC (0x1b, 033) character.
+.It Li \er
+Emits ASCII CR (0x0d, 015) character.
+.It Li \en
+Emits CRLF sequence.
 .El
 .It Va PS2
 The secondary prompt string, which defaults to
@@ -1914,11 +1959,64 @@ if any).
 To include a
 .Ql - ,
 make it the first or last character listed.
+.Ss Job Control
+A job is a set of processes, comprising a shell pipeline
+(see
+.Sx Pipelines ) ,
+and any processes descended from it, that are all
+in the same process group.
+.Pp
+The job control facility allows users to
+selectively suspend the execution of processes (by pressing
+.Sq Ctrl-Z ,
+if not adjusted using
+.Xr stty 1 ) ,
+continue their execution at a later point,
+and run them in the foreground or in the background (using builtins
+.Ic fg
+and
+.Ic bg ) .
+.Pp
+A job ID is a handle that is used to refer to a job.
+It can take any of the following forms:
+.Bl -tag -width "%?string"
+.It Cm %%
+Current job.
+.It Cm %+
+Current job.
+.It Cm %-
+Previous job.
+.It Cm % Ns Ar n
+Job number
+.Ar n .
+.It Cm % Ns Ar string
+Job whose command begins with
+.Ar string .
+.It Cm %? Ns Ar string
+Job whose command contains
+.Ar string .
+.El
+.Pp
+The job control built-in commands
+are:
+.Ic bg ,
+.Ic fg ,
+.Ic jobid
+and
+.Ic jobs .
+Additionally, the following built-in commands accept a job ID
+as an argument:
+.Ic kill ,
+.Ic wait .
+See
+.Sx Built-in Commands
+below.
 .Ss Built-in Commands
 This section lists the built-in commands.
 .Bl -tag -width indent
-.It Ic \&:
+.It Ic \&: Op Ar arg Ar ...
 A null command that returns a 0 (true) exit value.
+Any arguments are discarded.
 .It Ic \&. Ar file
 The commands in the specified file are read and executed by the shell.
 The
@@ -1940,7 +2038,7 @@ it is sought in the current working directory.
 .It Ic \&[
 A built-in equivalent of
 .Xr test 1 .
-.It Ic alias Oo Ar name Ns Oo = Ns Ar string Oc ... Oc
+.It Ic alias Oo Ar name Ns Oo = Ns Ar string Oc Ar ... Oc
 If
 .Ar name Ns = Ns Ar string
 is specified, the shell defines the alias
@@ -1966,8 +2064,12 @@ subsection.
 Continue the specified jobs
 (or the current job if no jobs are given)
 in the background.
+See
+.Sx Job Control
+for a list of job ID forms.
 .It Ic bind Oo Fl aeklrsv Oc Oo Ar key Oo Ar command Oc Oc
-List or alter key bindings for the line editor.
+List or alter key bindings for the line editor,
+.Xr editline 7 .
 This command is documented in
 .Xr editrc 5 .
 .It Ic break Op Ar num
@@ -2326,30 +2428,65 @@ The number of previous commands that are accessible.
 Move the specified
 .Ar job
 or the current job to the foreground.
+See
+.Sx Job Control
+for a list of job ID forms.
 .It Ic getopts Ar optstring var
-The POSIX
-.Ic getopts
-command.
-The
-.Ic getopts
-command deprecates the older
-.Xr getopt 1
-command.
-The first argument should be a series of letters, each possibly
+Parse command-line options and arguments.
+The first argument
+.Va optstring
+should be a series of letters, each possibly
 followed by a colon which indicates that the option takes an argument.
-The specified variable is set to the parsed option.
+The specified variable
+.Va var
+is set to the parsed option.
 The index of
 the next argument is placed into the shell variable
 .Va OPTIND .
 If an option takes an argument, it is placed into the shell variable
 .Va OPTARG .
-If an invalid option is encountered,
+.Pp
+If the found character
+is not specified by
+.Va optstring
+or if it is missing a required argument,
+the option is considered invalid and:
+.Bl -enum
+.It
+If the first character of
+.Va optstring
+is not a colon then
+.Va OPTARG
+is unset,
 .Ar var
 is set to
-.Ql \&? .
-It returns a false value (1) when it encounters the end of the options.
+.Ql \&?
+and a diagnostic message is written to stderr.
+.It
+If the first character of
+.Va optstring
+is a colon then
+.Va OPTARG
+is set to the option character found,
+.Ar var
+is set to
+.Ql \&:
+when a required argument is missing or to
+.Ql \&?
+when the option was not specified by
+.Va optstring ,
+and no diagnostic message is written to stderr.
+.El
+.Pp
+.Ic getopts
+returns a false value (1) when it encounters the end of the options.
 A new set of arguments may be parsed by assigning
 .Li OPTIND=1 .
+The POSIX
+.Ic getopts
+command deprecates the older
+.Xr getopt 1
+command.
 .It Ic hash Oo Fl rv Oc Op Ar command ...
 The shell maintains a hash table which remembers the locations of commands.
 With no arguments whatsoever, the
@@ -2377,19 +2514,117 @@ Print the process IDs of the processes in the specified
 If the
 .Ar job
 argument is omitted, use the current job.
+See
+.Sx Job Control
+for a list of job ID forms.
 .It Ic jobs Oo Fl lps Oc Op Ar job ...
 Print information about the specified jobs, or all jobs if no
 .Ar job
 argument is given.
-The information printed includes job ID, status and command name.
+See
+.Sx Job Control
+for a list of job ID forms.
 .Pp
 If the
 .Fl l
-option is specified, the PID of each job is also printed.
+option is not specified, the output line is the following
+for each job:
+.Dl Oo Ar job_number Oc Ar current Ar state Ar command
+where:
+.Bl -tag -width "job_number"
+.It Ar job_number
+A number that can be used to identify the process group to the
+.Ic bg ,
+.Ic fg ,
+.Ic kill
+and
+.Ic wait
+commands.
+Using these commands, the job can be identified by prefixing
+the
+.Ar job_number
+with
+.Cm % .
+See also
+.Sx Job Control .
+.It Ar current
+One of the following characters:
+.Bl -tag -width "<space>"
+.It Cm +
+Identifies the job that would be used as a default for the
+.Ic fg
+or
+.Ic bg
+commands.
+.It Cm -
+Identifies the job that would become the default if the
+current default job were to exit.
+.It Aq Cm space
+For all other jobs that are neither marked with
+.Cm +
+nor
+.Cm - .
+.El
+.It Ar state
+One of the following strings, describing the current job state:
+.Bl -tag -width "Stopped (tty output)"
+.It Running
+Indicates that the job has not been suspended by a signal and
+has not exited.
+.It Done
+Indicates that the job completed and returned exit status zero.
+.It Done Ns Pq Ar code
+Indicates that the job completed normally and that it exited
+with the specified non-zero exit status,
+.Ar code .
+.It Suspended
+Indicates that the job was interrupted by the
+.Dv SIGTSTP
+signal.
+This is typically because
+.Sq Ctrl-Z
+was pressed.
+.It Suspended Pq signal
+Indicates that the job was interrupted by the
+.Dv SIGSTOP
+signal.
+.It Stopped Pq tty input
+Indicates that the job was interrupted by the
+.Dv SIGTTIN
+signal.
+This is typically because the command attempted to read from the
+terminal while in the background.
+.It Stopped Pq tty output
+Indicates that the job was interrupted by the
+.Dv SIGTTOU
+signal.
+This is typically because the command attempted to change terminal
+settings or (if
+.Ic stty tostop
+is in effect; see
+.Xr stty 1 )
+write to the terminal while in the background.
+.El
+.Pp
+See
+.Xr signal 3
+for additional information on the meanings of the aforementioned signals.
+.It Ar command
+The associated command that was given to the shell.
+.El
+.Pp
+If the
+.Fl l
+option is specified, the PID of the job is
+inserted before the
+.Ar state
+field.
+.Pp
 If the
 .Fl p
 option is specified, only the process IDs for the process group leaders
 are printed, one per line.
+.Pp
 If the
 .Fl s
 option is specified, only the PIDs of the job commands are printed, one per
@@ -2397,7 +2632,11 @@ line.
 .It Ic kill
 A built-in equivalent of
 .Xr kill 1
-that additionally supports sending signals to jobs.
+that additionally supports sending signals to jobs,
+by means of specifying their job IDs as arguments.
+See
+.Sx Job Control
+for a list of job ID forms.
 .It Ic local Oo Ar variable ... Oc Op Fl
 See the
 .Sx Functions
@@ -2485,6 +2724,10 @@ to explicitly specify seconds, minutes or hours.
 If none is supplied,
 .Ql s
 is assumed.
+Multiple value-unit groups may be stringed together, in which case
+they are added up, e.g.\&
+.Ql 1h30m15s
+which adds up to 5,415 seconds.
 .Pp
 The
 .Fl e
@@ -2811,6 +3054,11 @@ Similarly, the
 command can be used to enable a subset of
 .Nm emacs Ns -style
 command line editing features.
+.Pp
+Command line editing in
+.Nm
+is handled by the
+.Xr editline 7 .
 .Sh ENVIRONMENT
 The following environment variables affect the execution of
 .Nm :
@@ -2843,6 +3091,10 @@ which may affect the shell as described under
 .Bl -tag -width "/etc/suid_profileXX" -compact
 .It Pa ~/.profile
 User's login profile.
+.It Pa ~/.sh_history
+Default shell history.
+.It Pa ~/.shrc
+Default shell resources.
 .It Pa /etc/profile
 System login profile.
 .It Pa /etc/shells
@@ -2878,9 +3130,11 @@ will return the argument.
 .Xr execve 2 ,
 .Xr getrlimit 2 ,
 .Xr umask 2 ,
+.Xr signal 3 ,
 .Xr wctype 3 ,
 .Xr editrc 5 ,
-.Xr shells 5
+.Xr shells 5 ,
+.Xr editline 7
 .Sh HISTORY
 A
 .Nm
@@ -2896,7 +3150,9 @@ This version of
 was rewritten in 1989 under the
 .Bx
 license after the Bourne shell from
-.At V.4 .
+.At V.4
+and first appeared in
+.Bx 4.3 Net/2 .
 .Sh AUTHORS
 This version of
 .Nm

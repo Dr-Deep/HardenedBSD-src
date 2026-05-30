@@ -1,4 +1,6 @@
-.\"-
+.\"
+.\" SPDX-License-Identifier: BSD-2-Clause
+.\"
 .\" Copyright (c) 2003	Sam Leffler, Errno Consulting
 .\" All rights reserved.
 .\"
@@ -23,14 +25,12 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"/
-.Dd July 29, 2020
+.Dd October 31, 2025
 .Dt SAFE 4
 .Os
 .Sh NAME
 .Nm safe
-.Nd SafeNet crypto accelerator
+.Nd SafeNet SafeXcel 1141/1741 crypto accelerator
 .Sh SYNOPSIS
 To compile this driver into the kernel,
 place the following lines in your
@@ -48,11 +48,20 @@ module at boot time, place the following line in
 safe_load="YES"
 .Ed
 .Pp
-.Nm sysctl Va hw.safe.debug
-.Nm sysctl Va hw.safe.dump
-.Nm sysctl Va hw.safe.rnginterval
-.Nm sysctl Va hw.safe.rngbufsize
-.Nm sysctl Va hw.safe.rngmaxalarm
+In
+.Xr sysctl.conf 5 :
+.Bd -ragged -offset indent
+.Cd hw.safe.debug
+.Cd hw.safe.dump
+.Cd hw.safe.rnginterval
+.Cd hw.safe.rngbufsize
+.Cd hw.safe.rngmaxalarm
+.Ed
+.Sh DEPRECATION NOTICE
+The
+.Nm
+driver is deprecated and is scheduled for removal in
+.Fx 16.0 .
 .Sh DESCRIPTION
 The
 .Nm
@@ -108,15 +117,13 @@ to dump the hardware interrupt registers.
 .Sh HARDWARE
 The
 .Nm
-driver supports cards containing any of the following chips:
-.Bl -tag -width "SafeNet 1141" -offset indent
-.It SafeNet 1141
-The original chipset.
+driver supports the following SafeXcel chips:
+.Bl -column "SafeNet 1141" "The original chipset. Supports" -offset indent
+.It SafeNet 1141 Ta The original chipset.
 Supports DES, Triple-DES, AES, MD5, and SHA-1
 symmetric crypto operations, RNG, public key operations, and full IPsec
 packet processing.
-.It SafeNet 1741
-A faster version of the 1141.
+.It SafeNet 1741 Ta A faster version of the 1141.
 .El
 .Sh SEE ALSO
 .Xr crypt 3 ,
@@ -126,5 +133,14 @@ A faster version of the 1141.
 .Xr random 4 ,
 .Xr crypto 7 ,
 .Xr crypto 9
+.Sh HISTORY
+The
+.Nm
+driver first appeared in
+.Fx 5.2 .
+It is deprecated in
+.Fx 15.0
+and removed in
+.Fx 16.0 .
 .Sh BUGS
 Public key support is not implemented.

@@ -22,16 +22,11 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
  * Generic DT based cpufreq driver
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -46,8 +41,8 @@ __FBSDID("$FreeBSD$");
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
-#include <dev/extres/clk/clk.h>
-#include <dev/extres/regulator/regulator.h>
+#include <dev/clk/clk.h>
+#include <dev/regulator/regulator.h>
 
 #include "cpufreq_if.h"
 
@@ -108,17 +103,26 @@ static const struct cpufreq_dt_opp *
 cpufreq_dt_find_opp(device_t dev, uint64_t freq)
 {
 	struct cpufreq_dt_softc *sc;
-	ssize_t n;
+	uint64_t diff, best_diff;
+	ssize_t n, best_n;
 
 	sc = device_get_softc(dev);
 
+	diff = 0;
+	best_diff = ~0;
 	DPRINTF(dev, "Looking for freq %ju\n", freq);
-	for (n = 0; n < sc->nopp; n++)
-		if (CPUFREQ_CMP(sc->opp[n].freq, freq))
-			return (&sc->opp[n]);
+	for (n = 0; n < sc->nopp; n++) {
+		diff = abs64((int64_t)sc->opp[n].freq - (int64_t)freq);
+		DPRINTF(dev, "Testing %ju, diff is %ju\n", sc->opp[n].freq, diff);
+		if (diff < best_diff) {
+			best_diff = diff;
+			best_n = n;
+			DPRINTF(dev, "%ju is best for now\n", sc->opp[n].freq);
+		}
+	}
 
-	DPRINTF(dev, "Couldn't find one\n");
-	return (NULL);
+	DPRINTF(dev, "Will use %ju\n", sc->opp[best_n].freq);
+	return (&sc->opp[best_n]);
 }
 
 static void
@@ -206,7 +210,7 @@ cpufreq_dt_set(device_t dev, const struct cf_setting *set)
 	} else
 		uvolt = 0;
 
-	opp = cpufreq_dt_find_opp(sc->dev, set->freq * 1000000);
+	opp = cpufreq_dt_find_opp(sc->dev, (uint64_t)set->freq * 1000000);
 	if (opp == NULL) {
 		device_printf(dev, "Couldn't find an opp for this freq\n");
 		return (EINVAL);
@@ -311,7 +315,7 @@ cpufreq_dt_identify(driver_t *driver, device_t parent)
 	    !OF_hasprop(node, "operating-points-v2"))
 		return;
 
-	if (device_find_child(parent, "cpufreq_dt", -1) != NULL)
+	if (device_find_child(parent, "cpufreq_dt", DEVICE_UNIT_ANY) != NULL)
 		return;
 
 	if (BUS_ADD_CHILD(parent, 0, "cpufreq_dt", device_get_unit(parent))
@@ -397,7 +401,7 @@ cpufreq_dt_oppv2_parse(struct cpufreq_dt_softc *sc, phandle_t node)
 	if (opp_table == opp_xref)
 		return (ENXIO);
 
-	if (!OF_hasprop(opp_table, "opp-shared")) {
+	if (!OF_hasprop(opp_table, "opp-shared") && mp_ncpus > 1) {
 		device_printf(sc->dev, "Only opp-shared is supported\n");
 		return (ENXIO);
 	}

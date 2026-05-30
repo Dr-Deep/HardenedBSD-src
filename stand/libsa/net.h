@@ -32,8 +32,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _STAND_NET_H
@@ -77,6 +75,7 @@ enum net_proto {
 
 extern	u_char bcea[6];
 extern	char rootpath[FNAME_SIZE];
+extern  int rootport;
 extern	char bootfile[FNAME_SIZE];
 extern	char hostname[FNAME_SIZE];
 extern	int hostnamelen;

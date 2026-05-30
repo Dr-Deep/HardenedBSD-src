@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2009, 2014 The FreeBSD Foundation
  *
  * This software was developed by Ed Schouten under sponsorship from the
@@ -25,9 +27,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
 #include <sys/endian.h>
@@ -453,8 +452,8 @@ parse_bdf(FILE *fp, unsigned int map_idx)
 			if (sscanf(ln + 7, "%d %d", &dwidth, &dwy) != 2)
 				errx(1, "invalid DWIDTH at line %u", linenum);
 			if (dwy != 0 || (dwidth != fbbw && dwidth * 2 != fbbw))
-				errx(1, "bitmap with unsupported DWIDTH %d %d at line %u",
-				    dwidth, dwy, linenum);
+				errx(1, "bitmap with unsupported DWIDTH %d %d (not %d or %d) at line %u",
+				    dwidth, dwy, fbbw, 2 * fbbw, linenum);
 			if (dwidth < fbbw)
 				set_width(dwidth);
 		}
@@ -988,7 +987,7 @@ done:
 	if (rv != 0)
 		perror(filename);
 	fclose(fp);
-	return (0);
+	return (rv);
 }
 
 static void

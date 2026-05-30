@@ -35,12 +35,9 @@
  * SUCH DAMAGE.
  *
  *	from: Utah $Hdr: mem.c 1.13 89/10/08$
- *	from: @(#)mem.c	7.2 (Berkeley) 5/9/91
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Memory special file
  */
@@ -128,8 +125,7 @@ kmem_direct_mapped:	off = v & PAGE_MASK;
 			}
 
 			if (hw_direct_map && !pmap_dev_direct_mapped(v, cnt)) {
-				error = uiomove((void *)PHYS_TO_DMAP(v), cnt,
-				    uio);
+				error = uiomove(PHYS_TO_DMAP(v), cnt, uio);
 			} else {
 				m.phys_addr = trunc_page(v);
 				marr = &m;

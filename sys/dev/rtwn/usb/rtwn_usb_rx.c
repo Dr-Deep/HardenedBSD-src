@@ -19,8 +19,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_wlan.h"
 
 #include <sys/param.h>
@@ -126,10 +124,15 @@ rtwn_rx_copy_to_mbuf(struct rtwn_softc *sc, struct rtwn_rx_stat_common *stat,
 	if (rtwn_rx_check_pre_alloc(sc, stat) != 0)
 		goto fail;
 
-	m = m_get2(totlen, M_NOWAIT, MT_DATA, M_PKTHDR);
+	/*
+	 * Note: this can require >4 KiB (eg de-aggregating an A-MSDU
+	 * from an USB frame.  See kern/286366 for more information.
+	 */
+	m = m_get3(totlen, M_NOWAIT, MT_DATA, M_PKTHDR);
 	if (__predict_false(m == NULL)) {
-		device_printf(sc->sc_dev, "%s: could not allocate RX mbuf\n",
-		    __func__);
+		device_printf(sc->sc_dev,
+		    "%s: could not allocate RX mbuf (%d bytes)\n",
+		    __func__, totlen);
 		goto fail;
 	}
 
@@ -336,6 +339,27 @@ rtwn_report_intr(struct rtwn_usb_softc *uc, struct usb_xfer *xfer,
 			rtwn_cmd_sleepable(sc, NULL, 0, rtwn_ff_flush_all);
 #endif
 		break;
+	case RTWN_RX_TX_REPORT2:
+		if (sc->sc_ratectl != RTWN_RATECTL_NET80211) {
+			/* shouldn't happen */
+			device_printf(sc->sc_dev,
+			    "%s called while ratectl = %d!\n",
+			    __func__, sc->sc_ratectl);
+			break;
+		}
+
+		RTWN_NT_LOCK(sc);
+		rtwn_handle_tx_report2(sc, buf, len);
+		RTWN_NT_UNLOCK(sc);
+
+#ifdef IEEE80211_SUPPORT_SUPERG
+		/*
+		 * NB: this will executed only when 'report' bit is set.
+		 */
+		if (sc->sc_tx_n_active > 0 && --sc->sc_tx_n_active <= 1)
+			rtwn_cmd_sleepable(sc, NULL, 0, rtwn_ff_flush_all);
+#endif
+		break;
 	case RTWN_RX_OTHER:
 		rtwn_handle_c2h_report(sc, buf, len);
 		break;
@@ -363,7 +387,6 @@ rtwn_rx_frame(struct rtwn_softc *sc, struct mbuf *m)
 void
 rtwn_bulk_rx_callback(struct usb_xfer *xfer, usb_error_t error)
 {
-	struct epoch_tracker et;
 	struct rtwn_usb_softc *uc = usbd_xfer_softc(xfer);
 	struct rtwn_softc *sc = &uc->uc_sc;
 	struct ieee80211com *ic = &sc->sc_ic;
@@ -406,7 +429,6 @@ tr_setup:
 			m->m_pkthdr.PH_loc.ptr = rtwn_rx_frame(sc, m);
 			m = m->m_nextpkt;
 		}
-		NET_EPOCH_ENTER(et);
 		RTWN_UNLOCK(sc);
 		m = m0;
 		while (m != NULL) {
@@ -424,7 +446,6 @@ tr_setup:
 			m = next;
 		}
 		RTWN_LOCK(sc);
-		NET_EPOCH_EXIT(et);
 		break;
 	default:
 		/* needs it to the inactive queue due to a error. */

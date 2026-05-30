@@ -21,8 +21,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include "opt_rss.h"
@@ -509,7 +507,10 @@ int mlx5_satisfy_startup_pages(struct mlx5_core_dev *dev, int boot)
 	mlx5_core_dbg(dev, "requested %d %s pages for func_id 0x%x\n",
 		      npages, boot ? "boot" : "init", func_id);
 
-	return give_pages(dev, func_id, npages, 0);
+	if (npages > 0)
+		return give_pages(dev, func_id, npages, 0);
+	else
+		return 0;
 }
 
 enum {
@@ -518,7 +519,7 @@ enum {
 
 s64 mlx5_wait_for_reclaim_vfs_pages(struct mlx5_core_dev *dev)
 {
-	int end = jiffies + msecs_to_jiffies(MAX_RECLAIM_TIME_MSECS);
+	unsigned long end = jiffies + msecs_to_jiffies(MAX_RECLAIM_TIME_MSECS);
 	s64 prevpages = 0;
 	s64 npages = 0;
 
@@ -556,7 +557,7 @@ static int optimal_reclaimed_pages(void)
 
 int mlx5_reclaim_startup_pages(struct mlx5_core_dev *dev)
 {
-	int end = jiffies + msecs_to_jiffies(MAX_RECLAIM_TIME_MSECS);
+	unsigned long end = jiffies + msecs_to_jiffies(MAX_RECLAIM_TIME_MSECS);
 	struct mlx5_fw_page *fwp;
 	struct rb_node *p;
 	int nclaimed = 0;

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: CDDL-1.0
 pkgdracut_02dir = $(dracutdir)/modules.d/02zfsexpandknowledge
 pkgdracut_02_SCRIPTS = \
 	%D%/02zfsexpandknowledge/module-setup.sh
@@ -16,6 +17,7 @@ pkgdracut_90_SCRIPTS = \
 
 pkgdracut_90_DATA = \
 	%D%/90zfs/zfs-env-bootfs.service \
+	%D%/90zfs/zfs-nonroot-necessities.service \
 	%D%/90zfs/zfs-rollback-bootfs.service \
 	%D%/90zfs/zfs-snapshot-bootfs.service
 

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2014 Juniper Networks, Inc.
  * All rights reserved.
  *
@@ -22,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _MKIMG_MKIMG_H_
@@ -31,6 +31,9 @@
 
 #include <sys/queue.h>
 #include <sys/types.h>
+#include <time.h>
+
+extern time_t timestamp;
 
 struct part {
 	TAILQ_ENTRY(part) link;

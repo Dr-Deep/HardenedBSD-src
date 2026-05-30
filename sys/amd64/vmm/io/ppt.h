@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2011 NetApp, Inc.
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _IO_PPT_H_
@@ -36,19 +34,13 @@ int	ppt_map_mmio(struct vm *vm, int bus, int slot, int func,
 		     vm_paddr_t gpa, size_t len, vm_paddr_t hpa);
 int	ppt_unmap_mmio(struct vm *vm, int bus, int slot, int func,
 		       vm_paddr_t gpa, size_t len);
-int	ppt_setup_msi(struct vm *vm, int vcpu, int bus, int slot, int func,
+int	ppt_setup_msi(struct vm *vm, int bus, int slot, int func,
 		      uint64_t addr, uint64_t msg, int numvec);
-int	ppt_setup_msix(struct vm *vm, int vcpu, int bus, int slot, int func,
+int	ppt_setup_msix(struct vm *vm, int bus, int slot, int func,
 		int idx, uint64_t addr, uint64_t msg, uint32_t vector_control);
 int	ppt_disable_msix(struct vm *vm, int bus, int slot, int func);
 int	ppt_assigned_devices(struct vm *vm);
 bool	ppt_is_mmio(struct vm *vm, vm_paddr_t gpa);
-
-/*
- * Returns the number of devices sequestered by the ppt driver for assignment
- * to virtual machines.
- */
-int	ppt_avail_devices(void);
 
 /*
  * The following functions should never be called directly.

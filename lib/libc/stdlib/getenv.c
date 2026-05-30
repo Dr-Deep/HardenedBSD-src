@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2007-2009 Sean C. Farley <scf@FreeBSD.org>
  * All rights reserved.
@@ -26,12 +26,9 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
-
 #include "namespace.h"
 #include <sys/types.h>
+#include <ssp/ssp.h>
 #include <errno.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -39,7 +36,7 @@ __FBSDID("$FreeBSD$");
 #include <string.h>
 #include <unistd.h>
 #include "un-namespace.h"
-
+#include "libc_private.h"
 
 static const char CorruptEnvFindMsg[] = "environment corrupt; unable to find ";
 static const char CorruptEnvValueMsg[] =
@@ -56,7 +53,6 @@ static const char CorruptEnvValueMsg[] =
  *	intEnviron:	Internally-built environ.  Exposed via environ during
  *			(re)builds of the environment.
  */
-extern char **environ;
 static char **origEnviron;
 static char **intEnviron = NULL;
 static int environSize = 0;
@@ -447,6 +443,53 @@ getenv(const char *name)
 	}
 }
 
+
+/*
+ * Like getenv(), but copies the value into the provided buffer.
+ */
+int
+__ssp_real(getenv_r)(const char *name, char *buf, size_t len)
+{
+	const char *val;
+	size_t nameLen;
+	int envNdx;
+
+	if (name == NULL || (nameLen = __strleneq(name)) == 0) {
+		errno = EINVAL;
+		return (-1);
+	}
+
+	if (environ == NULL || environ[0] == NULL) {
+		val = NULL;
+	} else if (envVars == NULL || environ != intEnviron) {
+		val = __findenv_environ(name, nameLen);
+	} else {
+		envNdx = envVarsTotal - 1;
+		val = __findenv(name, nameLen, &envNdx, true);
+	}
+	if (val == NULL) {
+		errno = ENOENT;
+		return (-1);
+	}
+	if (strlcpy(buf, val, len) >= len) {
+		errno = ERANGE;
+		return (-1);
+	}
+	return (0);
+}
+
+
+/*
+ * Runs getenv() unless the current process is tainted by uid or gid changes, in
+ * which case it will return NULL.
+ */
+char *
+secure_getenv(const char *name)
+{
+	if (issetugid())
+		return (NULL);
+	return (getenv(name));
+}
 
 /*
  * Set the value of a variable.  Older settings are labeled as inactive.  If an

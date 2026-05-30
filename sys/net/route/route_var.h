@@ -25,8 +25,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _NET_ROUTE_VAR_H_
@@ -279,13 +277,12 @@ struct nhgrp_object {
 static inline struct nhop_object *
 nhop_select(struct nhop_object *nh, uint32_t flowid)
 {
+	struct nhgrp_object *nhg;
 
-#ifdef ROUTE_MPATH
 	if (NH_IS_NHGRP(nh)) {
-		struct nhgrp_object *nhg = (struct nhgrp_object *)nh;
+		nhg = (struct nhgrp_object *)nh;
 		nh = nhg->nhops[flowid % nhg->nhg_size];
 	}
-#endif
 	return (nh);
 }
 
@@ -310,6 +307,9 @@ int nhgrp_get_filtered_group(struct rib_head *rh, const struct rtentry *rt,
     const struct nhgrp_object *src, rib_filter_f_t flt_func, void *flt_data,
     struct route_nhop_data *rnd);
 int nhgrp_get_addition_group(struct rib_head *rnh,
+    struct route_nhop_data *rnd_orig, struct route_nhop_data *rnd_add,
+    struct route_nhop_data *rnd_new);
+int nhgrp_get_merge_group(struct rib_head *rnh,
     struct route_nhop_data *rnd_orig, struct route_nhop_data *rnd_add,
     struct route_nhop_data *rnd_new);
 

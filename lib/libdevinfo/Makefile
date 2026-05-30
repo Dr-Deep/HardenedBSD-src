@@ -1,5 +1,4 @@
-# $FreeBSD$
-
+PACKAGE=	devmatch
 LIB=	devinfo
 SRCS=	devinfo.c
 INCS=	devinfo.h
@@ -15,7 +14,7 @@ MLINKS+=devinfo.3 devinfo_foreach_device_resource.3
 MLINKS+=devinfo.3 devinfo_foreach_rman_resource.3
 MLINKS+=devinfo.3 devinfo_foreach_rman.3
 
-SHLIB_MAJOR=	6
+SHLIB_MAJOR=	7
 
 WARNS?=	3
 

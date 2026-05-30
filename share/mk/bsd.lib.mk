@@ -1,12 +1,24 @@
-#	from: @(#)bsd.lib.mk	5.26 (Berkeley) 5/2/91
-# $FreeBSD$
+# If INTERNALLIB is defined, we build lib<name>.a and lib<name>_pie.a,
+# i.e. only static archives without dso, in both non-PIE and PIE variants,
+# suitable for static linking into binaries.
+# INTERNALLIB library headers are not installed.  A component that uses
+# the library should add explicit -I$(LIB<name>DIR) to CFLAGS.
 #
+# If PRIVATELIB is defined, we build and install both libprivate<name>.a
+# and libprivate<name>.so, so the library can be linked dynamically, but
+# cannot be picked up by third-party configure scripts.
+# PRIVATELIB library headers are installed into include/private/<name>.
+#
+# If neither of control variables are defined, we install headers into
+# include/, and both non-pic static and shared libraries under the defined
+# name.
 
 .include <bsd.init.mk>
 .include <bsd.compiler.mk>
 .include <bsd.linker.mk>
+.include <bsd.compat.pre.mk>
 
-__<bsd.lib.mk>__:
+__<bsd.lib.mk>__:	.NOTMAIN
 
 .if defined(LIB_CXX) || defined(SHLIB_CXX)
 _LD=	${CXX}
@@ -47,59 +59,74 @@ SONAME?=	${SHLIB_NAME}
 CFLAGS+=	${CRUNCH_CFLAGS}
 .endif
 
-.if ${MK_ASSERT_DEBUG} == "no"
-CFLAGS+= -DNDEBUG
-# XXX: shouldn't we ensure that !asserts marks potentially unused variables as
-# __unused instead of disabling -Werror globally?
-MK_WERROR=	no
+.for _libcompat in ${_ALL_libcompats}
+.if ${SHLIBDIR:M*/lib${_libcompat}} || ${SHLIBDIR:M*/lib${_libcompat}/*}
+TAGS+=	lib${_libcompat}
 .endif
-
-.if defined(DEBUG_FLAGS)
-CFLAGS+= ${DEBUG_FLAGS}
-
-.if ${MK_CTF} != "no" && ${DEBUG_FLAGS:M-g} != ""
-CTFFLAGS+= -g
-.endif
-.else
-STRIP?=	-s
-.endif
-
-.if ${SHLIBDIR:M*lib32*}
-TAGS+=	lib32
-.endif
+.endfor
 
 .if defined(NO_ROOT)
 .if !defined(TAGS) || ! ${TAGS:Mpackage=*}
-TAGS+=		package=${PACKAGE:Uutilities}
+TAGS+=	package=${PACKAGE:Uutilities}
 .endif
-TAG_ARGS=	-T ${TAGS:[*]:S/ /,/g}
+
+# By default, if PACKAGE=foo, then the native runtime libraries will go into
+# the FreeBSD-foo package, and subpackages will be created for -dev, -lib32,
+# and so on.  If LIB_PACKAGE is set, then we also create a subpackage for
+# runtime libraries with a -lib suffix.  This is used when a package has
+# libraries and some other content (e.g., executables) to allow consumers to
+# depend on the libraries.
+.if defined(LIB_PACKAGE) && ! ${TAGS:Mlib*}
+.if !defined(PACKAGE)
+.error LIB_PACKAGE cannot be used without PACKAGE
+.endif
+
+LIB_TAG_ARGS=	${TAG_ARGS},lib
+.else
+LIB_TAG_ARGS=	${TAG_ARGS}
+.endif
+
+TAG_ARGS=	-T ${TAGS:ts,:[*]}
+
+DBG_TAG_ARGS=	${TAG_ARGS},dbg
+# Usually we want to put development files (e.g., static libraries) into a
+# separate -dev packages but for a few cases, like tests, that's not wanted,
+# so allow the caller to disable it by setting NO_DEV_PACKAGE.
+.if !defined(NO_DEV_PACKAGE)
+DEV_TAG_ARGS=	${TAG_ARGS},dev
+.else
+DEV_TAG_ARGS=	${TAG_ARGS}
+.endif
+
+.endif	# defined(NO_ROOT)
+
+# By default, put library manpages in the -dev subpackage, since they're not
+# usually interesting if the development files aren't installed.   For pages
+# that should be installed in the base package, define a new MANNODEV group.
+# Note that bsd.man.mk ignores this setting if MANSPLITPKG is enabled: then
+# manpages are always installed in the -man subpackage.
+MANSUBPACKAGE?=	-dev
+MANGROUPS?=	MAN
+MANGROUPS+=	MANNODEV
+MANNODEVSUBPACKAGE=
+
+# LLD sensibly defaults to -znoexecstack, so do the same for BFD
+LDFLAGS.bfd+= -Wl,-znoexecstack
+.if ${MK_BRANCH_PROTECTION} != "no"
+CFLAGS+=  -mbranch-protection=standard
+.if ${LINKER_FEATURES:Mbti-report} && defined(BTI_REPORT_ERROR)
+LDFLAGS+= -Wl,-zbti-report=error
+.endif
 .endif
 
 # bsd.sanitizer.mk is not installed, so don't require it (e.g. for ports).
 .sinclude "bsd.sanitizer.mk"
-
-.if ${MK_DEBUG_FILES} != "no" && empty(DEBUG_FLAGS:M-g) && \
-    empty(DEBUG_FLAGS:M-gdwarf*)
-.if !${COMPILER_FEATURES:Mcompressed-debug}
-CFLAGS+= ${DEBUG_FILES_CFLAGS:N-gz*}
-CXXFLAGS+= ${DEBUG_FILES_CFLAGS:N-gz*}
-.else
-CFLAGS+= ${DEBUG_FILES_CFLAGS}
-CXXFLAGS+= ${DEBUG_FILES_CFLAGS}
-.endif
-CTFFLAGS+= -g
-.endif
 
 .if ${MACHINE_CPUARCH} == "riscv" && ${LINKER_FEATURES:Mriscv-relaxations} == ""
 CFLAGS += -mno-relax
 .endif
 
 .include <bsd.libnames.mk>
-
-# prefer .s to a .c, add .po, remove stuff not used in the BSD libraries
-# .pico used for PIC object files
-# .nossppico used for NOSSP PIC object files
-.SUFFIXES: .out .o .bc .ll .po .pico .nossppico .S .asm .s .c .cc .cpp .cxx .C .f .y .l .ln
 
 .if !defined(PICFLAG)
 PICFLAG=-fPIC
@@ -143,74 +170,19 @@ LDFLAGS+=	-flto
 CFLAGS+=	-mspeculative-load-hardening
 .endif
 
-PO_FLAG=-pg
+.if defined(MK_ZERO_REGS) && ${MK_ZERO_REGS} != "no"
+ZERO_REG_TYPE?=	used
+ZERO_REG_FLAG?=	-fzero-call-used-regs=${ZERO_REG_TYPE}
+CFLAGS+=	${ZERO_REG_FLAG}
+CXXFLAGS+=	${ZERO_REG_FLAG}
+.endif
 
-.c.po:
-	${CC} ${PO_FLAG} ${STATIC_CFLAGS} ${PO_CFLAGS} -c ${.IMPSRC} -o ${.TARGET}
-	${CTFCONVERT_CMD}
+.if defined(MK_CPP_HARDENING) && ${MK_CPP_HARDENING} != "no"
+CPP_HARDENING_FLAG?=	_LIBCPP_HARDENING_MODE_EXTENSIVE
+CXXFLAGS+=	-D_LIBCPP_HARDENING_MODE=${CPP_HARDENING_FLAG}
+.endif
 
-.c.pico:
-	${CC} ${PICFLAG} -DPIC ${SHARED_CFLAGS} ${CFLAGS} -c ${.IMPSRC} -o ${.TARGET}
-	${CTFCONVERT_CMD}
-
-.c.nossppico:
-	${CC} ${PICFLAG} -DPIC ${SHARED_CFLAGS:C/^-fstack-protector.*$//:C/^-fsanitize.*$//} ${CFLAGS:C/^-fstack-protector.*$//:C/^-fsanitize.*$//} -c ${.IMPSRC} -o ${.TARGET}
-	${CTFCONVERT_CMD}
-
-.cc.po .C.po .cpp.po .cxx.po:
-	${CXX} ${PO_FLAG} ${STATIC_CXXFLAGS} ${PO_CXXFLAGS} -c ${.IMPSRC} -o ${.TARGET}
-
-.cc.pico .C.pico .cpp.pico .cxx.pico:
-	${CXX} ${PICFLAG} -DPIC ${SHARED_CXXFLAGS} ${CXXFLAGS} -c ${.IMPSRC} -o ${.TARGET}
-
-.cc.nossppico .C.nossppico .cpp.nossppico .cxx.nossppico:
-	${CXX} ${PICFLAG} -DPIC ${SHARED_CXXFLAGS:C/^-fstack-protector.*$//:C/^-fsanitize.*$//} ${CXXFLAGS:C/^-fstack-protector.*$//:C/^-fsanitize.*$//} -c ${.IMPSRC} -o ${.TARGET}
-
-.f.po:
-	${FC} -pg ${FFLAGS} -o ${.TARGET} -c ${.IMPSRC}
-	${CTFCONVERT_CMD}
-
-.f.pico:
-	${FC} ${PICFLAG} -DPIC ${FFLAGS} -o ${.TARGET} -c ${.IMPSRC}
-	${CTFCONVERT_CMD}
-
-.f.nossppico:
-	${FC} ${PICFLAG} -DPIC ${FFLAGS:C/^-fstack-protector.*$//} -o ${.TARGET} -c ${.IMPSRC}
-	${CTFCONVERT_CMD}
-
-.s.po .s.pico .s.nossppico:
-	${AS} ${AFLAGS} -o ${.TARGET} ${.IMPSRC}
-	${CTFCONVERT_CMD}
-
-.asm.po:
-	${CC:N${CCACHE_BIN}} -x assembler-with-cpp -DPROF ${PO_CFLAGS} \
-	    ${ACFLAGS} -c ${.IMPSRC} -o ${.TARGET}
-	${CTFCONVERT_CMD}
-
-.asm.pico:
-	${CC:N${CCACHE_BIN}} -x assembler-with-cpp ${PICFLAG} -DPIC \
-	    ${CFLAGS} ${ACFLAGS} -c ${.IMPSRC} -o ${.TARGET}
-	${CTFCONVERT_CMD}
-
-.asm.nossppico:
-	${CC:N${CCACHE_BIN}} -x assembler-with-cpp ${PICFLAG} -DPIC \
-	    ${CFLAGS:C/^-fstack-protector.*$//} ${ACFLAGS} -c ${.IMPSRC} -o ${.TARGET}
-	${CTFCONVERT_CMD}
-
-.S.po:
-	${CC:N${CCACHE_BIN}} -DPROF ${PO_CFLAGS} ${ACFLAGS} -c ${.IMPSRC} \
-	    -o ${.TARGET}
-	${CTFCONVERT_CMD}
-
-.S.pico:
-	${CC:N${CCACHE_BIN}} ${PICFLAG} -DPIC ${CFLAGS} ${ACFLAGS} \
-	    -c ${.IMPSRC} -o ${.TARGET}
-	${CTFCONVERT_CMD}
-
-.S.nossppico:
-	${CC:N${CCACHE_BIN}} ${PICFLAG} -DPIC ${CFLAGS:C/^-fstack-protector.*$//} ${ACFLAGS} \
-	    -c ${.IMPSRC} -o ${.TARGET}
-	${CTFCONVERT_CMD}
+.include <bsd.suffixes-extra.mk>
 
 _LIBDIR:=${LIBDIR}
 _SHLIBDIR:=${SHLIBDIR}
@@ -218,10 +190,12 @@ _SHLIBDIR:=${SHLIBDIR}
 .if defined(SHLIB_NAME)
 .if ${MK_DEBUG_FILES} != "no"
 SHLIB_NAME_FULL=${SHLIB_NAME}.full
+DEBUGFILE= ${SHLIB_NAME}.debug
 # Use ${DEBUGDIR} for base system debug files, else .debug subdirectory
 .if ${_SHLIBDIR} == "/boot" ||\
     ${SHLIBDIR:C%/lib(/.*)?$%/lib%} == "/lib" ||\
-    ${SHLIBDIR:C%/usr/(tests/)?lib(32|exec)?(/.*)?%/usr/lib%} == "/usr/lib"
+    ${SHLIBDIR:C%/usr/lib(32|exec)?(/.*)?%/usr/lib%} == "/usr/lib" ||\
+    ${SHLIBDIR:C%/usr/tests(/.*)?%/usr/tests%} == "/usr/tests"
 DEBUGFILEDIR=${DEBUGDIR}${_SHLIBDIR}
 .else
 DEBUGFILEDIR=${_SHLIBDIR}/.debug
@@ -241,6 +215,15 @@ SHLIB_NAME_FULL=${SHLIB_NAME}
 .if !empty(VERSION_MAP)
 ${SHLIB_NAME_FULL}:	${VERSION_MAP}
 LDFLAGS+=	-Wl,--version-script=${VERSION_MAP}
+
+# Ideally we'd always enable --no-undefined-version (default for lld >= 16),
+# but we have several symbols in our version maps that may or may not exist,
+# depending on compile-time defines and that needs to be handled first.
+.if ${MK_UNDEFINED_VERSION} == "no"
+LDFLAGS+=	-Wl,--no-undefined-version
+.else
+LDFLAGS+=	-Wl,--undefined-version
+.endif
 .endif
 
 .if defined(LIB) && !empty(LIB) || defined(SHLIB_NAME)
@@ -257,24 +240,12 @@ _STATICLIB_SUFFIX=	_real
 _LIBS=		lib${LIB_PRIVATE}${LIB}${_STATICLIB_SUFFIX}.a
 
 lib${LIB_PRIVATE}${LIB}${_STATICLIB_SUFFIX}.a: ${OBJS} ${STATICOBJS}
-	@${ECHO} building static ${LIB} library
+	@${ECHO} Building static ${LIB} library
 	@rm -f ${.TARGET}
 	${AR} ${ARFLAGS} ${.TARGET} ${OBJS} ${STATICOBJS} ${ARADD}
 .endif
 
 .if !defined(INTERNALLIB)
-
-.if ${MK_PROFILE} != "no" && defined(LIB) && !empty(LIB)
-_LIBS+=		lib${LIB_PRIVATE}${LIB}_p.a
-POBJS+=		${OBJS:.o=.po} ${STATICOBJS:.o=.po}
-DEPENDOBJS+=	${POBJS}
-CLEANFILES+=	${POBJS}
-
-lib${LIB_PRIVATE}${LIB}_p.a: ${POBJS}
-	@${ECHO} building profiled ${LIB} library
-	@rm -f ${.TARGET}
-	${AR} ${ARFLAGS} ${.TARGET} ${POBJS} ${ARADD}
-.endif
 
 .if defined(LLVM_LINK)
 lib${LIB_PRIVATE}${LIB}.bc: ${BCOBJS}
@@ -323,7 +294,7 @@ CLEANFILES+=	${SHLIB_LINK}
 .endif
 
 ${SHLIB_NAME_FULL}: ${SOBJS}
-	@${ECHO} building shared library ${SHLIB_NAME}
+	@${ECHO} Building shared library ${SHLIB_NAME}
 	@rm -f ${SHLIB_NAME} ${SHLIB_LINK}
 .if defined(SHLIB_LINK) && !commands(${SHLIB_LINK:R}.ld) && ${MK_DEBUG_FILES} == "no"
 	# Note: This uses ln instead of ${INSTALL_LIBSYMLINK} since we are in OBJDIR
@@ -336,25 +307,25 @@ ${SHLIB_NAME_FULL}: ${SOBJS}
 .endif
 
 .if ${MK_DEBUG_FILES} != "no"
-CLEANFILES+=	${SHLIB_NAME_FULL} ${SHLIB_NAME}.debug
-${SHLIB_NAME}: ${SHLIB_NAME_FULL} ${SHLIB_NAME}.debug
-	${OBJCOPY} --strip-debug --add-gnu-debuglink=${SHLIB_NAME}.debug \
+CLEANFILES+=	${SHLIB_NAME_FULL} ${DEBUGFILE}
+${SHLIB_NAME}: ${SHLIB_NAME_FULL} ${DEBUGFILE}
+	${OBJCOPY} --strip-debug --add-gnu-debuglink=${DEBUGFILE} \
 	    ${SHLIB_NAME_FULL} ${.TARGET}
 .if defined(SHLIB_LINK) && !commands(${SHLIB_LINK:R}.ld)
 	# Note: This uses ln instead of ${INSTALL_LIBSYMLINK} since we are in OBJDIR
 	@${LN:Uln} -fs ${SHLIB_NAME} ${SHLIB_LINK}
 .endif
 
-${SHLIB_NAME}.debug: ${SHLIB_NAME_FULL}
+${DEBUGFILE}: ${SHLIB_NAME_FULL}
 	${OBJCOPY} --only-keep-debug ${SHLIB_NAME_FULL} ${.TARGET}
 .endif
 .endif #defined(SHLIB_NAME)
 
-.if defined(INSTALL_PIC_ARCHIVE) && defined(LIB) && !empty(LIB) && ${MK_TOOLCHAIN} != "no"
+.if defined(INSTALL_PIC_ARCHIVE) && defined(LIB) && !empty(LIB)
 _LIBS+=		lib${LIB_PRIVATE}${LIB}_pic.a
 
 lib${LIB_PRIVATE}${LIB}_pic.a: ${SOBJS}
-	@${ECHO} building special pic ${LIB} library
+	@${ECHO} Building special pic ${LIB} library
 	@rm -f ${.TARGET}
 	${AR} ${ARFLAGS} ${.TARGET} ${SOBJS} ${ARADD}
 .endif
@@ -366,7 +337,7 @@ CLEANFILES+=	${NOSSPSOBJS}
 _LIBS+=		lib${LIB_PRIVATE}${LIB}_nossp_pic.a
 
 lib${LIB_PRIVATE}${LIB}_nossp_pic.a: ${NOSSPSOBJS}
-	@${ECHO} building special nossp pic ${LIB} library
+	@${ECHO} Building special nossp pic ${LIB} library
 	@rm -f ${.TARGET}
 	${AR} ${ARFLAGS} ${.TARGET} ${NOSSPSOBJS} ${ARADD}
 .endif
@@ -396,6 +367,7 @@ _EXTRADEPEND:
 
 .if !target(install)
 
+INSTALLFLAGS+= -C
 .if defined(PRECIOUSLIB)
 .if !defined(NO_FSCHG)
 SHLINSTALLFLAGS+= -fschg
@@ -434,7 +406,7 @@ _SHLINSTALLFLAGS:=	${_SHLINSTALLFLAGS${ie}}
 installpcfiles: installpcfiles-${pcfile}
 
 installpcfiles-${pcfile}: ${pcfile}
-	${INSTALL} ${TAG_ARGS:D${TAG_ARGS},dev} -o ${LIBOWN} -g ${LIBGRP} -m ${LIBMODE} \
+	${INSTALL} ${DEV_TAG_ARGS} -o ${LIBOWN} -g ${LIBGRP} -m ${LIBMODE} \
 	    ${_INSTALLFLAGS} \
 	    ${.ALLSRC} ${DESTDIR}${LIBDATADIR}/pkgconfig/
 .endfor
@@ -442,53 +414,42 @@ installpcfiles-${pcfile}: ${pcfile}
 installpcfiles: .PHONY
 
 .if !defined(INTERNALLIB)
-realinstall: _libinstall installpcfiles
-.ORDER: beforeinstall _libinstall
+realinstall: _libinstall installpcfiles _debuginstall
+.ORDER: beforeinstall _libinstall _debuginstall
 _libinstall:
 .if defined(LIB) && !empty(LIB) && ${MK_INSTALLLIB} != "no"
-	${INSTALL} ${TAG_ARGS:D${TAG_ARGS},dev} -C -o ${LIBOWN} -g ${LIBGRP} -m ${LIBMODE} \
+	${INSTALL} ${DEV_TAG_ARGS} -o ${LIBOWN} -g ${LIBGRP} -m ${LIBMODE} \
 	    ${_INSTALLFLAGS} lib${LIB_PRIVATE}${LIB}${_STATICLIB_SUFFIX}.a ${DESTDIR}${_LIBDIR}/
-.if ${MK_PROFILE} != "no"
-	${INSTALL} ${TAG_ARGS:D${TAG_ARGS},dev} -C -o ${LIBOWN} -g ${LIBGRP} -m ${LIBMODE} \
-	    ${_INSTALLFLAGS} lib${LIB_PRIVATE}${LIB}_p.a ${DESTDIR}${_LIBDIR}/
-.endif
 .endif
 .if defined(SHLIB_NAME)
-	${INSTALL} ${TAG_ARGS} ${STRIP} -o ${LIBOWN} -g ${LIBGRP} -m ${LIBMODE} \
+	${INSTALL} ${LIB_TAG_ARGS} ${STRIP} -o ${LIBOWN} -g ${LIBGRP} -m ${LIBMODE} \
 	    ${_INSTALLFLAGS} ${_SHLINSTALLFLAGS} \
 	    ${SHLIB_NAME} ${DESTDIR}${_SHLIBDIR}/
-.if ${MK_DEBUG_FILES} != "no"
-.if defined(DEBUGMKDIR)
-	${INSTALL} ${TAG_ARGS:D${TAG_ARGS},dbg} -d ${DESTDIR}${DEBUGFILEDIR}/
-.endif
-	${INSTALL} ${TAG_ARGS:D${TAG_ARGS},dbg} -o ${LIBOWN} -g ${LIBGRP} -m ${DEBUGMODE} \
-	    ${_INSTALLFLAGS} \
-	    ${SHLIB_NAME}.debug ${DESTDIR}${DEBUGFILEDIR}/
-.endif
 .if defined(SHLIB_LINK)
 .if commands(${SHLIB_LINK:R}.ld)
-	${INSTALL} ${TAG_ARGS:D${TAG_ARGS},dev} -S -C -o ${LIBOWN} -g ${LIBGRP} -m ${LIBMODE} \
+	${INSTALL} ${DEV_TAG_ARGS} -S -o ${LIBOWN} -g ${LIBGRP} -m ${LIBMODE} \
 	    ${_INSTALLFLAGS} ${SHLIB_LINK:R}.ld \
 	    ${DESTDIR}${_LIBDIR}/${SHLIB_LINK}
 .for _SHLIB_LINK_LINK in ${SHLIB_LDSCRIPT_LINKS}
-	${INSTALL_LIBSYMLINK} ${_SHLINSTALLSYMLINKFLAGS} ${TAG_ARGS} ${SHLIB_LINK} \
-	    ${DESTDIR}${_LIBDIR}/${_SHLIB_LINK_LINK}
+	${INSTALL_LIBSYMLINK} ${_SHLINSTALLSYMLINKFLAGS} ${LIB_TAG_ARGS} \
+	    ${SHLIB_LINK} ${DESTDIR}${_LIBDIR}/${_SHLIB_LINK_LINK}
 .endfor
 .else
 .if ${_SHLIBDIR} == ${_LIBDIR}
 .if ${SHLIB_LINK:Mlib*}
-	${INSTALL_RSYMLINK} ${_SHLINSTALLSYMLINKFLAGS} ${TAG_ARGS:D${TAG_ARGS},dev} \
+	${INSTALL_RSYMLINK} ${_SHLINSTALLSYMLINKFLAGS} ${DEV_TAG_ARGS} \
 	    ${SHLIB_NAME} ${DESTDIR}${_LIBDIR}/${SHLIB_LINK}
 .else
-	${INSTALL_RSYMLINK} ${_SHLINSTALLSYMLINKFLAGS} ${TAG_ARGS} ${DESTDIR}${_SHLIBDIR}/${SHLIB_NAME} \
+	${INSTALL_RSYMLINK} ${_SHLINSTALLSYMLINKFLAGS} ${LIB_TAG_ARGS} \
+	    ${DESTDIR}${_SHLIBDIR}/${SHLIB_NAME} \
 	    ${DESTDIR}${_LIBDIR}/${SHLIB_LINK}
 .endif
 .else
 .if ${SHLIB_LINK:Mlib*}
-	${INSTALL_RSYMLINK} ${_SHLINSTALLSYMLINKFLAGS} ${TAG_ARGS:D${TAG_ARGS},dev} \
+	${INSTALL_RSYMLINK} ${_SHLINSTALLSYMLINKFLAGS} ${DEV_TAG_ARGS} \
 	    ${DESTDIR}${_SHLIBDIR}/${SHLIB_NAME} ${DESTDIR}${_LIBDIR}/${SHLIB_LINK}
 .else
-	${INSTALL_RSYMLINK} ${_SHLINSTALLSYMLINKFLAGS} ${TAG_ARGS} \
+	${INSTALL_RSYMLINK} ${_SHLINSTALLSYMLINKFLAGS} ${LIB_TAG_ARGS} \
 	    ${DESTDIR}${_SHLIBDIR}/${SHLIB_NAME} ${DESTDIR}${_LIBDIR}/${SHLIB_LINK}
 .endif
 .if exists(${DESTDIR}${_LIBDIR}/${SHLIB_NAME})
@@ -499,8 +460,8 @@ _libinstall:
 .endif # SHLIB_LDSCRIPT
 .endif # SHLIB_LINK
 .endif # SHIB_NAME
-.if defined(INSTALL_PIC_ARCHIVE) && defined(LIB) && !empty(LIB) && ${MK_TOOLCHAIN} != "no"
-	${INSTALL} ${TAG_ARGS:D${TAG_ARGS},dev} -o ${LIBOWN} -g ${LIBGRP} -m ${LIBMODE} \
+.if defined(INSTALL_PIC_ARCHIVE) && defined(LIB) && !empty(LIB)
+	${INSTALL} ${DEV_TAG_ARGS} -o ${LIBOWN} -g ${LIBGRP} -m ${LIBMODE} \
 	    ${_INSTALLFLAGS} lib${LIB}_pic.a ${DESTDIR}${_LIBDIR}/
 .endif
 .endif # !defined(INTERNALLIB)
@@ -520,6 +481,11 @@ LINKGRP?=	${LIBGRP}
 LINKMODE?=	${LIBMODE}
 SYMLINKOWN?=	${LIBOWN}
 SYMLINKGRP?=	${LIBGRP}
+.if !defined(NO_DEV_PACKAGE)
+LINKTAGS=	dev${_COMPAT_TAG}
+.else
+LINKTAGS=	${_COMPAT_TAG}
+.endif
 .include <bsd.links.mk>
 
 .if ${MK_MAN} != "no" && !defined(LIBRARIES_ONLY)
@@ -535,9 +501,6 @@ realinstall: maninstall
 
 .if defined(LIB) && !empty(LIB)
 OBJS_DEPEND_GUESS+= ${SRCS:M*.h}
-.for _S in ${SRCS:N*.[hly]}
-OBJS_DEPEND_GUESS.${_S:${OBJS_SRCS_FILTER:ts:}}.po+=	${_S}
-.endfor
 .endif
 .if defined(SHLIB_NAME) || \
     defined(INSTALL_PIC_ARCHIVE) && defined(LIB) && !empty(LIB)
@@ -557,6 +520,7 @@ SUBDIR_TARGETS+=	check
 TESTS_LD_LIBRARY_PATH+=	${.OBJDIR}
 .endif
 
+.include <bsd.debug.mk>
 .include <bsd.dep.mk>
 .include <bsd.clang-analyze.mk>
 .include <bsd.obj.mk>

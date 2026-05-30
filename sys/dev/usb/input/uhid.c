@@ -4,11 +4,8 @@
  *	$NetBSD: uhid.c,v 1.54 2002/09/23 05:51:21 simonb Exp $
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -42,8 +39,6 @@ __FBSDID("$FreeBSD$");
 /*
  * HID spec: http://www.usb.org/developers/devclass_docs/HID1_11.pdf
  */
-
-#include "opt_hid.h"
 
 #include <sys/stdint.h>
 #include <sys/stddef.h>
@@ -635,10 +630,13 @@ uhid_ioctl(struct usb_fifo *fifo, u_long cmd, void *addr,
 		default:
 			return (EINVAL);
 		}
+		size = imin(ugd->ugd_maxlen, size);
 		if (id != 0)
-			copyin(ugd->ugd_data, &id, 1);
-		error = uhid_get_report(sc, ugd->ugd_report_type, id,
-		    NULL, ugd->ugd_data, imin(ugd->ugd_maxlen, size));
+			error = copyin(ugd->ugd_data, &id, 1);
+		if (error == 0)
+			error = uhid_get_report(sc, ugd->ugd_report_type, id,
+			    NULL, ugd->ugd_data, size);
+		ugd->ugd_actlen = size;
 		break;
 
 	case USB_SET_REPORT:
@@ -663,9 +661,10 @@ uhid_ioctl(struct usb_fifo *fifo, u_long cmd, void *addr,
 			return (EINVAL);
 		}
 		if (id != 0)
-			copyin(ugd->ugd_data, &id, 1);
-		error = uhid_set_report(sc, ugd->ugd_report_type, id,
-		    NULL, ugd->ugd_data, imin(ugd->ugd_maxlen, size));
+			error = copyin(ugd->ugd_data, &id, 1);
+		if (error == 0)
+			error = uhid_set_report(sc, ugd->ugd_report_type, id,
+			    NULL, ugd->ugd_data, imin(ugd->ugd_maxlen, size));
 		break;
 
 	case USB_GET_REPORT_ID:
@@ -927,11 +926,7 @@ static device_method_t uhid_methods[] = {
 };
 
 static driver_t uhid_driver = {
-#ifdef HIDRAW_MAKE_UHID_ALIAS
-	.name = "hidraw",
-#else
 	.name = "uhid",
-#endif
 	.methods = uhid_methods,
 	.size = sizeof(struct uhid_softc),
 };

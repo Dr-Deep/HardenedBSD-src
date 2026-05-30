@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -377,21 +378,24 @@ get_special_prop(lua_State *state, dsl_dataset_t *ds, const char *dsname,
 		break;
 	}
 
+	case ZFS_PROP_ENCRYPTION:
 	case ZFS_PROP_KEYSTATUS:
 	case ZFS_PROP_KEYFORMAT: {
 		/* provide defaults in case no crypto obj exists */
 		setpoint[0] = '\0';
-		if (zfs_prop == ZFS_PROP_KEYSTATUS)
-			numval = ZFS_KEYSTATUS_NONE;
-		else
+		if (zfs_prop == ZFS_PROP_ENCRYPTION)
+			numval = ZIO_CRYPT_OFF;
+		else if (zfs_prop == ZFS_PROP_KEYFORMAT)
 			numval = ZFS_KEYFORMAT_NONE;
+		else if (zfs_prop == ZFS_PROP_KEYSTATUS)
+			numval = ZFS_KEYSTATUS_NONE;
 
 		nvlist_t *nvl, *propval;
 		nvl = fnvlist_alloc();
 		dsl_dataset_crypt_stats(ds, nvl);
 		if (nvlist_lookup_nvlist(nvl, zfs_prop_to_name(zfs_prop),
 		    &propval) == 0) {
-			char *source;
+			const char *source;
 
 			(void) nvlist_lookup_uint64(propval, ZPROP_VALUE,
 			    &numval);
@@ -403,9 +407,40 @@ get_special_prop(lua_State *state, dsl_dataset_t *ds, const char *dsname,
 		break;
 	}
 
+	case ZFS_PROP_ENCRYPTION_ROOT: {
+		setpoint[0] = '\0';
+		strval[0] = '\0';
+
+		nvlist_t *nvl, *propval;
+		nvl = fnvlist_alloc();
+		dsl_dataset_crypt_stats(ds, nvl);
+		if (nvlist_lookup_nvlist(nvl, zfs_prop_to_name(zfs_prop),
+		    &propval) == 0) {
+			const char *dsname;
+			const char *source;
+
+			if (nvlist_lookup_string(propval, ZPROP_VALUE,
+			    &dsname) == 0)
+				strlcpy(strval, dsname, ZAP_MAXVALUELEN);
+			if (nvlist_lookup_string(propval, ZPROP_SOURCE,
+			    &source) == 0)
+				strlcpy(setpoint, source, sizeof (setpoint));
+		}
+		nvlist_free(nvl);
+		break;
+	}
+
 	case ZFS_PROP_SNAPSHOTS_CHANGED:
 		numval = dsl_dir_snap_cmtime(ds->ds_dir).tv_sec;
 		break;
+
+	case ZFS_PROP_SNAPSHOTS_CHANGED_NSECS: {
+		inode_timespec_t snap_cmtime =
+		    dsl_dir_snap_cmtime(ds->ds_dir);
+		numval = ((uint64_t)snap_cmtime.tv_sec * NANOSEC) +
+		    snap_cmtime.tv_nsec;
+		break;
+	}
 
 	default:
 		/* Did not match these props, check in the dsl_dir */
@@ -467,11 +502,13 @@ get_zap_prop(lua_State *state, dsl_dataset_t *ds, zfs_prop_t zfs_prop)
 	} else {
 		error = dsl_prop_get_ds(ds, prop_name, sizeof (numval),
 		    1, &numval, setpoint);
-
+		if (error != 0)
+			goto out;
 #ifdef _KERNEL
 		/* Fill in temporary value for prop, if applicable */
 		(void) zfs_get_temporary_prop(ds, zfs_prop, &numval, setpoint);
 #else
+		kmem_free(strval, ZAP_MAXVALUELEN);
 		return (luaL_error(state,
 		    "temporary properties only supported in kernel mode",
 		    prop_name));
@@ -488,6 +525,7 @@ get_zap_prop(lua_State *state, dsl_dataset_t *ds, zfs_prop_t zfs_prop)
 				(void) lua_pushnumber(state, numval);
 		}
 	}
+out:
 	kmem_free(strval, ZAP_MAXVALUELEN);
 	if (error == 0)
 		get_prop_src(state, setpoint, zfs_prop);
@@ -607,8 +645,7 @@ parse_userquota_prop(const char *prop_name, zfs_userquota_prop_t *type,
 		 */
 		int domain_len = strrchr(cp, '-') - cp;
 		domain_val = kmem_alloc(domain_len + 1, KM_SLEEP);
-		(void) strncpy(domain_val, cp, domain_len);
-		domain_val[domain_len] = '\0';
+		(void) strlcpy(domain_val, cp, domain_len + 1);
 		cp += domain_len + 1;
 
 		(void) ddi_strtoll(cp, &end, 10, (longlong_t *)rid);

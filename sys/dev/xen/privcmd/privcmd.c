@@ -24,9 +24,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/uio.h>
@@ -123,25 +120,13 @@ privcmd_pg_dtor(void *handle)
 	struct privcmd_map *map = handle;
 	int error __diagused;
 	vm_size_t i;
-	vm_page_t m;
 
 	/*
 	 * Remove the mappings from the used pages. This will remove the
 	 * underlying p2m bindings in Xen second stage translation.
 	 */
 	if (map->mapped == true) {
-		VM_OBJECT_WLOCK(map->mem);
-retry:
-		for (i = 0; i < map->size; i++) {
-			m = vm_page_lookup(map->mem, i);
-			if (m == NULL)
-				continue;
-			if (vm_page_busy_acquire(m, VM_ALLOC_WAITFAIL) == 0)
-				goto retry;
-			cdev_pager_free_page(map->mem, m);
-		}
-		VM_OBJECT_WUNLOCK(map->mem);
-
+		cdev_mgtdev_pager_free_pages(map->mem);
 		for (i = 0; i < map->size; i++) {
 			rm.gpfn = atop(map->phys_base_addr) + i;
 			HYPERVISOR_memory_op(XENMEM_remove_from_physmap, &rm);
@@ -315,7 +300,7 @@ privcmd_ioctl(struct cdev *dev, unsigned long cmd, caddr_t arg,
 	}
 	case IOCTL_PRIVCMD_MMAPBATCH: {
 		struct ioctl_privcmd_mmapbatch *mmap;
-		struct xen_add_to_physmap_range add;
+		struct xen_add_to_physmap_batch add;
 		xen_ulong_t *idxs;
 		xen_pfn_t *gpfns;
 		int *errs;
@@ -338,7 +323,7 @@ privcmd_ioctl(struct cdev *dev, unsigned long cmd, caddr_t arg,
 
 		add.domid = DOMID_SELF;
 		add.space = XENMAPSPACE_gmfn_foreign;
-		add.foreign_domid = mmap->dom;
+		add.u.foreign_domid = mmap->dom;
 
 		/*
 		 * The 'size' field in the xen_add_to_physmap_range only
@@ -370,7 +355,7 @@ privcmd_ioctl(struct cdev *dev, unsigned long cmd, caddr_t arg,
 			bzero(errs, sizeof(*errs) * num);
 
 			error = HYPERVISOR_memory_op(
-			    XENMEM_add_to_physmap_range, &add);
+			    XENMEM_add_to_physmap_batch, &add);
 			if (error != 0) {
 				error = xen_translate_error(error);
 				goto mmap_out;

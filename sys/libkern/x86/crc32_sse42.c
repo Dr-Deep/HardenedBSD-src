@@ -24,8 +24,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * This file is compiled in userspace in order to run ATF unit tests.
  */
@@ -201,8 +199,10 @@ crc32c_shift(uint32_t zeros[][256], uint32_t crc)
 static void
 #ifndef _KERNEL
 __attribute__((__constructor__))
-#endif
 crc32c_init_hw(void)
+#else
+crc32c_init_hw(void *dummy __unused)
+#endif
 {
 	crc32c_zeros(crc32c_long, LONG);
 	crc32c_zeros(crc32c_2long, 2 * LONG);

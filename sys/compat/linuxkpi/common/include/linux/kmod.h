@@ -25,8 +25,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #ifndef	_LINUXKPI_LINUX_KMOD_H_
 #define	_LINUXKPI_LINUX_KMOD_H_
@@ -35,15 +33,14 @@
 #include <sys/syscallsubr.h>
 #include <sys/refcount.h>
 #include <sys/sbuf.h>
-#include <machine/stdarg.h>
+#include <sys/stdarg.h>
 #include <sys/proc.h>
 
 #define	request_module(...) \
 ({\
 	char modname[128]; \
-	int fileid; \
 	snprintf(modname, sizeof(modname), __VA_ARGS__); \
-	kern_kldload(curthread, modname, &fileid); \
+	kern_kldload(curthread, modname, NULL); \
 })
 
 #define request_module_nowait request_module

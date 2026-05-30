@@ -1,7 +1,8 @@
 /*
- * Copyright (c) 2018 Yubico AB. All rights reserved.
+ * Copyright (c) 2018-2022 Yubico AB. All rights reserved.
  * Use of this source code is governed by a BSD-style
  * license that can be found in the LICENSE file.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <openssl/hmac.h>
@@ -560,6 +561,32 @@ fail:
 	return (NULL);
 }
 
+cbor_item_t *
+cbor_encode_str_array(const fido_str_array_t *a)
+{
+	cbor_item_t	*array = NULL;
+	cbor_item_t	*entry = NULL;
+
+	if ((array = cbor_new_definite_array(a->len)) == NULL)
+		goto fail;
+
+	for (size_t i = 0; i < a->len; i++) {
+		if ((entry = cbor_build_string(a->ptr[i])) == NULL ||
+		    cbor_array_push(array, entry) == false)
+			goto fail;
+		cbor_decref(&entry);
+	}
+
+	return (array);
+fail:
+	if (entry != NULL)
+		cbor_decref(&entry);
+	if (array != NULL)
+		cbor_decref(&array);
+
+	return (NULL);
+}
+
 static int
 cbor_encode_largeblob_key_ext(cbor_item_t *map)
 {
@@ -583,6 +610,8 @@ cbor_encode_cred_ext(const fido_cred_ext_t *ext, const fido_blob_t *blob)
 	if (ext->mask & FIDO_EXT_CRED_PROTECT)
 		size++;
 	if (ext->mask & FIDO_EXT_LARGEBLOB_KEY)
+		size++;
+	if (ext->mask & FIDO_EXT_MINPINLEN)
 		size++;
 
 	if (size == 0 || (item = cbor_new_definite_map(size)) == NULL)
@@ -611,6 +640,12 @@ cbor_encode_cred_ext(const fido_cred_ext_t *ext, const fido_blob_t *blob)
 	}
 	if (ext->mask & FIDO_EXT_LARGEBLOB_KEY) {
 		if (cbor_encode_largeblob_key_ext(item) < 0) {
+			cbor_decref(&item);
+			return (NULL);
+		}
+	}
+	if (ext->mask & FIDO_EXT_MINPINLEN) {
+		if (cbor_add_bool(item, "minPinLength", FIDO_OPT_TRUE) < 0) {
 			cbor_decref(&item);
 			return (NULL);
 		}
@@ -662,7 +697,6 @@ cbor_encode_pin_auth(const fido_dev_t *dev, const fido_blob_t *secret,
 	uint8_t		 prot;
 	fido_blob_t	 key;
 
-
 	key.ptr = secret->ptr;
 	key.len = secret->len;
 
@@ -706,11 +740,7 @@ cbor_encode_change_pin_auth(const fido_dev_t *dev, const fido_blob_t *secret,
 	unsigned int	 dgst_len;
 	cbor_item_t	*item = NULL;
 	const EVP_MD	*md = NULL;
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
-	HMAC_CTX	 ctx;
-#else
 	HMAC_CTX	*ctx = NULL;
-#endif
 	fido_blob_t	 key;
 	uint8_t		 prot;
 	size_t		 outlen;
@@ -726,19 +756,6 @@ cbor_encode_change_pin_auth(const fido_dev_t *dev, const fido_blob_t *secret,
 	if (prot == CTAP_PIN_PROTOCOL2 && key.len > 32)
 		key.len = 32;
 
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
-	HMAC_CTX_init(&ctx);
-
-	if ((md = EVP_sha256()) == NULL ||
-	    HMAC_Init_ex(&ctx, key.ptr, (int)key.len, md, NULL) == 0 ||
-	    HMAC_Update(&ctx, new_pin_enc->ptr, new_pin_enc->len) == 0 ||
-	    HMAC_Update(&ctx, pin_hash_enc->ptr, pin_hash_enc->len) == 0 ||
-	    HMAC_Final(&ctx, dgst, &dgst_len) == 0 ||
-	    dgst_len != SHA256_DIGEST_LENGTH) {
-		fido_log_debug("%s: HMAC", __func__);
-		goto fail;
-	}
-#else
 	if ((ctx = HMAC_CTX_new()) == NULL ||
 	    (md = EVP_sha256())  == NULL ||
 	    HMAC_Init_ex(ctx, key.ptr, (int)key.len, md, NULL) == 0 ||
@@ -749,7 +766,6 @@ cbor_encode_change_pin_auth(const fido_dev_t *dev, const fido_blob_t *secret,
 		fido_log_debug("%s: HMAC", __func__);
 		goto fail;
 	}
-#endif /* OPENSSL_VERSION_NUMBER < 0x10100000L */
 
 	outlen = (prot == CTAP_PIN_PROTOCOL1) ? 16 : dgst_len;
 
@@ -759,10 +775,7 @@ cbor_encode_change_pin_auth(const fido_dev_t *dev, const fido_blob_t *secret,
 	}
 
 fail:
-#if OPENSSL_VERSION_NUMBER >= 0x10100000L
-	if (ctx != NULL)
-		HMAC_CTX_free(ctx);
-#endif
+	HMAC_CTX_free(ctx);
 
 	return (item);
 }
@@ -775,6 +788,7 @@ cbor_encode_hmac_secret_param(const fido_dev_t *dev, cbor_item_t *item,
 	cbor_item_t		*argv[4];
 	struct cbor_pair	 pair;
 	fido_blob_t		*enc = NULL;
+	uint8_t			 prot;
 	int			 r;
 
 	memset(argv, 0, sizeof(argv));
@@ -801,11 +815,17 @@ cbor_encode_hmac_secret_param(const fido_dev_t *dev, cbor_item_t *item,
 		goto fail;
 	}
 
+	if ((prot = fido_dev_get_pin_protocol(dev)) == 0) {
+		fido_log_debug("%s: fido_dev_get_pin_protocol", __func__);
+		r = FIDO_ERR_INTERNAL;
+		goto fail;
+	}
+
 	/* XXX not pin, but salt */
 	if ((argv[0] = es256_pk_encode(pk, 1)) == NULL ||
 	    (argv[1] = fido_blob_encode(enc)) == NULL ||
 	    (argv[2] = cbor_encode_pin_auth(dev, ecdh, enc)) == NULL ||
-	    (argv[3] = cbor_encode_pin_opt(dev)) == NULL) {
+	    (prot != 1 && (argv[3] = cbor_build_uint8(prot)) == NULL)) {
 		fido_log_debug("%s: cbor encode", __func__);
 		r = FIDO_ERR_INTERNAL;
 		goto fail;
@@ -896,7 +916,7 @@ cbor_decode_fmt(const cbor_item_t *item, char **fmt)
 	}
 
 	if (strcmp(type, "packed") && strcmp(type, "fido-u2f") &&
-	    strcmp(type, "none")) {
+	    strcmp(type, "none") && strcmp(type, "tpm")) {
 		fido_log_debug("%s: type=%s", __func__, type);
 		free(type);
 		return (-1);
@@ -979,7 +999,13 @@ get_cose_alg(const cbor_item_t *item, int *cose_alg)
 			fido_log_debug("%s: invalid kty/crv", __func__);
 			return (-1);
 		}
-
+		break;
+	case COSE_ES384:
+		if (cose_key.kty != COSE_KTY_EC2 ||
+		    cose_key.crv != COSE_P384) {
+			fido_log_debug("%s: invalid kty/crv", __func__);
+			return (-1);
+		}
 		break;
 	case COSE_EDDSA:
 		if (cose_key.kty != COSE_KTY_OKP ||
@@ -987,14 +1013,12 @@ get_cose_alg(const cbor_item_t *item, int *cose_alg)
 			fido_log_debug("%s: invalid kty/crv", __func__);
 			return (-1);
 		}
-
 		break;
 	case COSE_RS256:
 		if (cose_key.kty != COSE_KTY_RSA) {
 			fido_log_debug("%s: invalid kty/crv", __func__);
 			return (-1);
 		}
-
 		break;
 	default:
 		fido_log_debug("%s: unknown alg %d", __func__, cose_key.alg);
@@ -1019,6 +1043,12 @@ cbor_decode_pubkey(const cbor_item_t *item, int *type, void *key)
 	case COSE_ES256:
 		if (es256_pk_decode(item, key) < 0) {
 			fido_log_debug("%s: es256_pk_decode", __func__);
+			return (-1);
+		}
+		break;
+	case COSE_ES384:
+		if (es384_pk_decode(item, key) < 0) {
+			fido_log_debug("%s: es384_pk_decode", __func__);
 			return (-1);
 		}
 		break;
@@ -1103,6 +1133,64 @@ fail:
 }
 
 static int
+decode_attobj(const cbor_item_t *key, const cbor_item_t *val, void *arg)
+{
+	fido_cred_t *cred = arg;
+	char *name = NULL;
+	int ok = -1;
+
+	if (cbor_string_copy(key, &name) < 0) {
+		fido_log_debug("%s: cbor type", __func__);
+		ok = 0; /* ignore */
+		goto fail;
+	}
+
+	if (!strcmp(name, "fmt")) {
+		if (cbor_decode_fmt(val, &cred->fmt) < 0) {
+			fido_log_debug("%s: cbor_decode_fmt", __func__);
+			goto fail;
+		}
+	} else if (!strcmp(name, "attStmt")) {
+		if (cbor_decode_attstmt(val, &cred->attstmt) < 0) {
+			fido_log_debug("%s: cbor_decode_attstmt", __func__);
+			goto fail;
+		}
+	} else if (!strcmp(name, "authData")) {
+		if (fido_blob_decode(val, &cred->authdata_raw) < 0) {
+			fido_log_debug("%s: fido_blob_decode", __func__);
+			goto fail;
+		}
+		if (cbor_decode_cred_authdata(val, cred->type,
+		    &cred->authdata_cbor, &cred->authdata, &cred->attcred,
+		    &cred->authdata_ext) < 0) {
+			fido_log_debug("%s: cbor_decode_cred_authdata",
+			    __func__);
+			goto fail;
+		}
+	}
+
+	ok = 0;
+fail:
+	free(name);
+
+	return (ok);
+}
+
+/* XXX introduce fido_attobj_t? */
+int
+cbor_decode_attobj(const cbor_item_t *item, fido_cred_t *cred)
+{
+	if (cbor_isa_map(item) == false ||
+	    cbor_map_is_definite(item) == false ||
+	    cbor_map_iter(item, cred, decode_attobj) < 0) {
+		fido_log_debug("%s: cbor type", __func__);
+		return (-1);
+	}
+
+	return (0);
+}
+
+static int
 decode_cred_extension(const cbor_item_t *key, const cbor_item_t *val, void *arg)
 {
 	fido_cred_ext_t	*authdata_ext = arg;
@@ -1116,10 +1204,8 @@ decode_cred_extension(const cbor_item_t *key, const cbor_item_t *val, void *arg)
 	}
 
 	if (strcmp(type, "hmac-secret") == 0) {
-		if (cbor_isa_float_ctrl(val) == false ||
-		    cbor_float_get_width(val) != CBOR_FLOAT_0 ||
-		    cbor_is_bool(val) == false) {
-			fido_log_debug("%s: cbor type", __func__);
+		if (cbor_decode_bool(val, NULL) < 0) {
+			fido_log_debug("%s: cbor_decode_bool", __func__);
 			goto out;
 		}
 		if (cbor_ctrl_value(val) == CBOR_CTRL_TRUE)
@@ -1133,14 +1219,20 @@ decode_cred_extension(const cbor_item_t *key, const cbor_item_t *val, void *arg)
 		authdata_ext->mask |= FIDO_EXT_CRED_PROTECT;
 		authdata_ext->prot = cbor_get_uint8(val);
 	} else if (strcmp(type, "credBlob") == 0) {
-		if (cbor_isa_float_ctrl(val) == false ||
-		    cbor_float_get_width(val) != CBOR_FLOAT_0 ||
-		    cbor_is_bool(val) == false) {
-			fido_log_debug("%s: cbor type", __func__);
+		if (cbor_decode_bool(val, NULL) < 0) {
+			fido_log_debug("%s: cbor_decode_bool", __func__);
 			goto out;
 		}
 		if (cbor_ctrl_value(val) == CBOR_CTRL_TRUE)
 			authdata_ext->mask |= FIDO_EXT_CRED_BLOB;
+	} else if (strcmp(type, "minPinLength") == 0) {
+		if (cbor_isa_uint(val) == false ||
+		    cbor_int_get_width(val) != CBOR_INT_8) {
+			fido_log_debug("%s: cbor type", __func__);
+			goto out;
+		}
+		authdata_ext->mask |= FIDO_EXT_MINPINLEN;
+		authdata_ext->minpinlen = cbor_get_uint8(val);
 	}
 
 	ok = 0;
@@ -1352,12 +1444,47 @@ cbor_decode_assert_authdata(const cbor_item_t *item, fido_blob_t *authdata_cbor,
 static int
 decode_x5c(const cbor_item_t *item, void *arg)
 {
-	fido_blob_t *x5c = arg;
+	fido_blob_array_t *x5c = arg;
+	fido_blob_t *list_ptr = NULL;
+	fido_blob_t x5c_blob;
 
-	if (x5c->len)
-		return (0); /* ignore */
+	memset(&x5c_blob, 0, sizeof(x5c_blob));
 
-	return (fido_blob_decode(item, x5c));
+	if (fido_blob_decode(item, &x5c_blob) < 0) {
+		fido_log_debug("%s: fido_blob_decode", __func__);
+		return (-1);
+	}
+
+	if (x5c->len == SIZE_MAX) {
+		fido_blob_reset(&x5c_blob);
+		return (-1);
+	}
+
+	if ((list_ptr = recallocarray(x5c->ptr, x5c->len,
+	    x5c->len + 1, sizeof(x5c_blob))) == NULL) {
+		fido_blob_reset(&x5c_blob);
+		return (-1);
+	}
+
+	list_ptr[x5c->len++] = x5c_blob;
+	x5c->ptr = list_ptr;
+
+	return (0);
+}
+
+static int
+decode_x5c_array(const cbor_item_t *item, fido_blob_array_t *arr)
+{
+	if (arr->len) {
+		fido_log_debug("%s: dup", __func__);
+		return (-1);
+	}
+	if (cbor_isa_array(item) == false ||
+	    cbor_array_is_definite(item) == false) {
+		fido_log_debug("%s: cbor", __func__);
+		return (-1);
+	}
+	return (cbor_array_iter(item, arr, decode_x5c));
 }
 
 static int
@@ -1365,7 +1492,6 @@ decode_attstmt_entry(const cbor_item_t *key, const cbor_item_t *val, void *arg)
 {
 	fido_attstmt_t	*attstmt = arg;
 	char		*name = NULL;
-	int		 cose_alg = 0;
 	int		 ok = -1;
 
 	if (cbor_string_copy(key, &name) < 0) {
@@ -1380,10 +1506,12 @@ decode_attstmt_entry(const cbor_item_t *key, const cbor_item_t *val, void *arg)
 			fido_log_debug("%s: alg", __func__);
 			goto out;
 		}
-		if ((cose_alg = -(int)cbor_get_int(val) - 1) != COSE_ES256 &&
-		    cose_alg != COSE_RS256 && cose_alg != COSE_EDDSA) {
-			fido_log_debug("%s: unsupported cose_alg=%d", __func__,
-			    cose_alg);
+		attstmt->alg = -(int)cbor_get_int(val) - 1;
+		if (attstmt->alg != COSE_ES256 && attstmt->alg != COSE_ES384 &&
+		    attstmt->alg != COSE_RS256 && attstmt->alg != COSE_EDDSA &&
+		    attstmt->alg != COSE_RS1) {
+			fido_log_debug("%s: unsupported attstmt->alg=%d",
+			    __func__, attstmt->alg);
 			goto out;
 		}
 	} else if (!strcmp(name, "sig")) {
@@ -1392,10 +1520,18 @@ decode_attstmt_entry(const cbor_item_t *key, const cbor_item_t *val, void *arg)
 			goto out;
 		}
 	} else if (!strcmp(name, "x5c")) {
-		if (cbor_isa_array(val) == false ||
-		    cbor_array_is_definite(val) == false ||
-		    cbor_array_iter(val, &attstmt->x5c, decode_x5c) < 0) {
+		if (decode_x5c_array(val, &attstmt->x5c)) {
 			fido_log_debug("%s: x5c", __func__);
+			goto out;
+		}
+	} else if (!strcmp(name, "certInfo")) {
+		if (fido_blob_decode(val, &attstmt->certinfo) < 0) {
+			fido_log_debug("%s: certinfo", __func__);
+			goto out;
+		}
+	} else if (!strcmp(name, "pubArea")) {
+		if (fido_blob_decode(val, &attstmt->pubarea) < 0) {
+			fido_log_debug("%s: pubarea", __func__);
 			goto out;
 		}
 	}
@@ -1410,10 +1546,19 @@ out:
 int
 cbor_decode_attstmt(const cbor_item_t *item, fido_attstmt_t *attstmt)
 {
+	size_t alloc_len;
+
 	if (cbor_isa_map(item) == false ||
 	    cbor_map_is_definite(item) == false ||
 	    cbor_map_iter(item, attstmt, decode_attstmt_entry) < 0) {
 		fido_log_debug("%s: cbor type", __func__);
+		return (-1);
+	}
+
+	if (attstmt->cbor.ptr != NULL ||
+	    (attstmt->cbor.len = cbor_serialize_alloc(item,
+	    &attstmt->cbor.ptr, &alloc_len)) == 0) {
+		fido_log_debug("%s: cbor_serialize_alloc", __func__);
 		return (-1);
 	}
 
@@ -1569,6 +1714,22 @@ cbor_decode_rp_entity(const cbor_item_t *item, fido_rp_t *rp)
 		fido_log_debug("%s: cbor type", __func__);
 		return (-1);
 	}
+
+	return (0);
+}
+
+int
+cbor_decode_bool(const cbor_item_t *item, bool *v)
+{
+	if (cbor_isa_float_ctrl(item) == false ||
+	    cbor_float_get_width(item) != CBOR_FLOAT_0 ||
+	    cbor_is_bool(item) == false) {
+		fido_log_debug("%s: cbor type", __func__);
+		return (-1);
+	}
+
+	if (v != NULL)
+		*v = cbor_ctrl_value(item) == CBOR_CTRL_TRUE;
 
 	return (0);
 }

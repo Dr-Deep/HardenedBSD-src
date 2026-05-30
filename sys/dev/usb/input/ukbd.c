@@ -1,8 +1,5 @@
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -74,6 +71,8 @@ __FBSDID("$FreeBSD$");
 
 #include <dev/usb/quirk/usb_quirk.h>
 
+#include "usbdevs.h"
+
 #ifdef EVDEV_SUPPORT
 #include <dev/evdev/input.h>
 #include <dev/evdev/evdev.h>
@@ -96,18 +95,29 @@ __FBSDID("$FreeBSD$");
 
 #ifdef USB_DEBUG
 static int ukbd_debug = 0;
+#endif
 static int ukbd_no_leds = 0;
 static int ukbd_pollrate = 0;
+static int ukbd_apple_fn_mode = 0;
+static int ukbd_apple_swap_cmd_ctl = 0;
+static int ukbd_apple_swap_cmd_opt = 0;
 
 static SYSCTL_NODE(_hw_usb, OID_AUTO, ukbd, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "USB keyboard");
+#ifdef USB_DEBUG
 SYSCTL_INT(_hw_usb_ukbd, OID_AUTO, debug, CTLFLAG_RWTUN,
     &ukbd_debug, 0, "Debug level");
+#endif
 SYSCTL_INT(_hw_usb_ukbd, OID_AUTO, no_leds, CTLFLAG_RWTUN,
     &ukbd_no_leds, 0, "Disables setting of keyboard leds");
 SYSCTL_INT(_hw_usb_ukbd, OID_AUTO, pollrate, CTLFLAG_RWTUN,
     &ukbd_pollrate, 0, "Force this polling rate, 1-1000Hz");
-#endif
+SYSCTL_INT(_hw_usb_ukbd, OID_AUTO, apple_fn_mode, CTLFLAG_RWTUN,
+    &ukbd_apple_fn_mode, 0, "0 = Fn + F1..12 -> media, 1 = F1..F12 -> media");
+SYSCTL_INT(_hw_usb_ukbd, OID_AUTO, apple_swap_cmd_ctl, CTLFLAG_RWTUN,
+    &ukbd_apple_swap_cmd_ctl, 0, "Swap Command & Control keys");
+SYSCTL_INT(_hw_usb_ukbd, OID_AUTO, apple_swap_cmd_opt, CTLFLAG_RWTUN,
+    &ukbd_apple_swap_cmd_opt, 0, "Swap Command & Option keys");
 
 #define	UKBD_EMULATE_ATSCANCODE	       1
 #define	UKBD_DRIVER_NAME          "ukbd"
@@ -123,6 +133,10 @@ SYSCTL_INT(_hw_usb_ukbd, OID_AUTO, pollrate, CTLFLAG_RWTUN,
 
 #define	MOD_EJECT	0x01
 #define	MOD_FN		0x02
+
+/* check evdev_usb_scancodes[] for names */
+#define APPLE_FN_KEY 0xff
+#define APPLE_EJECT_KEY 0xec
 
 struct ukbd_data {
 	uint64_t bitmap[howmany(UKBD_NKEYCODE, 64)];
@@ -175,13 +189,19 @@ struct ukbd_softc {
 #define	UKBD_FLAG_ATTACHED	0x00000010
 #define	UKBD_FLAG_GONE		0x00000020
 
-#define	UKBD_FLAG_HID_MASK	0x003fffc0
-#define	UKBD_FLAG_APPLE_EJECT	0x00000040
-#define	UKBD_FLAG_APPLE_FN	0x00000080
-#define	UKBD_FLAG_APPLE_SWAP	0x00000100
+/* set in ukbd_attach */
+#define	UKBD_FLAG_APPLE_SWAP	0x00000040
+/* set in ukbd_parse_hid */
+#define	UKBD_FLAG_APPLE_EJECT	0x00000080
+#define	UKBD_FLAG_APPLE_FN	0x00000100
 #define	UKBD_FLAG_NUMLOCK	0x00080000
 #define	UKBD_FLAG_CAPSLOCK	0x00100000
 #define	UKBD_FLAG_SCROLLLOCK 	0x00200000
+#define	UKBD_FLAG_HID_MASK	UKBD_FLAG_APPLE_EJECT	| \
+				UKBD_FLAG_APPLE_FN	| \
+				UKBD_FLAG_NUMLOCK	| \
+				UKBD_FLAG_CAPSLOCK	| \
+				UKBD_FLAG_SCROLLLOCK
 
 	int	sc_mode;		/* input mode (K_XLATE,K_RAW,K_CODE) */
 	int	sc_state;		/* shift/lock key state */
@@ -193,6 +213,7 @@ struct ukbd_softc {
 	uint16_t sc_inputs;
 	uint16_t sc_inputhead;
 	uint16_t sc_inputtail;
+	uint16_t sc_vendor_id;
 
 	uint8_t	sc_leds;		/* store for async led requests */
 	uint8_t	sc_iface_index;
@@ -277,9 +298,9 @@ static const uint8_t ukbd_trtab[256] = {
 	NN, NN, NN, NN, NN, NN, NN, NN,	/* D0 - D7 */
 	NN, NN, NN, NN, NN, NN, NN, NN,	/* D8 - DF */
 	29, 42, 56, 105, 90, 54, 93, 106,	/* E0 - E7 */
-	NN, NN, NN, NN, NN, NN, NN, NN,	/* E8 - EF */
+	NN, NN, NN, NN, 254, NN, NN, NN,	/* E8 - EF */
 	NN, NN, NN, NN, NN, NN, NN, NN,	/* F0 - F7 */
-	NN, NN, NN, NN, NN, NN, NN, NN,	/* F8 - FF */
+	NN, NN, NN, NN, NN, NN, NN, 255,	/* F8 - FF */
 };
 
 static const uint8_t ukbd_boot_desc[] = {
@@ -297,6 +318,48 @@ static const uint8_t ukbd_boot_desc[] = {
 	0x05, 0x07, 0x19, 0x00, 0x2a,
 	0xff, 0x00, 0x81, 0x00, 0xc0
 };
+
+static const STRUCT_USB_HOST_ID ukbd_apple_iso_models[] = {
+	/* PowerBooks Feb 2005, iBooks G4 */
+	{ USB_VP(USB_VENDOR_APPLE, USB_PRODUCT_APPLE_FOUNTAIN_ISO) },
+	/* PowerBooks Oct 2005 */
+	{ USB_VP(USB_VENDOR_APPLE, USB_PRODUCT_APPLE_GEYSER_ISO) },
+	/* Core Duo MacBook & MacBook Pro */
+	{ USB_VP(USB_VENDOR_APPLE, USB_PRODUCT_APPLE_GEYSER3_ISO) },
+	/* Core2 Duo MacBook & MacBook Pro */
+	{ USB_VP(USB_VENDOR_APPLE, USB_PRODUCT_APPLE_GEYSER4_ISO) },
+	{ USB_VP(USB_VENDOR_APPLE, USB_PRODUCT_APPLE_GEYSER4_HF_ISO) },
+	{ USB_VP(USB_VENDOR_APPLE, USB_PRODUCT_APPLE_ALU_MINI_ISO) },
+	{ USB_VP(USB_VENDOR_APPLE, USB_PRODUCT_APPLE_ALU_ISO) },
+	{ USB_VP(USB_VENDOR_APPLE, USB_PRODUCT_APPLE_ALU_REVB_ISO) },
+	/* MacbookAir, aka wellspring */
+	{ USB_VP(USB_VENDOR_APPLE, USB_PRODUCT_APPLE_WELLSPRING_ISO) },
+	/* MacbookProPenryn, aka wellspring2 */
+	{ USB_VP(USB_VENDOR_APPLE, USB_PRODUCT_APPLE_WELLSPRING2_ISO) },
+	/* Macbook5,1 (unibody), aka wellspring3 */
+	{ USB_VP(USB_VENDOR_APPLE, USB_PRODUCT_APPLE_WELLSPRING3_ISO) },
+	/* MacbookAir3,2 (unibody), aka wellspring4 */
+	{ USB_VP(USB_VENDOR_APPLE, USB_PRODUCT_APPLE_WELLSPRING4_ISO) },
+	/* MacbookAir3,1 (unibody), aka wellspring4 */
+	{ USB_VP(USB_VENDOR_APPLE, USB_PRODUCT_APPLE_WELLSPRING4A_ISO) },
+	/* Macbook8 (unibody, March 2011) */
+	{ USB_VP(USB_VENDOR_APPLE, USB_PRODUCT_APPLE_WELLSPRING5_ISO) },
+	/* Macbook8,2 (unibody) */
+	{ USB_VP(USB_VENDOR_APPLE, USB_PRODUCT_APPLE_WELLSPRING5A_ISO) },
+	/* MacbookAir4,2 (unibody, July 2011) */
+	{ USB_VP(USB_VENDOR_APPLE, USB_PRODUCT_APPLE_WELLSPRING6_ISO) },
+	/* MacbookAir4,1 (unibody, July 2011) */
+	{ USB_VP(USB_VENDOR_APPLE, USB_PRODUCT_APPLE_WELLSPRING6A_ISO) },
+	/* MacbookPro10,1 (unibody, June 2012) */
+	{ USB_VP(USB_VENDOR_APPLE, USB_PRODUCT_APPLE_WELLSPRING7_ISO) },
+	/* MacbookPro10,2 (unibody, October 2012) */
+	{ USB_VP(USB_VENDOR_APPLE, USB_PRODUCT_APPLE_WELLSPRING7A_ISO) },
+	/* MacbookAir6,2 (unibody, June 2013) */
+	{ USB_VP(USB_VENDOR_APPLE, USB_PRODUCT_APPLE_WELLSPRING8_ISO) },
+	/* MacbookPro12,1 */
+	{ USB_VP(USB_VENDOR_APPLE, USB_PRODUCT_APPLE_WELLSPRING9_ISO) },
+};
+
 
 /* prototypes */
 static void	ukbd_timeout(void *);
@@ -394,6 +457,8 @@ ukbd_put_key(struct ukbd_softc *sc, uint32_t key)
 	if (evdev_rcpt_mask & EVDEV_RCPT_HW_KBD && sc->sc_evdev != NULL)
 		evdev_push_event(sc->sc_evdev, EV_KEY,
 		    evdev_hid2key(KEY_INDEX(key)), !(key & KEY_RELEASE));
+	if (sc->sc_evdev != NULL && evdev_is_grabbed(sc->sc_evdev))
+		return;
 #endif
 
 	if (sc->sc_inputs < UKBD_IN_BUF_SIZE) {
@@ -533,14 +598,14 @@ ukbd_interrupt(struct ukbd_softc *sc)
 					sc->sc_repeat_key = 0;
 			} else {
 				ukbd_put_key(sc, key | KEY_PRESS);
-
-				sc->sc_co_basetime = sbinuptime();
-				sc->sc_delay = sc->sc_kbd.kb_delay1;
-				ukbd_start_timer(sc);
-
-				/* set repeat time for last key */
-				sc->sc_repeat_time = now + sc->sc_kbd.kb_delay1;
-				sc->sc_repeat_key = key;
+				if (key != APPLE_FN_KEY) {
+					sc->sc_co_basetime = sbinuptime();
+					sc->sc_delay = sc->sc_kbd.kb_delay1;
+					ukbd_start_timer(sc);
+					/* set repeat time for last key */
+					sc->sc_repeat_time = now + sc->sc_kbd.kb_delay1;
+					sc->sc_repeat_key = key;
+				}
 			}
 		}
 	}
@@ -562,6 +627,8 @@ ukbd_interrupt(struct ukbd_softc *sc)
 #ifdef EVDEV_SUPPORT
 	if (evdev_rcpt_mask & EVDEV_RCPT_HW_KBD && sc->sc_evdev != NULL)
 		evdev_sync(sc->sc_evdev);
+	if (sc->sc_evdev != NULL && evdev_is_grabbed(sc->sc_evdev))
+		return;
 #endif
 
 	/* wakeup keyboard system */
@@ -618,12 +685,67 @@ static uint32_t
 ukbd_apple_fn(uint32_t keycode)
 {
 	switch (keycode) {
+	case 0x0b: return 0x50; /* H -> LEFT ARROW */
+	case 0x0d: return 0x51; /* J -> DOWN ARROW */
+	case 0x0e: return 0x52; /* K -> UP ARROW */
+	case 0x0f: return 0x4f; /* L -> RIGHT ARROW */
+	case 0x36: return 0x4a; /* COMMA -> HOME */
+	case 0x37: return 0x4d; /* DOT -> END */
+	case 0x18: return 0x4b; /* U -> PGUP */
+	case 0x07: return 0x4e; /* D -> PGDN */
+	case 0x16: return 0x47; /* S -> SCROLLLOCK */
+	case 0x13: return 0x46; /* P -> SYSRQ/PRTSC */
 	case 0x28: return 0x49; /* RETURN -> INSERT */
 	case 0x2a: return 0x4c; /* BACKSPACE -> DEL */
 	case 0x50: return 0x4a; /* LEFT ARROW -> HOME */
 	case 0x4f: return 0x4d; /* RIGHT ARROW -> END */
 	case 0x52: return 0x4b; /* UP ARROW -> PGUP */
 	case 0x51: return 0x4e; /* DOWN ARROW -> PGDN */
+	default: return keycode;
+	}
+}
+
+/* separate so the sysctl doesn't butcher non-fn keys */
+static uint32_t
+ukbd_apple_fn_media(uint32_t keycode)
+{
+	switch (keycode) {
+	case 0x3a: return 0xc0; /* F1 -> BRIGHTNESS DOWN */
+	case 0x3b: return 0xc1; /* F2 -> BRIGHTNESS UP */
+	case 0x3c: return 0xc2; /* F3 -> SCALE (MISSION CTRL)*/
+	case 0x3d: return 0xc3; /* F4 -> DASHBOARD (LAUNCHPAD) */
+	case 0x3e: return 0xc4; /* F5 -> KBD BACKLIGHT DOWN */
+	case 0x3f: return 0xc5; /* F6 -> KBD BACKLIGHT UP */
+	case 0x40: return 0xea; /* F7 -> MEDIA PREV */
+	case 0x41: return 0xe8; /* F8 -> PLAY/PAUSE */
+	case 0x42: return 0xeb; /* F9 -> MEDIA NEXT */
+	case 0x43: return 0xef; /* F10 -> MUTE */
+	case 0x44: return 0xee; /* F11 -> VOLUME DOWN */
+	case 0x45: return 0xed; /* F12 -> VOLUME UP */
+	default: return keycode;
+	}
+}
+
+static uint32_t
+ukbd_apple_doswap_cmd_ctl(uint32_t keycode)
+{
+	switch (keycode) {
+	case 0xe3: return 0xe0; /* LCMD -> LCTL */
+	case 0xe7: return 0xe4; /* RCMD -> RCTL */
+	case 0xe0: return 0xe3; /* LCTL -> LCMD */
+	case 0xe4: return 0xe7; /* RCTL -> RCMD */
+	default: return keycode;
+	}
+}
+
+static uint32_t
+ukbd_apple_doswap_cmd_opt(uint32_t keycode)
+{
+	switch (keycode) {
+	case 0xe3: return 0xe2; /* LCMD -> ROPT */
+	case 0xe7: return 0xe6; /* RCMD -> ROPT */
+	case 0xe2: return 0xe3; /* LOPT -> LCMD */
+	case 0xe6: return 0xe7; /* ROPT -> RCMD */
 	default: return keycode;
 	}
 }
@@ -689,17 +811,33 @@ ukbd_intr_callback(struct usb_xfer *xfer, usb_error_t error)
 		/* clear modifiers */
 		modifiers = 0;
 
-		/* scan through HID data */
+		/* scan through HID data and expose magic apple keys */
 		if ((sc->sc_flags & UKBD_FLAG_APPLE_EJECT) &&
 		    (id == sc->sc_id_apple_eject)) {
-			if (hid_get_data(sc->sc_buffer, len, &sc->sc_loc_apple_eject))
+			if (hid_get_data(sc->sc_buffer, len, &sc->sc_loc_apple_eject)) {
+				sc->sc_ndata.bitmap[APPLE_EJECT_KEY / 64] |=
+					1ULL << (APPLE_EJECT_KEY % 64);
 				modifiers |= MOD_EJECT;
+			} else {
+				sc->sc_ndata.bitmap[APPLE_EJECT_KEY / 64] &=
+					~(1ULL << (APPLE_EJECT_KEY % 64));
+			}
 		}
 		if ((sc->sc_flags & UKBD_FLAG_APPLE_FN) &&
 		    (id == sc->sc_id_apple_fn)) {
-			if (hid_get_data(sc->sc_buffer, len, &sc->sc_loc_apple_fn))
+			if (hid_get_data(sc->sc_buffer, len, &sc->sc_loc_apple_fn)) {
+				sc->sc_ndata.bitmap[APPLE_FN_KEY / 64] |=
+					1ULL << (APPLE_FN_KEY % 64);
 				modifiers |= MOD_FN;
+			} else {
+				sc->sc_ndata.bitmap[APPLE_FN_KEY / 64] &=
+					~(1ULL << (APPLE_FN_KEY % 64));
+			}
 		}
+
+		int apply_apple_fn_media = (modifiers & MOD_FN) ? 1 : 0;
+		if (ukbd_apple_fn_mode) /* toggle from sysctl value */
+			apply_apple_fn_media = !apply_apple_fn_media;
 
 		for (i = 0; i != UKBD_NKEYCODE; i++) {
 			const uint64_t valid = sc->sc_loc_key_valid[i / 64];
@@ -729,6 +867,12 @@ ukbd_intr_callback(struct usb_xfer *xfer, usb_error_t error)
 					}
 					if (modifiers & MOD_FN)
 						key = ukbd_apple_fn(key);
+					if (apply_apple_fn_media)
+						key = ukbd_apple_fn_media(key);
+					if (ukbd_apple_swap_cmd_ctl)
+						key = ukbd_apple_doswap_cmd_ctl(key);
+					if (ukbd_apple_swap_cmd_opt)
+						key = ukbd_apple_doswap_cmd_opt(key);
 					if (sc->sc_flags & UKBD_FLAG_APPLE_SWAP)
 						key = ukbd_apple_swap(key);
 					if (key == KEY_NONE || key >= UKBD_NKEYCODE)
@@ -741,6 +885,12 @@ ukbd_intr_callback(struct usb_xfer *xfer, usb_error_t error)
 
 				if (modifiers & MOD_FN)
 					key = ukbd_apple_fn(key);
+				if (apply_apple_fn_media)
+					key = ukbd_apple_fn_media(key);
+				if (ukbd_apple_swap_cmd_ctl)
+					key = ukbd_apple_doswap_cmd_ctl(key);
+				if (ukbd_apple_swap_cmd_opt)
+					key = ukbd_apple_doswap_cmd_opt(key);
 				if (sc->sc_flags & UKBD_FLAG_APPLE_SWAP)
 					key = ukbd_apple_swap(key);
 				if (key == KEY_NONE || key == KEY_ERROR || key >= UKBD_NKEYCODE)
@@ -994,22 +1144,37 @@ ukbd_parse_hid(struct ukbd_softc *sc, const uint8_t *ptr, uint32_t len)
 	    hid_input, &sc->sc_kbd_id);
 
 	/* investigate if this is an Apple Keyboard */
-	if (hid_locate(ptr, len,
-	    HID_USAGE2(HUP_CONSUMER, HUG_APPLE_EJECT),
-	    hid_input, 0, &sc->sc_loc_apple_eject, &flags,
-	    &sc->sc_id_apple_eject)) {
-		if (flags & HIO_VARIABLE)
-			sc->sc_flags |= UKBD_FLAG_APPLE_EJECT | 
-			    UKBD_FLAG_APPLE_SWAP;
-		DPRINTFN(1, "Found Apple eject-key\n");
-	}
-	if (hid_locate(ptr, len,
-	    HID_USAGE2(0xFFFF, 0x0003),
-	    hid_input, 0, &sc->sc_loc_apple_fn, &flags,
-	    &sc->sc_id_apple_fn)) {
-		if (flags & HIO_VARIABLE)
-			sc->sc_flags |= UKBD_FLAG_APPLE_FN;
-		DPRINTFN(1, "Found Apple FN-key\n");
+	if (sc->sc_vendor_id == USB_VENDOR_APPLE) {
+		if (hid_locate(ptr, len,
+		    HID_USAGE2(HUP_CONSUMER, HUG_APPLE_EJECT),
+		    hid_input, 0, &sc->sc_loc_apple_eject, &flags,
+		    &sc->sc_id_apple_eject)) {
+			if (flags & HIO_VARIABLE)
+				sc->sc_flags |= UKBD_FLAG_APPLE_EJECT;
+			DPRINTFN(1, "Found Apple eject-key\n");
+		}
+		/*
+		 * check the same vendor pages that linux does to find the one
+		 * apple uses for the function key.
+		 */
+		static const uint16_t apple_pages[] = {
+			HUP_APPLE,     /* HID_UP_CUSTOM in linux */
+			HUP_MICROSOFT, /* HID_UP_MSVENDOR in linux */
+			HUP_HP,        /* HID_UP_HPVENDOR2 in linux */
+			0xFFFF         /* Original FreeBSD check (Remove?) */
+		};
+		for (int i = 0; i < (int)nitems(apple_pages); i++) {
+			if (hid_locate(ptr, len,
+			    HID_USAGE2(apple_pages[i], 0x0003),
+			    hid_input, 0, &sc->sc_loc_apple_fn, &flags,
+			    &sc->sc_id_apple_fn)) {
+				if (flags & HIO_VARIABLE)
+					sc->sc_flags |= UKBD_FLAG_APPLE_FN;
+				DPRINTFN(1, "Found Apple FN-key on page 0x%04x\n",
+				    apple_pages[i]);
+				break;
+			}
+		}
 	}
 
 	/* figure out event buffer */
@@ -1097,6 +1262,7 @@ ukbd_attach(device_t dev)
 
 	sc->sc_udev = uaa->device;
 	sc->sc_iface = uaa->iface;
+	sc->sc_vendor_id = uaa->info.idVendor;
 	sc->sc_iface_index = uaa->info.bIfaceIndex;
 	sc->sc_iface_no = uaa->info.bIfaceNum;
 	sc->sc_mode = K_XLATE;
@@ -1134,6 +1300,17 @@ ukbd_attach(device_t dev)
 	sc->sc_accmap = accent_map;
 	for (n = 0; n < UKBD_NFKEY; n++) {
 		sc->sc_fkeymap[n] = fkey_tab[n];
+	}
+
+	/* check if this is an Apple keyboard with swapped key codes
+	 * apparently, these are the ISO layout models
+	*/
+	DPRINTF("uaa vendor: 0x%04x, uaa product 0x%04x\n", uaa->info.idVendor, uaa->info.idProduct );
+	if (usbd_lookup_id_by_uaa(ukbd_apple_iso_models, sizeof(ukbd_apple_iso_models), uaa) == 0) {
+		sc->sc_flags |= UKBD_FLAG_APPLE_SWAP;
+		DPRINTF("UKBD_FLAG_APPLE_SWAP set\n");
+	} else {
+		DPRINTF("UKBD_FLAG_APPLE_SWAP not set\n");
 	}
 
 	kbd_set_maps(kbd, &sc->sc_keymap, &sc->sc_accmap,
@@ -1853,11 +2030,15 @@ ukbd_ioctl_locked(keyboard_t *kbd, u_long cmd, caddr_t arg)
 		return (ukbd_set_typematic(kbd, *(int *)arg));
 
 	case PIO_KEYMAP:		/* set keyboard translation table */
-	case OPIO_KEYMAP:		/* set keyboard translation table
-					 * (compat) */
 	case PIO_KEYMAPENT:		/* set keyboard translation table
 					 * entry */
 	case PIO_DEADKEYMAP:		/* set accent key translation table */
+#ifdef COMPAT_FREEBSD13
+	case OPIO_KEYMAP:		/* set keyboard translation table
+					 * (compat) */
+	case OPIO_DEADKEYMAP:		/* set accent key translation table
+					 * (compat) */
+#endif /* COMPAT_FREEBSD13 */
 		sc->sc_accents = 0;
 		/* FALLTHROUGH */
 	default:
@@ -1994,17 +2175,11 @@ ukbd_set_typematic(keyboard_t *kbd, int code)
 #ifdef EVDEV_SUPPORT
 	struct ukbd_softc *sc = kbd->kb_data;
 #endif
-	static const int delays[] = {250, 500, 750, 1000};
-	static const int rates[] = {34, 38, 42, 46, 50, 55, 59, 63,
-		68, 76, 84, 92, 100, 110, 118, 126,
-		136, 152, 168, 184, 200, 220, 236, 252,
-	272, 304, 336, 368, 400, 440, 472, 504};
-
 	if (code & ~0x7f) {
 		return (EINVAL);
 	}
-	kbd->kb_delay1 = delays[(code >> 5) & 3];
-	kbd->kb_delay2 = rates[code & 0x1f];
+	kbd->kb_delay1 = kbdelays[(code >> 5) & 3];
+	kbd->kb_delay2 = kbrates[code & 0x1f];
 #ifdef EVDEV_SUPPORT
 	if (sc->sc_evdev != NULL)
 		evdev_push_repeats(sc->sc_evdev, kbd);

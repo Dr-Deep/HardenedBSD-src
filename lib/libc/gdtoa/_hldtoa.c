@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2004-2008 David Schultz <das@FreeBSD.ORG>
  * All rights reserved.
@@ -25,9 +25,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <float.h>
 #include <limits.h>
@@ -68,6 +65,7 @@ typedef uint32_t manl_t;
 
 #define	LDBL_ADJ	(LDBL_MAX_EXP - 2)
 #define	SIGFIGS		((LDBL_MANT_DIG + 3) / 4 + 1)
+#define	MAX_HEX_DIGITS	((LDBL_MANT_DIG + 3 - 1) / 4 + 1)
 
 static const float one[] = { 1.0f, -1.0f };
 
@@ -128,7 +126,7 @@ __hldtoa(long double e, const char *xdigs, int ndigits, int *decpt, int *sign,
 	s0 = rv_alloc(bufsize);
 
 	/* Round to the desired number of digits. */
-	if (SIGFIGS > ndigits && ndigits > 0) {
+	if (MAX_HEX_DIGITS > ndigits && ndigits > 0) {
 		float redux = one[u.bits.sign];
 		int offset = 4 * ndigits + LDBL_MAX_EXP - 4 - LDBL_MANT_DIG;
 #ifdef __i386__

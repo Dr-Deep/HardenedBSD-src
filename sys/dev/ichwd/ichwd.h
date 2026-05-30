@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2004 Texas A&M University
  * All rights reserved.
@@ -26,8 +26,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _ICHWD_H_
@@ -153,7 +151,8 @@ struct ichwd_softc {
 #define	DEVICEID_82801E		0x2450
 #define	DEVICEID_82801EB	0x24dc
 #define	DEVICEID_82801EBR	0x24d0
-#define	DEVICEID_6300ESB	0x25a1
+#define	DEVICEID_6300ESB_1	0x25a1
+#define	DEVICEID_6300ESB_2	0x25ab
 #define	DEVICEID_82801FBR	0x2640
 #define	DEVICEID_ICH6M		0x2641
 #define	DEVICEID_ICH6W		0x2642

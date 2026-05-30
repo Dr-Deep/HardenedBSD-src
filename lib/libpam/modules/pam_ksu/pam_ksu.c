@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2002 Jacques A. Vidrine <nectar@FreeBSD.org>
  * All rights reserved.
@@ -25,8 +25,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <errno.h>
@@ -49,6 +47,45 @@ static long	get_su_principal(krb5_context, const char *, const char *,
 		    char **, krb5_principal *);
 static int	auth_krb5(pam_handle_t *, krb5_context, const char *,
 		    krb5_principal);
+
+#ifdef MK_MITKRB5
+/* For MIT KRB5 only. */
+
+/*
+ * XXX This entire module will need to be rewritten when heimdal
+ * XXX compatidibility is no longer needed.
+ */
+#define KRB5_DEFAULT_CCFILE_ROOT "/tmp/krb5cc_"
+#define KRB5_DEFAULT_CCROOT "FILE:" KRB5_DEFAULT_CCFILE_ROOT
+
+typedef char *heim_general_string;
+typedef heim_general_string Realm;
+typedef Realm krb5_realm;
+typedef const char *krb5_const_realm;
+
+static krb5_error_code
+krb5_make_principal(krb5_context context, krb5_principal *principal,
+	krb5_const_realm realm, ...)
+{
+	krb5_realm temp_realm = NULL;
+	krb5_error_code rc;
+	va_list ap;
+
+	if (realm == NULL) {
+		if ((rc = krb5_get_default_realm(context, &temp_realm)))
+			return (rc);
+		realm=temp_realm;
+	}
+	va_start(ap, realm);
+
+	rc = krb5_build_principal_alloc_va(context, principal, strlen(realm),
+	    realm, ap);
+	va_end(ap);
+	if (temp_realm)
+		free(temp_realm);
+	return (rc);
+}
+#endif
 
 PAM_EXTERN int
 pam_sm_authenticate(pam_handle_t *pamh, int flags __unused,

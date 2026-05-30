@@ -1,7 +1,7 @@
 /*-
  * SPDX-License-Identifier: GPL-2.0 or Linux-OpenIB
  *
- * Copyright (c) 2017 - 2021 Intel Corporation
+ * Copyright (c) 2017 - 2026 Intel Corporation
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -31,11 +31,11 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-/*$FreeBSD$*/
 
 #include "osdep.h"
 #include "irdma_type.h"
 #include "icrdma_hw.h"
+#include "irdma_main.h"
 
 void disable_prefetch(struct irdma_hw *hw);
 
@@ -71,21 +71,23 @@ static u32 icrdma_regs[IRDMA_MAX_REGS] = {
 };
 
 static u64 icrdma_masks[IRDMA_MAX_MASKS] = {
-	ICRDMA_CCQPSTATUS_CCQP_DONE_M,
-	    ICRDMA_CCQPSTATUS_CCQP_ERR_M,
-	    ICRDMA_CQPSQ_STAG_PDID_M,
-	    ICRDMA_CQPSQ_CQ_CEQID_M,
-	    ICRDMA_CQPSQ_CQ_CQID_M,
-	    ICRDMA_COMMIT_FPM_CQCNT_M,
+	ICRDMA_CCQPSTATUS_CCQP_DONE,
+	    ICRDMA_CCQPSTATUS_CCQP_ERR,
+	    ICRDMA_CQPSQ_STAG_PDID,
+	    ICRDMA_CQPSQ_CQ_CEQID,
+	    ICRDMA_CQPSQ_CQ_CQID,
+	    ICRDMA_COMMIT_FPM_CQCNT,
+	    ICRDMA_CQPSQ_UPESD_HMCFNID,
 };
 
-static u64 icrdma_shifts[IRDMA_MAX_SHIFTS] = {
+static u8 icrdma_shifts[IRDMA_MAX_SHIFTS] = {
 	ICRDMA_CCQPSTATUS_CCQP_DONE_S,
 	    ICRDMA_CCQPSTATUS_CCQP_ERR_S,
 	    ICRDMA_CQPSQ_STAG_PDID_S,
 	    ICRDMA_CQPSQ_CQ_CEQID_S,
 	    ICRDMA_CQPSQ_CQ_CQID_S,
 	    ICRDMA_COMMIT_FPM_CQCNT_S,
+	    ICRDMA_CQPSQ_UPESD_HMCFNID_S,
 };
 
 /**
@@ -101,9 +103,10 @@ icrdma_ena_irq(struct irdma_sc_dev *dev, u32 idx)
 
 	if (dev->ceq_itr && dev->aeq->msix_idx != idx)
 		interval = dev->ceq_itr >> 1;	/* 2 usec units */
-	val = LS_64(0, IRDMA_GLINT_DYN_CTL_ITR_INDX) |
-	    LS_64(interval, IRDMA_GLINT_DYN_CTL_INTERVAL) |
-	    IRDMA_GLINT_DYN_CTL_INTENA_M | IRDMA_GLINT_DYN_CTL_CLEARPBA_M;
+	val = FIELD_PREP(IRDMA_GLINT_DYN_CTL_ITR_INDX, IRDMA_IDX_ITR0) |
+	    FIELD_PREP(IRDMA_GLINT_DYN_CTL_INTERVAL, interval) |
+	    FIELD_PREP(IRDMA_GLINT_DYN_CTL_INTENA, true) |
+	    FIELD_PREP(IRDMA_GLINT_DYN_CTL_CLEARPBA, true);
 	writel(val, dev->hw_regs[IRDMA_GLINT_DYN_CTL] + idx);
 }
 
@@ -131,9 +134,9 @@ icrdma_cfg_ceq(struct irdma_sc_dev *dev, u32 ceq_id, u32 idx,
 {
 	u32 reg_val;
 
-	reg_val = enable ? IRDMA_GLINT_CEQCTL_CAUSE_ENA_M : 0;
+	reg_val = enable ? IRDMA_GLINT_CEQCTL_CAUSE_ENA : 0;
 	reg_val |= (idx << IRDMA_GLINT_CEQCTL_MSIX_INDX_S) |
-	    IRDMA_GLINT_CEQCTL_ITR_INDX_M;
+	    IRDMA_GLINT_CEQCTL_ITR_INDX;
 
 	writel(reg_val, dev->hw_regs[IRDMA_GLINT_CEQCTL] + ceq_id);
 }
@@ -208,8 +211,6 @@ icrdma_init_hw(struct irdma_sc_dev *dev)
 
 		dev->hw_regs[i] = (u32 IOMEM *) (hw_addr + icrdma_regs[i]);
 	}
-	dev->hw_attrs.max_hw_vf_fpm_id = IRDMA_MAX_VF_FPM_ID;
-	dev->hw_attrs.first_hw_vf_fpm_id = IRDMA_FIRST_VF_FPM_ID;
 
 	for (i = 0; i < IRDMA_MAX_SHIFTS; ++i)
 		dev->hw_shifts[i] = icrdma_shifts[i];
@@ -224,16 +225,16 @@ icrdma_init_hw(struct irdma_sc_dev *dev)
 	dev->cq_ack_db = dev->hw_regs[IRDMA_CQACK];
 	dev->irq_ops = &icrdma_irq_ops;
 	dev->hw_stats_map = icrdma_hw_stat_map;
-
+	dev->hw_attrs.page_size_cap = SZ_4K | SZ_2M | SZ_1G;
 	dev->hw_attrs.max_hw_ird = ICRDMA_MAX_IRD_SIZE;
 	dev->hw_attrs.max_hw_ord = ICRDMA_MAX_ORD_SIZE;
 	dev->hw_attrs.max_stat_inst = ICRDMA_MAX_STATS_COUNT;
 	dev->hw_attrs.max_stat_idx = IRDMA_HW_STAT_INDEX_MAX_GEN_2;
+	dev->hw_attrs.max_hw_device_pages = ICRDMA_MAX_PUSH_PAGE_COUNT;
 
 	dev->hw_attrs.uk_attrs.max_hw_wq_frags = ICRDMA_MAX_WQ_FRAGMENT_COUNT;
 	dev->hw_attrs.uk_attrs.max_hw_read_sges = ICRDMA_MAX_SGE_RD;
-	dev->hw_attrs.uk_attrs.max_hw_wq_size = IRDMA_QP_WQE_MAX_SIZE;
-	dev->hw_attrs.uk_attrs.min_sw_wq_size = IRDMA_QP_SW_MIN_WQSIZE;
+	dev->hw_attrs.uk_attrs.min_hw_wq_size = ICRDMA_MIN_WQ_SIZE;
 	dev->hw_attrs.uk_attrs.max_hw_sq_chunk = IRDMA_MAX_QUANTA_PER_WR;
 	disable_tx_spad(dev->hw);
 	disable_prefetch(dev->hw);
@@ -244,11 +245,12 @@ icrdma_init_hw(struct irdma_sc_dev *dev)
 }
 
 void
-irdma_init_config_check(struct irdma_config_check *cc, u8 traffic_class, u16 qs_handle)
+irdma_init_config_check(struct irdma_config_check *cc, u8 traffic_class, u8 prio, u16 qs_handle)
 {
 	cc->config_ok = false;
 	cc->traffic_class = traffic_class;
 	cc->qs_handle = qs_handle;
+	cc->prio = prio;
 	cc->lfc_set = 0;
 	cc->pfc_set = 0;
 }
@@ -256,16 +258,27 @@ irdma_init_config_check(struct irdma_config_check *cc, u8 traffic_class, u16 qs_
 static bool
 irdma_is_lfc_set(struct irdma_config_check *cc, struct irdma_sc_vsi *vsi)
 {
+	u32 temp;
 	u32 lfc = 1;
+	u32 rx_pause_enable, tx_pause_enable;
 	u8 fn_id = vsi->dev->hmc_fn_id;
 
-	lfc &= (rd32(vsi->dev->hw,
-		     PRTMAC_HSEC_CTL_RX_PAUSE_ENABLE_0 + 4 * fn_id) >> 8);
-	lfc &= (rd32(vsi->dev->hw,
-		     PRTMAC_HSEC_CTL_TX_PAUSE_ENABLE_0 + 4 * fn_id) >> 8);
+	if (irdma_fw_major_ver(vsi->dev) == 1) {
+		rx_pause_enable = PRTMAC_HSEC_CTL_RX_PAUSE_ENABLE_0;
+		tx_pause_enable = PRTMAC_HSEC_CTL_TX_PAUSE_ENABLE_0;
+	} else {
+		rx_pause_enable = CNV_PRTMAC_HSEC_CTL_RX_PAUSE_ENABLE_0;
+		tx_pause_enable = CNV_PRTMAC_HSEC_CTL_TX_PAUSE_ENABLE_0;
+	}
+
+#define LFC_ENABLE BIT_ULL(8)
+#define LFC_ENABLE_S 8
+	temp = rd32(vsi->dev->hw, rx_pause_enable + 4 * fn_id);
+	lfc &= FIELD_GET(LFC_ENABLE, temp);
+	temp = rd32(vsi->dev->hw, tx_pause_enable + 4 * fn_id);
+	lfc &= FIELD_GET(LFC_ENABLE, temp);
 	lfc &= rd32(vsi->dev->hw,
 		    PRTMAC_HSEC_CTL_RX_ENABLE_GPP_0 + 4 * vsi->dev->hmc_fn_id);
-
 	if (lfc)
 		return true;
 	return false;
@@ -290,14 +303,21 @@ static bool
 irdma_is_pfc_set(struct irdma_config_check *cc, struct irdma_sc_vsi *vsi)
 {
 	u32 pause;
+	u32 rx_pause_enable, tx_pause_enable;
 	u8 fn_id = vsi->dev->hmc_fn_id;
 
-	pause = (rd32(vsi->dev->hw,
-		      PRTMAC_HSEC_CTL_RX_PAUSE_ENABLE_0 + 4 * fn_id) >>
-		 cc->traffic_class) & BIT(0);
-	pause &= (rd32(vsi->dev->hw,
-		       PRTMAC_HSEC_CTL_TX_PAUSE_ENABLE_0 + 4 * fn_id) >>
-		  cc->traffic_class) & BIT(0);
+	if (irdma_fw_major_ver(vsi->dev) == 1) {
+		rx_pause_enable = PRTMAC_HSEC_CTL_RX_PAUSE_ENABLE_0;
+		tx_pause_enable = PRTMAC_HSEC_CTL_TX_PAUSE_ENABLE_0;
+	} else {
+		rx_pause_enable = CNV_PRTMAC_HSEC_CTL_RX_PAUSE_ENABLE_0;
+		tx_pause_enable = CNV_PRTMAC_HSEC_CTL_TX_PAUSE_ENABLE_0;
+	}
+
+	pause = (rd32(vsi->dev->hw, rx_pause_enable + 4 * fn_id) >>
+		 cc->prio) & BIT(0);
+	pause &= (rd32(vsi->dev->hw, tx_pause_enable + 4 * fn_id) >>
+		  cc->prio) & BIT(0);
 
 	return irdma_check_tc_has_pfc(vsi, GLDCB_TC2PFC, cc->traffic_class) &&
 	    pause;
@@ -314,14 +334,18 @@ irdma_is_config_ok(struct irdma_config_check *cc, struct irdma_sc_vsi *vsi)
 	return cc->config_ok;
 }
 
-#define IRDMA_RCV_WND_NO_FC	65536
-#define IRDMA_RCV_WND_FC	65536
+#define IRDMA_RCV_WND_NO_FC	0x1FFFC
+#define IRDMA_RCV_WND_FC	0x3FFFC
 
-#define IRDMA_CWND_NO_FC	0x1
-#define IRDMA_CWND_FC		0x18
+#define IRDMA_CWND_NO_FC	0x20
+#define IRDMA_CWND_FC		0x400
+#define IRDMA_CWND_DCQCN_FC	0x80000
+
+#define IRDMA_RTOMIN_NO_FC	0x5
+#define IRDMA_RTOMIN_FC		0x32
 
 #define IRDMA_ACKCREDS_NO_FC	0x02
-#define IRDMA_ACKCREDS_FC	0x06
+#define IRDMA_ACKCREDS_FC	0x1E
 
 static void
 irdma_check_flow_ctrl(struct irdma_sc_vsi *vsi, u8 user_prio, u8 traffic_class)
@@ -369,7 +393,7 @@ irdma_check_fc_for_qp(struct irdma_sc_vsi *vsi, struct irdma_sc_qp *sc_qp)
 		struct irdma_config_check *cfg_chk = &vsi->cfg_check[i];
 
 		irdma_init_config_check(cfg_chk,
-					vsi->qos[i].traffic_class,
+					vsi->qos[i].traffic_class, i,
 					vsi->qos[i].qs_handle);
 		if (sc_qp->qs_handle == cfg_chk->qs_handle)
 			irdma_check_flow_ctrl(vsi, i, cfg_chk->traffic_class);
@@ -405,7 +429,7 @@ disable_tx_spad(struct irdma_hw *hw)
 	wr32(hw, GLPE_WQMTXIDXDATA, wqm_data);
 }
 
-#define GL_RDPU_CNTRL 		0x52054
+#define GL_RDPU_CNTRL		0x52054
 void
 rdpu_ackreqpmthresh(struct irdma_hw *hw)
 {

@@ -91,10 +91,18 @@
 #include "util/net_help.h"
 #include "sldns/keyraw.h"
 #include "respip/respip.h"
+#include "iterator/iter_fwd.h"
+#include "iterator/iter_hints.h"
 #include <signal.h>
 
 #ifdef HAVE_SYSTEMD
 #include <systemd/sd-daemon.h>
+#endif
+#ifdef HAVE_NETDB_H
+#include <netdb.h>
+#endif
+#ifdef USE_CACHEDB
+#include "cachedb/cachedb.h"
 #endif
 
 /** How many quit requests happened. */
@@ -191,6 +199,255 @@ signal_handling_playback(struct worker* wrk)
 	sig_record_reload = 0;
 }
 
+#ifdef HAVE_SSL
+/* setup a listening ssl context, fatal_exit() on any failure */
+static void
+setup_listen_sslctx(void** ctx, int is_dot, int is_doh,
+	struct config_file* cfg, char* chroot)
+{
+	char* key = cfg->ssl_service_key;
+	char* pem = cfg->ssl_service_pem;
+	if(chroot && strncmp(key, chroot, strlen(chroot)) == 0)
+		key += strlen(chroot);
+	if(chroot && pem && strncmp(pem, chroot, strlen(chroot)) == 0)
+		pem += strlen(chroot);
+	if(!(*ctx = listen_sslctx_create(key, pem, NULL,
+		cfg->tls_ciphers, cfg->tls_ciphersuites,
+		(cfg->tls_session_ticket_keys.first &&
+		cfg->tls_session_ticket_keys.first->str[0] != 0),
+		is_dot, is_doh, cfg->tls_protocols))) {
+		fatal_exit("could not set up listen SSL_CTX");
+	}
+}
+#endif /* HAVE_SSL */
+
+#ifdef HAVE_SSL
+void* daemon_setup_listen_dot_sslctx(struct daemon* daemon,
+	struct config_file* cfg)
+{
+	void* ctx;
+	(void)setup_listen_sslctx(&ctx, 1, 0, cfg, daemon->chroot);
+	return ctx;
+}
+#endif /* HAVE_SSL */
+
+#ifdef HAVE_SSL
+#ifdef HAVE_NGHTTP2_NGHTTP2_H
+void* daemon_setup_listen_doh_sslctx(struct daemon* daemon,
+	struct config_file* cfg)
+{
+	void* ctx;
+	(void)setup_listen_sslctx(&ctx, 0, 1, cfg, daemon->chroot);
+	return ctx;
+}
+#endif /* HAVE_NGHTTP2_NGHTTP2_H */
+#endif /* HAVE_SSL */
+
+#ifdef HAVE_SSL
+#ifdef HAVE_NGTCP2
+void* daemon_setup_listen_quic_sslctx(struct daemon* daemon,
+	struct config_file* cfg)
+{
+	void* ctx;
+	char* chroot = daemon->chroot;
+	char* key = cfg->ssl_service_key;
+	char* pem = cfg->ssl_service_pem;
+	if(chroot && strncmp(key, chroot, strlen(chroot)) == 0)
+		key += strlen(chroot);
+	if(chroot && pem && strncmp(pem, chroot, strlen(chroot)) == 0)
+		pem += strlen(chroot);
+
+	if(!(ctx = quic_sslctx_create(key, pem, NULL))) {
+		fatal_exit("could not set up quic SSL_CTX");
+	}
+	return ctx;
+}
+#endif /* HAVE_NGTCP2 */
+#endif /* HAVE_SSL */
+
+#ifdef HAVE_SSL
+void* daemon_setup_connect_dot_sslctx(struct daemon* daemon,
+	struct config_file* cfg)
+{
+	void* ctx;
+	char* bundle, *chroot = daemon->chroot;
+	bundle = cfg->tls_cert_bundle;
+	if(chroot && bundle && strncmp(bundle, chroot, strlen(chroot)) == 0)
+		bundle += strlen(chroot);
+
+	if(!(ctx = connect_sslctx_create(NULL, NULL, bundle,
+		cfg->tls_win_cert)))
+		fatal_exit("could not set up connect SSL_CTX");
+	return ctx;
+}
+#endif /* HAVE_SSL */
+
+/* setups the needed ssl contexts, fatal_exit() on any failure */
+void
+daemon_setup_sslctxs(struct daemon* daemon, struct config_file* cfg)
+{
+#ifdef HAVE_SSL
+	char* chroot = daemon->chroot;
+	if(cfg->ssl_service_key && cfg->ssl_service_key[0]) {
+		char* key = cfg->ssl_service_key;
+		char* pem = cfg->ssl_service_pem;
+		if(chroot && strncmp(key, chroot, strlen(chroot)) == 0)
+			key += strlen(chroot);
+		if(chroot && pem && strncmp(pem, chroot, strlen(chroot)) == 0)
+			pem += strlen(chroot);
+
+		/* setup the session keys; the callback to use them will be
+		 * attached to each sslctx separately */
+		if(cfg->tls_session_ticket_keys.first &&
+			cfg->tls_session_ticket_keys.first->str[0] != 0) {
+			if(!listen_sslctx_setup_ticket_keys(
+				cfg->tls_session_ticket_keys.first, chroot)) {
+				fatal_exit("could not set session ticket SSL_CTX");
+			}
+		}
+		daemon->listen_dot_sslctx = daemon_setup_listen_dot_sslctx(
+			daemon, cfg);
+#ifdef HAVE_NGHTTP2_NGHTTP2_H
+		if(cfg_has_https(cfg)) {
+			daemon->listen_doh_sslctx =
+				daemon_setup_listen_doh_sslctx(daemon, cfg);
+		}
+#endif
+#ifdef HAVE_NGTCP2
+		if(cfg_has_quic(cfg)) {
+			daemon->listen_quic_sslctx =
+				daemon_setup_listen_quic_sslctx(daemon, cfg);
+		}
+#endif /* HAVE_NGTCP2 */
+
+		/* Store the file name and mtime to detect changes later. */
+		daemon->ssl_service_key = strdup(cfg->ssl_service_key);
+		if(!daemon->ssl_service_key)
+			fatal_exit("could not setup ssl ctx: out of memory");
+		if(cfg->ssl_service_pem) {
+			daemon->ssl_service_pem = strdup(cfg->ssl_service_pem);
+			if(!daemon->ssl_service_pem)
+				fatal_exit("could not setup ssl ctx: out of memory");
+		} else {
+			daemon->ssl_service_pem = NULL;
+		}
+		if(!file_get_mtime(key,
+			&daemon->mtime_ssl_service_key,
+			&daemon->mtime_ns_ssl_service_key, NULL))
+			log_err("Could not stat(%s): %s",
+				key, strerror(errno));
+		if(pem) {
+			if(!file_get_mtime(pem,
+				&daemon->mtime_ssl_service_pem,
+				&daemon->mtime_ns_ssl_service_pem, NULL))
+				log_err("Could not stat(%s): %s",
+					pem, strerror(errno));
+		} else {
+			daemon->mtime_ssl_service_pem = 0;
+			daemon->mtime_ns_ssl_service_pem = 0;
+		}
+	}
+	daemon->connect_dot_sslctx = daemon_setup_connect_dot_sslctx(
+		daemon, cfg);
+#else /* HAVE_SSL */
+	(void)daemon;(void)cfg;
+#endif /* HAVE_SSL */
+}
+
+/** Delete the ssl ctxs */
+static void
+daemon_delete_sslctxs(struct daemon* daemon)
+{
+#ifdef HAVE_SSL
+	listen_sslctx_delete_ticket_keys();
+	SSL_CTX_free((SSL_CTX*)daemon->listen_dot_sslctx);
+	daemon->listen_dot_sslctx = NULL;
+	SSL_CTX_free((SSL_CTX*)daemon->listen_doh_sslctx);
+	daemon->listen_doh_sslctx = NULL;
+	SSL_CTX_free((SSL_CTX*)daemon->connect_dot_sslctx);
+	daemon->connect_dot_sslctx = NULL;
+	free(daemon->ssl_service_key);
+	daemon->ssl_service_key = NULL;
+	free(daemon->ssl_service_pem);
+	daemon->ssl_service_pem = NULL;
+#else
+	(void)daemon;
+#endif
+#ifdef HAVE_NGTCP2
+	SSL_CTX_free((SSL_CTX*)daemon->listen_quic_sslctx);
+	daemon->listen_quic_sslctx = NULL;
+#endif
+}
+
+int
+ssl_cert_changed(struct daemon* daemon, struct config_file* cfg)
+{
+	time_t mtime = 0;
+	long ns = 0;
+	char* chroot = daemon->chroot;
+	char* key = cfg->ssl_service_key;
+	char* pem = cfg->ssl_service_pem;
+	log_assert(daemon->ssl_service_key && cfg->ssl_service_key);
+	if(chroot && strncmp(key, chroot, strlen(chroot)) == 0)
+		key += strlen(chroot);
+	if(chroot && pem && strncmp(pem, chroot, strlen(chroot)) == 0)
+		pem += strlen(chroot);
+
+	if(strcmp(daemon->ssl_service_key, cfg->ssl_service_key) != 0)
+		return 1;
+	if(daemon->ssl_service_pem && cfg->ssl_service_pem &&
+	   strcmp(daemon->ssl_service_pem, cfg->ssl_service_pem) != 0)
+		return 1;
+	if(!file_get_mtime(key, &mtime, &ns, NULL)) {
+		log_err("Could not stat(%s): %s",
+			key, strerror(errno));
+		/* It has probably changed, but file read is likely going to
+		 * fail. */
+		return 0;
+	}
+	if(mtime != daemon->mtime_ssl_service_key ||
+		ns != daemon->mtime_ns_ssl_service_key)
+		return 1;
+	if(pem) {
+		if(!file_get_mtime(pem, &mtime, &ns, NULL)) {
+			log_err("Could not stat(%s): %s",
+				pem, strerror(errno));
+			/* It has probably changed, but file read is likely going to
+			 * fail. */
+			return 0;
+		}
+		if(mtime != daemon->mtime_ssl_service_pem ||
+			ns != daemon->mtime_ns_ssl_service_pem)
+			return 1;
+	}
+	return 0;
+}
+
+/** Reload the sslctxs if they have changed */
+static void
+daemon_reload_sslctxs(struct daemon* daemon)
+{
+#ifdef HAVE_SSL
+	if(daemon->cfg->ssl_service_key && daemon->cfg->ssl_service_key[0]) {
+		/* See if changed */
+		if(!daemon->ssl_service_key ||
+			ssl_cert_changed(daemon,daemon->cfg)) {
+			verbose(VERB_ALGO, "Reloading certificates");
+			daemon_delete_sslctxs(daemon);
+			daemon_setup_sslctxs(daemon, daemon->cfg);
+		}
+	} else {
+		/* See if sslctxs are removed from config. */
+		if(daemon->ssl_service_key) {
+			verbose(VERB_ALGO, "Removing certificates");
+			daemon_delete_sslctxs(daemon);
+		}
+	}
+#else
+	(void)daemon;
+#endif
+}
+
 struct daemon* 
 daemon_init(void)
 {
@@ -227,7 +484,11 @@ daemon_init(void)
 #  else
 	OPENSSL_init_crypto(OPENSSL_INIT_ADD_ALL_CIPHERS
 		| OPENSSL_INIT_ADD_ALL_DIGESTS
-		| OPENSSL_INIT_LOAD_CRYPTO_STRINGS, NULL);
+		| OPENSSL_INIT_LOAD_CRYPTO_STRINGS
+#    if defined(OPENSSL_INIT_NO_LOAD_CONFIG) && defined(UB_ON_WINDOWS)
+		| OPENSSL_INIT_NO_LOAD_CONFIG
+#    endif
+		, NULL);
 #  endif
 #  if HAVE_DECL_SSL_COMP_GET_COMPRESSION_METHODS
 	/* grab the COMP method ptr because openssl leaks it */
@@ -236,7 +497,11 @@ daemon_init(void)
 #  if OPENSSL_VERSION_NUMBER < 0x10100000 || !defined(HAVE_OPENSSL_INIT_SSL)
 	(void)SSL_library_init();
 #  else
-	(void)OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS, NULL);
+	(void)OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS
+#    if defined(OPENSSL_INIT_NO_LOAD_CONFIG) && defined(UB_ON_WINDOWS)
+		| OPENSSL_INIT_NO_LOAD_CONFIG
+#    endif
+		, NULL);
 #  endif
 #  if defined(HAVE_SSL) && defined(OPENSSL_THREADS) && !defined(THREADS_DISABLED)
 	if(!ub_openssl_lock_init())
@@ -257,6 +522,7 @@ daemon_init(void)
 		free(daemon);
 		return NULL;
 	}
+	daemon->env->modstack = &daemon->mods;
 	/* init edns_known_options */
 	if(!edns_known_options_init(daemon->env)) {
 		free(daemon->env);
@@ -271,8 +537,17 @@ daemon_init(void)
 		free(daemon);
 		return NULL;
 	}
+	daemon->acl_interface = acl_list_create();
+	if(!daemon->acl_interface) {
+		acl_list_delete(daemon->acl);
+		edns_known_options_delete(daemon->env);
+		free(daemon->env);
+		free(daemon);
+		return NULL;
+	}
 	daemon->tcl = tcl_list_create();
 	if(!daemon->tcl) {
+		acl_list_delete(daemon->acl_interface);
 		acl_list_delete(daemon->acl);
 		edns_known_options_delete(daemon->env);
 		free(daemon->env);
@@ -284,6 +559,7 @@ daemon_init(void)
 		log_err("gettimeofday: %s", strerror(errno));
 	daemon->time_last_stat = daemon->time_boot;
 	if((daemon->env->auth_zones = auth_zones_create()) == 0) {
+		acl_list_delete(daemon->acl_interface);
 		acl_list_delete(daemon->acl);
 		tcl_list_delete(daemon->tcl);
 		edns_known_options_delete(daemon->env);
@@ -293,6 +569,7 @@ daemon_init(void)
 	}
 	if(!(daemon->env->edns_strings = edns_strings_create())) {
 		auth_zones_delete(daemon->env->auth_zones);
+		acl_list_delete(daemon->acl_interface);
 		acl_list_delete(daemon->acl);
 		tcl_list_delete(daemon->tcl);
 		edns_known_options_delete(daemon->env);
@@ -303,7 +580,27 @@ daemon_init(void)
 	return daemon;	
 }
 
-int 
+int setup_acl_for_ports(struct acl_list* list, struct listen_port* port_list)
+{
+	struct acl_addr* acl_node;
+	for(; port_list; port_list=port_list->next) {
+		if(!port_list->socket) {
+			/* This is mainly for testbound where port_list is
+			 * empty. */
+			continue;
+		}
+		if(!(acl_node = acl_interface_insert(list,
+			(struct sockaddr_storage*)port_list->socket->addr,
+			port_list->socket->addrlen,
+			acl_refuse))) {
+			return 0;
+		}
+		port_list->socket->acl = acl_node;
+	}
+	return 1;
+}
+
+int
 daemon_open_shared_ports(struct daemon* daemon)
 {
 	log_assert(daemon);
@@ -320,6 +617,8 @@ daemon_open_shared_ports(struct daemon* daemon)
 			free(daemon->ports);
 			daemon->ports = NULL;
 		}
+		/* clean acl_interface */
+		acl_interface_init(daemon->acl_interface);
 		if(!resolve_interface_names(daemon->cfg->ifs,
 			daemon->cfg->num_ifs, NULL, &resif, &num_resif))
 			return 0;
@@ -329,7 +628,8 @@ daemon_open_shared_ports(struct daemon* daemon)
 			daemon->reuseport = 1;
 #endif
 		/* try to use reuseport */
-		p0 = listening_ports_open(daemon->cfg, resif, num_resif, &daemon->reuseport);
+		p0 = listening_ports_open(daemon->cfg, resif, num_resif,
+			&daemon->reuseport);
 		if(!p0) {
 			listening_ports_free(p0);
 			config_del_strarray(resif, num_resif);
@@ -350,6 +650,12 @@ daemon_open_shared_ports(struct daemon* daemon)
 			return 0;
 		}
 		daemon->ports[0] = p0;
+		if(!setup_acl_for_ports(daemon->acl_interface,
+		    daemon->ports[0])) {
+			listening_ports_free(p0);
+			config_del_strarray(resif, num_resif);
+			return 0;
+		}
 		if(daemon->reuseport) {
 			/* continue to use reuseport */
 			for(i=1; i<daemon->num_ports; i++) {
@@ -358,6 +664,15 @@ daemon_open_shared_ports(struct daemon* daemon)
 						resif, num_resif,
 						&daemon->reuseport))
 					|| !daemon->reuseport ) {
+					for(i=0; i<daemon->num_ports; i++)
+						listening_ports_free(daemon->ports[i]);
+					free(daemon->ports);
+					daemon->ports = NULL;
+					config_del_strarray(resif, num_resif);
+					return 0;
+				}
+				if(!setup_acl_for_ports(daemon->acl_interface,
+					daemon->ports[i])) {
 					for(i=0; i<daemon->num_ports; i++)
 						listening_ports_free(daemon->ports[i]);
 					free(daemon->ports);
@@ -385,6 +700,19 @@ daemon_open_shared_ports(struct daemon* daemon)
 	return 1;
 }
 
+int
+daemon_privileged(struct daemon* daemon)
+{
+	daemon->env->cfg = daemon->cfg;
+	daemon->env->alloc = &daemon->superalloc;
+	daemon->env->worker = NULL;
+	if(!modstack_call_startup(&daemon->mods, daemon->cfg->module_conf,
+		daemon->env)) {
+		fatal_exit("failed to startup modules");
+	}
+	return 1;
+}
+
 /**
  * Setup modules. setup module stack.
  * @param daemon: the daemon
@@ -394,11 +722,15 @@ static void daemon_setup_modules(struct daemon* daemon)
 	daemon->env->cfg = daemon->cfg;
 	daemon->env->alloc = &daemon->superalloc;
 	daemon->env->worker = NULL;
-	daemon->env->need_to_validate = 0; /* set by module init below */
-	if(!modstack_setup(&daemon->mods, daemon->cfg->module_conf, 
-		daemon->env)) {
-		fatal_exit("failed to setup modules");
+	if(daemon->mods_inited) {
+		modstack_call_deinit(&daemon->mods, daemon->env);
 	}
+	daemon->env->need_to_validate = 0; /* set by module init below */
+	if(!modstack_call_init(&daemon->mods, daemon->cfg->module_conf,
+		daemon->env)) {
+		fatal_exit("failed to init modules");
+	}
+	daemon->mods_inited = 1;
 	log_edns_known_options(VERB_ALGO, daemon->env);
 }
 
@@ -434,6 +766,30 @@ static int daemon_get_shufport(struct daemon* daemon, int* shufport)
 }
 
 /**
+ * Clear and delete per-worker alloc caches, and free memory maintained in
+ * superalloc.
+ * The rrset and message caches must be empty at the time of call.
+ * @param daemon: the daemon that maintains the alloc caches to be cleared.
+ */
+static void
+daemon_clear_allocs(struct daemon* daemon)
+{
+	int i;
+
+	/* daemon->num may be different during reloads (after configuration
+	 * read). Use old_num which has the correct value used to setup the
+	 * worker_allocs */
+	for(i=0; i<daemon->old_num; i++) {
+		alloc_clear(daemon->worker_allocs[i]);
+		free(daemon->worker_allocs[i]);
+	}
+	free(daemon->worker_allocs);
+	daemon->worker_allocs = NULL;
+
+	alloc_clear_special(&daemon->superalloc);
+}
+
+/**
  * Allocate empty worker structures. With backptr and thread-number,
  * from 0..numthread initialised. Used as user arguments to new threads.
  * Creates the daemon random generator if it does not exist yet.
@@ -457,6 +813,14 @@ daemon_create_workers(struct daemon* daemon)
 		fatal_exit("out of memory during daemon init");
 	numport = daemon_get_shufport(daemon, shufport);
 	verbose(VERB_ALGO, "total of %d outgoing ports available", numport);
+
+#ifdef HAVE_NGTCP2
+	if (cfg_has_quic(daemon->cfg)) {
+		daemon->doq_table = doq_table_create(daemon->cfg, daemon->rand);
+		if(!daemon->doq_table)
+			fatal_exit("could not create doq_table: out of memory");
+	}
+#endif
 	
 	daemon->num = (daemon->cfg->num_threads?daemon->cfg->num_threads:1);
 	if(daemon->reuseport && (int)daemon->num < (int)daemon->num_ports) {
@@ -485,6 +849,21 @@ daemon_create_workers(struct daemon* daemon)
 			/* the above is not ports/numthr, due to rounding */
 			fatal_exit("could not create worker");
 	}
+	/* create per-worker alloc caches if not reusing existing ones. */
+	if(!daemon->worker_allocs) {
+		daemon->worker_allocs = (struct alloc_cache**)calloc(
+			(size_t)daemon->num, sizeof(struct alloc_cache*));
+		if(!daemon->worker_allocs)
+			fatal_exit("could not allocate worker allocs");
+		for(i=0; i<daemon->num; i++) {
+			struct alloc_cache* alloc = calloc(1,
+				sizeof(struct alloc_cache));
+			if (!alloc)
+				fatal_exit("could not allocate worker alloc");
+			alloc_init(alloc, &daemon->superalloc, i);
+			daemon->worker_allocs[i] = alloc;
+		}
+	}
 	free(shufport);
 }
 
@@ -512,6 +891,25 @@ static void close_other_pipes(struct daemon* daemon, int thr)
 #endif /* THREADS_DISABLED */
 
 /**
+ * Function to set the thread local log ID.
+ * Either the internal thread number, or the LWP ID on Linux based on
+ * configuration.
+ */
+static void
+set_log_thread_id(struct worker* worker, struct config_file* cfg)
+{
+	(void)cfg;
+	log_assert(worker);
+#if defined(HAVE_GETTID) && !defined(THREADS_DISABLED)
+	worker->thread_tid = gettid();
+	if(cfg->log_thread_id)
+		log_thread_set(&worker->thread_tid);
+	else
+#endif
+		log_thread_set(&worker->thread_num);
+}
+
+/**
  * Function to start one thread. 
  * @param arg: user argument.
  * @return: void* user return value could be used for thread_join results.
@@ -521,7 +919,14 @@ thread_start(void* arg)
 {
 	struct worker* worker = (struct worker*)arg;
 	int port_num = 0;
-	log_thread_set(&worker->thread_num);
+	log_assert(worker->thr_id);
+	set_log_thread_id(worker, worker->daemon->cfg);
+	{
+		char name[16]; /* seems to be the safest size between
+				  different OSes */
+		snprintf(name, sizeof(name), "unbound/%u", worker->thread_num);
+		ub_thread_setname(worker->thr_id, name);
+	}
 	ub_thread_blocksigs();
 #ifdef THREADS_DISABLED
 	/* close pipe ends used by main */
@@ -596,14 +1001,18 @@ daemon_fork(struct daemon* daemon)
 #endif
 
 	log_assert(daemon);
-	if(!(daemon->views = views_create()))
+	daemon_reload_sslctxs(daemon);
+	if(!(daemon->env->views = views_create()))
 		fatal_exit("Could not create views: out of memory");
 	/* create individual views and their localzone/data trees */
-	if(!views_apply_cfg(daemon->views, daemon->cfg))
+	if(!views_apply_cfg(daemon->env->views, daemon->cfg))
 		fatal_exit("Could not set up views");
 
-	if(!acl_list_apply_cfg(daemon->acl, daemon->cfg, daemon->views))
+	if(!acl_list_apply_cfg(daemon->acl, daemon->cfg, daemon->env->views))
 		fatal_exit("Could not setup access control list");
+	if(!acl_interface_apply_cfg(daemon->acl_interface, daemon->cfg,
+		daemon->env->views))
+		fatal_exit("Could not setup interface control list");
 	if(!tcl_list_apply_cfg(daemon->tcl, daemon->cfg))
 		fatal_exit("Could not setup TCP connection limits");
 	if(daemon->cfg->dnscrypt) {
@@ -617,22 +1026,36 @@ daemon_fork(struct daemon* daemon)
 				   "dnscrypt support");
 #endif
 	}
+	if(daemon->cfg->cookie_secret_file &&
+		daemon->cfg->cookie_secret_file[0]) {
+		if(!(daemon->cookie_secrets = cookie_secrets_create()))
+			fatal_exit("Could not create cookie_secrets: out of memory");
+		if(!cookie_secrets_apply_cfg(daemon->cookie_secrets,
+			daemon->cfg->cookie_secret_file))
+			fatal_exit("Could not setup cookie_secrets");
+	}
 	/* create global local_zones */
 	if(!(daemon->local_zones = local_zones_create()))
 		fatal_exit("Could not create local zones: out of memory");
 	if(!local_zones_apply_cfg(daemon->local_zones, daemon->cfg))
 		fatal_exit("Could not set up local zones");
+	if(!(daemon->env->fwds = forwards_create()) ||
+		!forwards_apply_cfg(daemon->env->fwds, daemon->cfg))
+		fatal_exit("Could not set forward zones");
+	if(!(daemon->env->hints = hints_create()) ||
+		!hints_apply_cfg(daemon->env->hints, daemon->cfg))
+		fatal_exit("Could not set root or stub hints");
 
 	/* process raw response-ip configuration data */
-	if(!(daemon->respip_set = respip_set_create()))
+	if(!(daemon->env->respip_set = respip_set_create()))
 		fatal_exit("Could not create response IP set");
-	if(!respip_global_apply_cfg(daemon->respip_set, daemon->cfg))
+	if(!respip_global_apply_cfg(daemon->env->respip_set, daemon->cfg))
 		fatal_exit("Could not set up response IP set");
-	if(!respip_views_apply_cfg(daemon->views, daemon->cfg,
+	if(!respip_views_apply_cfg(daemon->env->views, daemon->cfg,
 		&have_view_respip_cfg))
 		fatal_exit("Could not set up per-view response IP sets");
-	daemon->use_response_ip = !respip_set_is_empty(daemon->respip_set) ||
-		have_view_respip_cfg;
+	daemon->use_response_ip = !respip_set_is_empty(
+		daemon->env->respip_set) || have_view_respip_cfg;
 
 	/* setup modules */
 	daemon_setup_modules(daemon);
@@ -646,6 +1069,10 @@ daemon_fork(struct daemon* daemon)
 	if(!edns_strings_apply_cfg(daemon->env->edns_strings, daemon->cfg))
 		fatal_exit("Could not set up EDNS strings");
 
+#ifdef USE_CACHEDB
+	daemon->env->cachedb_enabled = cachedb_is_enabled(&daemon->mods,
+		daemon->env);
+#endif
 	/* response-ip-xxx options don't work as expected without the respip
 	 * module.  To avoid run-time operational surprise we reject such
 	 * configuration. */
@@ -660,9 +1087,19 @@ daemon_fork(struct daemon* daemon)
 		fatal_exit("RPZ requires the respip module");
 
 	/* first create all the worker structures, so we can pass
-	 * them to the newly created threads. 
+	 * them to the newly created threads.
 	 */
 	daemon_create_workers(daemon);
+	/* Set it for the first (main) worker since it does not take part in
+	 * the thread_start() procedure.
+	 */
+	set_log_thread_id(daemon->workers[0], daemon->cfg);
+	/* If shm stats need an offset, calculate it */
+	if(daemon->cfg->shm_enable && daemon->cfg->stat_interval > 0) {
+		daemon->stat_time_specific = 1;
+		daemon->stat_time_offset =
+			((int)time(NULL))%daemon->cfg->stat_interval;
+	}
 
 #if defined(HAVE_EV_LOOP) || defined(HAVE_EV_DEFAULT_LOOP)
 	/* in libev the first inited base gets signals */
@@ -713,6 +1150,7 @@ daemon_fork(struct daemon* daemon)
 	/* Shutdown SHM */
 	shm_main_shutdown(daemon);
 
+	daemon->reuse_cache = daemon->workers[0]->reuse_cache;
 	daemon->need_to_exit = daemon->workers[0]->need_to_exit;
 }
 
@@ -727,25 +1165,45 @@ daemon_cleanup(struct daemon* daemon)
 	log_thread_set(NULL);
 	/* clean up caches because
 	 * a) RRset IDs will be recycled after a reload, causing collisions
-	 * b) validation config can change, thus rrset, msg, keycache clear */
-	slabhash_clear(&daemon->env->rrset_cache->table);
-	slabhash_clear(daemon->env->msg_cache);
+	 * b) validation config can change, thus rrset, msg, keycache clear
+	 *
+	 * If we are trying to keep the cache as long as possible, we should
+	 * defer the cleanup until we know whether the new configuration allows
+	 * the reuse.  (If we're exiting, cleanup should be done here). */
+	if(!daemon->reuse_cache || daemon->need_to_exit) {
+		slabhash_clear(&daemon->env->rrset_cache->table);
+		slabhash_clear(daemon->env->msg_cache);
+	}
+	daemon->old_num = daemon->num; /* save the current num */
+	forwards_delete(daemon->env->fwds);
+	daemon->env->fwds = NULL;
+	hints_delete(daemon->env->hints);
+	daemon->env->hints = NULL;
 	local_zones_delete(daemon->local_zones);
 	daemon->local_zones = NULL;
-	respip_set_delete(daemon->respip_set);
-	daemon->respip_set = NULL;
-	views_delete(daemon->views);
-	daemon->views = NULL;
+	respip_set_delete(daemon->env->respip_set);
+	daemon->env->respip_set = NULL;
+	views_delete(daemon->env->views);
+	daemon->env->views = NULL;
 	if(daemon->env->auth_zones)
 		auth_zones_cleanup(daemon->env->auth_zones);
-	/* key cache is cleared by module desetup during next daemon_fork() */
+	/* key cache is cleared by module deinit during next daemon_fork() */
 	daemon_remote_clear(daemon->rc);
+	if(daemon->fast_reload_thread)
+		fast_reload_thread_stop(daemon->fast_reload_thread);
+	if(daemon->fast_reload_printq_list)
+		fast_reload_printq_list_delete(daemon->fast_reload_printq_list);
 	for(i=0; i<daemon->num; i++)
 		worker_delete(daemon->workers[i]);
 	free(daemon->workers);
 	daemon->workers = NULL;
+	/* Unless we're trying to keep the cache, worker alloc_caches should be
+	 * cleared and freed here. We do this after deleting workers to
+	 * guarantee that the alloc caches are valid throughout the lifetime
+	 * of workers. */
+	if(!daemon->reuse_cache || daemon->need_to_exit)
+		daemon_clear_allocs(daemon);
 	daemon->num = 0;
-	alloc_clear_special(&daemon->superalloc);
 #ifdef USE_DNSTAP
 	dt_delete(daemon->dtenv);
 	daemon->dtenv = NULL;
@@ -753,6 +1211,12 @@ daemon_cleanup(struct daemon* daemon)
 #ifdef USE_DNSCRYPT
 	dnsc_delete(daemon->dnscenv);
 	daemon->dnscenv = NULL;
+#endif
+#ifdef HAVE_NGTCP2
+	if (daemon->doq_table) {
+		doq_table_delete(daemon->doq_table);
+		daemon->doq_table = NULL;
+	}
 #endif
 	daemon->cfg = NULL;
 }
@@ -763,7 +1227,9 @@ daemon_delete(struct daemon* daemon)
 	size_t i;
 	if(!daemon)
 		return;
-	modstack_desetup(&daemon->mods, daemon->env);
+	modstack_call_deinit(&daemon->mods, daemon->env);
+	modstack_call_destartup(&daemon->mods, daemon->env);
+	modstack_free(&daemon->mods);
 	daemon_remote_delete(daemon->rc);
 	for(i = 0; i < daemon->num_ports; i++)
 		listening_ports_free(daemon->ports[i]);
@@ -780,16 +1246,15 @@ daemon_delete(struct daemon* daemon)
 	ub_randfree(daemon->rand);
 	alloc_clear(&daemon->superalloc);
 	acl_list_delete(daemon->acl);
+	acl_list_delete(daemon->acl_interface);
 	tcl_list_delete(daemon->tcl);
+	cookie_secrets_delete(daemon->cookie_secrets);
 	listen_desetup_locks();
 	free(daemon->chroot);
 	free(daemon->pidfile);
+	free(daemon->cfgfile);
 	free(daemon->env);
-#ifdef HAVE_SSL
-	listen_sslctx_delete_ticket_keys();
-	SSL_CTX_free((SSL_CTX*)daemon->listen_sslctx);
-	SSL_CTX_free((SSL_CTX*)daemon->connect_sslctx);
-#endif
+	daemon_delete_sslctxs(daemon);
 	free(daemon);
 	/* lex cleanup */
 	ub_c_lex_destroy();
@@ -841,8 +1306,42 @@ daemon_delete(struct daemon* daemon)
 
 void daemon_apply_cfg(struct daemon* daemon, struct config_file* cfg)
 {
+	int new_num = cfg->num_threads?cfg->num_threads:1;
+
         daemon->cfg = cfg;
 	config_apply(cfg);
+
+	/* If this is a reload and we deferred the decision on whether to
+	 * reuse the alloc, RRset, and message caches, then check to see if
+	 * it's safe to keep the caches:
+	 * - changing the number of threads is obviously incompatible with
+	 *   keeping the per-thread alloc caches. It also means we have to
+	 *   clear RRset and message caches. (note that 'new_num' may be
+	 *   adjusted in daemon_create_workers, but for our purpose we can
+	 *   simply compare it with 'old_num'; if they are equal here,
+	 *   'new_num' won't be adjusted to a different value than 'old_num').
+	 * - changing RRset cache size effectively clears any remaining cache
+	 *   entries. We could keep their keys in alloc caches, but it would
+	 *   be more consistent with the sense of the change to clear allocs
+	 *   and free memory. To do so we also have to clear message cache.
+	 * - only changing message cache size does not necessarily affect
+	 *   RRset or alloc cache. But almost all new subsequent queries will
+	 *   require recursive resolution anyway, so it doesn't help much to
+	 *   just keep RRset and alloc caches. For simplicity we clear/free
+	 *   the other two, too. */
+	if(daemon->worker_allocs &&
+		(new_num != daemon->old_num ||
+		 !slabhash_is_size(daemon->env->msg_cache, cfg->msg_cache_size,
+			cfg->msg_cache_slabs) ||
+		 !slabhash_is_size(&daemon->env->rrset_cache->table,
+			cfg->rrset_cache_size, cfg->rrset_cache_slabs)))
+	{
+		log_warn("cannot reuse caches due to critical config change");
+		slabhash_clear(&daemon->env->rrset_cache->table);
+		slabhash_clear(daemon->env->msg_cache);
+		daemon_clear_allocs(daemon);
+	}
+
 	if(!slabhash_is_size(daemon->env->msg_cache, cfg->msg_cache_size,
 	   	cfg->msg_cache_slabs)) {
 		slabhash_delete(daemon->env->msg_cache);

@@ -1,4 +1,5 @@
 #!/bin/ksh -p
+# SPDX-License-Identifier: CDDL-1.0
 #
 # CDDL HEADER START
 #
@@ -85,8 +86,7 @@ function test_selfheal # <pool> <parity> <dir>
 	# from the files which were read.  Before overwriting additional
 	# devices we need to repair all of the blocks in the pool.
 	#
-	log_must zpool scrub -w $pool
-	log_must check_pool_status $pool "errors" "No known data errors"
+	log_must verify_draid_pool $pool "damaged"
 
 	log_must zpool clear $pool
 
@@ -103,8 +103,7 @@ function test_selfheal # <pool> <parity> <dir>
 	log_must eval "find $mntpnt -type f -exec cksum {} + >> /dev/null 2>&1"
 	log_must check_pool_status $pool "errors" "No known data errors"
 
-	log_must zpool scrub -w $pool
-	log_must check_pool_status $pool "errors" "No known data errors"
+	log_must verify_draid_pool $pool "damaged"
 
 	log_must zpool clear $pool
 }
@@ -181,8 +180,7 @@ function test_scrub # <pool> <parity> <dir>
 
 	log_must zpool import -o cachefile=none -d $dir $pool
 
-	log_must zpool scrub -w $pool
-	log_must check_pool_status $pool "errors" "No known data errors"
+	log_must verify_draid_pool $pool "damaged"
 
 	log_must zpool clear $pool
 
@@ -195,8 +193,7 @@ function test_scrub # <pool> <parity> <dir>
 
 	log_must zpool import -o cachefile=none -d $dir $pool
 
-	log_must zpool scrub -w $pool
-	log_must check_pool_status $pool "errors" "No known data errors"
+	log_must verify_draid_pool $pool "damaged"
 
 	log_must zpool clear $pool
 }
@@ -223,13 +220,13 @@ for nparity in 1 2 3; do
 	log_must zfs set primarycache=metadata $TESTPOOL
 
 	log_must zfs create $TESTPOOL/fs
-	log_must fill_fs /$TESTPOOL/fs 1 512 100 1024 R
+	log_must fill_fs /$TESTPOOL/fs 1 512 102400 1 R
 
 	log_must zfs create -o compress=on $TESTPOOL/fs2
-	log_must fill_fs /$TESTPOOL/fs2 1 512 100 1024 R
+	log_must fill_fs /$TESTPOOL/fs2 1 512 102400 1 R
 
 	log_must zfs create -o compress=on -o recordsize=8k $TESTPOOL/fs3
-	log_must fill_fs /$TESTPOOL/fs3 1 512 100 1024 R
+	log_must fill_fs /$TESTPOOL/fs3 1 512 102400 1 R
 
 	typeset pool_size=$(get_pool_prop size $TESTPOOL)
 

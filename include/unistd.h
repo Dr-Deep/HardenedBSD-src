@@ -27,19 +27,19 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)unistd.h	8.12 (Berkeley) 4/27/95
- * $FreeBSD$
  */
 
 #ifndef _UNISTD_H_
 #define	_UNISTD_H_
 
-#include <sys/cdefs.h>
 #include <sys/types.h>			/* XXX adds too much pollution. */
 #include <sys/unistd.h>
 #include <sys/_null.h>
 #include <sys/_types.h>
+
+#if !defined(_STANDALONE) && defined(_FORTIFY_SOURCE) && _FORTIFY_SOURCE > 0
+#include <ssp/unistd.h>
+#endif
 
 #ifndef _GID_T_DECLARED
 typedef	__gid_t		gid_t;
@@ -292,6 +292,11 @@ typedef	__useconds_t	useconds_t;
 #define	_SC_NPROCESSORS_CONF	57
 #define	_SC_NPROCESSORS_ONLN	58
 #define	_SC_CPUSET_SIZE		122
+#define	_SC_UEXTERR_MAXLEN	123 /* user */
+#endif
+
+#if __POSIX_VISIBLE >= 202405
+#define	_SC_NSIG		124
 #endif
 
 /* Extensions found in Solaris and Linux. */
@@ -448,6 +453,10 @@ int	unlinkat(int, const char *, int);
 int	 symlink(const char * __restrict, const char * __restrict);
 #endif
 
+#if __POSIX_VISIBLE >= 202405
+pid_t	 _Fork(void);
+#endif
+
 /* X/Open System Interfaces */
 #if __XSI_VISIBLE
 char	*crypt(const char *, const char *);
@@ -505,8 +514,11 @@ int	 eaccess(const char *, int);
 void	 endusershell(void);
 int	 exect(const char *, char * const *, char * const *);
 int	 execvP(const char *, const char *, char * const *);
+int	 execvpe(const char *, char * const *, char * const *);
 int	 feature_present(const char *);
+int	 fchroot(int);
 char	*fflagstostr(u_long);
+ssize_t	 freadlink(int fd, char *buf, size_t bufsize);
 int	 getdomainname(char *, int);
 int	 getentropy(void *, size_t);
 int	 getgrouplist(const char *, gid_t, gid_t *, int *);
@@ -522,6 +534,7 @@ int	 iruserok(unsigned long, int, const char *, const char *);
 int	 iruserok_sa(const void *, int, int, const char *, const char *);
 int	 issetugid(void);
 void	__FreeBSD_libc_enter_restricted_mode(void);
+int	 kcmp(pid_t pid1, pid_t pid2, int type, uintptr_t idx1, uintptr_t idx2);
 long	 lpathconf(const char *, int);
 #ifndef _MKDTEMP_DECLARED
 char	*mkdtemp(char *);
@@ -586,7 +599,6 @@ int	 undelete(const char *);
 int	 unwhiteout(const char *);
 void	*valloc(size_t);			/* obsoleted by malloc() */
 int	 funlinkat(int, const char *, int, int);
-pid_t	 _Fork(void);
 
 #ifndef _OPTRESET_DECLARED
 #define	_OPTRESET_DECLARED

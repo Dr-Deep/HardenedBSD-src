@@ -22,15 +22,15 @@ everywhere.
 Goals
 ~~~~~~~~~~~~~~~~~~~~~~
 
-RFC-conformance and full feature support
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Standard conformance and full feature support
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Anything the standard allows, libcbor can do.
 
 **Why?** Because conformance and interoperability is the point of defining
 standards. Clients expect the support to be feature-complete and
 there is no significant complexity reduction that can be achieved by slightly
-cutting corners, which means that the incremental cost of full RFC support is
+cutting corners, which means that the incremental cost of full [CBOR standard](https://www.rfc-editor.org/info/std94) support is
 comparatively small over "almost-conformance" seen in many alternatives.
 
 
@@ -99,7 +99,8 @@ Development dependencies
 - There are some `Ruby <https://www.ruby-lang.org/en/>`_ scripts in ``misc``
 - `Valgrind <http://valgrind.org/>`_ (memory correctness & profiling)
 - `GCOV/LCOV <http://ltp.sourceforge.net/coverage/lcov.php>`_ (test coverage)
-- `clang-format`
+- `clang-format` (linter)
+- `cmakelang <https://cmake-format.readthedocs.io/en/latest/index.html>`_ (linter)
 
 
 Installing *sphinx*
@@ -107,13 +108,16 @@ Installing *sphinx*
 
 .. code-block:: bash
 
-  pip install sphinx
-  pip install sphinx_rtd_theme
-  pip install breathe
-  pip install https://github.com/lepture/python-livereload/archive/master.zip
-  pip install sphinx-autobuild
+  pip install -r doc/source/requirements.txt
 
-Further instructions on configuring advanced features can be found at `<http://read-the-docs.readthedocs.org/en/latest/install.html>`_.
+
+To update the Python dependencies:
+
+.. code-block:: bash
+
+  pip-compile --upgrade doc/source/requirements.in
+
+Sphinx reference: `<http://read-the-docs.readthedocs.org/en/latest/install.html>`_.
 
 
 Live preview of docs

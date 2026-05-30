@@ -2,10 +2,18 @@
 .snap
 *.a
 *.core
+*.lo
+*.nossppico
 *.o
 *.orig
+*.pico
+*.pieo
+*.po
+# Don't ignore translation files under `contrib/...`.
+!contrib/**/po
 *.rej
 *.so
+*.so.[0-9]*
 *.sw[nop]
 *~
 _.tinderbox.*
@@ -14,13 +22,10 @@ _.amd64.*
 _.arm.*
 _.arm64.*
 _.i386.*
-_.ia64.*
-_.mips.*
-_.pc98.*
 _.powerpc.*
 _.riscv.*
-_.sparc64.*
-_.sun4v.*
+.*DS_Store
+.depend*
 GPATH
 GRTAGS
 GTAGS
@@ -33,5 +38,8 @@ cscope.po.out
 compile_commands.json
 compile_commands.events.json
 tags
+.cache
 .clangd
 .ccls-cache
+sys/*/compile
+/src.conf

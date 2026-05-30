@@ -24,9 +24,7 @@
 .\" (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 .\" THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
-.Dd February 22, 2021
+.Dd April 20, 2026
 .Dt PFCTL 8
 .Os
 .Sh NAME
@@ -45,7 +43,7 @@
 .Op Fl K Ar host | network
 .Xo
 .Oo Fl k
-.Ar host | network | label | id | gateway
+.Ar host | network | label | id | gateway | source | nat
 .Oc Xc
 .Op Fl o Ar level
 .Op Fl p Ar device
@@ -84,7 +82,7 @@ Translation rules are described in
 .Xr pf.conf 5 .
 .Pp
 When the variable
-.Va pf
+.Va pf_enable
 is set to
 .Dv YES
 in
@@ -106,20 +104,26 @@ to 1.
 Set them permanently in
 .Xr sysctl.conf 5 .
 .Pp
-The
-.Nm
-utility provides several commands.
+At least one option must be specified.
 The options are as follows:
 .Bl -tag -width Ds
 .It Fl A
 Load only the queue rules present in the rule file.
 Other rules and options are ignored.
+Can be combined with the
+.Fl N ,
+.Fl O ,
+and
+.Fl R
+flags to load multiple rule types without (re)loading all rules.
 .It Fl a Ar anchor
 Apply flags
 .Fl f ,
 .Fl F ,
+.Fl s ,
+.Fl T ,
 and
-.Fl s
+.Fl z
 only to the rules in the specified
 .Ar anchor .
 In addition to the main ruleset,
@@ -189,6 +193,13 @@ as the anchor name:
 .Bd -literal -offset indent
 # pfctl -a '*' -sr
 .Ed
+.Pp
+To flush all rulesets and tables recursively, specify only
+.Sq *
+as the anchor name:
+.Bd -literal -offset indent
+# pfctl -a '*' -Fa
+.Ed
 .It Fl D Ar macro Ns = Ns Ar value
 Define
 .Ar macro
@@ -207,28 +218,46 @@ Flush the filter parameters specified by
 .Ar modifier
 (may be abbreviated):
 .Pp
-.Bl -tag -width xxxxxxxxxxxx -compact
-.It Fl F Cm nat
+.Bl -tag -width xxxxxxxxx -compact
+.It Cm nat
 Flush the NAT rules.
-.It Fl F Cm queue
+.It Cm queue
 Flush the queue rules.
-.It Fl F Cm ethernet
+.It Cm ethernet
 Flush the Ethernet filter rules.
-.It Fl F Cm rules
+.It Cm rules
 Flush the filter rules.
-.It Fl F Cm states
+.It Cm states
 Flush the state table (NAT and filter).
-.It Fl F Cm Sources
+.It Cm Sources
 Flush the source tracking table.
-.It Fl F Cm info
+.It Cm info
 Flush the filter information (statistics that are not bound to rules).
-.It Fl F Cm Tables
+.It Cm Tables
 Flush the tables.
-.It Fl F Cm osfp
+.It Cm osfp
 Flush the passive operating system fingerprints.
-.It Fl F Cm all
+.It Cm Reset
+Reset limits, timeouts and other options back to default settings.
+See the OPTIONS section in
+.Xr pf.conf 5
+for details.
+.It Cm all
 Flush all of the above.
 .El
+.Pp
+If
+.Fl a
+is specified as well and
+.Ar anchor
+is terminated with a
+.Sq *
+character,
+.Cm rules ,
+.Cm Tables
+and
+.Cm all
+flush the given anchor recursively.
 .It Fl f Ar file
 Load the rules contained in
 .Ar file .
@@ -258,15 +287,18 @@ option may be specified, which will kill all the source tracking
 entries from the first host/network to the second.
 .It Xo
 .Fl k
-.Ar host | network | label | id | gateway
+.Ar host | network | label | id | key | gateway | source | nat
 .Xc
 Kill all of the state entries matching the specified
 .Ar host ,
 .Ar network ,
 .Ar label ,
 .Ar id ,
+.Ar key ,
+.Ar gateway,
+.Ar source ,
 or
-.Ar gateway.
+.Ar nat.
 .Pp
 For example, to kill all of the state entries originating from
 .Dq host :
@@ -296,7 +328,7 @@ To kill all states with the target
 .Pp
 .Dl # pfctl -k 0.0.0.0/0 -k host2
 .Pp
-It is also possible to kill states by rule label or state ID.
+It is also possible to kill states by rule label, state key or state ID.
 In this mode the first
 .Fl k
 argument is used to specify the type
@@ -306,6 +338,17 @@ from rules carrying the label
 .Dq foobar :
 .Pp
 .Dl # pfctl -k label -k foobar
+.Pp
+To kill one specific state by its key
+(protocol, host1, port1, direction, host2 and port2 in the same format
+of pfctl -s state),
+use the
+.Ar key
+modifier and as a second argument the state key.
+To kill a state whose protocol is TCP and originating from
+10.0.0.101:32123 to 10.0.0.1:80 use:
+.Pp
+.Dl # pfctl -k key -k 'tcp 10.0.0.1:80 <- 10.0.0.101:32123'
 .Pp
 To kill one specific state by its unique state ID
 (as shown by pfctl -s state -vv),
@@ -334,6 +377,14 @@ To kill all states using a gateway in 192.168.0.0/24:
 .Pp
 .Dl # pfctl -k gateway -k 192.168.0.0/24
 .Pp
+States can also be killed based on their pre-NAT address:
+.Pp
+.Dl # pfctl -k nat -k 192.168.0.1
+.Pp
+To remove a source from a source limiter use:
+.Pp
+.Dl # pfctl -I 1 -k source -k 192.0.2.2
+.Pp
 .It Fl M
 Kill matching states in the opposite direction (on other interfaces) when
 killing states.
@@ -354,23 +405,36 @@ Allows single options to be modified without disturbing the others:
 .It Fl N
 Load only the NAT rules present in the rule file.
 Other rules and options are ignored.
+Can be combined with the
+.Fl A ,
+.Fl O ,
+and
+.Fl R
+flags to load multiple rule types without (re)loading all rules.
 .It Fl n
 Do not actually load rules, just parse them.
 .It Fl O
 Load only the options present in the rule file.
 Other rules and options are ignored.
+Can be combined with the
+.Fl A ,
+.Fl N ,
+and
+.Fl R
+flags to load multiple rule types without (re)loading all rules.
 .It Fl o Ar level
 Control the ruleset optimizer, overriding any rule file settings.
 .Pp
-.Bl -tag -width xxxxxxxxxxxx -compact
-.It Fl o Cm none
+.Bl -tag -width xxxxxxxxx -compact
+.It Cm none
 Disable the ruleset optimizer.
-.It Fl o Cm basic
+.It Cm basic
 Enable basic ruleset optimizations.
 This is the default behaviour.
-.It Fl o Cm profile
+.It Cm profile
 Enable basic ruleset optimizations with profiling.
 .El
+.Pp
 For further information on the ruleset optimizer, see
 .Xr pf.conf 5 .
 .It Fl P
@@ -386,17 +450,27 @@ Only print errors and warnings.
 .It Fl R
 Load only the filter rules present in the rule file.
 Other rules and options are ignored.
+Can be combined with the
+.Fl A ,
+.Fl N ,
+and
+.Fl O
+flags to load multiple rule types without (re)loading all rules.
 .It Fl r
-Perform reverse DNS lookups on states when displaying them.
-.It Fl s Ar modifier
+Perform reverse DNS lookups on states and tables when displaying them.
+.Fl S
+and
+.Fl r
+are mutually exclusive.
+.It Fl s Ar modifier Op Fl R Ar id
 Show the filter parameters specified by
 .Ar modifier
 (may be abbreviated):
 .Pp
-.Bl -tag -width xxxxxxxxxxxxx -compact
-.It Fl s Cm nat
+.Bl -tag -width xxxxxxxxxxx -compact
+.It Cm nat
 Show the currently loaded NAT rules.
-.It Fl s Cm queue
+.It Cm queue
 Show the currently loaded queue rules.
 When used together with
 .Fl v ,
@@ -406,18 +480,25 @@ When used together with
 .Nm
 will loop and show updated queue statistics every five seconds, including
 measured bandwidth and packets per second.
-.It Fl s Cm ether
+.It Cm ethernet
 Show the currently loaded Ethernet rules.
 When used together with
 .Fl v ,
 the per-rule statistics (number of evaluations,
 packets, and bytes) are also shown.
-.It Fl s Cm rules
+.It Cm rules
 Show the currently loaded filter rules.
 When used together with
 .Fl v ,
 the per-rule statistics (number of evaluations,
 packets, and bytes) are also shown.
+When used together with
+.Fl g
+or
+.Fl vv ,
+expired rules
+.Pq marked as Dq # expired
+are also shown.
 Note that the
 .Dq skip step
 optimization done automatically by the kernel
@@ -425,7 +506,7 @@ will skip evaluation of rules where possible.
 Packets passed statefully are counted in the rule that created the state
 (even though the rule is not evaluated more than once for the entire
 connection).
-.It Fl s Cm Anchors
+.It Cm Anchors
 Show the currently loaded anchors directly attached to the main ruleset.
 If
 .Fl a Ar anchor
@@ -436,31 +517,34 @@ If
 .Fl v
 is specified, all anchors attached under the target anchor will be
 displayed recursively.
-.It Fl s Cm states
+.It Cm states
 Show the contents of the state table.
-.It Fl s Cm Sources
+.It Cm Sources
 Show the contents of the source tracking table.
-.It Fl s Cm info
+.It Cm info
 Show filter information (statistics and counters).
 When used together with
 .Fl v ,
-source tracking statistics are also shown.
-.It Fl s Cm Running
+source tracking statistics, the firewall's 32-bit hostid number and the
+main ruleset's MD5 checksum for use with
+.Xr pfsync 4
+are also shown.
+.It Cm Running
 Show the running status and provide a non-zero exit status when disabled.
-.It Fl s Cm labels
+.It Cm labels
 Show per-rule statistics (label, evaluations, packets total, bytes total,
 packets in, bytes in, packets out, bytes out, state creations) of
 filter rules with labels, useful for accounting.
-.It Fl s Cm timeouts
+.It Cm timeouts
 Show the current global timeouts.
-.It Fl s Cm memory
+.It Cm memory
 Show the current pool memory hard limits.
-.It Fl s Cm Tables
+.It Cm Tables
 Show the list of tables.
-.It Fl s Cm osfp
+.It Cm osfp
 Show the list of operating system fingerprints.
-.It Fl s Cm Interfaces
-Show the list of interfaces and interface drivers available to PF.
+.It Cm Interfaces
+Show the list of interfaces and interface groups available to PF.
 When used together with
 .Fl v ,
 it additionally lists which interfaces have skip rules activated.
@@ -469,43 +553,113 @@ When used together with
 interface statistics are also shown.
 .Fl i
 can be used to select an interface or a group of interfaces.
-.It Fl s Cm all
+.It Cm LimiterStates
+Show information about state limiters.
+If
+.Fl R Ar id
+is specified as well,
+only the state limiter identified by
+.Ar id
+is shown.
+.It Cm LimiterSrcs
+Show information about source limiters.
+If
+.Fl R Ar id
+is specified as well,
+only the state limiter identified by
+.Ar id
+is shown.
+If
+.Fl v
+is specified,
+the address entries for the source pools are shown too.
+.It Cm all
 Show all of the above, except for the lists of interfaces and operating
 system fingerprints.
 .El
-.It Fl T Ar command Op Ar address ...
+.Pp
+Counters shown with
+.Fl s Cm info
+are:
+.Pp
+.Bl -tag -width xxxxxxxxxxxxxx -compact
+.It match
+explicit rule match
+.It bad-offset
+currently unused
+.It fragment
+invalid fragments dropped
+.It short
+short packets dropped
+.It normalize
+dropped by normalizer: illegal packets
+.It memory
+memory could not be allocated
+.It bad-timestamp
+bad TCP timestamp; RFC 1323
+.It congestion
+network interface queue congested
+.It ip-option
+bad IP/IPv6 options
+.It proto-cksum
+invalid protocol checksum
+.It state-mismatch
+packet was associated with a state entry, but sequence numbers did not match
+.It state-insert
+state insertion failure
+.It state-limit
+configured state limit was reached
+.It src-limit
+source node/connection limit
+.It synproxy
+dropped by synproxy
+.It map-failed
+address mapping failed
+.It translate
+no free ports in translation port range
+.El
+.It Fl S
+Do not perform domain name resolution.
+If a name cannot be resolved without DNS, an error will be reported.
+.It Fl t Ar table Fl T Ar command Op Ar address ...
 Specify the
 .Ar command
-(may be abbreviated) to apply to the table.
+(may be abbreviated) to apply to
+.Ar table .
 Commands include:
 .Pp
-.Bl -tag -width xxxxxxxxxxxx -compact
-.It Fl T Cm kill
-Kill a table.
-.It Fl T Cm flush
-Flush all addresses of a table.
-.It Fl T Cm add
-Add one or more addresses in a table.
-Automatically create a nonexisting table.
-.It Fl T Cm delete
+.Bl -tag -width "expire number" -compact
+.It Cm add
+Add one or more addresses to a table.
+Automatically create a persistent table if it does not exist.
+.It Cm delete
 Delete one or more addresses from a table.
-.It Fl T Cm expire Ar number
+.It Cm expire Ar number
 Delete addresses which had their statistics cleared more than
 .Ar number
 seconds ago.
 For entries which have never had their statistics cleared,
 .Ar number
 refers to the time they were added to the table.
-.It Fl T Cm replace
+.It Cm flush
+Flush all addresses in a table.
+.It Cm kill
+Kill a table.
+.It Cm replace
 Replace the addresses of the table.
-Automatically create a nonexisting table.
-.It Fl T Cm show
+Automatically create a persistent table if it does not exist.
+.It Cm show
 Show the content (addresses) of a table.
-.It Fl T Cm test
+.It Cm test
 Test if the given addresses match a table.
-.It Fl T Cm zero
-Clear all the statistics of a table.
-.It Fl T Cm load
+.It Cm zero Op Ar address ...
+Clear all the statistics of a table, or only for specified addresses.
+.It Cm reset
+Clear statistics only for addresses with non-zero statistics. Addresses
+with counter values at zero and their
+.Dq Cleared
+timestamp are left untouched.
+.It Cm load
 Load only the table definitions from
 .Xr pf.conf 5 .
 This is used in conjunction with the
@@ -528,6 +682,8 @@ line and/or in an unformatted text file, using the
 flag.
 Comments starting with a
 .Sq #
+or
+.Sq \;
 are allowed in the text file.
 With these commands, the
 .Fl v
@@ -668,8 +824,6 @@ tables of the same name from anchors attached below it.
 .It C
 This flag is set when per-address counters are enabled on the table.
 .El
-.It Fl t Ar table
-Specify the name of the table.
 .It Fl v
 Produce more verbose output.
 A second use of

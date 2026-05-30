@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008 Paolo Pisati
  * All rights reserved.
@@ -26,9 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/eventhandler.h>
@@ -45,6 +42,7 @@ __FBSDID("$FreeBSD$");
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_private.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <netinet/ip_var.h>
@@ -313,17 +311,17 @@ ipfw_nat(struct ip_fw_args *args, struct cfg_nat *t, struct mbuf *m)
 	/*
 	 * XXX - Libalias checksum offload 'duct tape':
 	 *
-	 * locally generated packets have only pseudo-header checksum
-	 * calculated and libalias will break it[1], so mark them for
-	 * later fix.  Moreover there are cases when libalias modifies
+	 * When checksum offloading is used, packets contain only the
+	 * pseudo-header checksum and libalias will break it[1], so mark them
+	 * for later fix.  Moreover there are cases when libalias modifies
 	 * tcp packet data[2], mark them for later fix too.
 	 *
 	 * [1] libalias was never meant to run in kernel, so it does
 	 * not have any knowledge about checksum offloading, and
 	 * expects a packet with a full internet checksum.
-	 * Unfortunately, packets generated locally will have just the
-	 * pseudo header calculated, and when libalias tries to adjust
-	 * the checksum it will actually compute a wrong value.
+	 * Unfortunately, when checksum offloading is used, packets will
+	 * contain just the pseudo-header checksum, and when libalias tries to
+	 * adjust the checksum it will actually compute a wrong value.
 	 *
 	 * [2] when libalias modifies tcp's data content, full TCP
 	 * checksum has to be recomputed: the problem is that
@@ -342,8 +340,7 @@ ipfw_nat(struct ip_fw_args *args, struct cfg_nat *t, struct mbuf *m)
 	 * it can handle delayed checksum and tso)
 	 */
 
-	if (mcl->m_pkthdr.rcvif == NULL &&
-	    mcl->m_pkthdr.csum_flags & CSUM_DELAY_DATA)
+	if (mcl->m_pkthdr.csum_flags & CSUM_DELAY_DATA)
 		ldt = 1;
 
 	c = mtod(mcl, char *);
@@ -418,7 +415,7 @@ ipfw_nat(struct ip_fw_args *args, struct cfg_nat *t, struct mbuf *m)
 		struct tcphdr 	*th;
 
 		th = (struct tcphdr *)(ip + 1);
-		if (th->th_x2)
+		if (tcp_get_flags(th) & TH_RES1)
 			ldt = 1;
 	}
 
@@ -438,7 +435,7 @@ ipfw_nat(struct ip_fw_args *args, struct cfg_nat *t, struct mbuf *m)
 			 * Maybe it was set in
 			 * libalias...
 			 */
-			th->th_x2 = 0;
+			tcp_set_flags(th, tcp_get_flags(th) & ~TH_RES1);
 			th->th_sum = cksum;
 			mcl->m_pkthdr.csum_data =
 			    offsetof(struct tcphdr, th_sum);
@@ -505,7 +502,6 @@ nat44_config(struct ip_fw_chain *chain, struct nat44_cfg_nat *ucfg)
 	gencnt = chain->gencnt;
 	ptr = lookup_nat_name(&chain->nat, ucfg->name);
 	if (ptr == NULL) {
-		IPFW_UH_WUNLOCK(chain);
 		/* New rule: allocate and init new instance. */
 		ptr = malloc(sizeof(struct cfg_nat), M_IPFW, M_WAITOK | M_ZERO);
 		ptr->lib = LibAliasInit(NULL);
@@ -516,7 +512,6 @@ nat44_config(struct ip_fw_chain *chain, struct nat44_cfg_nat *ucfg)
 		LIST_REMOVE(ptr, _next);
 		flush_nat_ptrs(chain, ptr->id);
 		IPFW_WUNLOCK(chain);
-		IPFW_UH_WUNLOCK(chain);
 	}
 
 	/*
@@ -545,7 +540,6 @@ nat44_config(struct ip_fw_chain *chain, struct nat44_cfg_nat *ucfg)
 	del_redir_spool_cfg(ptr, &ptr->redir_chain);
 	/* Add new entries. */
 	add_redir_spool_cfg((char *)(ucfg + 1), ptr);
-	IPFW_UH_WLOCK(chain);
 
 	/* Extra check to avoid race with another ipfw_nat_cfg() */
 	tcfg = NULL;
@@ -883,11 +877,11 @@ nat44_get_log(struct ip_fw_chain *chain, ip_fw3_opheader *op3,
 }
 
 static struct ipfw_sopt_handler	scodes[] = {
-	{ IP_FW_NAT44_XCONFIG,	0,	HDIR_SET,	nat44_cfg },
-	{ IP_FW_NAT44_DESTROY,	0,	HDIR_SET,	nat44_destroy },
-	{ IP_FW_NAT44_XGETCONFIG,	0,	HDIR_GET,	nat44_get_cfg },
-	{ IP_FW_NAT44_LIST_NAT,	0,	HDIR_GET,	nat44_list_nat },
-	{ IP_FW_NAT44_XGETLOG,	0,	HDIR_GET,	nat44_get_log },
+    { IP_FW_NAT44_XCONFIG,	IP_FW3_OPVER, HDIR_SET,	nat44_cfg },
+    { IP_FW_NAT44_DESTROY,	IP_FW3_OPVER, HDIR_SET,	nat44_destroy },
+    { IP_FW_NAT44_XGETCONFIG,	IP_FW3_OPVER, HDIR_GET,	nat44_get_cfg },
+    { IP_FW_NAT44_LIST_NAT,	IP_FW3_OPVER, HDIR_GET,	nat44_list_nat },
+    { IP_FW_NAT44_XGETLOG,	IP_FW3_OPVER, HDIR_GET,	nat44_get_log },
 };
 
 /*
@@ -1001,9 +995,11 @@ ipfw_nat_del(struct sockopt *sopt)
 {
 	struct cfg_nat *ptr;
 	struct ip_fw_chain *chain = &V_layer3_chain;
-	int i;
+	int error, i;
 
-	sooptcopyin(sopt, &i, sizeof i, sizeof i);
+	error = sooptcopyin(sopt, &i, sizeof i, sizeof i);
+	if (error != 0)
+		return (error);
 	/* XXX validate i */
 	IPFW_UH_WLOCK(chain);
 	ptr = lookup_nat(&chain->nat, i);
@@ -1049,7 +1045,6 @@ retry:
 				len += sizeof(struct cfg_spool_legacy);
 		}
 	}
-	IPFW_UH_RUNLOCK(chain);
 
 	data = malloc(len, M_TEMP, M_WAITOK | M_ZERO);
 	bcopy(&nat_cnt, data, sizeof(nat_cnt));
@@ -1057,7 +1052,6 @@ retry:
 	nat_cnt = 0;
 	len = sizeof(nat_cnt);
 
-	IPFW_UH_RLOCK(chain);
 	if (gencnt != chain->gencnt) {
 		free(data, M_TEMP);
 		goto retry;
@@ -1106,7 +1100,7 @@ ipfw_nat_get_log(struct sockopt *sopt)
 {
 	uint8_t *data;
 	struct cfg_nat *ptr;
-	int i, size;
+	int error, i, size;
 	struct ip_fw_chain *chain;
 	IPFW_RLOCK_TRACKER;
 
@@ -1136,9 +1130,9 @@ ipfw_nat_get_log(struct sockopt *sopt)
 		i += LIBALIAS_BUF_SIZE;
 	}
 	IPFW_RUNLOCK(chain);
-	sooptcopyout(sopt, data, size);
+	error = sooptcopyout(sopt, data, size);
 	free(data, M_IPFW);
-	return(0);
+	return (error);
 }
 
 static int
@@ -1168,7 +1162,7 @@ vnet_ipfw_nat_uninit(const void *arg __unused)
 }
 
 static void
-ipfw_nat_init(void)
+ipfw_nat_init(void *dummy __unused)
 {
 
 	/* init ipfw hooks */
@@ -1185,7 +1179,7 @@ ipfw_nat_init(void)
 }
 
 static void
-ipfw_nat_destroy(void)
+ipfw_nat_destroy(void *dummy __unused)
 {
 
 	EVENTHANDLER_DEREGISTER(ifaddr_event, ifaddr_event_tag);

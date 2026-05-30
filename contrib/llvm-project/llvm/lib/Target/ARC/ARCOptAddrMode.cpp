@@ -36,7 +36,7 @@ using namespace llvm;
 namespace llvm {
 
 static cl::opt<unsigned> ArcKillAddrMode("arc-kill-addr-mode", cl::init(0),
-                                         cl::ReallyHidden, cl::ZeroOrMore);
+                                         cl::ReallyHidden);
 
 #define DUMP_BEFORE() ((ArcKillAddrMode & 0x0001) != 0)
 #define DUMP_AFTER() ((ArcKillAddrMode & 0x0002) != 0)
@@ -60,8 +60,8 @@ public:
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesCFG();
     MachineFunctionPass::getAnalysisUsage(AU);
-    AU.addRequired<MachineDominatorTree>();
-    AU.addPreserved<MachineDominatorTree>();
+    AU.addRequired<MachineDominatorTreeWrapperPass>();
+    AU.addPreserved<MachineDominatorTreeWrapperPass>();
   }
 
   bool runOnMachineFunction(MachineFunction &MF) override;
@@ -119,7 +119,7 @@ private:
 char ARCOptAddrMode::ID = 0;
 INITIALIZE_PASS_BEGIN(ARCOptAddrMode, OPTADDRMODE_NAME, OPTADDRMODE_DESC, false,
                       false)
-INITIALIZE_PASS_DEPENDENCY(MachineDominatorTree)
+INITIALIZE_PASS_DEPENDENCY(MachineDominatorTreeWrapperPass)
 INITIALIZE_PASS_END(ARCOptAddrMode, OPTADDRMODE_NAME, OPTADDRMODE_DESC, false,
                     false)
 
@@ -136,7 +136,7 @@ static bool isAddConstantOp(const MachineInstr &MI, int64_t &Amount) {
   switch (MI.getOpcode()) {
   case ARC::SUB_rru6:
     Sign = -1;
-    LLVM_FALLTHROUGH;
+    [[fallthrough]];
   case ARC::ADD_rru6:
     assert(MI.getOperand(2).isImm() && "Expected immediate operand");
     Amount = Sign * MI.getOperand(2).getImm();
@@ -153,11 +153,10 @@ static bool dominatesAllUsesOf(const MachineInstr *MI, unsigned VReg,
 
   assert(Register::isVirtualRegister(VReg) && "Expected virtual register!");
 
-  for (auto it = MRI->use_nodbg_begin(VReg), end = MRI->use_nodbg_end();
-       it != end; ++it) {
-    MachineInstr *User = it->getParent();
+  for (const MachineOperand &Use : MRI->use_nodbg_operands(VReg)) {
+    const MachineInstr *User = Use.getParent();
     if (User->isPHI()) {
-      unsigned BBOperandIdx = User->getOperandNo(&*it) + 1;
+      unsigned BBOperandIdx = Use.getOperandNo() + 1;
       MachineBasicBlock *MBB = User->getOperand(BBOperandIdx).getMBB();
       if (MBB->empty()) {
         const MachineBasicBlock *InstBB = MI->getParent();
@@ -217,7 +216,7 @@ MachineInstr *ARCOptAddrMode::tryToCombine(MachineInstr &Ldst) {
   }
 
   Register B = Base.getReg();
-  if (Register::isStackSlot(B) || !Register::isVirtualRegister(B)) {
+  if (!Register::isVirtualRegister(B)) {
     LLVM_DEBUG(dbgs() << "[ABAW] Base is not VReg\n");
     return nullptr;
   }
@@ -459,12 +458,12 @@ void ARCOptAddrMode::changeToAddrMode(MachineInstr &Ldst, unsigned NewOpcode,
 
   Register BaseReg = Ldst.getOperand(BasePos).getReg();
 
-  Ldst.RemoveOperand(OffPos);
-  Ldst.RemoveOperand(BasePos);
+  Ldst.removeOperand(OffPos);
+  Ldst.removeOperand(BasePos);
 
   if (IsStore) {
     Src = Ldst.getOperand(BasePos - 1);
-    Ldst.RemoveOperand(BasePos - 1);
+    Ldst.removeOperand(BasePos - 1);
   }
 
   Ldst.setDesc(AST->getInstrInfo()->get(NewOpcode));
@@ -509,7 +508,7 @@ bool ARCOptAddrMode::runOnMachineFunction(MachineFunction &MF) {
   AST = &MF.getSubtarget<ARCSubtarget>();
   AII = AST->getInstrInfo();
   MRI = &MF.getRegInfo();
-  MDT = &getAnalysis<MachineDominatorTree>();
+  MDT = &getAnalysis<MachineDominatorTreeWrapperPass>().getDomTree();
 
   bool Changed = false;
   for (auto &MBB : MF)

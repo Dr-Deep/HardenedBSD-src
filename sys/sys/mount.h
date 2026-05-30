@@ -27,23 +27,26 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)mount.h	8.21 (Berkeley) 5/20/95
- * $FreeBSD$
  */
 
 #ifndef _SYS_MOUNT_H_
 #define _SYS_MOUNT_H_
 
+#include <sys/types.h>
 #include <sys/ucred.h>
 #include <sys/queue.h>
 #ifdef _KERNEL
-#include <sys/types.h>
+#include <sys/systm.h>
 #include <sys/lock.h>
 #include <sys/lockmgr.h>
+#include <sys/proc.h>
 #include <sys/tslog.h>
 #include <sys/_mutex.h>
 #include <sys/_sx.h>
+#elif defined(_WANT_MOUNT)
+#include <sys/_lock.h>
+#include <sys/_lockmgr.h>
+#include <sys/_mutex.h>
 #endif
 
 /*
@@ -53,7 +56,12 @@
 
 typedef struct fsid { int32_t val[2]; } fsid_t;	/* filesystem id type */
 
-#define fsidcmp(a, b) memcmp((a), (b), sizeof(fsid_t))
+/* Returns non-zero if fsids are different. */
+static __inline int
+fsidcmp(const fsid_t *a, const fsid_t *b)
+{
+	return (a->val[0] != b->val[0] || a->val[1] != b->val[1]);
+}
 
 /*
  * File identifier.
@@ -216,6 +224,7 @@ struct mount_upper_node {
  *	i - interlock
  *	v - vnode freelist mutex
  *	d - deferred unmount list mutex
+ *	e - mnt_explock
  *
  * Unmarked fields are considered stable as long as a ref is held.
  *
@@ -245,13 +254,14 @@ struct mount {
 	void *		mnt_data;		/* private data */
 	time_t		mnt_time;		/* last time written*/
 	int		mnt_iosize_max;		/* max size for clusters, etc */
-	struct netexport *mnt_export;		/* export list */
+	struct netexport *mnt_export;		/* (e) export list */
 	struct label	*mnt_label;		/* MAC label for the fs */
 	u_int		mnt_hashseed;		/* Random seed for vfs_hash */
 	int		mnt_lockref;		/* (i) Lock reference count */
 	int		mnt_secondary_writes;   /* (i) # of secondary writes */
 	int		mnt_secondary_accwrites;/* (i) secondary wr. starts */
 	struct thread	*mnt_susp_owner;	/* (i) thread owning suspension */
+	struct ucred	*mnt_exjail;		/* (i) jail which did exports */
 #define	mnt_endzero	mnt_gjprovider
 	char		*mnt_gjprovider;	/* gjournal provider name */
 	struct mtx	mnt_listmtx;
@@ -259,6 +269,7 @@ struct mount {
 	int		mnt_lazyvnodelistsize;	/* (l) # of lazy vnodes */
 	int		mnt_upper_pending;	/* (i) # of pending ops on mnt_uppers */
 	struct lock	mnt_explock;		/* vfs_export walkers lock */
+	struct lock	mnt_renamelock;		/* renames and O_RESOLVE_BENEATH */
 	TAILQ_HEAD(, mount_upper_node) mnt_uppers; /* (i) upper mounts over us */
 	TAILQ_HEAD(, mount_upper_node) mnt_notify; /* (i) upper mounts for notification */
 	STAILQ_ENTRY(mount) mnt_taskqueue_link;	/* (d) our place in deferred unmount list */
@@ -361,6 +372,7 @@ struct mntoptnames {
 	{ MNT_RELOAD,		"reload" },				\
 	{ MNT_FORCE,		"force" },				\
 	{ MNT_SNAPSHOT,		"snapshot" },				\
+	{ MNT_NAMEDATTR,	"named attributes" },			\
 	{ 0, NULL }
 #endif
 
@@ -386,6 +398,7 @@ struct mntoptnames {
 #define	MNT_SUJ		0x0000000100000000ULL /* using journaled soft updates */
 #define	MNT_AUTOMOUNTED	0x0000000200000000ULL /* mounted by automountd(8) */
 #define	MNT_UNTRUSTED	0x0000000800000000ULL /* filesys metadata untrusted */
+#define	MNT_NAMEDATTR	0x0000020000000000ULL /* named attributes enabled */
 
 /*
  * NFS export related mount flags.
@@ -425,7 +438,7 @@ struct mntoptnames {
 			MNT_IGNORE	| MNT_EXPUBLIC	| MNT_NOSYMFOLLOW | \
 			MNT_GJOURNAL	| MNT_MULTILABEL | MNT_ACLS	| \
 			MNT_NFS4ACLS	| MNT_AUTOMOUNTED | MNT_VERIFIED | \
-			MNT_UNTRUSTED)
+			MNT_UNTRUSTED	| MNT_NAMEDATTR)
 
 /* Mask of flags that can be updated. */
 #define	MNT_UPDATEMASK (MNT_NOSUID	| MNT_NOEXEC	| \
@@ -475,37 +488,39 @@ struct mntoptnames {
  * the filesystem to cancel operations that might otherwise deadlock
  * with the unmount attempt (used by NFS).
  */
-#define MNTK_UNMOUNTF	0x00000001	/* forced unmount in progress */
-#define MNTK_ASYNC	0x00000002	/* filtered async flag */
-#define MNTK_SOFTDEP	0x00000004	/* async disabled by softdep */
-#define MNTK_NOMSYNC	0x00000008	/* don't do msync */
-#define	MNTK_DRAINING	0x00000010	/* lock draining is happening */
-#define	MNTK_REFEXPIRE	0x00000020	/* refcount expiring is happening */
+#define MNTK_UNMOUNTF		0x00000001 /* forced unmount in progress */
+#define MNTK_ASYNC		0x00000002 /* filtered async flag */
+#define MNTK_SOFTDEP		0x00000004 /* async disabled by softdep */
+#define MNTK_NOMSYNC		0x00000008 /* don't do msync */
+#define	MNTK_DRAINING		0x00000010 /* lock draining is happening */
+#define	MNTK_REFEXPIRE		0x00000020 /* refcount expiring is happening */
 #define MNTK_EXTENDED_SHARED	0x00000040 /* Allow shared locking for more ops */
 #define	MNTK_SHARED_WRITES	0x00000080 /* Allow shared locking for writes */
-#define	MNTK_NO_IOPF	0x00000100	/* Disallow page faults during reads
-					   and writes. Filesystem shall properly
-					   handle i/o state on EFAULT. */
+#define	MNTK_NO_IOPF		0x00000100 /* Disallow page faults during reads
+					      and writes. Filesystem shall
+					      properly handle i/o state on
+					      EFAULT. */
 #define	MNTK_RECURSE		0x00000200 /* pending recursive unmount */
 #define	MNTK_UPPER_WAITER	0x00000400 /* waiting to drain MNTK_UPPER_PENDING */
 /* UNUSED 			0x00000800 */
-#define	MNTK_UNLOCKED_INSMNTQUE	0x00001000 /* fs does not lock the vnode for insmntque */
+#define	MNTK_UNLOCKED_INSMNTQUE	0x00001000 /* fs does not lock the vnode for
+					      insmntque */
 #define	MNTK_UNMAPPED_BUFS	0x00002000
 #define	MNTK_USES_BCACHE	0x00004000 /* FS uses the buffer cache. */
 /* UNUSED			0x00008000 */
 #define	MNTK_VMSETSIZE_BUG	0x00010000
-#define	MNTK_UNIONFS	0x00020000	/* A hack for F_ISUNIONSTACK */
-#define	MNTK_FPLOOKUP	0x00040000	/* fast path lookup is supported */
+#define	MNTK_UNIONFS		0x00020000 /* A hack for F_ISUNIONSTACK */
+#define	MNTK_FPLOOKUP		0x00040000 /* fast path lookup is supported */
 #define	MNTK_SUSPEND_ALL	0x00080000 /* Suspended by all-fs suspension */
 #define	MNTK_TASKQUEUE_WAITER	0x00100000 /* Waiting on unmount taskqueue */
 /* UNUSED			0x00200000 */
 /* UNUSED			0x00400000 */
-#define	MNTK_NOASYNC	0x00800000	/* disable async */
-#define	MNTK_UNMOUNT	0x01000000	/* unmount in progress */
-#define	MNTK_MWAIT	0x02000000	/* waiting for unmount to finish */
-#define	MNTK_SUSPEND	0x08000000	/* request write suspension */
-#define	MNTK_SUSPEND2	0x04000000	/* block secondary writes */
-#define	MNTK_SUSPENDED	0x10000000	/* write operations are suspended */
+#define	MNTK_NOASYNC		0x00800000 /* disable async */
+#define	MNTK_UNMOUNT		0x01000000 /* unmount in progress */
+#define	MNTK_MWAIT		0x02000000 /* waiting for unmount to finish */
+#define	MNTK_SUSPEND		0x08000000 /* request write suspension */
+#define	MNTK_SUSPEND2		0x04000000 /* block secondary writes */
+#define	MNTK_SUSPENDED		0x10000000 /* write operations are suspended */
 #define	MNTK_NULL_NOCACHE	0x20000000 /* auto disable cache for nullfs
 					      mounts over this fs */
 #define MNTK_LOOKUP_SHARED	0x40000000 /* FS supports shared lock lookups */
@@ -678,6 +693,9 @@ struct ovfsconf {
 #define	VFCF_DELEGADMIN	0x00800000	/* supports delegated administration */
 #define	VFCF_SBDRY	0x01000000	/* Stop at Boundary: defer stop requests
 					   to kernel->user (AST) transition */
+#define	VFCF_FILEMOUNT	0x02000000	/* allow mounting files */
+#define	VFCF_FILEREVINC	0x04000000	/* va_filerev is incr. by one */
+#define	VFCF_FILEREVCT	0x08000000	/* va_filerev is set to ctime */
 
 typedef uint32_t fsctlop_t;
 
@@ -835,114 +853,134 @@ struct vfsops {
 
 vfs_statfs_t	__vfs_statfs;
 
-#define	VFS_MOUNT(MP) ({						\
-	int _rc;							\
-									\
-	TSRAW(curthread, TS_ENTER, "VFS_MOUNT", (MP)->mnt_vfc->vfc_name);\
-	_rc = (*(MP)->mnt_op->vfs_mount)(MP);				\
-	TSRAW(curthread, TS_EXIT, "VFS_MOUNT", (MP)->mnt_vfc->vfc_name);\
-	_rc; })
+static inline int
+VFS_MOUNT(struct mount *mp)
+{
+	int rc;
 
-#define	VFS_UNMOUNT(MP, FORCE) ({					\
-	int _rc;							\
-									\
-	_rc = (*(MP)->mnt_op->vfs_unmount)(MP, FORCE);			\
-	_rc; })
+	TSRAW(curthread, TS_ENTER, "VFS_MOUNT", mp->mnt_vfc->vfc_name);
+	rc = mp->mnt_op->vfs_mount(mp);
+	TSRAW(curthread, TS_EXIT, "VFS_MOUNT", mp->mnt_vfc->vfc_name);
+	return (rc);
+}
 
-#define	VFS_ROOT(MP, FLAGS, VPP) ({					\
-	int _rc;							\
-									\
-	_rc = (*(MP)->mnt_op->vfs_root)(MP, FLAGS, VPP);		\
-	_rc; })
+static inline int
+VFS_UNMOUNT(struct mount *mp, int force)
+{
+	return (mp->mnt_op->vfs_unmount(mp, force));
+}
 
-#define	VFS_CACHEDROOT(MP, FLAGS, VPP) ({				\
-	int _rc;							\
-									\
-	_rc = (*(MP)->mnt_op->vfs_cachedroot)(MP, FLAGS, VPP);		\
-	_rc; })
+static inline int
+VFS_ROOT(struct mount *mp, int flags, struct vnode **vpp)
+{
+	return (mp->mnt_op->vfs_root(mp, flags, vpp));
+}
 
-#define	VFS_QUOTACTL(MP, C, U, A, MP_BUSY) ({				\
-	int _rc;							\
-									\
-	_rc = (*(MP)->mnt_op->vfs_quotactl)(MP, C, U, A, MP_BUSY);	\
-	_rc; })
+static inline int
+VFS_CACHEDROOT(struct mount *mp, int flags, struct vnode **vpp)
+{
+	return (mp->mnt_op->vfs_cachedroot(mp, flags, vpp));
+}
 
-#define	VFS_STATFS(MP, SBP) ({						\
-	int _rc;							\
-									\
-	_rc = __vfs_statfs((MP), (SBP));				\
-	_rc; })
+static inline int
+VFS_QUOTACTL(struct mount *mp, int cmds, uid_t uid, void *arg, bool *mp_busy)
+{
+	return (mp->mnt_op->vfs_quotactl(mp, cmds, uid, arg, mp_busy));
+}
 
-#define	VFS_SYNC(MP, WAIT) ({						\
-	int _rc;							\
-									\
-	_rc = (*(MP)->mnt_op->vfs_sync)(MP, WAIT);			\
-	_rc; })
+static inline int
+VFS_STATFS(struct mount *mp, struct statfs *sbp)
+{
+	return (__vfs_statfs(mp, sbp));
+}
 
-#define	VFS_VGET(MP, INO, FLAGS, VPP) ({				\
-	int _rc;							\
-									\
-	_rc = (*(MP)->mnt_op->vfs_vget)(MP, INO, FLAGS, VPP);		\
-	_rc; })
+static inline int
+VFS_SYNC(struct mount *mp, int waitfor)
+{
+	return (mp->mnt_op->vfs_sync(mp, waitfor));
+}
 
-#define	VFS_FHTOVP(MP, FIDP, FLAGS, VPP) ({				\
-	int _rc;							\
-									\
-	_rc = (*(MP)->mnt_op->vfs_fhtovp)(MP, FIDP, FLAGS, VPP);	\
-	_rc; })
+static inline int
+VFS_VGET(struct mount *mp, ino_t ino, int flags, struct vnode **vpp)
+{
+	return (mp->mnt_op->vfs_vget(mp, ino, flags, vpp));
+}
 
-#define	VFS_CHECKEXP(MP, NAM, EXFLG, CRED, NUMSEC, SEC) ({		\
-	int _rc;							\
-									\
-	_rc = (*(MP)->mnt_op->vfs_checkexp)(MP, NAM, EXFLG, CRED, NUMSEC,\
-	    SEC);							\
-	_rc; })
+static inline int
+VFS_FHTOVP(struct mount *mp, struct fid *fidp, int flags, struct vnode **vpp)
+{
+	return (mp->mnt_op->vfs_fhtovp(mp, fidp, flags, vpp));
+}
 
-#define	VFS_EXTATTRCTL(MP, C, FN, NS, N) ({				\
-	int _rc;							\
-									\
-	_rc = (*(MP)->mnt_op->vfs_extattrctl)(MP, C, FN, NS, N);	\
-	_rc; })
+static inline int
+VFS_CHECKEXP(struct mount *mp, struct sockaddr *nam, uint64_t *extflagsp,
+    struct ucred **credanonp, int *numsecflavors, int *secflavors)
+{
+	return (mp->mnt_op->vfs_checkexp(mp, nam, extflagsp, credanonp,
+	    numsecflavors, secflavors));
+}
 
-#define	VFS_SYSCTL(MP, OP, REQ) ({					\
-	int _rc;							\
-									\
-	_rc = (*(MP)->mnt_op->vfs_sysctl)(MP, OP, REQ);			\
-	_rc; })
+static inline int
+VFS_EXTATTRCTL(struct mount *mp, int cmd, struct vnode *filename_vp,
+    int attrnamespace, const char *attrname)
+{
+	return (mp->mnt_op->vfs_extattrctl(mp, cmd, filename_vp,
+	    attrnamespace, attrname));
+}
 
-#define	VFS_SUSP_CLEAN(MP) do {						\
-	if (*(MP)->mnt_op->vfs_susp_clean != NULL) {			\
-		(*(MP)->mnt_op->vfs_susp_clean)(MP);			\
-	}								\
-} while (0)
+static inline int
+VFS_SYSCTL(struct mount *mp, fsctlop_t op, struct sysctl_req *req)
+{
+	return (mp->mnt_op->vfs_sysctl(mp, op, req));
+}
 
-#define	VFS_RECLAIM_LOWERVP(MP, VP) do {				\
-	if (*(MP)->mnt_op->vfs_reclaim_lowervp != NULL) {		\
-		(*(MP)->mnt_op->vfs_reclaim_lowervp)((MP), (VP));	\
-	}								\
-} while (0)
+static inline void
+VFS_SUSP_CLEAN(struct mount *mp)
+{
+	if (mp->mnt_op->vfs_susp_clean != NULL)
+		mp->mnt_op->vfs_susp_clean(mp);
+}
 
-#define	VFS_UNLINK_LOWERVP(MP, VP) do {					\
-	if (*(MP)->mnt_op->vfs_unlink_lowervp != NULL) {		\
-		(*(MP)->mnt_op->vfs_unlink_lowervp)((MP), (VP));	\
-	}								\
-} while (0)
+static inline void
+VFS_RECLAIM_LOWERVP(struct mount *mp, struct vnode *vp)
+{
+	if (mp->mnt_op->vfs_reclaim_lowervp != NULL)
+		mp->mnt_op->vfs_reclaim_lowervp(mp, vp);
+}
 
-#define	VFS_PURGE(MP) do {						\
-	if (*(MP)->mnt_op->vfs_purge != NULL) {				\
-		(*(MP)->mnt_op->vfs_purge)(MP);				\
-	}								\
-} while (0)
+static inline void
+VFS_UNLINK_LOWERVP(struct mount *mp, struct vnode *vp)
+{
+	if (mp->mnt_op->vfs_unlink_lowervp != NULL)
+		mp->mnt_op->vfs_unlink_lowervp(mp, vp);
+}
 
-#define VFS_KNOTE_LOCKED(vp, hint) do					\
-{									\
-	VN_KNOTE((vp), (hint), KNF_LISTLOCKED);				\
-} while (0)
+static inline void
+VFS_PURGE(struct mount *mp)
+{
+	if (mp->mnt_op->vfs_purge != NULL)
+		mp->mnt_op->vfs_purge(mp);
+}
 
-#define VFS_KNOTE_UNLOCKED(vp, hint) do					\
-{									\
-	VN_KNOTE((vp), (hint), 0);					\
-} while (0)
+#include <sys/vnode.h>
+
+static inline void
+VFS_KNOTE_LOCKED(struct vnode *vp, int hint)
+{
+	if ((vn_irflag_read(vp) & VIRF_KNOTE) != 0) {
+		KNOTE(&vp->v_pollinfo->vpi_selinfo.si_note,
+		    hint, KNF_LISTLOCKED | KNF_NOKQLOCK);
+	}
+}
+
+static inline void
+VFS_KNOTE_UNLOCKED(struct vnode *vp, int hint)
+{
+	if ((vn_irflag_read(vp) & VIRF_KNOTE) != 0) {
+		KNOTE(&vp->v_pollinfo->vpi_selinfo.si_note,
+		    hint, KNF_NOKQLOCK);
+	}
+}
 
 #include <sys/module.h>
 
@@ -978,6 +1016,9 @@ enum vfs_notify_upper_type {
  * exported vnode operations
  */
 
+/* Define this to indicate that vfs_exjail_clone() exists for ZFS to use. */
+#define	VFS_SUPPORTS_EXJAIL_CLONE	1
+
 int	dounmount(struct mount *, uint64_t, struct thread *);
 
 int	kernel_mount(struct mntarg *ma, uint64_t flags);
@@ -988,6 +1029,7 @@ struct mntarg *mount_argsu(struct mntarg *ma, const char *name, const void *val,
 void	statfs_scale_blocks(struct statfs *sf, long max_size);
 struct vfsconf *vfs_byname(const char *);
 struct vfsconf *vfs_byname_kld(const char *, struct thread *td, int *);
+void	vfs_unref_vfsconf(struct vfsconf *vfsp);
 void	vfs_mount_destroy(struct mount *);
 void	vfs_event_signal(fsid_t *, u_int32_t, intptr_t);
 void	vfs_freeopts(struct vfsoptlist *opts);
@@ -1014,8 +1056,11 @@ int	vfs_setpublicfs			    /* set publicly exported fs */
 	    (struct mount *, struct netexport *, struct export_args *);
 void	vfs_periodic(struct mount *, int);
 int	vfs_busy(struct mount *, int);
+void	vfs_exjail_clone(struct mount *, struct mount *);
+void	vfs_exjail_delete(struct prison *);
 int	vfs_export			 /* process mount export info */
-	    (struct mount *, struct export_args *);
+	    (struct mount *, struct export_args *, bool);
+void	vfs_free_addrlist(struct netexport *);
 void	vfs_allocate_syncvnode(struct mount *);
 void	vfs_deallocate_syncvnode(struct mount *);
 int	vfs_donmount(struct thread *td, uint64_t fsflags,
@@ -1048,7 +1093,6 @@ int	vfs_report_lockf(struct mount *mp, struct sbuf *sb);
 
 extern	TAILQ_HEAD(mntlist, mount) mountlist;	/* mounted filesystem list */
 extern	struct mtx_padalign mountlist_mtx;
-extern	struct nfs_public nfs_pub;
 extern	struct sx vfsconf_sx;
 #define	vfsconf_lock()		sx_xlock(&vfsconf_sx)
 #define	vfsconf_unlock()	sx_xunlock(&vfsconf_sx)
@@ -1115,47 +1159,64 @@ void resume_all_fs(void);
  */
 #define	vfs_mount_pcpu(mp)		zpcpu_get(mp->mnt_pcpu)
 #define	vfs_mount_pcpu_remote(mp, cpu)	zpcpu_get_cpu(mp->mnt_pcpu, cpu)
+static void vfs_op_thread_exit_crit(struct mount *mp, struct mount_pcpu *mpcpu);
 
-#define vfs_op_thread_entered(mp) ({				\
-	MPASS(curthread->td_critnest > 0);			\
-	struct mount_pcpu *_mpcpu = vfs_mount_pcpu(mp);		\
-	_mpcpu->mntp_thread_in_ops == 1;			\
-})
+static inline bool
+vfs_op_thread_entered(struct mount *mp)
+{
+	struct mount_pcpu *mpcpu = vfs_mount_pcpu(mp);
 
-#define vfs_op_thread_enter_crit(mp, _mpcpu) ({			\
-	bool _retval_crit = true;				\
-	MPASS(curthread->td_critnest > 0);			\
-	_mpcpu = vfs_mount_pcpu(mp);				\
-	MPASS(mpcpu->mntp_thread_in_ops == 0);			\
-	_mpcpu->mntp_thread_in_ops = 1;				\
-	atomic_interrupt_fence();					\
-	if (__predict_false(mp->mnt_vfs_ops > 0)) {		\
-		vfs_op_thread_exit_crit(mp, _mpcpu);		\
-		_retval_crit = false;				\
-	}							\
-	_retval_crit;						\
-})
+	MPASS(curthread->td_critnest > 0);
+	return (mpcpu->mntp_thread_in_ops == 1);
+}
 
-#define vfs_op_thread_enter(mp, _mpcpu) ({			\
-	bool _retval;						\
-	critical_enter();					\
-	_retval = vfs_op_thread_enter_crit(mp, _mpcpu);		\
-	if (__predict_false(!_retval))				\
-		critical_exit();				\
-	_retval;						\
-})
+static inline bool
+vfs_op_thread_enter_crit(struct mount *mp, struct mount_pcpu **mpcpup)
+{
+	struct mount_pcpu *mpcpu;
+	bool retval_crit = true;
 
-#define vfs_op_thread_exit_crit(mp, _mpcpu) do {		\
-	MPASS(_mpcpu == vfs_mount_pcpu(mp));			\
-	MPASS(_mpcpu->mntp_thread_in_ops == 1);			\
-	atomic_interrupt_fence();					\
-	_mpcpu->mntp_thread_in_ops = 0;				\
-} while (0)
+	MPASS(curthread->td_critnest > 0);
+	mpcpu = vfs_mount_pcpu(mp);
+	MPASS(mpcpu->mntp_thread_in_ops == 0);
+	mpcpu->mntp_thread_in_ops = 1;
+	atomic_interrupt_fence();
+	if (__predict_false(mp->mnt_vfs_ops > 0)) {
+		vfs_op_thread_exit_crit(mp, mpcpu);
+		retval_crit = false;
+	}
+	*mpcpup = mpcpu;
+	return (retval_crit);
+}
 
-#define vfs_op_thread_exit(mp, _mpcpu) do {			\
-	vfs_op_thread_exit_crit(mp, _mpcpu);			\
-	critical_exit();					\
-} while (0)
+static inline bool
+vfs_op_thread_enter(struct mount *mp, struct mount_pcpu **mpcpup)
+{
+	bool retval;
+
+	critical_enter();
+	retval = vfs_op_thread_enter_crit(mp, mpcpup);
+	if (__predict_false(!retval))
+		critical_exit();
+	return (retval);
+}
+
+static inline void
+vfs_op_thread_exit_crit(struct mount *mp, struct mount_pcpu *mpcpu)
+{
+	MPASS(mpcpu == vfs_mount_pcpu(mp));
+	MPASS(mpcpu->mntp_thread_in_ops == 1);
+
+	atomic_interrupt_fence();
+	mpcpu->mntp_thread_in_ops = 0;
+}
+
+static inline void
+vfs_op_thread_exit(struct mount *mp, struct mount_pcpu *mpcpu)
+{
+	vfs_op_thread_exit_crit(mp, mpcpu);
+	critical_exit();
+}
 
 #define vfs_mp_count_add_pcpu(_mpcpu, count, val) do {		\
 	MPASS(_mpcpu->mntp_thread_in_ops == 1);			\

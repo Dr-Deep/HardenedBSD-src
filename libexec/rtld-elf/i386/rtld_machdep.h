@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1999, 2000 John D. Polstra.
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef RTLD_MACHDEP_H
@@ -37,9 +35,17 @@
 
 struct Struct_Obj_Entry;
 
+#define	MD_OBJ_ENTRY
+
 /* Return the address of the .dynamic section in the dynamic linker. */
 #define rtld_dynamic(obj) \
     ((const Elf_Dyn *)((obj)->relocbase + (Elf_Addr)&_DYNAMIC))
+
+/* No arch-specific dynamic tags */
+#define	arch_digest_dynamic(obj, dynp)	false
+
+/* No architecture specific notes */
+#define	arch_digest_note(obj, note)	false
 
 Elf_Addr reloc_jmpslot(Elf_Addr *where, Elf_Addr target,
     const struct Struct_Obj_Entry *obj, const struct Struct_Obj_Entry *refobj,
@@ -53,6 +59,8 @@ Elf_Addr reloc_jmpslot(Elf_Addr *where, Elf_Addr target,
 
 #define call_init_pointer(obj, target) \
 	(((InitArrFunc)(target))(main_argc, main_argv, environ))
+
+#define	arch_fix_auxv(a, ai)		do {} while (0)
 
 extern uint32_t cpu_feature;
 extern uint32_t cpu_feature2;
@@ -69,9 +77,6 @@ typedef struct {
 
 void *___tls_get_addr(tls_index *ti) __attribute__((__regparm__(1))) __exported;
 void *__tls_get_addr(tls_index *ti) __exported;
-
-#define	RTLD_DEFAULT_STACK_PF_EXEC	PF_X
-#define	RTLD_DEFAULT_STACK_EXEC		PROT_EXEC
 
 #define md_abi_variant_hook(x)
 

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2005-2007, Joseph Koshy
  * Copyright (c) 2007 The FreeBSD Foundation
@@ -28,8 +28,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef	_SYS_PMCLOG_H_
@@ -127,6 +125,20 @@ struct pmclog_callchain {
 #define	PMC_CALLCHAIN_TO_CPUFLAGS(CPU,FLAGS)	\
 	(((CPU) << 16) | ((FLAGS) & 0xFFFF))
 
+/*
+ * If the multipart flag is set, then pl_pc contains multiple data types.  The
+ * first 8 bytes is a header made up of a 1 byte type and 1 byte length that
+ * describes the use of the remaining pl_pc array.
+ */
+
+#define PMC_MULTIPART_HEADER_LENGTH	8
+#define PMC_MULTIPART_HEADER_ENTRIES	4
+
+#define	PMC_CC_MULTIPART_NONE		0
+#define	PMC_CC_MULTIPART_CALLCHAIN	1
+#define	PMC_CC_MULTIPART_IBS_FETCH	2
+#define	PMC_CC_MULTIPART_IBS_OP		3
+
 struct pmclog_closelog {
 	PMCLOG_ENTRY_HEADER
 };
@@ -202,7 +214,10 @@ struct pmclog_procexec {
 	PMCLOG_ENTRY_HEADER
 	uint32_t		pl_pid;
 	uint32_t		pl_pmcid;
-	uintfptr_t		pl_start;	/* keep 8 byte aligned */
+	/* keep 8 byte aligned */
+	uintptr_t		pl_base;	/* AT_BASE */
+	/* keep 8 byte aligned */
+	uintptr_t		pl_dyn;		/* PIE load base */
 	char			pl_pathname[PATH_MAX];
 } __packed;
 
@@ -314,7 +329,7 @@ void	pmclog_process_pmcdetach(struct pmc *_pm, pid_t _pid);
 void	pmclog_process_proccsw(struct pmc *_pm, struct pmc_process *_pp,
     pmc_value_t _v, struct thread *);
 void	pmclog_process_procexec(struct pmc_owner *_po, pmc_id_t _pmid, pid_t _pid,
-    uintfptr_t _startaddr, char *_path);
+    uintfptr_t _baseaddr, uintptr_t _dynaddr, char *_path);
 void	pmclog_process_procexit(struct pmc *_pm, struct pmc_process *_pp);
 void	pmclog_process_procfork(struct pmc_owner *_po, pid_t _oldpid, pid_t _newpid);
 void	pmclog_process_sysexit(struct pmc_owner *_po, pid_t _pid);

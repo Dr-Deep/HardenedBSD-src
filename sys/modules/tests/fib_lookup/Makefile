@@ -1,8 +1,3 @@
-# $FreeBSD$
-
-SYSDIR?=${SRCTOP}/sys
-.include "${SYSDIR}/conf/kern.opts.mk"
-
 .PATH: ${SYSDIR}/tests/fib_lookup
 
 KMOD=	test_lookup

@@ -28,9 +28,6 @@
  * IN THE SOFTWARE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/bus.h>
 #include <sys/kernel.h>
@@ -48,9 +45,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/uio.h>
 #include <sys/unistd.h>
 #include <sys/queue.h>
+#include <sys/stdarg.h>
 #include <sys/taskqueue.h>
-
-#include <machine/stdarg.h>
 
 #include <xen/xen-os.h>
 #include <xen/hypervisor.h>
@@ -1071,8 +1067,8 @@ static void
 xs_attach_deferred(void *arg)
 {
 
-	bus_generic_probe(xs.xs_dev);
-	bus_generic_attach(xs.xs_dev);
+	bus_identify_children(xs.xs_dev);
+	bus_attach_children(xs.xs_dev);
 
 	config_intrhook_disestablish(&xs.xs_attachcb);
 }
@@ -1082,8 +1078,8 @@ xs_attach_late(void *arg, int pending)
 {
 
 	KASSERT((pending == 1), ("xs late attach queued several times"));
-	bus_generic_probe(xs.xs_dev);
-	bus_generic_attach(xs.xs_dev);
+	bus_identify_children(xs.xs_dev);
+	bus_attach_children(xs.xs_dev);
 }
 
 /**

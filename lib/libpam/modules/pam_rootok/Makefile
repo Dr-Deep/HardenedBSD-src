@@ -22,10 +22,9 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 
-LIB=	pam_rootok
-SRCS=	pam_rootok.c
-MAN=	pam_rootok.8
+LIB=		pam_rootok
+SRCS=		pam_rootok.c
+MANNODEV=	pam_rootok.8
 
 .include <bsd.lib.mk>

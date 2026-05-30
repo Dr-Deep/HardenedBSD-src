@@ -60,9 +60,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/types.h>
 #include <sys/param.h>
 #include <sys/module.h>
@@ -98,6 +95,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_map.h>
 #include <vm/vm_page.h>
 #include <vm/vm_object.h>
+#include <vm/vnode_pager.h>
 
 #include "fuse.h"
 #include "fuse_file.h"
@@ -303,6 +301,7 @@ fuse_write_directbackend(struct vnode *vp, struct uio *uio,
 	struct fuse_write_out *fwo;
 	struct fuse_dispatcher fdi;
 	size_t chunksize;
+	ssize_t r;
 	void *fwi_data;
 	off_t as_written_offset;
 	int diff;
@@ -338,8 +337,11 @@ fuse_write_directbackend(struct vnode *vp, struct uio *uio,
 	if (ioflag & IO_APPEND)
 		uio_setoffset(uio, filesize);
 
-	if (vn_rlimit_fsize(vp, uio, uio->uio_td))
-		return (EFBIG);
+	err = vn_rlimit_fsizex(vp, uio, 0, &r, uio->uio_td);
+	if (err != 0) {
+		vn_rlimit_fsizex_res(uio, r);
+		return (err);
+	}
 
 	fdisp_init(&fdi, 0);
 
@@ -399,6 +401,7 @@ retry:
 			fuse_warn(data, FSESS_WARN_WROTE_LONG,
 				"wrote more data than we provided it.");
 			/* This is bonkers.  Clear attr cache. */
+			ASSERT_CACHED_ATTRS_LOCKED(vp);
 			fvdat->flag &= ~FN_SIZECHANGE;
 			fuse_vnode_clear_attr_cache(vp);
 			err = EINVAL;
@@ -414,8 +417,10 @@ retry:
 			fuse_vnode_setsize(vp, as_written_offset, false);
 			getnanouptime(&fvdat->last_local_modify);
 		}
-		if (as_written_offset - diff >= filesize)
+		if (as_written_offset - diff >= filesize) {
+			ASSERT_CACHED_ATTRS_LOCKED(vp);
 			fvdat->flag &= ~FN_SIZECHANGE;
+		}
 
 		if (diff > 0) {
 			/* Short write */
@@ -452,9 +457,13 @@ retry:
 
 	fdisp_destroy(&fdi);
 
-	if (wrote_anything)
+	if (wrote_anything) {
+		CACHED_ATTR_LOCK(vp);
 		fuse_vnode_undirty_cached_timestamps(vp, false);
+		CACHED_ATTR_UNLOCK(vp);
+	}
 
+	vn_rlimit_fsizex_res(uio, r);
 	return (err);
 }
 
@@ -471,6 +480,7 @@ fuse_write_biobackend(struct vnode *vp, struct uio *uio,
 	struct buf *bp;
 	daddr_t lbn;
 	off_t filesize;
+	ssize_t r;
 	int bcount;
 	int n, on, seqcount, err = 0;
 
@@ -493,8 +503,11 @@ fuse_write_biobackend(struct vnode *vp, struct uio *uio,
 	if (ioflag & IO_APPEND)
 		uio_setoffset(uio, filesize);
 
-	if (vn_rlimit_fsize(vp, uio, uio->uio_td))
-		return (EFBIG);
+	err = vn_rlimit_fsizex(vp, uio, 0, &r, uio->uio_td);
+	if (err != 0) {
+		vn_rlimit_fsizex_res(uio, r);
+		return (err);
+	}
 
 	do {
 		bool direct_append, extending;
@@ -549,6 +562,7 @@ again:
 			err = fuse_vnode_setsize(vp, uio->uio_offset + n, false);
 			filesize = uio->uio_offset + n;
 			getnanouptime(&fvdat->last_local_modify);
+			ASSERT_CACHED_ATTRS_LOCKED(vp);
 			fvdat->flag |= FN_SIZECHANGE;
 			if (err) {
 				brelse(bp);
@@ -722,6 +736,7 @@ again:
 			break;
 	} while (uio->uio_resid > 0 && n > 0);
 
+	vn_rlimit_fsizex_res(uio, r);
 	return (err);
 }
 
@@ -798,6 +813,7 @@ fuse_io_strategy(struct vnode *vp, struct buf *bp)
 			left = uiop->uio_resid;
 			bzero((char *)bp->b_data + nread, left);
 
+			CACHED_ATTR_LOCK(vp);
 			if ((fvdat->flag & FN_SIZECHANGE) == 0) {
 				/*
 				 * A short read with no error, when not using
@@ -830,6 +846,7 @@ fuse_io_strategy(struct vnode *vp, struct buf *bp)
 					"Short read of a dirty file");
 				uiop->uio_resid = 0;
 			}
+			CACHED_ATTR_UNLOCK(vp);
 		}
 		if (error) {
 			bp->b_ioflags |= BIO_ERROR;
@@ -847,10 +864,18 @@ fuse_io_strategy(struct vnode *vp, struct buf *bp)
 		 * anything about it.  In particular, we can't invalidate any
 		 * part of the file's buffers because VOP_STRATEGY is called
 		 * with them already locked.
+		 *
+		 * Normally the vnode should be exclusively locked at this
+		 * point.  However, if clustered reads are in use, then in a
+		 * mixed read-write workload getblkx may need to flush a
+		 * partially written buffer to disk during a read.  In such a
+		 * case, the vnode may only have a shared lock at this point.
 		 */
+		CACHED_ATTR_LOCK(vp);
 		filesize = fvdat->cached_attrs.va_size;
 		/* filesize must've been cached by fuse_vnop_open.  */
 		KASSERT(filesize != VNOVAL, ("filesize should've been cached"));
+		CACHED_ATTR_UNLOCK(vp);
 
 		if ((off_t)bp->b_lblkno * biosize + bp->b_dirtyend > filesize)
 			bp->b_dirtyend = filesize - 
@@ -924,7 +949,7 @@ fuse_io_invalbuf(struct vnode *vp, struct thread *td)
 		if (vp->v_mount->mnt_kern_flag & MNTK_UNMOUNTF)
 			return EIO;
 		fvdat->flag |= FN_FLUSHWANT;
-		tsleep(&fvdat->flag, PRIBIO + 2, "fusevinv", 2 * hz);
+		tsleep(&fvdat->flag, PRIBIO, "fusevinv", 2 * hz);
 		error = 0;
 		if (p != NULL) {
 			PROC_LOCK(p);
@@ -938,11 +963,7 @@ fuse_io_invalbuf(struct vnode *vp, struct thread *td)
 	}
 	fvdat->flag |= FN_FLUSHINPROG;
 
-	if (vp->v_bufobj.bo_object != NULL) {
-		VM_OBJECT_WLOCK(vp->v_bufobj.bo_object);
-		vm_object_page_clean(vp->v_bufobj.bo_object, 0, 0, OBJPC_SYNC);
-		VM_OBJECT_WUNLOCK(vp->v_bufobj.bo_object);
-	}
+	vnode_pager_clean_sync(vp);
 	error = vinvalbuf(vp, V_SAVE, PCATCH, 0);
 	while (error) {
 		if (error == ERESTART || error == EINTR) {

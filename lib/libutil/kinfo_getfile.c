@@ -1,6 +1,4 @@
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/sysctl.h>
 #include <sys/user.h>
@@ -29,6 +27,10 @@ kinfo_getfile(pid_t pid, int *cntp)
 	error = sysctl(mib, nitems(mib), NULL, &len, NULL, 0);
 	if (error)
 		return (NULL);
+	/*
+	 * Add extra space as the table may grow between requesting the size
+	 * and fetching the data.
+	 */
 	len = len * 4 / 3;
 	buf = malloc(len);
 	if (buf == NULL)

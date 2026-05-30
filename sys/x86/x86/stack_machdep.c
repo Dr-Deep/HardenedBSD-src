@@ -26,8 +26,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_stack.h"
 
 #include <sys/param.h>
@@ -45,7 +43,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_param.h>
 #include <vm/pmap.h>
 
-#include <x86/stack.h>
+#include <machine/stack.h>
 
 #ifdef __i386__
 #define	PCB_FP(pcb)	((pcb)->pcb_ebp)
@@ -111,8 +109,6 @@ stack_save_td(struct stack *st, struct thread *td)
 	bool done;
 
 	THREAD_LOCK_ASSERT(td, MA_OWNED);
-	KASSERT(!TD_IS_SWAPPED(td),
-	    ("stack_save_td: thread %p is swapped", td));
 	if (TD_IS_RUNNING(td) && td != curthread)
 		PROC_LOCK_ASSERT(td->td_proc, MA_OWNED);
 

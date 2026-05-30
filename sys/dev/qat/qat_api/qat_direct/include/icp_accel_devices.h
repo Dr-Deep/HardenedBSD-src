@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/* Copyright(c) 2007-2022 Intel Corporation */
-/* $FreeBSD$ */
+/* Copyright(c) 2007-2025 Intel Corporation */
 /*****************************************************************************
  * @file icp_accel_devices.h
  *
@@ -97,7 +96,11 @@ typedef enum device_type_e {
 	DEVICE_200XX,
 	DEVICE_200XXVF,
 	DEVICE_C4XXX,
-	DEVICE_C4XXXVF
+	DEVICE_C4XXXVF,
+	DEVICE_D15XX,
+	DEVICE_D15XXVF,
+	DEVICE_4XXX,
+	DEVICE_4XXXVF
 } device_type_t;
 
 /*
@@ -123,7 +126,7 @@ typedef struct accel_dev_s {
 	QatUtilsAtomic usageCounter;  /* Usage counter. Prevents
 				     shutting down the dev if not 0*/
 	Cpa32U deviceMemAvail; /* Device memory for intermediate buffers */
-	/* Component specific fields - cast to relevent layer */
+	/* Component specific fields - cast to relevant layer */
 	void *pRingInflight;       /* For offload optimization */
 	void *pSalHandle;	  /* For SAL*/
 	void *pQatStats;	   /* For QATAL/SAL stats */

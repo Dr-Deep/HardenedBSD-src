@@ -1,6 +1,5 @@
-/* $FreeBSD$ */
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2009 Sylvestre Gallon. All rights reserved.
  *
@@ -30,7 +29,14 @@
 #define	__LIBUSB10_H__
 
 #ifndef LIBUSB_GLOBAL_INCLUDE_FILE
+#include <sys/cdefs.h>
 #include <sys/queue.h>
+#include <netlink/netlink.h>
+#include <netlink/netlink_generic.h>
+#include <netlink/netlink_snl.h>
+#include <netlink/netlink_snl_generic.h>
+#include <netlink/netlink_sysevent.h>
+
 #endif
 
 #define	GET_CONTEXT(ctx) (((ctx) == NULL) ? usbi_default_context : (ctx))
@@ -41,24 +47,11 @@
 #define	HOTPLUG_LOCK(ctx) pthread_mutex_lock(&(ctx)->hotplug_lock)
 #define	HOTPLUG_UNLOCK(ctx) pthread_mutex_unlock(&(ctx)->hotplug_lock)
 
-#define	DPRINTF(ctx, dbg, format, ...) do {			\
-	switch (dbg) {						\
-	case LIBUSB_DEBUG_FUNCTION:				\
-		if ((ctx)->debug & LIBUSB_DEBUG_FUNCTION) {	\
-			printf("LIBUSB_FUNCTION: "		\
-			       format "\n", ## __VA_ARGS__);	\
-		}						\
-		break;						\
-	case LIBUSB_DEBUG_TRANSFER:				\
-		if ((ctx)->debug & LIBUSB_DEBUG_TRANSFER) { 	\
-			printf("LIBUSB_TRANSFER: "		\
-			       format "\n", ## __VA_ARGS__);	\
-		}						\
-		break;						\
-	default:						\
-		break;						\
-	}							\
-} while (0)
+void libusb_log_va_args(struct libusb_context *ctx, enum libusb_log_level level,
+    const char *fmt, ...) __printflike(3, 4);
+
+#define DPRINTF(ctx, dbg, format, ...) \
+	libusb_log_va_args(ctx, dbg, format, ##__VA_ARGS__)
 
 /* internal structures */
 
@@ -91,12 +84,22 @@ struct libusb_hotplug_callback_handle_struct {
 
 TAILQ_HEAD(libusb_device_head, libusb_device);
 
+typedef enum {
+	usb_event_none,
+	usb_event_scan,
+	usb_event_devd,
+	usb_event_netlink
+} usb_event_mode_t;
+
 struct libusb_context {
 	int	debug;
 	int	debug_fixed;
-	int	ctrl_pipe[2];
+	int	event;
 	int	tr_done_ref;
 	int	tr_done_gen;
+	usb_event_mode_t usb_event_mode;
+	int	devd_pipe;
+	struct	snl_state ss;
 
 	pthread_mutex_t ctx_lock;
   	pthread_mutex_t hotplug_lock;
@@ -127,12 +130,19 @@ struct libusb_device {
 	struct libusb_super_pollfd dev_poll;
 
 	struct libusb_context *ctx;
+	struct libusb_device *parent_dev;
 
 	TAILQ_ENTRY(libusb_device) hotplug_entry;
 
 	TAILQ_HEAD(, libusb_super_transfer) tr_head;
 
 	struct libusb20_device *os_priv;
+};
+
+struct libusb_language_context {
+	const char *lang_name;
+	/* All error Plus 1 UNKNOWN */
+	const char *err_strs[LIBUSB_ERROR_COUNT + 1];
 };
 
 extern struct libusb_context *usbi_default_context;

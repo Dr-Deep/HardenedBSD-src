@@ -26,8 +26,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include <sys/types.h>
@@ -564,7 +562,9 @@ ifconfig_create_interface(ifconfig_handle_t *h, const char *name, char **ifname)
 	    (strncmp(name, "vlan",
 	    strlen("vlan")) == 0) ||
 	    (strncmp(name, "vxlan",
-	    strlen("vxlan")) == 0)) {
+	    strlen("vxlan")) == 0) ||
+	    (strncmp(name, "geneve",
+	    strlen("geneve")) == 0)) {
 		h->error.errtype = OTHER;
 		h->error.errcode = ENOSYS;
 		return (-1);

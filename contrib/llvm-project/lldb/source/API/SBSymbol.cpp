@@ -126,8 +126,9 @@ SBInstructionList SBSymbol::GetInstructions(SBTarget target,
         AddressRange symbol_range(symbol_addr, m_opaque_ptr->GetByteSize());
         const bool force_live_memory = true;
         sb_instructions.SetDisassembler(Disassembler::DisassembleRange(
-            module_sp->GetArchitecture(), nullptr, flavor_string, *target_sp,
-            symbol_range, force_live_memory));
+            module_sp->GetArchitecture(), nullptr, flavor_string,
+            target_sp->GetDisassemblyCPU(), target_sp->GetDisassemblyFeatures(),
+            *target_sp, symbol_range, force_live_memory));
       }
     }
   }
@@ -160,6 +161,20 @@ SBAddress SBSymbol::GetEndAddress() {
     }
   }
   return addr;
+}
+
+uint64_t SBSymbol::GetValue() {
+  LLDB_INSTRUMENT_VA(this);
+  if (m_opaque_ptr)
+    return m_opaque_ptr->GetRawValue();
+  return 0;
+}
+
+uint64_t SBSymbol::GetSize() {
+  LLDB_INSTRUMENT_VA(this);
+  if (m_opaque_ptr && m_opaque_ptr->GetByteSizeIsValid())
+    return m_opaque_ptr->GetByteSize();
+  return 0;
 }
 
 uint32_t SBSymbol::GetPrologueByteSize() {

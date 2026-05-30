@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2006 Bernd Walter.  All rights reserved.
  * Copyright (c) 2006 M. Warner Losh <imp@FreeBSD.org>
@@ -52,9 +52,6 @@
  * or the SD Card Association to disclose or distribute any technical
  * information, know-how or other confidential information to any third party.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -704,6 +701,10 @@ mmc_select_card(struct mmc_softc *sc, uint16_t rca)
 {
 	int err, flags;
 
+	/* No card selection in SPI mode. */
+	if (mmcbr_get_bus_type(sc->dev) == bus_type_spi)
+		return (MMC_ERR_NONE);
+
 	flags = (rca ? MMC_RSP_R1B : MMC_RSP_NONE) | MMC_CMD_AC;
 	sc->retune_paused++;
 	err = mmc_wait_for_command(sc, MMC_SELECT_CARD, (uint32_t)rca << 16,
@@ -902,6 +903,10 @@ mmc_set_timing(struct mmc_softc *sc, struct mmc_ivars *ivar,
 	u_char switch_res[64];
 	uint8_t	value;
 	int err;
+
+	/* No timings in SPI mode. */
+	if (mmcbr_get_bus_type(sc->dev) == bus_type_spi)
+		return (MMC_ERR_NONE);
 
 	if (mmcbr_get_mode(sc->dev) == mode_sd) {
 		switch (timing) {
@@ -1918,7 +1923,7 @@ child_common:
 			mmc_log_card(sc->dev, ivar, newcard);
 		if (newcard) {
 			/* Add device. */
-			child = device_add_child(sc->dev, NULL, -1);
+			child = device_add_child(sc->dev, NULL, DEVICE_UNIT_ANY);
 			if (child != NULL) {
 				device_set_ivars(child, ivar);
 				sc->child_list = realloc(sc->child_list,
@@ -2237,6 +2242,15 @@ clock:
 		mmcbr_set_clock(dev, max_dtr);
 		mmcbr_update_ios(dev);
 
+		/*
+		 * Don't call into the bridge driver for timings definitely
+		 * not requiring tuning.  Note that it's up to the upper
+		 * layer to actually execute tuning otherwise.
+		 */
+		if (timing <= bus_timing_uhs_sdr25 ||
+		    timing == bus_timing_mmc_ddr52)
+			goto power_class;
+
 		if (mmcbr_tune(dev, hs400) != 0) {
 			device_printf(dev, "Card at relative address %d "
 			    "failed to execute initial tuning\n", rca);
@@ -2451,7 +2465,7 @@ mmc_scan(struct mmc_softc *sc)
 		device_printf(dev, "Failed to release bus after scanning\n");
 		return;
 	}
-	(void)bus_generic_attach(dev);
+	bus_attach_children(dev);
 }
 
 static int

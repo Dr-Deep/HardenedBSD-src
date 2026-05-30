@@ -1,4 +1,3 @@
-/*	$FreeBSD$	*/
 
 /*
  * Copyright (C) 2012 by Darren Reed.
@@ -7,8 +6,6 @@
  *
  * Simple FTP transparent proxy for in-kernel use.  For use with the NAT
  * code.
- *
- * $FreeBSD$
  * Id: ip_ftp_pxy.c,v 2.88.2.19 2006/04/01 10:14:53 darrenr Exp $
  */
 
@@ -222,7 +219,7 @@ ipf_p_ftp_soft_destroy(ipf_main_softc_t *softc, void *arg)
 
 
 int
-ipf_p_ftp_new(void *arg, fr_info_t *fin, ap_session_t *aps, nat_t *nat)
+ipf_p_ftp_new(void *arg, fr_info_t *fin, ap_session_t *aps, nat_t *nat __unused)
 {
 	ftpinfo_t *ftp;
 	ftpside_t *f;
@@ -230,8 +227,6 @@ ipf_p_ftp_new(void *arg, fr_info_t *fin, ap_session_t *aps, nat_t *nat)
 	KMALLOC(ftp, ftpinfo_t *);
 	if (ftp == NULL)
 		return (-1);
-
-	nat = nat;	/* LINT */
 
 	aps->aps_data = ftp;
 	aps->aps_psiz = sizeof(ftpinfo_t);
@@ -266,9 +261,7 @@ ipf_p_ftp_setpending(ipf_main_softc_t *softc, ftpinfo_t *ftp)
 
 
 void
-ipf_p_ftp_del(softc, aps)
-	ipf_main_softc_t *softc;
-	ap_session_t *aps;
+ipf_p_ftp_del(ipf_main_softc_t *softc, ap_session_t *aps)
 {
 	ftpinfo_t *ftp;
 
@@ -548,7 +541,7 @@ ipf_p_ftp_addport(ipf_ftp_softc_t *softf, fr_info_t *fin, ip_t *ip, nat_t *nat,
 
 	tcp2->th_win = htons(8192);
 	TCP_OFF_A(tcp2, 5);
-	tcp2->th_flags = TH_SYN;
+	tcp_set_flags(tcp2, TH_SYN);
 
 	if (nat->nat_dir == NAT_INBOUND) {
 		fi.fin_out = 1;
@@ -878,7 +871,7 @@ ipf_p_ftp_pasvreply(ipf_ftp_softc_t *softf, fr_info_t *fin, ip_t *ip,
 	fi.fin_flx &= FI_LOWTTL|FI_FRAG|FI_TCPUDP|FI_OPTIONS|FI_IGNORE;
 
 	TCP_OFF_A(tcp2, 5);
-	tcp2->th_flags = TH_SYN;
+	tcp_set_flags(tcp2, TH_SYN);
 	tcp2->th_win = htons(8192);
 	tcp2->th_dport = htons(port);
 
@@ -1245,9 +1238,9 @@ ipf_p_ftp_process(ipf_ftp_softc_t *softf, fr_info_t *fin, nat_t *nat,
 	if (softf->ipf_p_ftp_debug & DEBUG_INFO)
 		printf("ipf_p_ftp_process: %d:%d,%d, mlen %d flags %x\n",
 		       fin->fin_out, fin->fin_sport, fin->fin_dport,
-		       mlen, tcp->th_flags);
+		       mlen, tcp_get_flags(tcp));
 
-	if ((mlen == 0) && ((tcp->th_flags & TH_OPENING) == TH_OPENING)) {
+	if ((mlen == 0) && ((tcp_get_flags(tcp) & TH_OPENING) == TH_OPENING)) {
 		f->ftps_seq[0] = thseq + 1;
 		t->ftps_seq[0] = thack;
 		return (0);
@@ -1288,7 +1281,7 @@ ipf_p_ftp_process(ipf_ftp_softc_t *softf, fr_info_t *fin, nat_t *nat,
 	}
 	if (softf->ipf_p_ftp_debug & DEBUG_INFO) {
 		printf("%s: %x seq %x/%d ack %x/%d len %d/%d off %d\n",
-		       rv ? "IN" : "OUT", tcp->th_flags, thseq, seqoff,
+		       rv ? "IN" : "OUT", tcp_get_flags(tcp), thseq, seqoff,
 		       thack, ackoff, mlen, fin->fin_plen, off);
 		printf("sel %d seqmin %x/%x offset %d/%d\n", sel,
 		       aps->aps_seqmin[sel], aps->aps_seqmin[sel2],
@@ -1362,7 +1355,7 @@ ipf_p_ftp_process(ipf_ftp_softc_t *softf, fr_info_t *fin, nat_t *nat,
 				f->ftps_seq[0], f->ftps_seq[1]);
 		}
 
-		if (tcp->th_flags & TH_FIN) {
+		if (tcp_get_flags(tcp) & TH_FIN) {
 			if (thseq == f->ftps_seq[1]) {
 				f->ftps_seq[0] = f->ftps_seq[1] - seqoff;
 				f->ftps_seq[1] = thseq + 1 - seqoff;
@@ -1535,7 +1528,7 @@ whilemore:
 	}
 
 	/* f->ftps_seq[1] += inc; */
-	if (tcp->th_flags & TH_FIN)
+	if (tcp_get_flags(tcp) & TH_FIN)
 		f->ftps_seq[1]++;
 	if (softf->ipf_p_ftp_debug & DEBUG_PARSE_INFO) {
 		mlen = MSGDSIZE(m);
@@ -1720,7 +1713,9 @@ ipf_p_ftp_eprt4(ipf_ftp_softc_t *softf, fr_info_t *fin, ip_t *ip, nat_t *nat,
 		return (0);
 	if (c != delim)
 		return (0);
-	addr |= addr;
+#if 0
+	addr |= (addr << 0);
+#endif
 
 	/*
 	 * Get the port number
@@ -1839,7 +1834,7 @@ ipf_p_ftp_epsv(ipf_ftp_softc_t *softf, fr_info_t *fin, ip_t *ip, nat_t *nat,
 		s++;
 
 	/*
-	 * As per RFC 2428, there are no addres components in the EPSV
+	 * As per RFC 2428, there are no address components in the EPSV
 	 * response.  So we'll go straight to getting the port.
 	 */
 	while (*s && ISDIGIT(*s)) {

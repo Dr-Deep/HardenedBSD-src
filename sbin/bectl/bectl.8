@@ -1,97 +1,115 @@
 .\"
-.\" SPDX-License-Identifier: BSD-2-Clause-FreeBSD
-.\"
 .\" Copyright (c) 2017 Kyle J. Kneitinger <kyle@kneit.in>
 .\"
-.\" Redistribution and use in source and binary forms, with or without
-.\" modification, are permitted provided that the following conditions
-.\" are met:
-.\" 1. Redistributions of source code must retain the above copyright
-.\"    notice, this list of conditions and the following disclaimer.
-.\" 2. Redistributions in binary form must reproduce the above copyright
-.\"    notice, this list of conditions and the following disclaimer in the
-.\"    documentation and/or other materials provided with the distribution.
+.\" SPDX-License-Identifier: BSD-2-Clause
 .\"
-.\"
-.\"     @(#)be.1
-.\"
-.\" $FreeBSD$
-.\"
-.Dd March 31, 2022
+.Dd February 4, 2026
 .Dt BECTL 8
 .Os
 .Sh NAME
 .Nm bectl
-.Nd Utility to manage boot environments on ZFS
+.Nd manage ZFS boot environments
 .Sh SYNOPSIS
 .Nm
+.Op Fl h
+.Nm
+.Op Fl r Ar beroot
 .Cm activate
 .Op Fl t | Fl T
 .Ar beName
 .Nm
+.Op Fl r Ar beroot
 .Cm check
 .Nm
+.Op Fl r Ar beroot
 .Cm create
 .Op Fl r
 .Op Fl e Brq Ar nonActiveBe | Ar beName Ns Cm @ Ns Ar snapshot
 .Ar newBeName
 .Nm
+.Op Fl r Ar beroot
 .Cm create
 .Op Fl r
 .Ar beName@snapshot
 .Nm
+.Op Fl r Ar beroot
+.Cm create
+.Fl E
+.Ar newBeName
+.Nm
+.Op Fl r Ar beroot
 .Cm destroy
 .Op Fl \&Fo
 .Ar beName Ns Op Cm @ Ns Ar snapshot
 .Nm
+.Op Fl r Ar beroot
 .Cm export
 .Ar sourceBe
 .Nm
+.Op Fl r Ar beroot
 .Cm import
 .Ar targetBe
 .Nm
+.Op Fl r Ar beroot
 .Cm jail
 .Op Fl bU
 .Oo Bro Fl o Ar key Ns Cm = Ns Ar value | Fl u Ar key Brc Oc Ns ...
 .Ar beName
 .Op Ar utility Op Ar argument ...
 .Nm
+.Op Fl r Ar beroot
 .Cm list
 .Op Fl aDHs
 .Op Fl c Ar property
 .Op Fl C Ar property
 .Oo Bro Fl c Ar property | Fl C Ar property Brc Oc
 .Nm
+.Op Fl r Ar beroot
 .Cm mount
 .Ar beName
 .Op Ar mountpoint
 .Nm
+.Op Fl r Ar beroot
 .Cm rename
 .Ar origBeName
 .Ar newBeName
 .Nm
+.Op Fl r Ar beroot
 .Brq Cm ujail | unjail
 .Brq Ar jailId | jailName | beName
 .Nm
+.Op Fl r Ar beroot
 .Brq Cm umount | unmount
 .Op Fl f
 .Ar beName
-.Pp
-.Nm
-.Op Fl h\&?
 .Sh DESCRIPTION
 The
 .Nm
-command is used to setup and interact with ZFS boot environments, which are
-bootable clones of datasets.
-.Pp
-Boot environments
-allow the system to be upgraded, while preserving the old system environment in
-a separate ZFS dataset.
-.Pp
-The following commands are supported by
-.Nm :
-.Bl -tag -width activate
+utility manages bootable ZFS clones called boot environments.
+Boot envionments allow system changes to be tested safely,
+as they are selectable directly from the boot
+.Xr loader 8 .
+This utility can
+.Cm create ,
+.Cm list ,
+.Cm mount ,
+or
+.Cm jail
+boot environments.
+Once the changes have been tested, the boot environment can be
+.Cm unmount Ns ed ,
+.Cm activate Ns d ,
+.Cm rename Ns d ,
+and
+.Cm destroy Ns ed .
+.Ss Supported Subcommands and Flags
+.Bl -tag -width indent
+.It Fl h
+Print usage information and exit.
+.It Fl r Ar beroot Sy Ar subcommand
+Specify a parent dataset for the boot environment to use for
+.Ar subcommand
+for operation on manually imported pools or unusual layouts.
 .It Xo
 .Cm activate
 .Op Fl t | Fl T
@@ -106,19 +124,19 @@ flag is given, this takes effect only for the next boot.
 Flag
 .Fl T
 removes temporary boot once configuration.
-Without temporary configuration, the next boot will use zfs dataset specified
-in boot pool
+Without temporary configuration,
+the next boot will use zfs dataset specified in boot pool
 .Ar bootfs
 property.
 .It Xo
 .Cm check
 .Xc
-Performs a silent sanity check on the current system.
+Perform a check to see if the current system can use boot environments.
 If boot environments are supported and used,
 .Nm
 will exit with a status code of 0.
-Any other status code is not currently defined and may, in the future, grow
-special meaning for different degrees of sanity check failures.
+Any other status code is not currently defined and may, in the future,
+grow special meaning for different degrees of sanity check failures.
 .It Xo
 .Cm create
 .Op Fl r
@@ -141,11 +159,13 @@ flag is specified, the new environment will be cloned from the given
 .Ar nonActiveBe
 or
 .Ar beName Ns Cm @ Ns Ar snapshot .
-Otherwise, the new environment will be created from the currently booted environment.
+Otherwise, the new environment will be created from the currently booted
+environment.
 .Pp
 If
 .Nm
-is creating from another boot environment, a snapshot of that boot environment will be created to clone from.
+is creating from another boot environment,
+a snapshot of that boot environment will be created to clone from.
 .It Xo
 .Cm create
 .Op Fl r
@@ -156,13 +176,22 @@ Create a snapshot of the boot environment named
 .Pp
 If the
 .Fl r
-flag is given, a recursive snapshot of the boot environment will be created.
-A snapshot is created for each descendant dataset of the boot environment.
+flag is given,
+a recursive snapshot of the boot environment will be created.
+A snapshot is created for each descendant dataset
+of the boot environment.
 See
 .Sx Boot Environment Structures
 for a discussion on different layouts.
 .Pp
-No new boot environment is created with this command.
+No new boot environment is created with this subcommand.
+.It Xo
+.Cm create
+.Fl E
+.Ar newBeName
+.Xc
+Create a new empty boot environment named
+.Ar newBeName .
 .It Xo
 .Cm destroy
 .Op Fl \&Fo
@@ -173,7 +202,7 @@ Destroy the given
 boot environment or
 .Ar beName Ns Cm @ Ns Ar snapshot
 snapshot without confirmation, unlike in
-.Xr beadm 1 .
+.Xr beadm 8 .
 Specifying
 .Fl F
 will automatically unmount without confirmation.
@@ -223,8 +252,8 @@ If
 .Ar utility
 is specified, it will be executed instead of
 .Pa /bin/sh .
-The jail will be destroyed and the boot environment unmounted when the command
-finishes executing, unless the
+The jail will be destroyed and the boot environment unmounted
+when the command finishes executing, unless the
 .Fl U
 argument is specified.
 .Pp
@@ -251,11 +280,11 @@ The following default parameters are provided:
 .It Va allow.mount Ta Cm true
 .It Va allow.mount.devfs Ta Cm true
 .It Va enforce_statfs Ta Cm 1
-.It Va name Ta Set to jail ID.
+.It Va name Ta set to jail ID
 .It Va host.hostname Ta Va bootenv
-.It Va path Ta Set to a path in Pa /tmp
+.It Va path Ta set to a path in Pa /tmp
 generated by
-.Xr libbe 3 .
+.Xr libbe 3
 .El
 .Pp
 All default parameters may be overwritten.
@@ -276,13 +305,12 @@ is used on next boot once
 .Pq Em \&T ;
 or combination of
 .Pq Em \&NRT .
-.Pp
 .Bl -tag -width indent
 .It Fl a
 Display all datasets.
 .It Fl D
-Display the full space usage for each boot environment, assuming all
-other boot environments were destroyed.
+Display the full space usage for each boot environment,
+assuming all other boot environments were destroyed.
 .It Fl H
 Used for scripting.
 Do not print headers and separate fields by a single tab instead of
@@ -290,18 +318,20 @@ arbitrary white space.
 .It Fl s
 Display all snapshots as well.
 .It Fl c Ar property
-Sort boot environments by given property name.
+Sort boot environments by the given ZFS dataset property.
 The following properties are supported:
 .Pp
 .Bl -tag -width 4n -offset indent -compact
-.It name (default output)
+.It name (the default)
 .It creation
 .It origin
 .It used
-.It usedds
-.It usedsnap
-.It usedrefreserv
+.It usedbydataset
+.It usedbyrefreservation
+.It usedbysnapshots
 .El
+.Pp
+Short forms usedds, usedrefreserv and usedsnap are also supported.
 .It Fl C Ar property
 Same as the
 .Fl c
@@ -316,16 +346,34 @@ or
 .Fl a
 option is used.
 .It Cm mount Ar beName Op Ar mountpoint
-Temporarily mount the boot environment.
-Mount at the specified
+Mount the given boot environment.
+.Pp
+If a nonexistent
 .Ar mountpoint
-if provided.
+is given:
+.Nm
+will make the directory, including intermediate directories as required.
+.Pp
+If no
+.Ar mountpoint
+is given:
+.Nm
+will make a directory such as
+.Pa be_mount.c6Sf
+in
+.Pa /tmp .
+Randomness in the last four characters of the directory name
+will prevent mount point conflicts.
+Unmount of an environment, followed by mount of the same environment
+without giving a
+.Ar mountpoint ,
+will result in a different randomly-named mountpoint.
 .It Cm rename Ar origBeName newBeName
 Rename the given
 .Ar origBeName
 to the given
 .Ar newBeName .
-The boot environment will not be unmounted in order for this rename to occur.
+The boot environment will not be unmounted for this rename to occur.
 .It Cm ujail Brq Ar jailId | jailName | beName
 .It Cm unjail Brq Ar jailId | jailName | beName
 Destroy the jail created from the given boot environment.
@@ -343,14 +391,9 @@ Unmount the given boot environment, if it is mounted.
 Specifying
 .Fl f
 will force the unmount if busy.
-.El
 .Pp
-.Nm
-prints usage information if
-.Fl h
-or
-.Fl \&?
-is specified.
+Unmount will not remove the mount point.
+.El
 .Ss Boot Environment Structures
 The traditional
 .Fx
@@ -358,8 +401,8 @@ boot environment layout, as created by the Auto ZFS option to
 .Xr bsdinstall 8 ,
 is a
 .Dq shallow
-boot environment structure, where boot environment datasets do not have any
-directly subordinate datasets.
+boot environment structure, where boot environment datasets
+do not have any directly subordinate datasets.
 Instead, they're organized off in
 .Pa zroot/ROOT ,
 and they rely on datasets elsewhere in the pool having
@@ -373,9 +416,10 @@ NAME			CANMOUNT	MOUNTPOINT
 zroot
 zroot/ROOT		noauto		none
 zroot/ROOT/default	noauto		none
+zroot/home		on		/home
 zroot/usr		off		/usr
-zroot/usr/home		on		/usr/home
-zroot/var		on		/var
+zroot/usr/src		on		/usr/src
+zroot/var		off		/var
 .Ed
 .Pp
 In that example,
@@ -386,10 +430,11 @@ set to
 .Dv off ,
 thus files in
 .Pa /usr
-typically fall into the boot environment because this dataset is not mounted.
-.Pa zroot/usr/home
+typically fall into the boot environment
+because this dataset is not mounted.
+.Pa zroot/usr/src
 is mounted, thus files in
-.Pa /usr/home
+.Pa /usr/src
 are not in the boot environment.
 .Pp
 The other style of boot environments in use, frequently called
@@ -412,8 +457,8 @@ Note that the subordinate datasets now have
 .Dv canmount
 set to
 .Dv noauto .
-These are more obviously a part of the boot environment, as indicated by their
-positioning in the layout.
+These are more obviously a part of the boot environment,
+as indicated by their positioning in the layout.
 These subordinate datasets will be mounted by the
 .Dv zfsbe
 .Xr rc 8
@@ -423,7 +468,7 @@ In this example,
 is excluded from the boot environment.
 .Pp
 .Nm
-commands that have their own
+subcommands that have their own
 .Fl r
 operate on this second,
 .Dq deep
@@ -435,33 +480,50 @@ A future version of
 may default to handling both styles and deprecate the various
 .Fl r
 flags.
-\" .Sh EXAMPLES
-\" .Bl -bullet
-\" .It
-\" To fill in with jail upgrade example when behavior is firm.
-\" .El
+.Sh EXAMPLES
+Create a boot environment, named with today's date,
+containing snapshots of the root dataset and of all child datasets:
+.Pp
+.Dl bectl create -r `date +%Y%m%d`
+.Pp
+Mount a previous boot environment,
+.Ar yesterdaysbe ,
+to
+.Pa /mnt :
+.Pp
+.Dl bectl mount yesterdaysbe /mnt
+.\" To fill in with jail upgrade example when behavior is firm.
 .Sh SEE ALSO
 .Xr libbe 3 ,
+.Xr zfsprops 7 ,
 .Xr beinstall.sh 8 ,
 .Xr jail 8 ,
+.Xr loader 8 ,
 .Xr zfs 8 ,
 .Xr zpool 8
 .Sh HISTORY
 .Nm
-is based on
-.Xr beadm 1
-and was implemented as a project for the 2017 Summer of Code, along with
-.Xr libbe 3 .
-.Sh AUTHORS
+and
+.Xr libbe 3
+were written by
+.An Kyle Kneitinger (kneitinger) Aq Mt kyle@kneit.in
+as a 2017 Google Summer of Code project, with
+.An Allan Jude (allanjude) Aq Mt allanjude@freebsd.org
+as mentor.
+.Pp
 .Nm
-was written by
-.An Kyle Kneitinger (kneitinger) Aq Mt kyle@kneit.in .
-.Pp
-.Xr beadm 1
-was written and is maintained by
-.An Slawomir Wojciech Wojtczak (vermaden) Aq Mt vermaden@interia.pl .
-.Pp
+and this manual page were derived from
+.Xr beadm 8 .
+.Sh AUTHORS
+.An Slawomir Wojciech Wojtczak (vermaden) Aq Mt vermaden@interia.pl
+is the creator and maintainer of
+.Xr beadm 8 .
 .An Bryan Drewery (bdrewery) Aq Mt bryan@shatow.net
-wrote the original
-.Xr beadm 1
-manual page that this one is derived from.
+contributed child dataset fixes, and wrote the
+.Xr beadm 8
+manual page.
+.Pp
+Most later changes to
+.Nm ,
+and to this page, were written by
+.An Kyle Evans (kevans) Aq Mt kevans@freebsd.org .

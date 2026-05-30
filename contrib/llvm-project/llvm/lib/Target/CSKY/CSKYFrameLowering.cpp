@@ -13,6 +13,7 @@
 #include "CSKYFrameLowering.h"
 #include "CSKYMachineFunctionInfo.h"
 #include "CSKYSubtarget.h"
+#include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -32,7 +33,7 @@ static Register getFPReg(const CSKYSubtarget &STI) { return CSKY::R8; }
 // callee saved register to save the value.
 static Register getBPReg(const CSKYSubtarget &STI) { return CSKY::R7; }
 
-bool CSKYFrameLowering::hasFP(const MachineFunction &MF) const {
+bool CSKYFrameLowering::hasFPImpl(const MachineFunction &MF) const {
   const TargetRegisterInfo *RegInfo = MF.getSubtarget().getRegisterInfo();
 
   const MachineFrameInfo &MFI = MF.getFrameInfo();
@@ -134,7 +135,7 @@ void CSKYFrameLowering::emitPrologue(MachineFunction &MF,
   // directives.
   for (const auto &Entry : CSI) {
     int64_t Offset = MFI.getObjectOffset(Entry.getFrameIdx());
-    Register Reg = Entry.getReg();
+    MCRegister Reg = Entry.getReg();
 
     unsigned Num = TRI->getRegSizeInBits(Reg, MRI) / 32;
     for (unsigned i = 0; i < Num; i++) {
@@ -270,6 +271,17 @@ void CSKYFrameLowering::emitEpilogue(MachineFunction &MF,
             MachineInstr::FrameDestroy);
 }
 
+static unsigned EstimateFunctionSizeInBytes(const MachineFunction &MF,
+                                            const CSKYInstrInfo &TII) {
+  unsigned FnSize = 0;
+  for (auto &MBB : MF) {
+    for (auto &MI : MBB)
+      FnSize += TII.getInstSizeInBytes(MI);
+  }
+  FnSize += MF.getConstantPool()->getConstants().size() * 4;
+  return FnSize;
+}
+
 static unsigned estimateRSStackSizeLimit(MachineFunction &MF,
                                          const CSKYSubtarget &STI) {
   unsigned Limit = (1 << 12) - 1;
@@ -349,6 +361,7 @@ void CSKYFrameLowering::determineCalleeSaves(MachineFunction &MF,
 
   CSKYMachineFunctionInfo *CFI = MF.getInfo<CSKYMachineFunctionInfo>();
   const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
+  const CSKYInstrInfo *TII = STI.getInstrInfo();
   const MachineRegisterInfo &MRI = MF.getRegInfo();
   MachineFrameInfo &MFI = MF.getFrameInfo();
 
@@ -411,8 +424,6 @@ void CSKYFrameLowering::determineCalleeSaves(MachineFunction &MF,
     }
   }
 
-  CFI->setLRIsSpilled(SavedRegs.test(CSKY::R15));
-
   unsigned CSStackSize = 0;
   for (unsigned Reg : SavedRegs.set_bits()) {
     auto RegSize = TRI->getRegSizeInBits(Reg, MRI) / 8;
@@ -430,8 +441,16 @@ void CSKYFrameLowering::determineCalleeSaves(MachineFunction &MF,
     unsigned size = TRI->getSpillSize(*RC);
     Align align = TRI->getSpillAlign(*RC);
 
-    RS->addScavengingFrameIndex(MFI.CreateStackObject(size, align, false));
+    RS->addScavengingFrameIndex(MFI.CreateSpillStackObject(size, align));
   }
+
+  unsigned FnSize = EstimateFunctionSizeInBytes(MF, *TII);
+  // Force R15 to be spilled if the function size is > 65534. This enables
+  // use of BSR to implement far jump.
+  if (FnSize >= ((1 << (16 - 1)) * 2))
+    SavedRegs.set(CSKY::R15);
+
+  CFI->setLRIsSpilled(SavedRegs.test(CSKY::R15));
 }
 
 // Not preserve stack space within prologue for outgoing variables when the
@@ -455,9 +474,10 @@ bool CSKYFrameLowering::spillCalleeSavedRegisters(
 
   for (auto &CS : CSI) {
     // Insert the spill to the stack frame.
-    Register Reg = CS.getReg();
+    MCRegister Reg = CS.getReg();
     const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(Reg);
-    TII.storeRegToStackSlot(MBB, MI, Reg, true, CS.getFrameIdx(), RC, TRI);
+    TII.storeRegToStackSlot(MBB, MI, Reg, true, CS.getFrameIdx(), RC, TRI,
+                            Register());
   }
 
   return true;
@@ -476,9 +496,10 @@ bool CSKYFrameLowering::restoreCalleeSavedRegisters(
     DL = MI->getDebugLoc();
 
   for (auto &CS : reverse(CSI)) {
-    Register Reg = CS.getReg();
+    MCRegister Reg = CS.getReg();
     const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(Reg);
-    TII.loadRegFromStackSlot(MBB, MI, Reg, CS.getFrameIdx(), RC, TRI);
+    TII.loadRegFromStackSlot(MBB, MI, Reg, CS.getFrameIdx(), RC, TRI,
+                             Register());
     assert(MI != MBB.begin() && "loadRegFromStackSlot didn't insert any code!");
   }
 

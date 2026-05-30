@@ -14,9 +14,6 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_wlan.h"
 
 #include <sys/param.h>
@@ -887,6 +884,8 @@ urtw_attach(device_t dev)
 
 	/* XXX TODO: setup regdomain if URTW_EPROM_CHANPLAN_BY_HW bit is set.*/
 
+	ic->ic_flags_ext |= IEEE80211_FEXT_SEQNO_OFFLOAD;
+
 	urtw_getradiocaps(ic, IEEE80211_CHAN_MAX, &ic->ic_nchans,
 	    ic->ic_channels);
 
@@ -929,8 +928,8 @@ urtw_detach(device_t dev)
 {
 	struct urtw_softc *sc = device_get_softc(dev);
 	struct ieee80211com *ic = &sc->sc_ic;
-	unsigned int x;
-	unsigned int n_xfers;
+	unsigned x;
+	unsigned n_xfers;
 
 	/* Prevent further ioctls */
 	URTW_LOCK(sc);
@@ -1702,6 +1701,10 @@ urtw_tx_start(struct urtw_softc *sc, struct ieee80211_node *ni, struct mbuf *m0,
 	ismcast = IEEE80211_IS_MULTICAST(wh->i_addr1);
 	type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
 
+
+	/* Assign sequence number */
+	ieee80211_output_seqno_assign(ni, -1, m0);
+
 	/*
 	 * Software crypto.
 	 */
@@ -1726,8 +1729,7 @@ urtw_tx_start(struct urtw_softc *sc, struct ieee80211_node *ni, struct mbuf *m0,
 		ieee80211_radiotap_tx(vap, m0);
 	}
 
-	if (type == IEEE80211_FC0_TYPE_MGT ||
-	    type == IEEE80211_FC0_TYPE_CTL ||
+	if (IEEE80211_IS_MGMT(wh) || IEEE80211_IS_CTL(wh) ||
 	    (m0->m_flags & M_EAPOL) != 0) {
 		rate = tp->mgmtrate;
 	} else {
@@ -1805,9 +1807,7 @@ urtw_tx_start(struct urtw_softc *sc, struct ieee80211_node *ni, struct mbuf *m0,
 		}
 		tx->flag = htole32(flags);
 		tx->txdur = txdur;
-		if (type == IEEE80211_FC0_TYPE_MGT &&
-		    (wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK) ==
-		    IEEE80211_FC0_SUBTYPE_PROBE_RESP)
+		if (IEEE80211_IS_MGMT_PROBE_RESP(wh))
 			tx->retry = 1;
 		else
 			tx->retry = URTW_TX_MAXRETRY;
@@ -1964,7 +1964,7 @@ fail:
 static uint16_t
 urtw_rtl2rate(uint32_t rate)
 {
-	unsigned int i;
+	unsigned i;
 
 	for (i = 0; i < nitems(urtw_ratetable); i++) {
 		if (rate == urtw_ratetable[i].val)
@@ -2487,7 +2487,7 @@ fail:
 static usb_error_t
 urtw_8225_rf_init(struct urtw_softc *sc)
 {
-	unsigned int i;
+	unsigned i;
 	uint16_t data;
 	usb_error_t error;
 
@@ -2867,7 +2867,7 @@ fail:
 static usb_error_t
 urtw_8225v2_rf_init(struct urtw_softc *sc)
 {
-	unsigned int i;
+	unsigned i;
 	uint16_t data;
 	uint32_t data32;
 	usb_error_t error;
@@ -3201,7 +3201,7 @@ urtw_8225v2b_rf_init(struct urtw_softc *sc)
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct ieee80211vap *vap = TAILQ_FIRST(&ic->ic_vaps);
 	const uint8_t *macaddr;
-	unsigned int i;
+	unsigned i;
 	uint8_t data8;
 	usb_error_t error;
 
@@ -4042,7 +4042,6 @@ urtw_bulk_rx_callback(struct usb_xfer *xfer, usb_error_t error)
 	struct urtw_softc *sc = usbd_xfer_softc(xfer);
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct ieee80211_node *ni;
-	struct epoch_tracker et;
 	struct mbuf *m = NULL;
 	struct urtw_data *data;
 	int8_t nf = -95;
@@ -4086,14 +4085,12 @@ setup:
 			} else
 				ni = NULL;
 
-			NET_EPOCH_ENTER(et);
 			if (ni != NULL) {
 				(void) ieee80211_input(ni, m, rssi, nf);
 				/* node is no longer needed */
 				ieee80211_free_node(ni);
 			} else
 				(void) ieee80211_input_all(ic, m, rssi, nf);
-			NET_EPOCH_EXIT(et);
 			m = NULL;
 		}
 		URTW_LOCK(sc);

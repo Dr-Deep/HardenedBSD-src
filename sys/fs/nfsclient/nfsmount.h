@@ -30,8 +30,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _NFSCLIENT_NFSMOUNT_H_
@@ -89,6 +87,7 @@ struct	nfsmount {
 					/* unclipped, wraps to 0 */
 	struct __rpc_client *nm_aconn[NFS_MAXNCONN - 1]; /* Additional nconn */
 					/* Locked via nm_sockreq.nr_mtx */
+	uint32_t nm_cloneblksize;	/* Block cloning alignment */
 	u_int16_t nm_krbnamelen;	/* Krb5 host principal, if any */
 	u_int16_t nm_dirpathlen;	/* and mount dirpath, for V4 */
 	u_int16_t nm_srvkrbnamelen;	/* and the server's target name */
@@ -125,9 +124,11 @@ struct	nfsmount {
 #define	NFSMNTP_NOALLOCATE	0x00000200
 #define	NFSMNTP_DELEGISSUED	0x00000400
 #define	NFSMNTP_NODEALLOCATE	0x00000800
+#define	NFSMNTP_FAKEROOTFH	0x00001000
 
 /* New mount flags only used by the kernel via nmount(2). */
 #define	NFSMNT_TLS		0x00000001
+#define	NFSMNT_SYSKRB5		0x00000002
 
 #define	NFSMNT_DIRPATH(m)	(&((m)->nm_name[(m)->nm_krbnamelen + 1]))
 #define	NFSMNT_SRVKRBNAME(m)						\

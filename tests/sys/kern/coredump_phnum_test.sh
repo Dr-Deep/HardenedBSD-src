@@ -27,7 +27,6 @@
 #  IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 #  POSSIBILITY OF SUCH DAMAGES.
 #
-# $FreeBSD$
 
 atf_test_case coredump_phnum cleanup
 coredump_phnum_head()
@@ -79,6 +78,11 @@ coredump_phnum_body()
 	# Check that core looks good
 	if [ ! -f coredump_phnum_helper.core ]; then
 		atf_fail "Helper program did not dump core"
+	fi
+
+	if readelf --version | grep -q LLVM; then
+		atf_expect_fail "PR285547: llvm-objdump does not support large phdr count"
+		# See https://github.com/llvm/llvm-project/issues/132216
 	fi
 
 	# These magic numbers don't have any real significance.  They are just

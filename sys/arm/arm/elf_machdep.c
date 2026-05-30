@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright 1996-1998 John D. Polstra.
  * All rights reserved.
@@ -24,9 +24,6 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include "opt_pax.h"
 
@@ -60,8 +57,8 @@ __FBSDID("$FreeBSD$");
 #include "opt_global.h"         /* for OPT_KDTRACE_HOOKS */
 #include "opt_stack.h"          /* for OPT_STACK */
 
-static boolean_t elf32_arm_abi_supported(struct image_params *, int32_t *,
-    uint32_t *);
+static bool elf32_arm_abi_supported(const struct image_params *,
+    const int32_t *, const uint32_t *);
 
 u_long elf_hwcap;
 u_long elf_hwcap2;
@@ -78,7 +75,6 @@ struct sysentvec elf32_freebsd_sysvec = {
 	.sv_elf_core_osabi = ELFOSABI_FREEBSD,
 	.sv_elf_core_abi_vendor = FREEBSD_ABI_VENDOR,
 	.sv_elf_core_prepare_notes = __elfN(prepare_notes),
-	.sv_imgact_try	= NULL,
 	.sv_minsigstksz	= MINSIGSTKSZ,
 	.sv_minuser	= VM_MIN_ADDRESS,
 	.sv_maxuser	= VM_MAXUSER_ADDRESS,
@@ -93,7 +89,7 @@ struct sysentvec elf32_freebsd_sysvec = {
 	.sv_maxssiz	= NULL,
 	.sv_flags	=
 			  SV_SHP | SV_TIMEKEEP | SV_RNG_SEED_VER |
-			  SV_ABI_FREEBSD | SV_ILP32,
+			  SV_ABI_FREEBSD | SV_ILP32 | SV_SIGSYS,
 	.sv_set_syscall_retval = cpu_set_syscall_retval,
 	.sv_fetch_syscall_args = cpu_fetch_syscall_args,
 	.sv_syscallnames = syscallnames,
@@ -105,6 +101,8 @@ struct sysentvec elf32_freebsd_sysvec = {
 	.sv_pax_aslr_init = pax_aslr_init_vmspace,
 	.sv_hwcap	= &elf_hwcap,
 	.sv_hwcap2	= &elf_hwcap2,
+	.sv_hwcap3	= NULL,
+	.sv_hwcap4	= NULL,
 	.sv_onexec_old	= exec_onexec_old,
 	.sv_onexit	= exit_onexit,
 	.sv_regset_begin = SET_BEGIN(__elfN(regset)),
@@ -112,11 +110,10 @@ struct sysentvec elf32_freebsd_sysvec = {
 };
 INIT_SYSENTVEC(elf32_sysvec, &elf32_freebsd_sysvec);
 
-static Elf32_Brandinfo freebsd_brand_info = {
+static const Elf32_Brandinfo freebsd_brand_info = {
 	.brand		= ELFOSABI_FREEBSD,
 	.machine	= EM_ARM,
 	.compat_3_brand	= "FreeBSD",
-	.emul_path	= NULL,
 	.interp_path	= "/libexec/ld-elf.so.1",
 	.sysvec		= &elf32_freebsd_sysvec,
 	.interp_newpath	= NULL,
@@ -125,13 +122,13 @@ static Elf32_Brandinfo freebsd_brand_info = {
 	.header_supported= elf32_arm_abi_supported,
 };
 
-SYSINIT(elf32, SI_SUB_EXEC, SI_ORDER_FIRST,
+C_SYSINIT(elf32, SI_SUB_EXEC, SI_ORDER_FIRST,
 	(sysinit_cfunc_t) elf32_insert_brand_entry,
 	&freebsd_brand_info);
 
-static boolean_t
-elf32_arm_abi_supported(struct image_params *imgp, int32_t *osrel __unused,
-    uint32_t *fctl0 __unused)
+static bool
+elf32_arm_abi_supported(const struct image_params *imgp,
+    const int32_t *osrel __unused, const uint32_t *fctl0 __unused)
 {
 	const Elf_Ehdr *hdr = (const Elf_Ehdr *)imgp->image_header;
 
@@ -142,9 +139,9 @@ elf32_arm_abi_supported(struct image_params *imgp, int32_t *osrel __unused,
 		if (bootverbose)
 			uprintf("Attempting to execute non EABI binary (rev %d) image %s",
 			    EF_ARM_EABI_VERSION(hdr->e_flags), imgp->args->fname);
-		return (FALSE);
+		return (false);
 	}
-	return (TRUE);
+	return (true);
 }
 
 void
@@ -157,7 +154,7 @@ bool
 elf_is_ifunc_reloc(Elf_Size r_info __unused)
 {
 
-	return (false);
+	return (ELF_R_TYPE(r_info) == R_ARM_IRELATIVE);
 }
 
 /*
@@ -260,6 +257,12 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 		case R_ARM_RELATIVE:
 			break;
 
+		case R_ARM_IRELATIVE:
+			addr = relocbase + addend;
+			addr = ((Elf_Addr (*)(void))addr)();
+			if (*where != addr)
+				*where = addr;
+			break;
 		default:
 			printf("kldload: unexpected relocation type %d, "
 			    "symbol index %d\n", rtype, symidx);

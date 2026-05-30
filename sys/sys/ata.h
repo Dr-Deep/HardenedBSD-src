@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2000 - 2008 Søren Schmidt <sos@FreeBSD.org>
  * All rights reserved.
@@ -24,8 +24,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _SYS_ATA_H_
@@ -349,8 +347,11 @@ struct ata_params {
 #define ATA_STATUS_BUSY			0x80
 
 /* ATA Error Register */
+/* COMMAND TIMEOUT		0x01 */
 #define ATA_ERROR_ABORT		0x04
 #define ATA_ERROR_ID_NOT_FOUND	0x10
+/* UNCORRECTABLE ERROR		0x40 */
+/* INTERFACE CRC		0x80 */
 
 /* ATA HPA Features */
 #define ATA_HPA_FEAT_MAX_ADDR	0x00

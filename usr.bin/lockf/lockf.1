@@ -1,4 +1,6 @@
 .\"
+.\" SPDX-License-Identifier: BSD-2-Clause
+.\"
 .\" Copyright (C) 1998 John D. Polstra.  All rights reserved.
 .\"
 .\" Redistribution and use in source and binary forms, with or without
@@ -22,9 +24,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
-.Dd August 26, 2020
+.Dd February 26, 2026
 .Dt LOCKF 1
 .Os
 .Sh NAME
@@ -32,11 +32,15 @@
 .Nd execute a command while holding a file lock
 .Sh SYNOPSIS
 .Nm
-.Op Fl knsw
+.Op Fl knpsTw
 .Op Fl t Ar seconds
 .Ar file
 .Ar command
 .Op Ar arguments
+.Nm
+.Op Fl s
+.Op Fl t Ar seconds
+.Ar fd
 .Sh DESCRIPTION
 The
 .Nm
@@ -66,6 +70,27 @@ the mere existence of the
 .Ar file
 is not considered to constitute a lock.
 .Pp
+.Nm
+may also be used to operate on a file descriptor instead of a file.
+If no
+.Ar command
+is supplied, then
+.Ar fd
+must be a file descriptor.
+The version with a
+.Ar command
+may also be used with a file descriptor by supplying it as a path
+.Pa /dev/fd/N ,
+where N is the desired file descriptor.
+The
+.Fl k
+option is implied when a file descriptor is in use, and the
+.Fl n
+and
+.Fl w
+options are silently ignored.
+This can be used to lock inside a shell script.
+.Pp
 If the
 .Nm
 utility is being used to facilitate concurrency between a number
@@ -81,15 +106,10 @@ that if the
 option is not used, then no guarantees around lock ordering can be made.
 .Pp
 The following options are supported:
-.Bl -tag -width ".Fl t Ar seconds"
+.Bl -tag -width "-t seconds"
 .It Fl k
 Causes the lock file to be kept (not removed) after the command
 completes.
-.It Fl s
-Causes
-.Nm
-to operate silently.
-Failure to acquire the lock is indicated only in the exit status.
 .It Fl n
 Causes
 .Nm
@@ -103,6 +123,37 @@ is not specified,
 will create
 .Ar file
 if necessary.
+.It Fl p
+Write the pid of the
+.Ar command
+to
+.Ar file .
+This option will cause
+.Nm
+to open
+.Ar file
+for writing rather than reading.
+.It Fl s
+Causes
+.Nm
+to operate silently.
+Failure to acquire the lock is indicated only in the exit status.
+.It Fl T
+Upon receipt of a
+.Dv SIGTERM ,
+forward a
+.Dv SIGTERM
+along to the
+.Ar command
+before cleaning up the
+.Ar file
+and exiting.
+By default,
+.Nm
+effectively orphans the
+.Ar command
+after cleaning up the
+.Ar file .
 .It Fl t Ar seconds
 Specifies a timeout for waiting for the lock.
 By default,
@@ -142,32 +193,32 @@ successfully acquires the lock, it returns the exit status produced by
 Otherwise, it returns one of the exit codes defined in
 .Xr sysexits 3 ,
 as follows:
-.Bl -tag -width ".Dv EX_CANTCREAT"
-.It Dv EX_TEMPFAIL
-The specified lock file was already locked by another process.
-.It Dv EX_CANTCREAT
+.Bl -tag -width "EX_UNAVAILABLE (69)"
+.It Er EX_OSERR Pq 61
+A system call, e.g.,
+.Xr fork 2 ,
+failed unexpectedly.
+.It Er EX_USAGE Pq 64
+There was an error on the
+.Nm
+command line.
+.It Er EX_UNAVAILABLE Pq 69
+The
+.Fl n
+option is specified and the specified lock file does not exist.
+.It Er EX_SOFTWARE Pq 70
+The
+.Ar command
+did not exit normally,
+but may have been signaled or stopped.
+.It Er EX_CANTCREAT Pq 73
 The
 .Nm
 utility
 was unable to create the lock file, e.g., because of insufficient access
 privileges.
-.It Dv EX_UNAVAILABLE
-The
-.Fl n
-option is specified and the specified lock file does not exist.
-.It Dv EX_USAGE
-There was an error on the
-.Nm
-command line.
-.It Dv EX_OSERR
-A system call (e.g.,
-.Xr fork 2 )
-failed unexpectedly.
-.It Dv EX_SOFTWARE
-The
-.Ar command
-did not exit normally,
-but may have been signaled or stopped.
+.It Er EX_TEMPFAIL Pq 75
+The specified lock file was already locked by another process.
 .El
 .Sh EXAMPLES
 The first job takes a lock and sleeps for 5 seconds in the background.
@@ -187,6 +238,43 @@ $ lockf mylock sleep 1 & lockf -t 5 mylock echo "Success"
 [1] 19995
 Success
 [1]+  Done                    lockf mylock sleep 1
+.Ed
+.Pp
+Lock a file and run a script, return immediately if the lock is not
+available.
+Do not delete the file afterward so lock order is guaranteed.
+.Pp
+.Dl $ lockf -t 0 -k /tmp/my.lock myscript
+.Pp
+Protect a section of a shell script with a lock, wait up to 5 seconds
+for it to become available.
+Note that the shell script has opened the lock file
+.Fa /tmp/my.lock ,
+and
+.Nm
+is performing the lock call exclusively via the passed in file descriptor (9).
+In this case
+.Fl k
+is implied, and
+.Fl w
+has no effect because the file has already been opened by the shell.
+This example assumes that
+.Ql >
+is implemented in the shell by opening and truncating
+.Pa /tmp/my.lock ,
+rather than by replacing the lock file.
+.Bd -literal -offset indent
+(
+	lockf -s -t 5 9
+	if [ $? -ne 0 ]; then
+		echo "Failed to obtain lock"
+		exit 1
+	fi
+
+	echo Start
+	# Do some stuff
+	echo End
+) 9>/tmp/my.lock
 .Ed
 .Sh SEE ALSO
 .Xr flock 2 ,

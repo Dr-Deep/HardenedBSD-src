@@ -32,9 +32,6 @@
  * and Kohno ("FS&K").
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/limits.h>
 
@@ -77,8 +74,6 @@ __FBSDID("$FreeBSD$");
 #include <dev/random/fortuna.h>
 
 /* Defined in FS&K */
-#define	RANDOM_FORTUNA_NPOOLS 32		/* The number of accumulation pools */
-#define	RANDOM_FORTUNA_DEFPOOLSIZE 64		/* The default pool size/length for a (re)seed */
 #define	RANDOM_FORTUNA_MAX_READ (1 << 20)	/* Max bytes from AES before rekeying */
 #define	RANDOM_FORTUNA_BLOCKS_PER_KEY (1 << 16)	/* Max blocks from AES before rekeying */
 CTASSERT(RANDOM_FORTUNA_BLOCKS_PER_KEY * RANDOM_BLOCKSIZE ==
@@ -349,6 +344,13 @@ random_fortuna_process_event(struct harvest_event *event)
 	u_int pl;
 
 	RANDOM_RESEED_LOCK();
+	/*
+	 * Run SP 800-90B health tests on the source if so configured.
+	 */
+	if (!random_harvest_healthtest(event)) {
+		RANDOM_RESEED_UNLOCK();
+		return;
+	}
 	/*-
 	 * FS&K - P_i = P_i|<harvested stuff>
 	 * Accumulate the event into the appropriate pool

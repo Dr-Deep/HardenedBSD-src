@@ -128,7 +128,8 @@ void MutexDestroy(ThreadState *thr, uptr pc, uptr addr, u32 flagz) {
     }
     // Imitate a memory write to catch unlock-destroy races.
     if (pc && IsAppMem(addr))
-      MemoryAccess(thr, pc, addr, 1, kAccessWrite | kAccessFree);
+      MemoryAccess(thr, pc, addr, 1,
+                   kAccessWrite | kAccessFree | kAccessSlotLocked);
   }
   if (unlock_locked && ShouldReport(thr, ReportTypeMutexDestroyLocked))
     ReportDestroyLocked(thr, pc, addr, last_lock, creation_stack_id);
@@ -445,9 +446,9 @@ void Acquire(ThreadState *thr, uptr pc, uptr addr) {
   if (!s)
     return;
   SlotLocker locker(thr);
+  ReadLock lock(&s->mtx);
   if (!s->clock)
     return;
-  ReadLock lock(&s->mtx);
   thr->clock.Acquire(s->clock);
 }
 

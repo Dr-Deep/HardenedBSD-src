@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -142,7 +143,7 @@ record_merge_enqueue(bqueue_t *q, struct redact_record **build,
 {
 	if (new->eos_marker) {
 		if (*build != NULL)
-			bqueue_enqueue(q, *build, sizeof (*build));
+			bqueue_enqueue(q, *build, sizeof (**build));
 		bqueue_enqueue_flush(q, new, sizeof (*new));
 		return;
 	}
@@ -175,11 +176,7 @@ objnode_compare(const void *o1, const void *o2)
 {
 	const struct objnode *obj1 = o1;
 	const struct objnode *obj2 = o2;
-	if (obj1->obj < obj2->obj)
-		return (-1);
-	if (obj1->obj > obj2->obj)
-		return (1);
-	return (0);
+	return (TREE_CMP(obj1->obj, obj2->obj));
 }
 
 
@@ -189,7 +186,7 @@ zfs_get_deleteq(objset_t *os)
 	objlist_t *deleteq_objlist = objlist_create();
 	uint64_t deleteq_obj;
 	zap_cursor_t zc;
-	zap_attribute_t za;
+	zap_attribute_t *za;
 	dmu_object_info_t doi;
 
 	ASSERT3U(os->os_phys->os_type, ==, DMU_OST_ZFS);
@@ -208,13 +205,15 @@ zfs_get_deleteq(objset_t *os)
 	avl_create(&at, objnode_compare, sizeof (struct objnode),
 	    offsetof(struct objnode, node));
 
+	za = zap_attribute_alloc();
 	for (zap_cursor_init(&zc, os, deleteq_obj);
-	    zap_cursor_retrieve(&zc, &za) == 0; zap_cursor_advance(&zc)) {
+	    zap_cursor_retrieve(&zc, za) == 0; zap_cursor_advance(&zc)) {
 		struct objnode *obj = kmem_zalloc(sizeof (*obj), KM_SLEEP);
-		obj->obj = za.za_first_integer;
+		obj->obj = za->za_first_integer;
 		avl_add(&at, obj);
 	}
 	zap_cursor_fini(&zc);
+	zap_attribute_free(za);
 
 	struct objnode *next, *found = avl_first(&at);
 	while (found != NULL) {
@@ -367,8 +366,8 @@ redact_traverse_thread(void *arg)
 #endif
 
 	err = traverse_dataset_resume(rt_arg->ds, rt_arg->txg,
-	    &rt_arg->resume, TRAVERSE_PRE | TRAVERSE_PREFETCH_METADATA,
-	    redact_cb, rt_arg);
+	    &rt_arg->resume, TRAVERSE_PRE | TRAVERSE_PREFETCH_METADATA |
+	    TRAVERSE_LOGICAL, redact_cb, rt_arg);
 
 	if (err != EINTR)
 		rt_arg->error_code = err;
@@ -422,11 +421,11 @@ redact_node_compare_start(const void *arg1, const void *arg2)
 	if (rr2->eos_marker)
 		return (-1);
 
-	int cmp = redact_range_compare(rr1->start_object, rr1->start_blkid,
-	    rr1->datablksz, rr2->start_object, rr2->start_blkid,
-	    rr2->datablksz);
+	int cmp = redact_range_compare(
+	    rr1->start_object, rr1->start_blkid, rr1->datablksz,
+	    rr2->start_object, rr2->start_blkid, rr2->datablksz);
 	if (cmp == 0)
-		cmp = (rn1->thread_num < rn2->thread_num ? -1 : 1);
+		cmp = TREE_CMP(rn1->thread_num, rn2->thread_num);
 	return (cmp);
 }
 
@@ -448,11 +447,11 @@ redact_node_compare_end(const void *arg1, const void *arg2)
 	if (srr2->eos_marker)
 		return (-1);
 
-	int cmp = redact_range_compare(srr1->end_object, srr1->end_blkid,
-	    srr1->datablksz, srr2->end_object, srr2->end_blkid,
-	    srr2->datablksz);
+	int cmp = redact_range_compare(
+	    srr1->end_object, srr1->end_blkid, srr1->datablksz,
+	    srr2->end_object, srr2->end_blkid, srr2->datablksz);
 	if (cmp == 0)
-		cmp = (rn1->thread_num < rn2->thread_num ? -1 : 1);
+		cmp = TREE_CMP(rn1->thread_num, rn2->thread_num);
 	return (cmp);
 }
 
@@ -541,7 +540,8 @@ redaction_list_update_sync(void *arg, dmu_tx_t *tx)
 		if (index == bufsize) {
 			dmu_write(mos, rl->rl_object,
 			    rl->rl_phys->rlp_num_entries * sizeof (*buf),
-			    bufsize * sizeof (*buf), buf, tx);
+			    bufsize * sizeof (*buf), buf, tx,
+			    DMU_READ_NO_PREFETCH);
 			rl->rl_phys->rlp_num_entries += bufsize;
 			index = 0;
 		}
@@ -549,7 +549,8 @@ redaction_list_update_sync(void *arg, dmu_tx_t *tx)
 	}
 	if (index > 0) {
 		dmu_write(mos, rl->rl_object, rl->rl_phys->rlp_num_entries *
-		    sizeof (*buf), index * sizeof (*buf), buf, tx);
+		    sizeof (*buf), index * sizeof (*buf), buf, tx,
+		    DMU_READ_NO_PREFETCH);
 		rl->rl_phys->rlp_num_entries += index;
 	}
 	kmem_free(buf, bufsize * sizeof (*buf));
@@ -565,7 +566,7 @@ commit_rl_updates(objset_t *os, struct merge_data *md, uint64_t object,
 {
 	dmu_tx_t *tx = dmu_tx_create_dd(spa_get_dsl(os->os_spa)->dp_mos_dir);
 	dmu_tx_hold_space(tx, sizeof (struct redact_block_list_node));
-	VERIFY0(dmu_tx_assign(tx, TXG_WAIT));
+	VERIFY0(dmu_tx_assign(tx, DMU_TX_WAIT | DMU_TX_SUSPEND));
 	uint64_t txg = dmu_tx_get_txg(tx);
 	if (!md->md_synctask_txg[txg & TXG_MASK]) {
 		dsl_sync_task_nowait(dmu_tx_pool(tx),
@@ -746,10 +747,8 @@ perform_thread_merge(bqueue_t *q, uint32_t num_threads,
 		bqueue_enqueue(q, record, sizeof (*record));
 		return (0);
 	}
-	if (num_threads > 0) {
-		redact_nodes = kmem_zalloc(num_threads *
-		    sizeof (*redact_nodes), KM_SLEEP);
-	}
+	redact_nodes = vmem_zalloc(num_threads *
+	    sizeof (*redact_nodes), KM_SLEEP);
 
 	avl_create(&start_tree, redact_node_compare_start,
 	    sizeof (struct redact_node),
@@ -822,9 +821,9 @@ perform_thread_merge(bqueue_t *q, uint32_t num_threads,
 
 	avl_destroy(&start_tree);
 	avl_destroy(&end_tree);
-	kmem_free(redact_nodes, num_threads * sizeof (*redact_nodes));
+	vmem_free(redact_nodes, num_threads * sizeof (*redact_nodes));
 	if (current_record != NULL)
-		bqueue_enqueue(q, current_record, sizeof (current_record));
+		bqueue_enqueue(q, current_record, sizeof (*current_record));
 	return (err);
 }
 
@@ -914,7 +913,7 @@ perform_redaction(objset_t *os, redaction_list_t *rl,
 			object = prev_obj;
 		}
 		while (err == 0 && object <= rec->end_object) {
-			if (issig(JUSTLOOKING) && issig(FORREAL)) {
+			if (issig()) {
 				err = EINTR;
 				break;
 			}
@@ -1032,7 +1031,7 @@ dmu_redact_snap(const char *snapname, nvlist_t *redactnvl,
 
 	numsnaps = fnvlist_num_pairs(redactnvl);
 	if (numsnaps > 0)
-		args = kmem_zalloc(numsnaps * sizeof (*args), KM_SLEEP);
+		args = vmem_zalloc(numsnaps * sizeof (*args), KM_SLEEP);
 
 	nvpair_t *pair = NULL;
 	for (int i = 0; i < numsnaps; i++) {
@@ -1066,7 +1065,7 @@ dmu_redact_snap(const char *snapname, nvlist_t *redactnvl,
 	}
 	if (err != 0)
 		goto out;
-	VERIFY3P(nvlist_next_nvpair(redactnvl, pair), ==, NULL);
+	VERIFY0P(nvlist_next_nvpair(redactnvl, pair));
 
 	boolean_t resuming = B_FALSE;
 	zfs_bookmark_phys_t bookmark;
@@ -1081,7 +1080,7 @@ dmu_redact_snap(const char *snapname, nvlist_t *redactnvl,
 		kmem_free(newredactbook,
 		    sizeof (char) * ZFS_MAX_DATASET_NAME_LEN);
 		if (args != NULL)
-			kmem_free(args, numsnaps * sizeof (*args));
+			vmem_free(args, numsnaps * sizeof (*args));
 		return (SET_ERROR(ENAMETOOLONG));
 	}
 	err = dsl_bookmark_lookup(dp, newredactbook, NULL, &bookmark);
@@ -1121,7 +1120,7 @@ dmu_redact_snap(const char *snapname, nvlist_t *redactnvl,
 	} else {
 		uint64_t *guids = NULL;
 		if (numsnaps > 0) {
-			guids = kmem_zalloc(numsnaps * sizeof (uint64_t),
+			guids = vmem_zalloc(numsnaps * sizeof (uint64_t),
 			    KM_SLEEP);
 		}
 		for (int i = 0; i < numsnaps; i++) {
@@ -1133,10 +1132,9 @@ dmu_redact_snap(const char *snapname, nvlist_t *redactnvl,
 		dp = NULL;
 		err = dsl_bookmark_create_redacted(newredactbook, snapname,
 		    numsnaps, guids, FTAG, &new_rl);
-		kmem_free(guids, numsnaps * sizeof (uint64_t));
-		if (err != 0) {
+		vmem_free(guids, numsnaps * sizeof (uint64_t));
+		if (err != 0)
 			goto out;
-		}
 	}
 
 	for (int i = 0; i < numsnaps; i++) {
@@ -1190,7 +1188,7 @@ out:
 	}
 
 	if (args != NULL)
-		kmem_free(args, numsnaps * sizeof (*args));
+		vmem_free(args, numsnaps * sizeof (*args));
 	if (dp != NULL)
 		dsl_pool_rele(dp, FTAG);
 	if (ds != NULL) {

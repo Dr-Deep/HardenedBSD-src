@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 PROG_CXX=	clang-tblgen
 MAN=
 
@@ -8,6 +6,8 @@ SRCS+=		ASTTableGen.cpp
 SRCS+=		ClangASTNodesEmitter.cpp
 SRCS+=		ClangASTPropertiesEmitter.cpp
 SRCS+=		ClangAttrEmitter.cpp
+SRCS+=		ClangBuiltinTemplatesEmitter.cpp
+SRCS+=		ClangBuiltinsEmitter.cpp
 SRCS+=		ClangCommentCommandInfoEmitter.cpp
 SRCS+=		ClangCommentHTMLNamedCharacterReferenceEmitter.cpp
 SRCS+=		ClangCommentHTMLTagsEmitter.cpp
@@ -25,4 +25,8 @@ SRCS+=		RISCVVEmitter.cpp
 SRCS+=		SveEmitter.cpp
 SRCS+=		TableGen.cpp
 
-.include "../llvm.prog.mk"
+.include "${SRCTOP}/lib/clang/clang.pre.mk"
+
+CFLAGS.RISCVVEmitter.cpp+=	-I${CLANG_SRCS}/include
+
+.include "../clang.prog.mk"

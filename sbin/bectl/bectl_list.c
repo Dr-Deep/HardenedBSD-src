@@ -1,32 +1,8 @@
-/*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
- *
+/*
  * Copyright (c) 2018 Kyle Evans <kevans@FreeBSD.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
- * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
- * AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <stdbool.h>
@@ -39,8 +15,8 @@ __FBSDID("$FreeBSD$");
 #include "bectl.h"
 
 struct sort_column {
-	char *name;
-	char *val;
+	const char *name;
+	const char *val;
 	nvlist_t *nvl;
 };
 
@@ -80,7 +56,7 @@ static unsigned long long dataset_space(const char *oname);
 static const char *
 get_origin_props(nvlist_t *dsprops, nvlist_t **originprops)
 {
-	char *propstr;
+	const char *propstr;
 
 	if (nvlist_lookup_string(dsprops, "origin", &propstr) == 0) {
 		if (be_prop_list_alloc(originprops) != 0) {
@@ -119,7 +95,8 @@ static unsigned long long
 dataset_space(const char *oname)
 {
 	unsigned long long space;
-	char *dsname, *propstr, *sep;
+	char *dsname, *sep;
+	const char *propstr;
 	nvlist_t *dsprops;
 
 	space = 0;
@@ -179,8 +156,7 @@ print_info(const char *name, nvlist_t *dsprops, struct printc *pc)
 	char buf[BUFSZ];
 	unsigned long long ctimenum, space;
 	nvlist_t *originprops;
-	const char *oname;
-	char *dsname, *propstr;
+	const char *oname, *dsname, *propstr;
 	int active_colsz;
 	boolean_t active_now, active_reboot, bootonce;
 
@@ -293,10 +269,9 @@ print_info(const char *name, nvlist_t *dsprops, struct printc *pc)
 static void
 print_headers(nvlist_t *props, struct printc *pc)
 {
-	const char *chosen_be_header;
+	const char *chosen_be_header, *propstr;
 	nvpair_t *cur;
 	nvlist_t *dsprops;
-	char *propstr;
 	size_t be_maxcol, mount_colsz;
 
 	if (pc->show_all_datasets || pc->show_snaps)

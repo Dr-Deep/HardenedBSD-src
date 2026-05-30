@@ -1,14 +1,11 @@
-# $FreeBSD$
-
 .PATH:	${.CURDIR:H}/mount
 
-PACKAGE=runtime
+PACKAGE=ufs
 PROG=	mksnap_ffs
-SRCS=	mksnap_ffs.c getmntopts.c
+LIBADD=	util
 MAN=	mksnap_ffs.8
 
 WARNS?=	2
-CFLAGS+=-I${.CURDIR:H}/mount
 
 .if defined(NOSUID)
 BINMODE=554

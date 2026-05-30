@@ -1,6 +1,10 @@
 /*-
  * Copyright (c) 2017 Mellanox Technologies, Ltd.
  * All rights reserved.
+ * Copyright (c) 2024-2025 The FreeBSD Foundation
+ *
+ * Portions of this software were developed by Björn Zeeb
+ * under sponsorship from the FreeBSD Foundation.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -25,8 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
+#include <linux/compat.h>
 #include <linux/slab.h>
 #include <linux/rcupdate.h>
 #include <linux/kernel.h>
@@ -208,6 +211,151 @@ linux_kmem_cache_destroy(struct linux_kmem_cache *c)
 	free(c, M_KMALLOC);
 }
 
+void *
+lkpi___kmalloc_node(size_t size, gfp_t flags, int node)
+{
+	if (size <= PAGE_SIZE)
+		return (malloc_domainset(size, M_KMALLOC,
+		    linux_get_vm_domain_set(node), linux_check_m_flags(flags)));
+	else
+		return (contigmalloc_domainset(size, M_KMALLOC,
+		    linux_get_vm_domain_set(node), linux_check_m_flags(flags),
+		    0, -1UL, PAGE_SIZE, 0));
+}
+
+void *
+lkpi___kmalloc(size_t size, gfp_t flags)
+{
+	size_t _s;
+
+	/* sizeof(struct llist_node) is used for kfree_async(). */
+	_s = MAX(size, sizeof(struct llist_node));
+
+	if (_s <= PAGE_SIZE)
+		return (malloc(_s, M_KMALLOC, linux_check_m_flags(flags)));
+	else
+		return (contigmalloc(_s, M_KMALLOC, linux_check_m_flags(flags),
+		    0, -1UL, PAGE_SIZE, 0));
+}
+
+void *
+lkpi_krealloc(const void *ptr, size_t size, gfp_t flags)
+{
+	void *nptr;
+	size_t osize;
+
+	/*
+	 * First handle invariants based on function arguments.
+	 */
+	if (ptr == NULL)
+		return (kmalloc(size, flags));
+
+	if (size == 0) {
+		kfree(ptr);
+		return (ZERO_SIZE_PTR);
+	}
+
+	osize = ksize(ptr);
+	if (size <= osize)
+		return (__DECONST(void *, ptr));
+
+	/*
+	 * We know the new size > original size.  realloc(9) does not (and cannot)
+	 * know about our requirements for physically contiguous memory, so we can
+	 * only call it for sizes up to and including PAGE_SIZE, and otherwise have
+	 * to replicate its functionality using kmalloc to get the contigmalloc(9)
+	 * backing.
+	 */
+	if (size <= PAGE_SIZE)
+		return (realloc(__DECONST(void *, ptr), size, M_KMALLOC, linux_check_m_flags(flags)));
+
+	nptr = kmalloc(size, flags);
+	if (nptr == NULL)
+		return (NULL);
+
+	memcpy(nptr, ptr, osize);
+	kfree(ptr);
+	return (nptr);
+}
+
+void *
+lkpi_kvrealloc(const void *ptr, size_t oldsize, size_t newsize, gfp_t flags)
+{
+	void *newptr;
+
+	/*
+	 * We replicate the behaviour of krealloc() instead of calling it
+	 * because we don't need to allocate physically contiguous memory.
+	 */
+
+	if (newsize == 0) {
+		kfree(ptr);
+		return (ZERO_SIZE_PTR);
+	}
+
+	if (ptr == NULL) {
+		newptr = kvmalloc(newsize, flags);
+		return (newptr);
+	}
+
+	newptr = realloc(
+	    __DECONST(void *, ptr), newsize, M_KMALLOC,
+	    linux_check_m_flags(flags));
+
+	if (newptr == NULL) {
+		newptr = kvmalloc(newsize, flags);
+		if (newptr == NULL)
+			return (NULL);
+
+		if (ptr != NULL) {
+			memcpy(newptr, ptr, oldsize);
+			kfree(ptr);
+		}
+	}
+
+	return (newptr);
+}
+
+struct lkpi_kmalloc_ctx {
+	size_t size;
+	gfp_t flags;
+	void *addr;
+};
+
+static void
+lkpi_kmalloc_cb(void *ctx)
+{
+	struct lkpi_kmalloc_ctx *lmc = ctx;
+
+	lmc->addr = __kmalloc(lmc->size, lmc->flags);
+}
+
+void *
+lkpi_kmalloc(size_t size, gfp_t flags)
+{
+	struct lkpi_kmalloc_ctx lmc = { .size = size, .flags = flags };
+
+	lkpi_fpu_safe_exec(&lkpi_kmalloc_cb, &lmc);
+	return(lmc.addr);
+}
+
+static void
+lkpi_kvmalloc_cb(void *ctx)
+{
+	struct lkpi_kmalloc_ctx *lmc = ctx;
+
+	lmc->addr = malloc(lmc->size, M_KMALLOC, linux_check_m_flags(lmc->flags));
+}
+
+void *
+lkpi_kvmalloc(size_t size, gfp_t flags)
+{
+	struct lkpi_kmalloc_ctx lmc = { .size = size, .flags = flags };
+
+	lkpi_fpu_safe_exec(&lkpi_kvmalloc_cb, &lmc);
+	return(lmc.addr);
+}
+
 static void
 linux_kfree_async_fn(void *context, int pending)
 {
@@ -219,7 +367,7 @@ linux_kfree_async_fn(void *context, int pending)
 static struct task linux_kfree_async_task =
     TASK_INITIALIZER(0, linux_kfree_async_fn, &linux_kfree_async_task);
 
-void
+static void
 linux_kfree_async(void *addr)
 {
 	if (addr == NULL)
@@ -227,3 +375,16 @@ linux_kfree_async(void *addr)
 	llist_add(addr, &linux_kfree_async_list);
 	taskqueue_enqueue(linux_irq_work_tq, &linux_kfree_async_task);
 }
+
+void
+lkpi_kfree(const void *ptr)
+{
+	if (ZERO_OR_NULL_PTR(ptr))
+		return;
+
+	if (curthread->td_critnest != 0)
+		linux_kfree_async(__DECONST(void *, ptr));
+	else
+		free(__DECONST(void *, ptr), M_KMALLOC);
+}
+

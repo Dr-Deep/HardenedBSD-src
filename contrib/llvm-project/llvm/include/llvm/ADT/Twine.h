@@ -11,13 +11,12 @@
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <cassert>
 #include <cstdint>
 #include <string>
-#if __cplusplus > 201402L
 #include <string_view>
-#endif
 
 namespace llvm {
 
@@ -39,7 +38,7 @@ namespace llvm {
   /// A Twine is not intended for use directly and should not be stored, its
   /// implementation relies on the ability to store pointers to temporary stack
   /// objects which may be deallocated at the end of a statement. Twines should
-  /// only be used accepted as const references in arguments, when an API wishes
+  /// only be used as const references in arguments, when an API wishes
   /// to accept possibly-concatenated strings.
   ///
   /// Twines support a special 'null' value, which always concatenates to form
@@ -103,6 +102,10 @@ namespace llvm {
       /// StringRef, and SmallString.  Can't use a StringRef here
       /// because they are not trivally constructible.
       PtrAndLengthKind,
+
+      /// A pointer and length representation that's also null-terminated.
+      /// Guaranteed to be constructed from a compile-time string literal.
+      StringLiteralKind,
 
       /// A pointer to a formatv_object_base instance.
       FormatvObjectKind,
@@ -272,8 +275,9 @@ namespace llvm {
       if (Str[0] != '\0') {
         LHS.cString = Str;
         LHSKind = CStringKind;
-      } else
+      } else {
         LHSKind = EmptyKind;
+      }
 
       assert(isValid() && "Invalid twine!");
     }
@@ -287,7 +291,6 @@ namespace llvm {
       assert(isValid() && "Invalid twine!");
     }
 
-#if __cplusplus > 201402L
     /// Construct from an std::string_view by converting it to a pointer and
     /// length.  This handles string_views on a pure API basis, and avoids
     /// storing one (or a pointer to one) inside a Twine, which avoids problems
@@ -298,10 +301,17 @@ namespace llvm {
       LHS.ptrAndLength.length = Str.length();
       assert(isValid() && "Invalid twine!");
     }
-#endif
 
     /// Construct from a StringRef.
     /*implicit*/ Twine(const StringRef &Str) : LHSKind(PtrAndLengthKind) {
+      LHS.ptrAndLength.ptr = Str.data();
+      LHS.ptrAndLength.length = Str.size();
+      assert(isValid() && "Invalid twine!");
+    }
+
+    /// Construct from a StringLiteral.
+    /*implicit*/ Twine(const StringLiteral &Str)
+        : LHSKind(StringLiteralKind) {
       LHS.ptrAndLength.ptr = Str.data();
       LHS.ptrAndLength.length = Str.size();
       assert(isValid() && "Invalid twine!");
@@ -422,6 +432,11 @@ namespace llvm {
       return isNullary();
     }
 
+    /// Check if this twine is guaranteed to refer to single string literal.
+    bool isSingleStringLiteral() const {
+      return isUnary() && getLHSKind() == StringLiteralKind;
+    }
+
     /// Return true if this twine can be dynamically accessed as a single
     /// StringRef value with getSingleStringRef().
     bool isSingleStringRef() const {
@@ -432,6 +447,7 @@ namespace llvm {
       case CStringKind:
       case StdStringKind:
       case PtrAndLengthKind:
+      case StringLiteralKind:
         return true;
       default:
         return false;
@@ -449,10 +465,10 @@ namespace llvm {
     /// @{
 
     /// Return the twine contents as a std::string.
-    std::string str() const;
+    LLVM_ABI std::string str() const;
 
     /// Append the concatenated string into the given SmallString or SmallVector.
-    void toVector(SmallVectorImpl<char> &Out) const;
+    LLVM_ABI void toVector(SmallVectorImpl<char> &Out) const;
 
     /// This returns the twine as a single StringRef.  This method is only valid
     /// if isSingleStringRef() is true.
@@ -467,6 +483,7 @@ namespace llvm {
       case StdStringKind:
         return StringRef(*LHS.stdString);
       case PtrAndLengthKind:
+      case StringLiteralKind:
         return StringRef(LHS.ptrAndLength.ptr, LHS.ptrAndLength.length);
       }
     }
@@ -486,20 +503,23 @@ namespace llvm {
     /// given SmallVector and a StringRef to the SmallVector's data is returned.
     ///
     /// The returned StringRef's size does not include the null terminator.
-    StringRef toNullTerminatedStringRef(SmallVectorImpl<char> &Out) const;
+    LLVM_ABI StringRef
+    toNullTerminatedStringRef(SmallVectorImpl<char> &Out) const;
 
     /// Write the concatenated string represented by this twine to the
     /// stream \p OS.
-    void print(raw_ostream &OS) const;
-
-    /// Dump the concatenated string represented by this twine to stderr.
-    void dump() const;
+    LLVM_ABI void print(raw_ostream &OS) const;
 
     /// Write the representation of this twine to the stream \p OS.
-    void printRepr(raw_ostream &OS) const;
+    LLVM_ABI void printRepr(raw_ostream &OS) const;
+
+#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
+    /// Dump the concatenated string represented by this twine to stderr.
+    LLVM_DUMP_METHOD void dump() const;
 
     /// Dump the representation of this twine to stderr.
-    void dumpRepr() const;
+    LLVM_DUMP_METHOD void dumpRepr() const;
+#endif
 
     /// @}
   };

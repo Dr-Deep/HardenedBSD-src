@@ -2,6 +2,7 @@
  * Copyright (c) 2020 Yubico AB. All rights reserved.
  * Use of this source code is governed by a BSD-style
  * license that can be found in the LICENSE file.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <sys/types.h>
@@ -126,13 +127,13 @@ fido_hid_manifest(fido_dev_info_t *devlist, size_t ilen, size_t *olen)
 	char	path[64];
 	size_t	i;
 
+	if (devlist == NULL || olen == NULL)
+		return (FIDO_ERR_INVALID_ARGUMENT);
+
 	*olen = 0;
 
 	if (ilen == 0)
 		return (FIDO_OK); /* nothing to do */
-
-	if (devlist == NULL || olen == NULL)
-		return (FIDO_ERR_INVALID_ARGUMENT);
 
 	for (i = *olen = 0; i < MAX_UHID && *olen < ilen; i++) {
 		snprintf(path, sizeof(path), "/dev/uhid%zu", i);

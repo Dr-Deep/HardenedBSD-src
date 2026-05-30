@@ -25,13 +25,10 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #ifndef	_LINUXKPI_LINUX_TYPES_H_
 #define	_LINUXKPI_LINUX_TYPES_H_
 
-#include <sys/cdefs.h>
 #include <sys/types.h>
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -66,6 +63,7 @@ typedef unsigned gfp_t;
 typedef off_t loff_t;
 typedef vm_paddr_t resource_size_t;
 typedef uint16_t __bitwise__ __sum16;
+typedef uint32_t __bitwise__ __wsum;
 typedef unsigned long pgoff_t;
 typedef unsigned __poll_t;
 
@@ -78,6 +76,14 @@ typedef	unsigned long	kernel_ulong_t;
 	unsigned long n[howmany(bits, sizeof(long) * 8)]
 
 typedef unsigned long irq_hw_number_t;
+
+#ifndef LIST_HEAD_DEF
+#define	LIST_HEAD_DEF
+struct list_head {
+	struct list_head *next;
+	struct list_head *prev;
+};
+#endif
 
 struct rcu_head {
 	void *raw[2];

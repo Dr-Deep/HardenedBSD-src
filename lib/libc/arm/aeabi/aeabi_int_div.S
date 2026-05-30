@@ -26,8 +26,6 @@
  */
 
 #include <machine/asm.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Due to bug in libcompiler_rt, all symbols declared by
  * DEFINE_AEABI_FUNCTION_ALIAS() are not hidden. All these but
@@ -39,11 +37,13 @@ __FBSDID("$FreeBSD$");
  */
 
 ENTRY(__aeabi_uidiv_compat)
+	.hidden __aeabi_uidiv_compat
 	.symver __aeabi_uidiv_compat, __aeabi_uidiv@
 	b __udivsi3
 END(__aeabi_uidiv_compat)
 
 ENTRY(__aeabi_idiv_compat)
+	.hidden __aeabi_idiv_compat
 	.symver __aeabi_idiv_compat, __aeabi_idiv@
 	b __divsi3
 END(__aeabi_idiv_compat)

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008 Isilon Inc http://www.isilon.com/
  * Authors: Doug Rabson <dfr@rabson.org>
@@ -27,9 +27,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/kobj.h>
@@ -52,9 +49,6 @@ gss_release_name(OM_uint32 *minor_status, gss_name_t *input_name)
 	CLIENT *cl;
 
 	*minor_status = 0;
-
-	if (!kgss_gssd_handle)
-		return (GSS_S_FAILURE);
 
 	if (*input_name) {
 		name = *input_name;

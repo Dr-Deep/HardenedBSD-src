@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2005-2007, Joseph Koshy
  * Copyright (c) 2007 The FreeBSD Foundation
@@ -28,8 +28,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef	_PMCSTAT_H_
@@ -52,8 +50,9 @@
 
 #define	PMCSTAT_PRINT_ENTRY(T,...) do {					\
 		(void) fprintf(args.pa_printfile, "%-9s", T);		\
-		(void) fprintf(args.pa_printfile, " "  __VA_ARGS__);	\
-		(void) fprintf(args.pa_printfile, "\n");		\
+		(void) fprintf(args.pa_printfile, " " __VA_ARGS__);	\
+		(void) fprintf(args.pa_printfile, " %20ju\n",		\
+		(uintmax_t)_pmcstat_current_tsc);			\
 	} while (0)
 
 #define PMCSTAT_PL_NONE		0

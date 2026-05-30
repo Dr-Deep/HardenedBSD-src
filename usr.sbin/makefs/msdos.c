@@ -1,6 +1,8 @@
 /*	$NetBSD: msdos.c,v 1.20 2017/04/14 15:40:35 christos Exp $	*/
 
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
@@ -31,11 +33,6 @@
 #if HAVE_NBTOOL_CONFIG_H
 #include "nbtool_config.h"
 #endif
-
-#include <sys/cdefs.h>
-#if defined(__RCSID) && !defined(__lint)
-__FBSDID("$FreeBSD$");
-#endif	/* !__lint */
 
 #include <sys/param.h>
 

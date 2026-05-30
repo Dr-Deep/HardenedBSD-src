@@ -30,10 +30,7 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	from: @(#)vmparam.h     5.9 (Berkeley) 5/12/91
  *	from: FreeBSD: src/sys/i386/include/vmparam.h,v 1.33 2000/03/30
- * $FreeBSD$
  */
 
 #ifndef	_MACHINE_VMPARAM_H_
@@ -174,24 +171,30 @@
 #define	PHYS_IN_DMAP(pa)	((pa) >= DMAP_MIN_PHYSADDR && \
     (pa) < DMAP_MAX_PHYSADDR)
 /* True if va is in the dmap range */
-#define	VIRT_IN_DMAP(va)	((va) >= DMAP_MIN_ADDRESS && \
-    (va) < (dmap_max_addr))
+#define	VIRT_IN_DMAP(va)						\
+({									\
+	uintptr_t __va = (uintptr_t)(va);				\
+									\
+	__va >= DMAP_MIN_ADDRESS && __va < (dmap_max_addr);		\
+})
 
 #define	PMAP_HAS_DMAP	1
-#define	PHYS_TO_DMAP(pa)						\
+#define	PHYS_TO_DMAP_ADDR(pa)						\
 ({									\
 	KASSERT(PHYS_IN_DMAP(pa),					\
 	    ("%s: PA out of range, PA: 0x%lx", __func__,		\
 	    (vm_paddr_t)(pa)));						\
 	((pa) - dmap_phys_base) + DMAP_MIN_ADDRESS;			\
 })
+#define	PHYS_TO_DMAP(x)		((void *)PHYS_TO_DMAP_ADDR(x))
 
 #define	DMAP_TO_PHYS(va)						\
 ({									\
-	KASSERT(VIRT_IN_DMAP(va),					\
-	    ("%s: VA out of range, VA: 0x%lx", __func__,		\
-	    (vm_offset_t)(va)));					\
-	((va) - DMAP_MIN_ADDRESS) + dmap_phys_base;			\
+	uintptr_t _va = (uintptr_t)(va);				\
+									\
+	KASSERT(VIRT_IN_DMAP(_va),					\
+	    ("%s: VA out of range, VA: %p", __func__, (void *)_va));	\
+	(_va - DMAP_MIN_ADDRESS) + dmap_phys_base;			\
 })
 
 #define	VM_MIN_USER_ADDRESS		(0x0000000000000000UL)
@@ -211,8 +214,6 @@
 #define	USRSTACK		USRSTACK_SV48
 #define	PS_STRINGS_SV39		(USRSTACK_SV39 - sizeof(struct ps_strings))
 #define	PS_STRINGS_SV48		(USRSTACK_SV48 - sizeof(struct ps_strings))
-
-#define	VM_EARLY_DTB_ADDRESS	(VM_MAX_KERNEL_ADDRESS - (2 * L2_SIZE))
 
 /*
  * How many physical pages per kmem arena virtual page.
@@ -237,20 +238,22 @@
 #define	VM_INITIAL_PAGEIN	16
 #endif
 
-#define	UMA_MD_SMALL_ALLOC
+#define UMA_USE_DMAP
 
 #ifndef LOCORE
 extern vm_paddr_t dmap_phys_base;
 extern vm_paddr_t dmap_phys_max;
 extern vm_offset_t dmap_max_addr;
-extern vm_offset_t vm_max_kernel_address;
-extern vm_offset_t init_pt_va;
 #endif
 
 #define	ZERO_REGION_SIZE	(64 * 1024)	/* 64KB */
 
+/*
+ * The top of KVA is reserved for early device mappings.
+ */
 #define	DEVMAP_MAX_VADDR	VM_MAX_KERNEL_ADDRESS
-#define	PMAP_MAPDEV_EARLY_SIZE	(L2_SIZE * 2)
+#define	DEVMAP_MIN_VADDR	(DEVMAP_MAX_VADDR - PMAP_MAPDEV_EARLY_SIZE)
+#define	PMAP_MAPDEV_EARLY_SIZE	(4 * L2_SIZE)
 
 /*
  * No non-transparent large page support in the pmap.
@@ -261,5 +264,6 @@ extern vm_offset_t init_pt_va;
  * Need a page dump array for minidump.
  */
 #define MINIDUMP_PAGE_TRACKING	1
+#define MINIDUMP_STARTUP_PAGE_TRACKING 1
 
 #endif /* !_MACHINE_VMPARAM_H_ */

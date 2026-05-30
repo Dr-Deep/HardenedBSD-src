@@ -27,16 +27,11 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)subr_log.c	8.1 (Berkeley) 6/10/93
  */
 
 /*
  * Error log buffer for kernel printf's.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -52,7 +47,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/filedesc.h>
 #include <sys/sysctl.h>
 
-#define LOG_RDPRI	(PZERO + 1)
+#define LOG_RDPRI	PZERO
 
 #define LOG_ASYNC	0x04
 
@@ -79,11 +74,12 @@ static struct cdevsw log_cdevsw = {
 static int	logkqread(struct knote *note, long hint);
 static void	logkqdetach(struct knote *note);
 
-static struct filterops log_read_filterops = {
+static const struct filterops log_read_filterops = {
 	.f_isfd =	1,
 	.f_attach =	NULL,
 	.f_detach =	logkqdetach,
 	.f_event =	logkqread,
+	.f_copy = knote_triv_copy,
 };
 
 static struct logsoftc {

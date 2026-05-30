@@ -1,3 +1,6 @@
+.\"
+.\" SPDX-License-Identifier: BSD-2-Clause
+.\"
 .\" Copyright (c) 2014 Warren Block
 .\" All rights reserved.
 .\"
@@ -22,43 +25,45 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
-.Dd July 21, 2022
-.Dt "VT" 4
+.Dd November 21, 2025
+.Dt VT 4
 .Os
 .Sh NAME
 .Nm vt
-.Nd virtual terminal console driver
+.Nd virtual terminal system video console driver
 .Sh SYNOPSIS
-.Cd "options TERMINAL_KERN_ATTR=_attribute_"
-.Cd "options TERMINAL_NORM_ATTR=_attribute_"
-.Cd "options VT_MAXWINDOWS=N"
-.Cd "options VT_ALT_TO_ESC_HACK=1"
-.Cd "options VT_TWOBUTTON_MOUSE"
-.Cd "options VT_FB_MAX_WIDTH=X"
-.Cd "options VT_FB_MAX_HEIGHT=Y"
-.Cd "options SC_NO_CUTPASTE"
-.Cd "device vt"
+.Cd options TERMINAL_KERN_ATTR= Ns Ao Ar attribute Ac
+.Cd options TERMINAL_NORM_ATTR= Ns Ao Ar attribute Ac
+.Cd options VT_MAXWINDOWS= Ns Ao Ar N Ac
+.Cd options VT_ALT_TO_ESC_HACK= Ns Ar 1
+.Cd options VT_TWOBUTTON_MOUSE
+.Cd options VT_FB_MAX_WIDTH= Ns Ao Ar X Ac
+.Cd options VT_FB_MAX_HEIGHT= Ns Ao Ar Y Ac
+.Cd options SC_NO_CUTPASTE
+.Cd device vt
 .Pp
 In
 .Xr loader.conf 5 :
-.Cd hw.vga.textmode=1
-.Cd hw.vga.acpi_ignore_no_vga=1
-.Cd kern.vty=vt
-.Cd kern.vt.color.<colornum>.rgb="<colorspec>"
-.Cd kern.vt.fb.default_mode="<X>x<Y>"
-.Cd kern.vt.fb.modes.<connector>="<X>x<Y>"
+.Cd hw.vga.textmode= Ns Ar 1
+.Cd hw.vga.acpi_ignore_no_vga= Ns Ar 1
+.Cd kern.vty= Ns Ar vt
+.Cd kern.vt.color. Ns Ao Ar colornum Ac Ns .rgb= Ns Ao Ar colorspec Ac
+.Cd kern.vt.fb.default_mode= Ns Ao Ar X Ac Ns x Ns Ao Ar Y Ac
+.Cd kern.vt.fb.modes. Ns Ao Ar connector Ac Ns = Ns Ao Ar X Ac Ns x Ns Ao Ar Y Ac
+.Cd kern.vt.slow_down= Ns Ao Ar delay Ac
+.Cd screen.font= Ns Ao Ar X Ac Ns x Ns Ao Ar Y Ac
 .Pp
 In
 .Xr loader.conf 5 or
 .Xr sysctl.conf 5 :
-.Cd kern.vt.kbd_halt=1
-.Cd kern.vt.kbd_poweroff=1
-.Cd kern.vt.kbd_reboot=1
-.Cd kern.vt.kbd_debug=1
-.Cd kern.vt.kbd_panic=0
-.Cd kern.vt.enable_bell=1
+.Cd kern.consmute= Ns Ar 1
+.Cd kern.vt.kbd_halt= Ns Ar 1
+.Cd kern.vt.kbd_poweroff= Ns Ar 1
+.Cd kern.vt.kbd_reboot= Ns Ar 1
+.Cd kern.vt.kbd_debug= Ns Ar 1
+.Cd kern.vt.kbd_panic= Ns Ar 0
+.Cd kern.vt.enable_altgr= Ns Ar 0
+.Cd kern.vt.enable_bell= Ns Ar 1
 .Sh DESCRIPTION
 The
 .Nm
@@ -125,8 +130,8 @@ These kernel options control the
 .Nm
 driver.
 .Bl -tag -width MAXCONS
-.It Dv TERMINAL_NORM_ATTR= Ns Pa attribute
-.It Dv TERMINAL_KERN_ATTR= Ns Pa attribute
+.It Dv TERMINAL_NORM_ATTR= Ns Ao Ar attribute Ac
+.It Dv TERMINAL_KERN_ATTR= Ns Ao Ar attribute Ac
 These options change the default colors used for normal and kernel
 text.
 Available colors are defined in
@@ -134,11 +139,11 @@ Available colors are defined in
 See
 .Sx EXAMPLES
 below.
-.It Dv VT_MAXWINDOWS=N
+.It Dv VT_MAXWINDOWS= Ns Ao Ar N Ac
 Set the number of virtual terminals to be created to
 .Fa N .
 The value defaults to 12.
-.It Dv VT_ALT_TO_ESC_HACK=1
+.It Dv VT_ALT_TO_ESC_HACK= Ns Ar 1
 When the Alt key is held down while pressing another key, send an ESC
 sequence instead of the Alt key.
 .It Dv VT_TWOBUTTON_MOUSE
@@ -147,10 +152,10 @@ In effect, this makes the right-hand mouse button perform a paste.
 These options are checked in the order shown.
 .It Dv SC_NO_CUTPASTE
 Disable mouse support.
-.It VT_FB_MAX_WIDTH=X
+.It VT_FB_MAX_WIDTH= Ns Ao Ar X Ac
 Set the maximum width to
 .Fa X .
-.It VT_FB_MAX_HEIGHT=Y
+.It VT_FB_MAX_HEIGHT= Ns Ao Ar Y Ac
 Set the maximum height to
 .Fa Y .
 .El
@@ -161,7 +166,7 @@ console device,
 These options will be removed in a future
 .Fx
 version.
-.Bl -column -offset indent ".Sy vt VT_TWOBUTTON_MOUSE" ".Sy SC_TWOBUTTON_MOUSE"
+.Bl -column -offset indent "TERMINAL_KERN_ATTR" "SC_KERNEL_CONS_ATTR"
 .It Sy vt Option Name Ta Sy sc Option Name
 .It Dv TERMINAL_KERN_ATTR Ta Dv SC_KERNEL_CONS_ATTR
 .It Dv TERMINAL_NORM_ATTR Ta Dv SC_NORM_ATTR
@@ -196,12 +201,16 @@ prompt or in
 .Xr loader.conf 5 .
 .Bl -tag -width indent
 .It Va hw.vga.textmode
-Set to 1 to use virtual terminals in text mode instead of graphics mode.
+Set to 1 to use virtual terminals in text mode instead of graphics mode on
+BIOS boot.
 Features that require graphics mode, like loadable fonts, will be
 disabled.
 .Pp
-If a KMS driver is loaded the console will switch to (and remain in)
+If a KMS driver is loaded the console will switch to, and remain in,
 graphics mode.
+Moreover this tunable has no effect with
+.Xr UEFI 8
+boot because it does not use VGA mode.
 .It Va hw.vga.acpi_ignore_no_vga
 Set to 1 to force the usage of the VGA driver regardless of whether
 ACPI IAPC_BOOT_ARCH signals no VGA support.
@@ -220,9 +229,14 @@ The
 kernel uses
 .Nm
 when this value is not set.
-.It Va kern.vt.color. Ns Ar colornum Ns Va .rgb
+Note that
+.Ql sc
+is not compatible with
+.Xr UEFI 8
+boot.
+.It Va kern.vt.color . Ns Ar colornum . Ns Va rgb
 Set this value to override default palette entry for color
-.Pa colornum
+.Ar colornum
 which should be in a range from 0 to 15 inclusive.
 The value should be either a comma-separated triplet of
 red, green, and blue values in a range from 0 to 255 or
@@ -235,15 +249,15 @@ Note: The
 .Nm
 VGA hardware driver does not support palette configuration.
 .It Va kern.vt.fb.default_mode
-Set this value to a graphic mode to override the default mode picked by the
+Set this value to a graphic mode to override the default picked by the
 .Nm
 backend.
 The mode is applied to all output connectors.
 This is currently only supported by the
 .Cm vt_fb
 backend when it is paired with a KMS video driver.
-.It Va kern.vt.fb.modes. Ns Pa connector_name
-Set this value to a graphic mode to override the default mode picked by the
+.It Va kern.vt.fb.modes . Ns Ao Ar connector_name Ac
+Set this value to a graphic mode to override the default picked by the
 .Nm
 backend.
 This mode is applied to the output connector
@@ -258,6 +272,24 @@ It will contain a list of connectors and their associated tunables.
 This is currently only supported by the
 .Cm vt_fb
 backend when it is paired with a KMS video driver.
+.It Va kern.vt.slow_down
+When debugging the kernel on modern laptops, the screen is often
+the only available console, and relevant information will scroll
+out of view before it can be captured by eye or camera.
+.Pp
+Setting
+.Va kern.vt.slow_down
+to a non-zero number will make console output synchronous (ie:
+not dependent on timers and interrupts) and slow it down in proportion
+to the number.
+.It Va screen.font
+Set this value to the base name of the desired font file located in
+.Pa /boot/fonts .
+The font must be specified in the
+.Pa INDEX.fonts
+file located there.
+Fonts can be converted for use with
+.Xr vtfontcvt 8 .
 .El
 .Sh KEYBOARD SYSCTL TUNABLES
 These settings control whether certain special key combinations are enabled or
@@ -274,6 +306,8 @@ and can also be changed at runtime with the
 .Xr sysctl 8
 command.
 .Bl -tag -width indent
+.It Va kern.vt.enable_altgr
+Enable AltGr key (do not assume right Alt key as Alt).
 .It Va kern.vt.kbd_halt
 Enable halt keyboard combination.
 .It Va kern.vt.kbd_poweroff
@@ -293,11 +327,13 @@ prompt, set in
 or changed at runtime with
 .Xr sysctl 8 .
 .Bl -tag -width indent
+.It Va kern.consmute
+Disable printing kernel messages to the system console.
 .It Va kern.vt.enable_bell
 Enable the terminal bell.
 .El
 .Sh FILES
-.Bl -tag -width /usr/share/vt/keymaps/* -compact
+.Bl -tag -width "/usr/share/vt/keymaps/*.kbd" -compact
 .It Pa /dev/console
 .It Pa /dev/consolectl
 .It Pa /dev/ttyv*
@@ -310,13 +346,12 @@ console fonts
 keyboard layouts
 .El
 .Sh DEVCTL MESSAGES
-.Bl -column "System" "Subsystem" "1234567" -compact
+.Bl -column "System" "Subsystem" "Type" "Description"
 .Sy "System" Ta Sy "Subsystem" Ta Sy "Type" Ta Sy "Description"
 .It Li VT Ta BELL Ta RING Ta
 Notification that the console bell has rung.
 .El
-.Pp
-.Bl -column "Variable" "Meaning" -compact
+.Bl -column "duration_ms" "Meaning"
 .Sy "Variable" Ta Sy "Meaning"
 .It Li duration_ms Ta Length of time the bell was requested to ring in milliseconds.
 .It Li enabled Ta true or false indicating whether or not the bell was administratively enabled when rung.
@@ -324,6 +359,12 @@ Notification that the console bell has rung.
 .It Li hz Ta Tone that was requested in Hz.
 .El
 .Sh EXAMPLES
+To increase the scrollback buffer size to 22500 lines,
+add the following line to
+.Pa /etc/rc.conf :
+.Pp
+.Dl allscreens_flags="-h 22500"
+.Pp
 This example changes the default color of normal text to green on a
 black background, or black on a green background when reversed.
 Note that white space cannot be used inside the attribute string
@@ -342,7 +383,8 @@ To set a 1024x768 mode on all output connectors, put the following line in
 .Pp
 .Dl kern.vt.fb.default_mode="1024x768"
 .Pp
-To set a 800x600 only on a laptop builtin screen, use the following line instead:
+To set a 800x600 only on a laptop builtin screen,
+use the following line instead:
 .Pp
 .Dl kern.vt.fb.modes.LVDS-1="800x600"
 .Pp
@@ -357,6 +399,14 @@ To set black and white colors of console palette
 .Pp
 .Dl kern.vt.color.0.rgb="10,10,10"
 .Dl kern.vt.color.15.rgb="#f0f0f0"
+.Pp
+Load the 8x16 font in
+.Xr loader.conf 5
+from
+.Pa /boot/fonts/*.fnt[.gz]
+at boot:
+.Pp
+.Dl screen.font="8x16"
 .Sh SEE ALSO
 .Xr kbdcontrol 1 ,
 .Xr login 1 ,
@@ -370,6 +420,7 @@ To set black and white colors of console palette
 .Xr syscons 4 ,
 .Xr ukbd 4 ,
 .Xr kbdmap 5 ,
+.Xr loader.conf 5 ,
 .Xr rc.conf 5 ,
 .Xr ttys 5 ,
 .Xr config 8 ,

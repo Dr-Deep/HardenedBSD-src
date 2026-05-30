@@ -3,7 +3,7 @@
  */
 
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2001-2002 Maksim Yevmenkin <m_evmenkin@yahoo.com>
  * All rights reserved.
@@ -30,7 +30,6 @@
  * SUCH DAMAGE.
  *
  * $Id: ng_btsocket_sco.c,v 1.2 2005/10/31 18:08:51 max Exp $
- * $FreeBSD$
  */
 
 #include <sys/param.h>
@@ -1178,20 +1177,6 @@ ng_btsocket_sco_close(struct socket *so)
 } /* ng_btsocket_sco_close */
 
 /*
- * Accept connection on socket. Nothing to do here, socket must be connected
- * and ready, so just return peer address and be done with it.
- */
-
-int
-ng_btsocket_sco_accept(struct socket *so, struct sockaddr **nam)
-{
-	if (ng_btsocket_sco_node == NULL) 
-		return (EINVAL);
-
-	return (ng_btsocket_sco_peeraddr(so, nam));
-} /* ng_btsocket_sco_accept */
-
-/*
  * Create and attach new socket
  */
 
@@ -1207,7 +1192,7 @@ ng_btsocket_sco_attach(struct socket *so, int proto, struct thread *td)
 	if (so->so_type != SOCK_SEQPACKET)
 		return (ESOCKTNOSUPPORT);
 
-#if 0 /* XXX sonewconn() calls "pru_attach" with proto == 0 */
+#if 0 /* XXX sonewconn() calls pr_attach() with proto == 0 */
 	if (proto != 0) 
 		if (proto != BLUETOOTH_PROTO_SCO)
 			return (EPROTONOSUPPORT);
@@ -1262,7 +1247,7 @@ ng_btsocket_sco_attach(struct socket *so, int proto, struct thread *td)
 	 * In the second case we hold ng_btsocket_sco_sockets_mtx already.
 	 * So we now need to distinguish between these cases. From reading
 	 * /sys/kern/uipc_socket2.c we can find out that sonewconn() calls
-	 * pru_attach with proto == 0 and td == NULL. For now use this fact
+	 * pr_attach() with proto == 0 and td == NULL. For now use this fact
 	 * to figure out if we were called from socket() or from sonewconn().
 	 */
 
@@ -1625,31 +1610,30 @@ out:
 } /* ng_btsocket_listen */
 
 /*
- * Get peer address
+ * Return peer address for getpeername(2) or for accept(2).  For the latter
+ * case no extra work to do here, socket must be connected and ready.
  */
-
 int
-ng_btsocket_sco_peeraddr(struct socket *so, struct sockaddr **nam)
+ng_btsocket_sco_peeraddr(struct socket *so, struct sockaddr *sa)
 {
 	ng_btsocket_sco_pcb_p	pcb = so2sco_pcb(so);
-	struct sockaddr_sco	sa;
+	struct sockaddr_sco *sco = (struct sockaddr_sco *)sa;
 
 	if (pcb == NULL)
 		return (EINVAL);
 	if (ng_btsocket_sco_node == NULL) 
 		return (EINVAL);
 
+	*sco = (struct sockaddr_sco ){
+		.sco_len = sizeof(struct sockaddr_sco),
+		.sco_family = AF_BLUETOOTH,
+	};
 	mtx_lock(&pcb->pcb_mtx);
-	bcopy(&pcb->dst, &sa.sco_bdaddr, sizeof(sa.sco_bdaddr));
+	bcopy(&pcb->dst, &sco->sco_bdaddr, sizeof(sco->sco_bdaddr));
 	mtx_unlock(&pcb->pcb_mtx);
 
-	sa.sco_len = sizeof(sa);
-	sa.sco_family = AF_BLUETOOTH;
-
-	*nam = sodupsockaddr((struct sockaddr *) &sa, M_NOWAIT);
-
-	return ((*nam == NULL)? ENOMEM : 0);
-} /* ng_btsocket_sco_peeraddr */
+	return (0);
+}
 
 /*
  * Send data to socket
@@ -1782,27 +1766,26 @@ ng_btsocket_sco_send2(ng_btsocket_sco_pcb_p pcb)
  */
 
 int
-ng_btsocket_sco_sockaddr(struct socket *so, struct sockaddr **nam)
+ng_btsocket_sco_sockaddr(struct socket *so, struct sockaddr *sa)
 {
 	ng_btsocket_sco_pcb_p	pcb = so2sco_pcb(so);
-	struct sockaddr_sco	sa;
+	struct sockaddr_sco *sco = (struct sockaddr_sco *)sa;
 
 	if (pcb == NULL)
 		return (EINVAL);
 	if (ng_btsocket_sco_node == NULL) 
 		return (EINVAL);
 
+	*sco = (struct sockaddr_sco ){
+		.sco_len = sizeof(struct sockaddr_sco),
+		.sco_family = AF_BLUETOOTH,
+	};
 	mtx_lock(&pcb->pcb_mtx);
-	bcopy(&pcb->src, &sa.sco_bdaddr, sizeof(sa.sco_bdaddr));
+	bcopy(&pcb->src, &sco->sco_bdaddr, sizeof(sco->sco_bdaddr));
 	mtx_unlock(&pcb->pcb_mtx);
 
-	sa.sco_len = sizeof(sa);
-	sa.sco_family = AF_BLUETOOTH;
-
-	*nam = sodupsockaddr((struct sockaddr *) &sa, M_NOWAIT);
-
-	return ((*nam == NULL)? ENOMEM : 0);
-} /* ng_btsocket_sco_sockaddr */
+	return (0);
+}
 
 /*****************************************************************************
  *****************************************************************************

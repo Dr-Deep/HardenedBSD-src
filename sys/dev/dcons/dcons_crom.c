@@ -34,7 +34,6 @@
  * SUCH DAMAGE.
  * 
  * $Id: dcons_crom.c,v 1.8 2003/10/23 15:47:21 simokawa Exp $
- * $FreeBSD$
  */
 
 #include <sys/param.h>
@@ -254,7 +253,7 @@ static device_method_t dcons_crom_methods[] = {
 	DEVMETHOD(device_probe,		dcons_crom_probe),
 	DEVMETHOD(device_attach,	dcons_crom_attach),
 	DEVMETHOD(device_detach,	dcons_crom_detach),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t dcons_crom_driver = {

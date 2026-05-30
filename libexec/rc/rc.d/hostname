@@ -23,7 +23,6 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 #
 
 # PROVIDE: hostname
@@ -43,8 +42,8 @@ hostname_start()
 	# If we are not inside a jail, set the host name.
 	# If we are inside a jail, set the host name if it is permitted.
 	#
-	if [ `$SYSCTL_N security.jail.jailed` -eq 1 ]; then
-		if [ `$SYSCTL_N security.jail.set_hostname_allowed` -eq 0 ]; then
+	if check_jail jailed; then
+		if ! check_jail set_hostname_allowed; then
 			return
 		fi
 	else
@@ -78,4 +77,8 @@ hostname_start()
 }
 
 load_rc_config $name
+
+# doesn't make sense to run in a svcj: config setting
+hostname_svcj="NO"
+
 run_rc_command "$1"

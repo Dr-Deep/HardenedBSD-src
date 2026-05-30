@@ -1,4 +1,3 @@
-/* $FreeBSD$ */
 /*	$OpenBSD: ieee80211_amrr.h,v 1.3 2006/06/17 19:34:31 damien Exp $	*/
 
 /*-
@@ -50,6 +49,10 @@ struct ieee80211_amrr_node {
 	struct ieee80211_amrr *amn_amrr;/* backpointer */
 	int	amn_rix;		/* current rate index */
 	int	amn_ticks;		/* time of last update */
+	/* for VHT, since there's no VHT RIX right now */
+	int	amn_vht_mcs;
+	int	amn_vht_nss;
+
 	/* statistics */
 	u_int	amn_txcnt;
 	u_int	amn_success;

@@ -5,15 +5,14 @@
 # This is not a general-purpose converter; it is designed for current tzdata.
 # It just converts from current source to main, vanguard, and rearguard forms.
 # Although it might be nice for it to be idempotent, or to be useful
-# for converting back and forth between vanguard and rearguard formats,
+# for converting back and forth between formats,
 # it does not do these nonessential tasks now.
 #
-# Although main and vanguard forms are currently equivalent,
-# this need not always be the case.  When the two forms differ,
-# this script can convert either from main to vanguard form (needed then),
-# or from vanguard to main form (this conversion would be needed later,
-# after main became rearguard and vanguard became main).
+# This script can convert from main to vanguard form and vice versa.
 # There is no need to convert rearguard to other forms.
+#
+# When converting to vanguard form, the output can use the line
+# "Zone GMT 0 - GMT" which TZUpdater 2.3.2 mistakenly rejects.
 #
 # When converting to vanguard form, the output can use negative SAVE
 # values.
@@ -142,9 +141,20 @@ DATAFORM != "main" {
   }
 
   # If this line should differ due to Portugal benefiting from %z if supported,
-  # uncomment the desired version and comment out the undesired one.
-  if ($0 ~ /^#?[\t ]+-[12]:00[\t ]+Port[\t ]+[%+-]/) {
-    if (($0 ~ /%z/) == (DATAFORM == "vanguard")) {
+  # comment out the undesired version and uncomment the desired one.
+  if ($0 ~ /^#?[\t ]+-[12]:00[\t ]+((Port|W-Eur)[\t ]+[%+-]|-[\t ]+(%z|-01)[\t ]+1982 Mar 28)/) {
+    if (($0 ~ /%z/) == (DATAFORM == "rearguard")) {
+      comment_out = !in_comment
+    } else {
+      uncomment = in_comment
+    }
+  }
+
+  # In vanguard form, use the line "Zone GMT 0 - GMT" instead of
+  # "Zone Etc/GMT 0 - GMT" and adjust Link lines accordingly.
+  # This works around a bug in TZUpdater 2.3.2.
+  if (/^#?(Zone|Link)[\t ]+(Etc\/)?GMT[\t ]/) {
+    if (($2 == "GMT") == (DATAFORM == "vanguard")) {
       uncomment = in_comment
     } else {
       comment_out = !in_comment
@@ -158,13 +168,8 @@ DATAFORM != "main" {
     sub(/^/, "#")
   }
 
-  # Prefer %z in vanguard form, explicit abbreviations otherwise.
-  if (DATAFORM == "vanguard") {
-    sub(/^(Zone[\t ]+[^\t ]+)?[\t ]+[^\t ]+[\t ]+[^\t ]+[\t ]+[-+][^\t ]+/, \
-	"&CHANGE-TO-%z")
-    sub(/-00CHANGE-TO-%z/, "-00")
-    sub(/[-+][^\t ]+CHANGE-TO-/, "")
-  } else {
+  # Prefer explicit abbreviations in rearguard form, %z otherwise.
+  if (DATAFORM == "rearguard") {
     if ($0 ~ /^[^#]*%z/) {
       stdoff_column = 2 * ($0 ~ /^Zone/) + 1
       rules_column = stdoff_column + 1
@@ -202,6 +207,11 @@ DATAFORM != "main" {
       }
       sub(/%z/, abbr)
     }
+  } else {
+    sub(/^(Zone[\t ]+[^\t ]+)?[\t ]+[^\t ]+[\t ]+[^\t ]+[\t ]+[-+][^\t ]+/, \
+	"&CHANGE-TO-%z")
+    sub(/-00CHANGE-TO-%z/, "-00")
+    sub(/[-+][^\t ]+CHANGE-TO-/, "")
   }
 
   # Normally, prefer whole seconds.  However, prefer subseconds
@@ -297,6 +307,39 @@ DATAFORM != "main" {
   }
 }
 
+# Return a link line resulting by changing OLDLINE to link to TARGET
+# from LINKNAME, instead of linking to OLDTARGET from LINKNAME.
+# Align data columns the same as they were in OLDLINE.
+# Also, replace any existing white space followed by comment with COMMENT.
+function make_linkline(oldline, target, linkname, oldtarget, comment, \
+		       oldprefix, oldprefixlen, oldtargettabs, \
+		       replsuffix, targettabs)
+{
+  oldprefix = "Link\t" oldtarget "\t"
+  oldprefixlen = length(oldprefix)
+  if (substr(oldline, 1, oldprefixlen) == oldprefix) {
+    # Use tab stops to preserve LINKNAME's column.
+    replsuffix = substr(oldline, oldprefixlen + 1)
+    sub(/[\t ]*#.*/, "", replsuffix)
+    oldtargettabs = int(length(oldtarget) / 8) + 1
+    targettabs = int(length(target) / 8) + 1
+    for (; targettabs < oldtargettabs; targettabs++) {
+      replsuffix = "\t" replsuffix
+    }
+    for (; oldtargettabs < targettabs && replsuffix ~ /^\t/; targettabs--) {
+      replsuffix = substr(replsuffix, 2)
+    }
+  } else {
+    # Odd format line; don't bother lining up its replacement nicely.
+    replsuffix = linkname
+  }
+  return "Link\t" target "\t" replsuffix comment
+}
+
+/^Link/ && $4 == "#=" && DATAFORM == "vanguard" {
+  $0 = make_linkline($0, $5, $3, $2)
+}
+
 # If a Link line is followed by a Link or Zone line for the same data, comment
 # out the Link line.  This can happen if backzone overrides a Link
 # with a Zone or a different Link.
@@ -306,11 +349,34 @@ DATAFORM != "main" {
 /^Link/ {
   sub(/^Link/, "#Link", line[linkline[$3]])
   linkline[$3] = NR
+  linktarget[$3] = $2
 }
 
 { line[NR] = $0 }
 
+function cut_link_chains_short( \
+			       l, linkname, t, target)
+{
+  for (linkname in linktarget) {
+    target = linktarget[linkname]
+    t = linktarget[target]
+    if (t) {
+      # TARGET is itself a link name.  Replace the line "Link TARGET LINKNAME"
+      # with "Link T LINKNAME #= TARGET", where T is at the end of the chain
+      # of links that LINKNAME points to.
+      while ((u = linktarget[t])) {
+	t = u
+      }
+      l = linkline[linkname]
+      line[l] = make_linkline(line[l], t, linkname, target, "\t#= " target)
+    }
+  }
+}
+
 END {
+  if (DATAFORM != "vanguard") {
+    cut_link_chains_short()
+  }
   for (i = 1; i <= NR; i++)
     print line[i]
 }

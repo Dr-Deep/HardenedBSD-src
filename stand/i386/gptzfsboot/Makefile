@@ -1,16 +1,14 @@
-# $FreeBSD$
-
 .include <bsd.init.mk>
 
 .PATH:		${BOOTSRC}/i386/boot2 ${BOOTSRC}/i386/gptboot \
-		${BOOTSRC}/i386/zfsboot ${BOOTSRC}/i386/common \
+		${BOOTSRC}/i386/common \
 		${BOOTSRC}/common
 
 FILES=		gptzfsboot
 MAN=		gptzfsboot.8
 
 BOOT_COMCONSOLE_PORT?= 0x3f8
-BOOT_COMCONSOLE_SPEED?= 9600
+BOOT_COMCONSOLE_SPEED?= 115200
 B2SIOFMT?=	0x3
 
 REL1=	0x700
@@ -29,7 +27,7 @@ CFLAGS+=-DBOOTPROG=\"gptzfsboot\" \
 	-I${LDRSRC} \
 	-I${BOOTSRC}/i386/common \
 	-I${BOOTSRC}/i386/libi386 \
-	-I${ZFSSRC} \
+	-I${SAZFSSRC} \
 	-I${SYSDIR}/crypto/skein \
 	-I${SYSDIR}/cddl/boot/zfs \
 	-I${SYSDIR}/contrib/openzfs/include \
@@ -48,7 +46,8 @@ CFLAGS.clang+=	-Wno-tentative-definition-incomplete-type
 
 NO_WCAST_ALIGN=
 
-CFLAGS.gcc+=	--param max-inline-insns-single=100
+CFLAGS.gcc+=	--param max-inline-insns-single=100 \
+		--param min-pagesize=1024
 
 LD_FLAGS+=${LD_FLAGS_BIN}
 
@@ -67,7 +66,7 @@ gptldr.out: gptldr.o
 	${LD} ${LD_FLAGS} -e start --defsym ORG=${ORG1} -T ${LDSCRIPT} -o ${.TARGET} gptldr.o
 
 OBJS=	zfsboot.o sio.o cons.o bcache.o devopen.o disk.o part.o zfs_cmd.o misc.o
-CLEANFILES+=	gptzfsboot.bin gptzfsboot.out ${OBJS} ${OPENCRYPTO_XTS}
+CLEANFILES+=	gptzfsboot.bin gptzfsboot.out ${OBJS}
 
 # i386 standalone support library
 LIBI386=	${BOOTOBJ}/i386/libi386/libi386.a
@@ -75,10 +74,9 @@ LIBI386=	${BOOTOBJ}/i386/libi386/libi386.a
 gptzfsboot.bin: gptzfsboot.out
 	${OBJCOPY} -S -O binary gptzfsboot.out ${.TARGET}
 
-gptzfsboot.out: ${BTXCRT} ${OBJS} \
-	${OPENCRYPTO_XTS}
+gptzfsboot.out: ${BTXCRT} ${OBJS}
 	${LD} ${LD_FLAGS} --defsym ORG=${ORG2} -T ${LDSCRIPT} -o ${.TARGET} ${.ALLSRC} ${LIBI386} ${LIBSA32}
 
-zfsboot.o: ${ZFSSRC}/zfsimpl.c
+zfsboot.o: ${SAZFSSRC}/zfsimpl.c
 
 .include <bsd.prog.mk>

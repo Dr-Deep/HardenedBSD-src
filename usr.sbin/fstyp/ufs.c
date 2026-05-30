@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2002, 2003 Gordon Tetlow
  * Copyright (c) 2006 Pawel Jakub Dawidek <pjd@FreeBSD.org>
  * Copyright (c) 2014 The FreeBSD Foundation
@@ -28,9 +30,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
 #include <ufs/ufs/dinode.h>

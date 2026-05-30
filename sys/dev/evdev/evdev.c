@@ -23,8 +23,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include "opt_evdev.h"
@@ -39,6 +37,7 @@
 #include <sys/malloc.h>
 #include <sys/module.h>
 #include <sys/proc.h>
+#include <sys/stat.h>
 #include <sys/sx.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
@@ -84,7 +83,7 @@ SYSCTL_INT(_kern_evdev, OID_AUTO, rcpt_mask, CTLFLAG_RWTUN, &evdev_rcpt_mask, 0,
     "Who is receiving events: bit0 - sysmouse, bit1 - kbdmux, "
     "bit2 - mouse hardware, bit3 - keyboard hardware");
 SYSCTL_INT(_kern_evdev, OID_AUTO, sysmouse_t_axis, CTLFLAG_RWTUN,
-    &evdev_sysmouse_t_axis, 0, "Extract T-axis from 0-none, 1-ums, 2-psm");
+    &evdev_sysmouse_t_axis, 0, "Extract T-axis from 0-none, 1-ums, 2-psm, 3-wsp");
 #endif
 SYSCTL_NODE(_kern_evdev, OID_AUTO, input, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
     "Evdev input devices");
@@ -96,8 +95,14 @@ static int evdev_check_event(struct evdev_dev *, uint16_t, uint16_t, int32_t);
 struct evdev_dev *
 evdev_alloc(void)
 {
+	struct evdev_dev *evdev;
 
-	return malloc(sizeof(struct evdev_dev), M_EVDEV, M_WAITOK | M_ZERO);
+	evdev = malloc(sizeof(struct evdev_dev), M_EVDEV, M_WAITOK | M_ZERO);
+	evdev->ev_cdev_uid = UID_ROOT;
+	evdev->ev_cdev_gid = GID_WHEEL;
+	evdev->ev_cdev_mode = S_IRUSR | S_IWUSR;
+
+	return (evdev);
 }
 
 void
@@ -584,6 +589,14 @@ evdev_set_flag(struct evdev_dev *evdev, uint16_t flag)
 
 	KASSERT(flag < EVDEV_FLAG_CNT, ("invalid evdev flag property"));
 	bit_set(evdev->ev_flags, flag);
+}
+
+void
+evdev_set_cdev_mode(struct evdev_dev *evdev, uid_t uid, gid_t gid, int mode)
+{
+	evdev->ev_cdev_uid = uid;
+	evdev->ev_cdev_gid = gid;
+	evdev->ev_cdev_mode = mode;
 }
 
 static int
@@ -1092,6 +1105,19 @@ evdev_release_client(struct evdev_dev *evdev, struct evdev_client *client)
 	evdev->ev_grabber = NULL;
 
 	return (0);
+}
+
+bool
+evdev_is_grabbed(struct evdev_dev *evdev)
+{
+	if (kdb_active || SCHEDULER_STOPPED())
+		return (false);
+	/*
+	 * The function is intended to be called from evdev-unrelated parts of
+	 * code like syscons-compatible parts of mouse and keyboard drivers.
+	 * That makes unlocked read-only access acceptable.
+	 */
+	return (evdev->ev_grabber != NULL);
 }
 
 static void

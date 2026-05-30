@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 LIB_CXX=	lutok
 INTERNALLIB=
 
@@ -19,8 +17,5 @@ CFLAGS+=	-I${SRCTOP}/contrib/lutok/include \
 
 WARNS?=	3
 SHLIB_MAJOR=	0
-
-# lutok uses auto_ptr
-CFLAGS+=	-Wno-deprecated-declarations
 
 .include <bsd.lib.mk>

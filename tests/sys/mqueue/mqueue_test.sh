@@ -23,12 +23,11 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 #
 
 mqtest1_head()
 {
-	:
+	atf_set require.kmods mqueuefs
 }
 mqtest1_body()
 {
@@ -37,7 +36,7 @@ mqtest1_body()
 
 mqtest2_head()
 {
-	:
+	atf_set require.kmods mqueuefs
 }
 mqtest2_body()
 {
@@ -46,7 +45,7 @@ mqtest2_body()
 
 mqtest3_head()
 {
-	:
+	atf_set require.kmods mqueuefs
 }
 mqtest3_body()
 {
@@ -55,7 +54,7 @@ mqtest3_body()
 
 mqtest4_head()
 {
-	:
+	atf_set require.kmods mqueuefs
 }
 mqtest4_body()
 {
@@ -64,7 +63,7 @@ mqtest4_body()
 
 mqtest5_head()
 {
-	:
+	atf_set require.kmods mqueuefs
 }
 mqtest5_body()
 {
@@ -75,7 +74,7 @@ atf_init_test_cases()
 {
 	atf_add_test_case mqtest1
 	atf_add_test_case mqtest2
-	#atf_add_test_case mqtest3
-	#atf_add_test_case mqtest4
+	atf_add_test_case mqtest3
+	atf_add_test_case mqtest4
 	atf_add_test_case mqtest5
 }

@@ -2,7 +2,18 @@
 # Copyright 2009, Wouter Wijngaards, NLnet Labs.   
 # BSD licensed.
 #
-# Version 43
+# Version 51
+# 2025-11-06 Fix ACX_CHECK_NONSTRING_ATTRIBUTE to reject clang, that prints
+#	     a warning for 'unknown attribute' when nonstring is used.
+# 2025-09-29 add ac_cv_func_malloc_0_nonnull as a cache value for the malloc(0)
+#            check by ACX_FUNC_MALLOC.
+# 2025-09-29 add ACX_CHECK_NONSTRING_ATTRIBUTE, AHX_CONFIG_NONSTRING_ATTRIBUTE.
+# 2024-01-16 fix to add -l:libssp.a to -lcrypto link check.
+#	     and check for getaddrinfo with only header.
+# 2024-01-15 fix to add crypt32 to -lcrypto link check when checking for gdi32.
+# 2023-05-04 fix to remove unused whitespace.
+# 2023-01-26 fix -Wstrict-prototypes.
+# 2022-09-01 fix checking if nonblocking sockets work on OpenBSD.
 # 2021-08-17 fix sed script in ssldir split handling.
 # 2021-08-17 fix for openssl to detect split version, with ssldir_include
 # 	     and ssldir_lib output directories.
@@ -65,6 +76,7 @@
 # ACX_DEPFLAG			- find cc dependency flags.
 # ACX_DETERMINE_EXT_FLAGS_UNBOUND - find out which flags enable BSD and POSIX.
 # ACX_CHECK_FORMAT_ATTRIBUTE	- find cc printf format syntax.
+# ACX_CHECK_NONSTRING_ATTRIBUTE - find cc nonstring attribute syntax.
 # ACX_CHECK_UNUSED_ATTRIBUTE	- find cc variable unused syntax.
 # ACX_CHECK_FLTO		- see if cc supports -flto and use it if so.
 # ACX_LIBTOOL_C_ONLY		- create libtool for C only, improved.
@@ -86,6 +98,7 @@
 # ACX_FUNC_IOCTLSOCKET		- find ioctlsocket, portably.
 # ACX_FUNC_MALLOC		- check malloc, define replacement .
 # AHX_CONFIG_FORMAT_ATTRIBUTE	- config.h text for format.
+# AHX_CONFIG_NONSTRING_ATTRIBUTE - config.h text for nonstring.
 # AHX_CONFIG_UNUSED_ATTRIBUTE	- config.h text for unused.
 # AHX_CONFIG_FSEEKO		- define fseeko, ftello fallback.
 # AHX_CONFIG_RAND_MAX		- define RAND_MAX if needed.
@@ -186,7 +199,7 @@ dnl cache=`echo $1 | sed 'y%.=/+- %___p__%'`
 AC_CACHE_VAL(cv_prog_cc_flag_needed_$cache,
 [
 echo '$2' > conftest.c
-echo 'void f(){}' >>conftest.c
+echo 'void f(void){}' >>conftest.c
 if test -z "`$CC $CPPFLAGS $CFLAGS $ERRFLAG -c conftest.c 2>&1`"; then
 eval "cv_prog_cc_flag_needed_$cache=no"
 else
@@ -232,7 +245,7 @@ dnl DEPFLAG: set to flag that generates dependencies.
 AC_DEFUN([ACX_DEPFLAG],
 [
 AC_MSG_CHECKING([$CC dependency flag])
-echo 'void f(){}' >conftest.c
+echo 'void f(void){}' >conftest.c
 if test "`$CC -MM conftest.c 2>&1`" = "conftest.o: conftest.c"; then
 	DEPFLAG="-MM"
 else 
@@ -271,7 +284,7 @@ ACX_CHECK_COMPILER_FLAG_NEEDED($C99FLAG -D__EXTENSIONS__ -D_BSD_SOURCE -D_DEFAUL
 #include <getopt.h>
 #endif
 
-int test() {
+int test(void) {
 	int a;
 	char **opts = NULL;
 	struct timeval tv;
@@ -308,7 +321,7 @@ ACX_CHECK_COMPILER_FLAG_NEEDED($C99FLAG -D__EXTENSIONS__ -D_BSD_SOURCE -D_DEFAUL
 #include <getopt.h>
 #endif
 
-int test() {
+int test(void) {
 	int a;
 	char **opts = NULL;
 	struct timeval tv;
@@ -334,7 +347,7 @@ ACX_CHECK_COMPILER_FLAG_NEEDED($C99FLAG,
 [
 #include <stdbool.h>
 #include <ctype.h>
-int test() {
+int test(void) {
         int a = 0;
         return a;
 }
@@ -344,7 +357,7 @@ ACX_CHECK_COMPILER_FLAG_NEEDED(-D_BSD_SOURCE -D_DEFAULT_SOURCE,
 [
 #include <ctype.h>
 
-int test() {
+int test(void) {
         int a;
         a = isascii(32);
         return a;
@@ -355,7 +368,7 @@ ACX_CHECK_COMPILER_FLAG_NEEDED(-D_GNU_SOURCE,
 [
 #include <netinet/in.h>
 
-int test() {
+int test(void) {
         struct in6_pktinfo inf;
 	int a = (int)sizeof(inf);
         return a;
@@ -369,7 +382,7 @@ ACX_CHECK_COMPILER_FLAG_NEEDED(-D_GNU_SOURCE -D_FRSRESGID,
 [
 #include <unistd.h>
 
-int test() {
+int test(void) {
 	int a = setresgid(0,0,0);
 	a = setresuid(0,0,0);
         return a;
@@ -384,7 +397,7 @@ ACX_CHECK_COMPILER_FLAG_NEEDED(-D_POSIX_C_SOURCE=200112,
 #endif
 #include <netdb.h>
 
-int test() {
+int test(void) {
         int a = 0;
         char *t;
         time_t time = 0;
@@ -412,7 +425,7 @@ ACX_CHECK_COMPILER_FLAG_NEEDED(-D__EXTENSIONS__,
 #include <getopt.h>
 #endif
 
-int test() {
+int test(void) {
         int a;
         char **opts = NULL;
         struct timeval tv;
@@ -474,7 +487,7 @@ fi
 dnl Setup ATTR_FORMAT config.h parts.
 dnl make sure you call ACX_CHECK_FORMAT_ATTRIBUTE also.
 AC_DEFUN([AHX_CONFIG_FORMAT_ATTRIBUTE],
-[ 
+[
 #ifdef HAVE_ATTR_FORMAT
 #  define ATTR_FORMAT(archetype, string_index, first_to_check) \
     __attribute__ ((format (archetype, string_index, first_to_check)))
@@ -484,7 +497,7 @@ AC_DEFUN([AHX_CONFIG_FORMAT_ATTRIBUTE],
 ])
 
 dnl Check how to mark function arguments as unused.
-dnl result in HAVE_ATTR_UNUSED.  
+dnl result in HAVE_ATTR_UNUSED.
 dnl Make sure you include AHX_CONFIG_UNUSED_ATTRIBUTE also.
 AC_DEFUN([ACX_CHECK_UNUSED_ATTRIBUTE],
 [AC_REQUIRE([AC_PROG_CC])
@@ -516,6 +529,49 @@ AC_DEFUN([AHX_CONFIG_UNUSED_ATTRIBUTE],
 AC_MSG_RESULT($ac_cv_c_unused_attribute)
 if test $ac_cv_c_unused_attribute = yes; then
   AC_DEFINE(HAVE_ATTR_UNUSED, 1, [Whether the C compiler accepts the "unused" attribute])
+fi
+])dnl
+
+dnl Check how to mark function arguments as nonstring.
+dnl result in HAVE_ATTR_NONSTRING.
+dnl Make sure you include AHX_CONFIG_NONSTRING_ATTRIBUTE also.
+AC_DEFUN([ACX_CHECK_NONSTRING_ATTRIBUTE],
+[AC_REQUIRE([AC_PROG_CC])
+AC_REQUIRE([ACX_CHECK_ERROR_FLAGS])
+BAKCFLAGS="$CFLAGS"
+CFLAGS="$CFLAGS $ERRFLAG"
+AC_MSG_CHECKING(whether the C compiler (${CC-cc}) accepts the "nonstring" attribute)
+AC_CACHE_VAL(ac_cv_c_nonstring_attribute,
+[ac_cv_c_nonstring_attribute=no
+AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <stdio.h>
+struct test {
+    char __attribute__((nonstring)) s[1];
+};
+]], [[
+   struct test t = { "1" };
+   (void) t;
+]])],[ac_cv_c_nonstring_attribute="yes"],[ac_cv_c_nonstring_attribute="no"])
+CFLAGS="$BAKCFLAGS"
+])
+
+dnl Setup ATTR_NONSTRING config.h parts.
+dnl make sure you call ACX_CHECK_NONSTRING_ATTRIBUTE also.
+AC_DEFUN([AHX_CONFIG_NONSTRING_ATTRIBUTE],
+[
+#if defined(DOXYGEN)
+#  define ATTR_NONSTRING(x)  x
+#elif defined(__cplusplus)
+#  define ATTR_NONSTRING(x)  __attribute__((nonstring)) x
+#elif defined(HAVE_ATTR_NONSTRING)
+#  define ATTR_NONSTRING(x)  __attribute__((nonstring)) x
+#else /* !HAVE_ATTR_NONSTRING */
+#  define ATTR_NONSTRING(x)  x
+#endif /* !HAVE_ATTR_NONSTRING */
+])
+
+AC_MSG_RESULT($ac_cv_c_nonstring_attribute)
+if test $ac_cv_c_nonstring_attribute = yes; then
+  AC_DEFINE(HAVE_ATTR_NONSTRING, 1, [Whether the C compiler accepts the "nonstring" attribute])
 fi
 ])dnl
 
@@ -704,7 +760,7 @@ AC_DEFUN([ACX_SSL_CHECKS], [
 		    LIBSSL_LDFLAGS="$LIBSSL_LDFLAGS -L$ssldir_lib"
 	    	    ACX_RUNTIME_PATH_ADD([$ssldir_lib])
 	    fi
-        
+
             AC_MSG_CHECKING([for EVP_sha256 in -lcrypto])
             LIBS="$LIBS -lcrypto"
             LIBSSL_LIBS="$LIBSSL_LIBS -lcrypto"
@@ -729,40 +785,73 @@ AC_DEFUN([ACX_SSL_CHECKS], [
                   ]])],[
                     AC_DEFINE([HAVE_EVP_SHA256], 1,
                         [If you have EVP_sha256])
-                    AC_MSG_RESULT(yes) 
+                    AC_MSG_RESULT(yes)
                   ],[
                     AC_MSG_RESULT(no)
                     LIBS="$BAKLIBS"
                     LIBSSL_LIBS="$BAKSSLLIBS"
-                    LIBS="$LIBS -ldl"
-                    LIBSSL_LIBS="$LIBSSL_LIBS -ldl"
-                    AC_MSG_CHECKING([if -lcrypto needs -ldl])
-                    AC_LINK_IFELSE([AC_LANG_PROGRAM([[]], [[
-                        int EVP_sha256(void);
-                        (void)EVP_sha256();
-                      ]])],[
-                        AC_DEFINE([HAVE_EVP_SHA256], 1,
-                            [If you have EVP_sha256])
-                        AC_MSG_RESULT(yes) 
-                      ],[
-                        AC_MSG_RESULT(no)
-                        LIBS="$BAKLIBS"
-                        LIBSSL_LIBS="$BAKSSLLIBS"
-                        LIBS="$LIBS -ldl -pthread"
-                        LIBSSL_LIBS="$LIBSSL_LIBS -ldl -pthread"
-                        AC_MSG_CHECKING([if -lcrypto needs -ldl -pthread])
-                        AC_LINK_IFELSE([AC_LANG_PROGRAM([[]], [[
-                            int EVP_sha256(void);
-                            (void)EVP_sha256();
-                          ]])],[
-                            AC_DEFINE([HAVE_EVP_SHA256], 1,
-                                [If you have EVP_sha256])
-                            AC_MSG_RESULT(yes) 
-                          ],[
-                            AC_MSG_RESULT(no)
-                            AC_MSG_ERROR([OpenSSL found in $ssldir, but version 0.9.7 or higher is required])
+
+		    LIBS="$LIBS -lgdi32 -lws2_32 -lcrypt32"
+		    LIBSSL_LIBS="$LIBSSL_LIBS -lgdi32 -lws2_32 -lcrypt32"
+                    AC_MSG_CHECKING([if -lcrypto needs -lgdi32 -lws2_32 -lcrypt32])
+		    AC_LINK_IFELSE([AC_LANG_PROGRAM([[]], [[
+			int EVP_sha256(void);
+			(void)EVP_sha256();
+		      ]])],[
+			AC_DEFINE([HAVE_EVP_SHA256], 1,
+			    [If you have EVP_sha256])
+			AC_MSG_RESULT(yes)
+		      ],[
+			AC_MSG_RESULT(no)
+			LIBS="$BAKLIBS"
+			LIBSSL_LIBS="$BAKSSLLIBS"
+
+			LIBS="$LIBS -lgdi32 -lws2_32 -lcrypt32 -l:libssp.a"
+			LIBSSL_LIBS="$LIBSSL_LIBS -lgdi32 -lws2_32 -lcrypt32 -l:libssp.a"
+			AC_MSG_CHECKING([if -lcrypto needs -lgdi32 -lws2_32 -lcrypt32 -l:libssp.a])
+			AC_LINK_IFELSE([AC_LANG_PROGRAM([[]], [[
+			    int EVP_sha256(void);
+			    (void)EVP_sha256();
+			  ]])],[
+			    AC_DEFINE([HAVE_EVP_SHA256], 1,
+				[If you have EVP_sha256])
+			    AC_MSG_RESULT(yes)
+			  ],[
+			    AC_MSG_RESULT(no)
+			    LIBS="$BAKLIBS"
+			    LIBSSL_LIBS="$BAKSSLLIBS"
+
+			    LIBS="$LIBS -ldl"
+			    LIBSSL_LIBS="$LIBSSL_LIBS -ldl"
+			    AC_MSG_CHECKING([if -lcrypto needs -ldl])
+			    AC_LINK_IFELSE([AC_LANG_PROGRAM([[]], [[
+				int EVP_sha256(void);
+				(void)EVP_sha256();
+			      ]])],[
+				AC_DEFINE([HAVE_EVP_SHA256], 1,
+				    [If you have EVP_sha256])
+				AC_MSG_RESULT(yes)
+			      ],[
+				AC_MSG_RESULT(no)
+				LIBS="$BAKLIBS"
+				LIBSSL_LIBS="$BAKSSLLIBS"
+				LIBS="$LIBS -ldl -pthread"
+				LIBSSL_LIBS="$LIBSSL_LIBS -ldl -pthread"
+				AC_MSG_CHECKING([if -lcrypto needs -ldl -pthread])
+				AC_LINK_IFELSE([AC_LANG_PROGRAM([[]], [[
+				    int EVP_sha256(void);
+				    (void)EVP_sha256();
+				  ]])],[
+				    AC_DEFINE([HAVE_EVP_SHA256], 1,
+					[If you have EVP_sha256])
+				    AC_MSG_RESULT(yes)
+				  ],[
+				    AC_MSG_RESULT(no)
+				    AC_MSG_ERROR([OpenSSL found in $ssldir, but version 0.9.7 or higher is required])
+				])
+			    ])
 			])
-                    ])
+		    ])
                 ])
             ])
         fi
@@ -776,7 +865,7 @@ AC_CHECK_HEADERS([openssl/rand.h],,, [AC_INCLUDES_DEFAULT])
 
 dnl Check for SSL, where SSL is mandatory
 dnl Adds --with-ssl option, searches for openssl and defines HAVE_SSL if found
-dnl Setup of CPPFLAGS, CFLAGS.  Adds -lcrypto to LIBS. 
+dnl Setup of CPPFLAGS, CFLAGS.  Adds -lcrypto to LIBS.
 dnl Checks main header files of SSL.
 dnl
 AC_DEFUN([ACX_WITH_SSL],
@@ -833,7 +922,7 @@ dnl try to see if an additional _LARGEFILE_SOURCE 1 is needed to get fseeko
 ACX_CHECK_COMPILER_FLAG_NEEDED(-D_LARGEFILE_SOURCE=1,
 [
 #include <stdio.h>
-int test() {
+int test(void) {
         int a = fseeko(stdin, 0, 0);
         return a;
 }
@@ -858,7 +947,7 @@ char* (*f) () = getaddrinfo;
 #ifdef __cplusplus
 }
 #endif
-int main() {
+int main(void) {
         ;
         return 0;
 }
@@ -869,7 +958,7 @@ dnl see if on windows
 if test "$ac_cv_header_windows_h" = "yes"; then
 	AC_DEFINE(USE_WINSOCK, 1, [Whether the windows socket API is used])
 	USE_WINSOCK="1"
-	if echo $LIBS | grep 'lws2_32' >/dev/null; then
+	if echo "$LIBS" | grep 'lws2_32' >/dev/null; then
 		:
 	else
 		LIBS="$LIBS -lws2_32"
@@ -877,6 +966,24 @@ if test "$ac_cv_header_windows_h" = "yes"; then
 fi
 ],
 dnl no quick getaddrinfo, try mingw32 and winsock2 library.
+dnl perhaps getaddrinfo needs only the include
+AC_LINK_IFELSE(
+[AC_LANG_PROGRAM(
+[
+#ifdef HAVE_WS2TCPIP_H
+#include <ws2tcpip.h>
+#endif
+],
+[
+        (void)getaddrinfo(NULL, NULL, NULL, NULL);
+]
+)],
+[
+ac_cv_func_getaddrinfo="yes"
+AC_DEFINE(USE_WINSOCK, 1, [Whether the windows socket API is used])
+USE_WINSOCK="1"
+],
+
 ORIGLIBS="$LIBS"
 LIBS="$LIBS -lws2_32"
 AC_LINK_IFELSE(
@@ -901,6 +1008,7 @@ ac_cv_func_getaddrinfo="no"
 LIBS="$ORIGLIBS"
 ])
 )
+)
 
 AC_MSG_RESULT($ac_cv_func_getaddrinfo)
 if test $ac_cv_func_getaddrinfo = yes; then
@@ -922,7 +1030,7 @@ cache=`echo $1 | sed 'y%.=/+-%___p_%'`
 AC_CACHE_VAL(cv_cc_deprecated_$cache,
 [
 echo '$3' >conftest.c
-echo 'void f(){ $2 }' >>conftest.c
+echo 'void f(void){ $2 }' >>conftest.c
 if test -z "`$CC $CPPFLAGS $CFLAGS -c conftest.c 2>&1 | grep -e deprecated -e unavailable`"; then
 eval "cv_cc_deprecated_$cache=no"
 else
@@ -962,6 +1070,9 @@ AC_LANG_SOURCE([[
 #include <errno.h>
 #ifdef HAVE_SYS_TYPES_H
 #include <sys/types.h>
+#endif
+#ifdef HAVE_SYS_SELECT_H
+#include <sys/select.h>
 #endif
 #ifdef HAVE_SYS_SOCKET_H
 #include <sys/socket.h>
@@ -1129,8 +1240,9 @@ dnl detect malloc and provide malloc compat prototype.
 dnl $1: unique name for compat code
 AC_DEFUN([ACX_FUNC_MALLOC],
 [
-	AC_MSG_CHECKING([for GNU libc compatible malloc])
-	AC_RUN_IFELSE([AC_LANG_PROGRAM(
+	AC_CACHE_CHECK([for GNU libc compatible malloc],[ac_cv_func_malloc_0_nonnull],
+	[
+		AC_RUN_IFELSE([AC_LANG_PROGRAM(
 [[#if defined STDC_HEADERS || defined HAVE_STDLIB_H
 #include <stdlib.h>
 #else
@@ -1138,14 +1250,16 @@ char *malloc ();
 #endif
 ]], [ if(malloc(0) != 0) return 1;])
 ],
-	[AC_MSG_RESULT([no])
-	AC_LIBOBJ(malloc)
-	AC_DEFINE_UNQUOTED([malloc], [rpl_malloc_$1], [Define if  replacement function should be used.])] ,
-	[AC_MSG_RESULT([yes])
-	AC_DEFINE([HAVE_MALLOC], 1, [If have GNU libc compatible malloc])],
-	[AC_MSG_RESULT([no (crosscompile)])
-	AC_LIBOBJ(malloc)
-	AC_DEFINE_UNQUOTED([malloc], [rpl_malloc_$1], [Define if  replacement function should be used.])] )
+		[ac_cv_func_malloc_0_nonnull=no],
+		[ac_cv_func_malloc_0_nonnull=yes],
+		[ac_cv_func_malloc_0_nonnull="no (crosscompile)"])
+	])
+	AS_IF([test "$ac_cv_func_malloc_0_nonnull" = yes],
+		[AC_DEFINE([HAVE_MALLOC], 1, [If have GNU libc compatible malloc])],
+	[
+		AC_LIBOBJ(malloc)
+		AC_DEFINE_UNQUOTED([malloc], [rpl_malloc_$1], [Define if  replacement function should be used.])
+	])
 ])
 
 dnl Define fallback for fseeko and ftello if needed.
@@ -1313,7 +1427,7 @@ AC_DEFUN([AHX_CONFIG_W32_FD_SET_T],
 #ifdef HAVE_WINSOCK2_H
 #define FD_SET_T (u_int)
 #else
-#define FD_SET_T 
+#define FD_SET_T
 #endif
 ])
 
@@ -1351,7 +1465,7 @@ dnl $3: define value, 1
 AC_DEFUN([AHX_CONFIG_FLAG_OMITTED],
 [#if defined($1) && !defined($2)
 #define $2 $3
-[#]endif ])
+[#]endif])
 
 dnl Wrapper for AHX_CONFIG_FLAG_OMITTED for -D style flags
 dnl $1: the -DNAME or -DNAME=value string.

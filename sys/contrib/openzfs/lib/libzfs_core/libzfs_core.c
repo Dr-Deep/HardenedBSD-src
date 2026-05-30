@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -95,9 +96,13 @@
 #define	BIG_PIPE_SIZE (64 * 1024) /* From sys/pipe.h */
 #endif
 
+#include "libzfs_core_impl.h"
+
 static int g_fd = -1;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static int g_refcount;
+
+static int g_ioc_trace = 0;
 
 #ifdef ZFS_DEBUG
 static zfs_ioc_t fail_ioc_cmd = ZFS_IOC_LAST;
@@ -151,6 +156,10 @@ libzfs_core_init(void)
 #ifdef ZFS_DEBUG
 	libzfs_core_debug_ioc();
 #endif
+
+	if (getenv("ZFS_IOC_TRACE"))
+		g_ioc_trace = 1;
+
 	(void) pthread_mutex_unlock(&g_lock);
 	return (0);
 }
@@ -168,6 +177,42 @@ libzfs_core_fini(void)
 		g_fd = -1;
 	}
 	(void) pthread_mutex_unlock(&g_lock);
+}
+
+int
+lzc_ioctl_fd(int fd, unsigned long ioc, zfs_cmd_t *zc)
+{
+	if (!g_ioc_trace)
+		return (lzc_ioctl_fd_os(fd, ioc, zc));
+
+	nvlist_t *nvl;
+
+	fprintf(stderr, "=== lzc_ioctl: call: ioc=0x%lx name=%s\n",
+	    ioc, zc->zc_name[0] ? zc->zc_name : "[none]");
+	if (zc->zc_nvlist_src) {
+		nvl = fnvlist_unpack(
+		    (void *)(uintptr_t)zc->zc_nvlist_src,
+		    zc->zc_nvlist_src_size);
+		nvlist_print(stderr, nvl);
+		fnvlist_free(nvl);
+	}
+
+	int rc = lzc_ioctl_fd_os(fd, ioc, zc);
+	int err = errno;
+
+	fprintf(stderr, "=== lzc_ioctl: result: ioc=0x%lx name=%s "
+	    "rc=%d errno=%d\n", ioc, zc->zc_name[0] ? zc->zc_name : "[none]",
+	    rc, (rc < 0 ? err : 0));
+	if (rc >= 0 && zc->zc_nvlist_dst) {
+		nvl = fnvlist_unpack(
+		    (void *)(uintptr_t)zc->zc_nvlist_dst,
+		    zc->zc_nvlist_dst_size);
+		nvlist_print(stderr, nvl);
+		fnvlist_free(nvl);
+	}
+
+	errno = err;
+	return (rc);
 }
 
 static int
@@ -235,7 +280,7 @@ lzc_ioctl(zfs_ioc_t ioc, const char *name,
 			break;
 		}
 	}
-	if (zc.zc_nvlist_dst_filled) {
+	if (zc.zc_nvlist_dst_filled && resultp != NULL) {
 		*resultp = fnvlist_unpack((void *)(uintptr_t)zc.zc_nvlist_dst,
 		    zc.zc_nvlist_dst_size);
 	}
@@ -245,6 +290,13 @@ out:
 		fnvlist_pack_free(packed, size);
 	free((void *)(uintptr_t)zc.zc_nvlist_dst);
 	return (error);
+}
+
+int
+lzc_scrub(zfs_ioc_t ioc, const char *name,
+    nvlist_t *source, nvlist_t **resultp)
+{
+	return (lzc_ioctl(ioc, name, source, resultp));
 }
 
 int
@@ -589,6 +641,12 @@ lzc_get_holds(const char *snapname, nvlist_t **holdsp)
 	return (lzc_ioctl(ZFS_IOC_GET_HOLDS, snapname, NULL, holdsp));
 }
 
+int
+lzc_get_props(const char *poolname, nvlist_t **props)
+{
+	return (lzc_ioctl(ZFS_IOC_POOL_GET_PROPS, poolname, NULL, props));
+}
+
 static unsigned int
 max_pipe_buffer(int infd)
 {
@@ -643,10 +701,12 @@ send_worker(void *arg)
 	unsigned int bufsiz = max_pipe_buffer(ctx->from);
 	ssize_t rd;
 
-	while ((rd = splice(ctx->from, NULL, ctx->to, NULL, bufsiz,
-	    SPLICE_F_MOVE | SPLICE_F_MORE)) > 0)
-		;
-
+	for (;;) {
+		rd = splice(ctx->from, NULL, ctx->to, NULL, bufsiz,
+		    SPLICE_F_MOVE | SPLICE_F_MORE);
+		if ((rd == -1 && errno != EINTR) || rd == 0)
+			break;
+	}
 	int err = (rd == -1) ? errno : 0;
 	close(ctx->from);
 	return ((void *)(uintptr_t)err);
@@ -956,6 +1016,39 @@ lzc_send_space(const char *snapname, const char *from,
 	    NULL, -1, spacep));
 }
 
+/*
+ * Query the progress of a send stream identified by the snapshot name and
+ * the file descriptor the stream is being written to.
+ *
+ * snapname    name of the snapshot being sent
+ * fd          file descriptor of the active send stream
+ * bytes_written  on success, set to the number of bytes sent so far
+ * blocks_visited on success, set to the number of logical blocks traversed
+ *
+ * Returns 0 on success.  Returns ENOENT if no send stream matching the
+ * snapshot name and file descriptor was found in the current process.
+ */
+int
+lzc_send_progress(const char *snapname, int fd, uint64_t *bytes_written,
+    uint64_t *blocks_visited)
+{
+	zfs_cmd_t zc = {"\0"};
+
+	if (bytes_written != NULL)
+		*bytes_written = 0;
+	if (blocks_visited != NULL)
+		*blocks_visited = 0;
+	(void) strlcpy(zc.zc_name, snapname, sizeof (zc.zc_name));
+	zc.zc_cookie = fd;
+	if (lzc_ioctl_fd(g_fd, ZFS_IOC_SEND_PROGRESS, &zc) != 0)
+		return (errno);
+	if (bytes_written != NULL)
+		*bytes_written = zc.zc_cookie;
+	if (blocks_visited != NULL)
+		*blocks_visited = zc.zc_objset_type;
+	return (0);
+}
+
 static int
 recv_read(int fd, void *buf, int ilen)
 {
@@ -1105,7 +1198,8 @@ recv_impl(const char *snapname, nvlist_t *recvdprops, nvlist_t *localprops,
 		fnvlist_free(outnvl);
 	} else {
 		zfs_cmd_t zc = {"\0"};
-		char *packed = NULL;
+		char *rp_packed = NULL;
+		char *lp_packed = NULL;
 		size_t size;
 
 		ASSERT3S(g_refcount, >, 0);
@@ -1114,14 +1208,14 @@ recv_impl(const char *snapname, nvlist_t *recvdprops, nvlist_t *localprops,
 		(void) strlcpy(zc.zc_value, snapname, sizeof (zc.zc_value));
 
 		if (recvdprops != NULL) {
-			packed = fnvlist_pack(recvdprops, &size);
-			zc.zc_nvlist_src = (uint64_t)(uintptr_t)packed;
+			rp_packed = fnvlist_pack(recvdprops, &size);
+			zc.zc_nvlist_src = (uint64_t)(uintptr_t)rp_packed;
 			zc.zc_nvlist_src_size = size;
 		}
 
 		if (localprops != NULL) {
-			packed = fnvlist_pack(localprops, &size);
-			zc.zc_nvlist_conf = (uint64_t)(uintptr_t)packed;
+			lp_packed = fnvlist_pack(localprops, &size);
+			zc.zc_nvlist_conf = (uint64_t)(uintptr_t)lp_packed;
 			zc.zc_nvlist_conf_size = size;
 		}
 
@@ -1156,8 +1250,10 @@ recv_impl(const char *snapname, nvlist_t *recvdprops, nvlist_t *localprops,
 				    zc.zc_nvlist_dst_size, errors, KM_SLEEP));
 		}
 
-		if (packed != NULL)
-			fnvlist_pack_free(packed, size);
+		if (rp_packed != NULL)
+			fnvlist_pack_free(rp_packed, size);
+		if (lp_packed != NULL)
+			fnvlist_pack_free(lp_packed, size);
 		free((void *)(uintptr_t)zc.zc_nvlist_dst);
 	}
 
@@ -1612,6 +1708,26 @@ lzc_pool_checkpoint_discard(const char *pool)
 }
 
 /*
+ * Load the requested data type for the specified pool.
+ */
+int
+lzc_pool_prefetch(const char *pool, zpool_prefetch_type_t type)
+{
+	int error;
+	nvlist_t *result = NULL;
+	nvlist_t *args = fnvlist_alloc();
+
+	fnvlist_add_int32(args, ZPOOL_PREFETCH_TYPE, type);
+
+	error = lzc_ioctl(ZFS_IOC_POOL_PREFETCH, pool, args, &result);
+
+	fnvlist_free(args);
+	fnvlist_free(result);
+
+	return (error);
+}
+
+/*
  * Executes a read-only channel program.
  *
  * A read-only channel program works programmatically the same way as a
@@ -1888,4 +2004,26 @@ int
 lzc_get_bootenv(const char *pool, nvlist_t **outnvl)
 {
 	return (lzc_ioctl(ZFS_IOC_GET_BOOTENV, pool, NULL, outnvl));
+}
+
+/*
+ * Prune the specified amount from the pool's dedup table.
+ */
+int
+lzc_ddt_prune(const char *pool, zpool_ddt_prune_unit_t unit, uint64_t amount)
+{
+	int error;
+
+	nvlist_t *result = NULL;
+	nvlist_t *args = fnvlist_alloc();
+
+	fnvlist_add_int32(args, DDT_PRUNE_UNIT, unit);
+	fnvlist_add_uint64(args, DDT_PRUNE_AMOUNT, amount);
+
+	error = lzc_ioctl(ZFS_IOC_DDT_PRUNE, pool, args, &result);
+
+	fnvlist_free(args);
+	fnvlist_free(result);
+
+	return (error);
 }

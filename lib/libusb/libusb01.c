@@ -1,6 +1,5 @@
-/* $FreeBSD$ */
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008 Hans Petter Selasky. All rights reserved.
  *
@@ -131,6 +130,8 @@ usb_get_transfer_by_ep_no(usb_dev_handle * dev, uint8_t ep_no)
 		bufsize = 4096;
 	} else if (speed == LIBUSB20_SPEED_SUPER) {
 		bufsize = 65536;
+	} else if (speed == LIBUSB20_SPEED_SUPER_PLUS) {
+		bufsize = 131072;
 	} else {
 		bufsize = 16384;
 	}

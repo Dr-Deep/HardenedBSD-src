@@ -26,7 +26,6 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGES.
  * 
- * $FreeBSD$
  */
 
 #ifndef _BHND_NVRAM_BHND_NVRAM_PRIVATE_H_
@@ -40,8 +39,7 @@
 
 #ifdef _KERNEL
 #include <sys/malloc.h>
-
-#include <machine/stdarg.h>
+#include <sys/stdarg.h>
 #else
 #include <stdarg.h>
 #include <stdbool.h>

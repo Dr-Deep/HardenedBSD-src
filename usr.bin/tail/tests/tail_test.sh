@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+# SPDX-License-Identifier: BSD-2-Clause
 #
 # Copyright (c) 2016 Alan Somers
 #
@@ -23,7 +23,6 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 
 atf_test_case empty_r
 empty_r_head()
@@ -330,10 +329,29 @@ follow_stdin_body()
 	atf_check kill $pid
 }
 
+atf_test_case follow_create
+follow_create_head()
+{
+	atf_set "descr" "Verify that -F works when a file is created"
+}
+follow_create_body()
+{
+	local pid
+
+	rm -f infile
+	tail -F infile > outfile &
+	pid=$!
+	sleep 0.1
+	seq 1 5 >infile
+	sleep 2
+	atf_check cmp infile outfile
+	atf_check kill $pid
+}
+
 atf_test_case follow_rename
 follow_rename_head()
 {
-	atf_set "descr" "Verify that -F works"
+	atf_set "descr" "Verify that -F works when a file is replaced"
 }
 follow_rename_body()
 {
@@ -343,6 +361,7 @@ follow_rename_body()
 	seq 1 3 > infile
 	tail -F infile > outfile &
 	pid=$!
+	sleep 0.1
 	seq 4 5 > infile_new
 	atf_check mv infile infile_old
 	atf_check mv infile_new infile
@@ -392,6 +411,64 @@ si_number_body() {
 	atf_check cmp outfile expectfile
 }
 
+atf_test_case no_lf_at_eof
+no_lf_at_eof_head()
+{
+	atf_set "descr" "File does not end in newline"
+}
+no_lf_at_eof_body()
+{
+	printf "a\nb\nc" >infile
+	atf_check -o inline:"c" tail -1 infile
+	atf_check -o inline:"b\nc" tail -2 infile
+	atf_check -o inline:"a\nb\nc" tail -3 infile
+	atf_check -o inline:"a\nb\nc" tail -4 infile
+}
+
+atf_test_case tail_b
+tail_b_head()
+{
+	atf_set "descr" "Test -b option"
+}
+tail_b_body()
+{
+	(jot -b a 256 ; jot -b b 256 ; jot -b c 256) >infile
+	(jot -b b 256 ; jot -b c 256) >outfile
+	# infile is 3 blocks long, outfile contains the last two
+	atf_check -o file:outfile tail -b +2 infile # start at the 2nd block
+	atf_check -o file:outfile tail -b -2 infile # 2 blocks from the end
+	atf_check -o file:outfile tail -b  2 infile # 2 blocks from the end
+}
+
+atf_test_case tail_c
+tail_c_head()
+{
+	atf_set "descr" "Test -c option"
+}
+tail_c_body()
+{
+	(jot -b a 256 ; jot -b b 256 ; jot -b c 256) >infile
+	(jot -b b 256 ; jot -b c 256) >outfile
+	# infile is 1536 bytes long, outfile contains the last 1024
+	atf_check -o file:outfile tail -c  +513 infile # start at the 513th byte
+	atf_check -o file:outfile tail -c -1024 infile # 1024 bytes from the end
+	atf_check -o file:outfile tail -c  1024 infile # 1024 bytes from the end
+}
+
+atf_test_case tail_n
+tail_n_head()
+{
+	atf_set "descr" "Test -n option"
+}
+tail_n_body()
+{
+	(jot -b a 256 ; jot -b b 256 ; jot -b c 256) >infile
+	(jot -b b 256 ; jot -b c 256) >outfile
+	# infile is 768 lines long, outfile contains the last 512
+	atf_check -o file:outfile tail -n +257 infile # start at the 257th line
+	atf_check -o file:outfile tail -n -512 infile # 512 lines from the end
+	atf_check -o file:outfile tail -n  512 infile # 512 lines from the end
+}
 
 atf_init_test_cases()
 {
@@ -412,8 +489,13 @@ atf_init_test_cases()
 	atf_add_test_case stdin
 	atf_add_test_case follow
 	atf_add_test_case follow_stdin
+	atf_add_test_case follow_create
 	atf_add_test_case follow_rename
 	atf_add_test_case silent_header
 	atf_add_test_case verbose_header
 	atf_add_test_case si_number
+	atf_add_test_case no_lf_at_eof
+	atf_add_test_case tail_b
+	atf_add_test_case tail_c
+	atf_add_test_case tail_n
 }

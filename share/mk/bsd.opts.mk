@@ -1,4 +1,3 @@
-# $FreeBSD$
 #
 # Option file for bmake builds. These options are available to all users of
 # bmake (including the source tree userland and kernel builds). They generally
@@ -31,7 +30,7 @@
 #
 
 .if !target(__<bsd.opts.mk>__)
-__<bsd.opts.mk>__:
+__<bsd.opts.mk>__:	.NOTMAIN
 
 .if !defined(_WITHOUT_SRCCONF)
 #
@@ -72,13 +71,17 @@ __DEFAULT_YES_OPTIONS = \
 
 __DEFAULT_NO_OPTIONS = \
     ASAN \
+    BRANCH_PROTECTION \
     CCACHE_BUILD \
     CTF \
     INSTALL_AS_USER \
     MANSPLITPKG \
-    PROFILE \
+    REPRODUCIBLE_BUILD \
+    REPRODUCIBLE_PATHS \
+    RUN_TESTS \
     STALE_STAGED \
-    UBSAN
+    UBSAN \
+    UNDEFINED_VERSION
 
 __DEFAULT_DEPENDENT_OPTIONS = \
     MAKE_CHECK_USE_SANDBOX/TESTS \
@@ -86,27 +89,15 @@ __DEFAULT_DEPENDENT_OPTIONS = \
     STAGING_PROG/STAGING \
     STALE_STAGED/STAGING \
 
-.include <bsd.mkopt.mk>
-
-#
-# Supported NO_* options (if defined, MK_* will be forced to "no",
-# regardless of user's setting).
-#
-# These are transitional and will disappaer in the FreeBSD 12.
-#
-.for var in \
-    CTF \
-    DEBUG_FILES \
-    INSTALLLIB \
-    MAN \
-    PROFILE \
-    WARNS \
-    WERROR
-.if defined(NO_${var})
-.error NO_${var} is defined, but deprecated. Please use MK_${var}=no instead.
-MK_${var}:=no
+.if ${MACHINE_CPUARCH} != "aarch64"
+BROKEN_OPTIONS+=	BRANCH_PROTECTION
 .endif
-.endfor
+
+__SINGLE_OPTIONS =
+
+.-include <local.opts.mk>
+
+.include <bsd.mkopt.mk>
 
 .include <bsd.cpu.mk>
 

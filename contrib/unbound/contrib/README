@@ -55,3 +55,8 @@ distribution but may be helpful.
   contributed by Andreas Schulze.
 * metrics.awk: awk script that can convert unbound-control stats to
   Prometheus metrics format output.
+* unbound.init_yocto: An init script to start and stop the server. Put it
+  in /etc/init.d/unbound to use it. It is for the Yocto Project, in
+  embedded systems, contributed by beni-sandu.
+* gost12.patch: adds ECC-GOST12 support for the informational RFC9558.
+  Contributed by Igor V. Ruzanov.

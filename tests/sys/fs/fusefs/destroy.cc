@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2019 The FreeBSD Foundation
  *
@@ -26,11 +26,12 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 extern "C" {
+#include <sys/param.h>
+#include <sys/mount.h>
+
 #include <fcntl.h>
 #include <pthread.h>
 #include <semaphore.h>
@@ -47,6 +48,30 @@ class Destroy: public FuseTest {};
 /* Tests for unexpected deaths of the server */
 class Death: public FuseTest{};
 
+/* Tests for the auto_unmount mount option*/
+class AutoUnmount: public FuseTest {
+virtual void SetUp() {
+	m_auto_unmount = true;
+	FuseTest::SetUp();
+}
+
+protected:
+/* Unmounting fusefs might be asynchronous with close, so use a retry loop */
+void assert_unmounted() {
+	struct statfs statbuf;
+
+	for (int retry = 100; retry > 0; retry--) {
+		ASSERT_EQ(0, statfs("mountpoint", &statbuf)) << strerror(errno);
+		if (strcmp("fusefs", statbuf.f_fstypename) != 0 &&
+		    strcmp("/dev/fuse", statbuf.f_mntfromname) != 0)
+			return;
+		nap();
+	}
+	FAIL() << "fusefs is still mounted";
+}
+
+};
+
 static void* open_th(void* arg) {
 	int fd;
 	const char *path = (const char*)arg;
@@ -58,11 +83,65 @@ static void* open_th(void* arg) {
 }
 
 /*
+ * With the auto_unmount mount option, the kernel will automatically unmount
+ * the file system when the server dies.
+ */
+TEST_F(AutoUnmount, auto_unmount)
+{
+	/* Kill the daemon */
+	m_mock->kill_daemon();
+
+	/* Use statfs to check that the file system is no longer mounted */
+	assert_unmounted();
+}
+
+/*
+ * When -o auto_unmount is used, the kernel should _not_ unmount the file
+ * system when any /dev/fuse file descriptor is closed, but only for the last
+ * one.
+ */
+TEST_F(AutoUnmount, dup)
+{
+	struct statfs statbuf;
+	int fuse2;
+
+	EXPECT_CALL(*m_mock, process(
+		ResultOf([](auto in) {
+			return (in.header.opcode == FUSE_STATFS);
+		}, Eq(true)),
+		_)
+	).WillOnce(Invoke(ReturnImmediate([=](auto in __unused, auto& out) {
+		SET_OUT_HEADER_LEN(out, statfs);
+	})));
+
+	fuse2 = dup_dev_fuse();
+
+	/*
+	 * Close one of the /dev/fuse file descriptors.  Close the duplicate
+	 * first so the daemon thread doesn't freak out when it gets a bunch of
+	 * EBADF errors.
+	 */
+	close(fuse2);
+
+	/* Use statfs to check that the file system is still mounted */
+	ASSERT_EQ(0, statfs("mountpoint", &statbuf)) << strerror(errno);
+	EXPECT_EQ(0, strcmp("fusefs", statbuf.f_fstypename));
+	EXPECT_EQ(0, strcmp("/dev/fuse", statbuf.f_mntfromname));
+
+	/*
+	 * Close the original file descriptor too. Now the file system should be
+	 * unmounted at last.
+	 */
+	m_mock->kill_daemon();
+	assert_unmounted();
+}
+
+/*
  * The server dies with unsent operations still on the message queue.
  * Check for any memory leaks like this:
  * 1) kldunload fusefs, if necessary
  * 2) kldload fusefs
- * 3) ./destroy --gtest_filter=Destroy.unsent_operations
+ * 3) ./destroy --gtest_filter=Death.unsent_operations
  * 4) kldunload fusefs
  * 5) check /var/log/messages for anything like this:
 Freed UMA keg (fuse_ticket) was not empty (31 items).  Lost 2 pages of memory.

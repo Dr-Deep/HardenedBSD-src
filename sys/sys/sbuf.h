@@ -1,8 +1,8 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2000-2008 Poul-Henning Kamp
- * Copyright (c) 2000-2008 Dag-Erling Coïdan Smørgrav
+ * Copyright (c) 2000-2008 Dag-Erling Smørgrav
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,8 +26,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *      $FreeBSD$
  */
 
 #ifndef _SYS_SBUF_H_
@@ -116,6 +114,9 @@ struct uio;
 struct sbuf	*sbuf_uionew(struct sbuf *, struct uio *, int *);
 int		 sbuf_bcopyin(struct sbuf *, const void *, size_t);
 int		 sbuf_copyin(struct sbuf *, const void *, size_t);
+#ifdef DDB
+int		 sbuf_db_printf_drain(void *arg, const char *data, int len);
+#endif
 #endif
 __END_DECLS
 

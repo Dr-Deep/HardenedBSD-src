@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 #include "clang/Basic/SanitizerSpecialCaseList.h"
+#include "llvm/ADT/STLExtras.h"
 
 using namespace clang;
 
@@ -33,7 +34,7 @@ SanitizerSpecialCaseList::createOrDie(const std::vector<std::string> &Paths,
   std::string Error;
   if (auto SSCL = create(Paths, VFS, Error))
     return SSCL;
-  llvm::report_fatal_error(Error);
+  llvm::report_fatal_error(StringRef(Error));
 }
 
 void SanitizerSpecialCaseList::createSanitizerSections() {
@@ -49,17 +50,27 @@ void SanitizerSpecialCaseList::createSanitizerSections() {
 #undef SANITIZER
 #undef SANITIZER_GROUP
 
-    SanitizerSections.emplace_back(Mask, S.Entries);
+    SanitizerSections.emplace_back(Mask, S.Entries, S.FileIdx);
   }
 }
 
 bool SanitizerSpecialCaseList::inSection(SanitizerMask Mask, StringRef Prefix,
                                          StringRef Query,
                                          StringRef Category) const {
-  for (auto &S : SanitizerSections)
-    if ((S.Mask & Mask) &&
-        SpecialCaseList::inSectionBlame(S.Entries, Prefix, Query, Category))
-      return true;
+  return inSectionBlame(Mask, Prefix, Query, Category) != NotFound;
+}
 
-  return false;
+std::pair<unsigned, unsigned>
+SanitizerSpecialCaseList::inSectionBlame(SanitizerMask Mask, StringRef Prefix,
+                                         StringRef Query,
+                                         StringRef Category) const {
+  for (const auto &S : llvm::reverse(SanitizerSections)) {
+    if (S.Mask & Mask) {
+      unsigned LineNum =
+          SpecialCaseList::inSectionBlame(S.Entries, Prefix, Query, Category);
+      if (LineNum > 0)
+        return {S.FileIdx, LineNum};
+    }
+  }
+  return NotFound;
 }

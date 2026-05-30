@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-4-Clause AND BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-4-Clause AND BSD-2-Clause
  *
  * Copyright (C) 1995, 1996 Wolfgang Solfrank.
  * Copyright (C) 1995, 1996 TooLs GmbH.
@@ -57,8 +57,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_fpu_emu.h"
 
 #include <sys/param.h>
@@ -116,7 +114,7 @@ typedef struct __ucontext32 {
 
 struct sigframe32 {
 	ucontext32_t		sf_uc;
-	struct siginfo32	sf_si;
+	struct __siginfo32	sf_si;
 };
 
 static int	grab_mcontext32(struct thread *td, mcontext32_t *, int flags);
@@ -137,7 +135,7 @@ _Static_assert(sizeof(siginfo_t) == 80, "siginfo_t size incorrect");
 #ifdef COMPAT_FREEBSD32
 _Static_assert(sizeof(mcontext32_t) == 1224, "mcontext32_t size incorrect");
 _Static_assert(sizeof(ucontext32_t) == 1280, "ucontext32_t size incorrect");
-_Static_assert(sizeof(struct siginfo32) == 64, "struct siginfo32 size incorrect");
+_Static_assert(sizeof(struct __siginfo32) == 64, "struct __siginfo32 size incorrect");
 #endif /* COMPAT_FREEBSD32 */
 #else /* powerpc */
 _Static_assert(sizeof(mcontext_t) == 1224, "mcontext_t size incorrect");
@@ -154,7 +152,7 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	struct thread *td;
 	struct proc *p;
 	#ifdef COMPAT_FREEBSD32
-	struct siginfo32 siginfo32;
+	struct __siginfo32 siginfo32;
 	struct sigframe32 sf32;
 	#endif
 	size_t sfpsize;
@@ -213,10 +211,10 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 		sfpsize = sizeof(sf);
 		#ifdef __powerpc64__
 		/*
-		 * 64-bit PPC defines a 288 byte scratch region
-		 * below the stack.
+		 * 64-bit PPC defines a 512 byte red zone below
+		 * the existing stack (ELF ABI v2 §2.2.2.4)
 		 */
-		rndfsize = 288 + roundup(sizeof(sf), 48);
+		rndfsize = 512 + roundup(sizeof(sf), 48);
 		#else
 		rndfsize = roundup(sizeof(sf), 16);
 		#endif
@@ -348,13 +346,6 @@ sys_sigreturn(struct thread *td, struct sigreturn_args *uap)
 	if (error != 0)
 		return (error);
 
-	/*
-	 * Save FPU state if needed. User may have changed it on
-	 * signal handler
-	 */
-	if (uc.uc_mcontext.mc_srr1 & PSL_FP)
-		save_fpu(td);
-
 	kern_sigprocmask(td, SIG_SETMASK, &uc.uc_sigmask, NULL, 0);
 
 	CTR3(KTR_SIG, "sigreturn: return td=%p pc=%#x sp=%#x",
@@ -431,6 +422,7 @@ grab_mcontext(struct thread *td, mcontext_t *mcp, int flags)
 	}
 
 	if (pcb->pcb_flags & PCB_VSX) {
+		mcp->mc_flags |= _MC_VS_VALID;
 		for (i = 0; i < 32; i++)
 			memcpy(&mcp->mc_vsxfpreg[i],
 			    &pcb->pcb_fpu.fpr[i].vsr[2], sizeof(double));
@@ -440,12 +432,14 @@ grab_mcontext(struct thread *td, mcontext_t *mcp, int flags)
 	 * Repeat for Altivec context
 	 */
 
-	if (pcb->pcb_flags & PCB_VEC) {
-		KASSERT(td == curthread,
-			("get_mcontext: fp save not curthread"));
-		critical_enter();
-		save_vec(td);
-		critical_exit();
+	if (pcb->pcb_flags & PCB_VECREGS) {
+		if (pcb->pcb_flags & PCB_VEC) {
+			KASSERT(td == curthread,
+				("get_mcontext: altivec save not curthread"));
+			critical_enter();
+			save_vec(td);
+			critical_exit();
+		}
 		mcp->mc_flags |= _MC_AV_VALID;
 		mcp->mc_vscr  = pcb->pcb_vec.vscr;
 		mcp->mc_vrsave =  pcb->pcb_vec.vrsave;
@@ -478,6 +472,7 @@ set_mcontext(struct thread *td, mcontext_t *mcp)
 	struct pcb *pcb;
 	struct trapframe *tf;
 	register_t tls;
+	register_t msr;
 	int i;
 
 	pcb = td->td_pcb;
@@ -525,8 +520,24 @@ set_mcontext(struct thread *td, mcontext_t *mcp)
 	 * Additionally, ensure VSX is disabled as well, as it is illegal
 	 * to leave it turned on when FP or VEC are off.
 	 */
-	tf->srr1 &= ~(PSL_FP | PSL_VSX);
-	pcb->pcb_flags &= ~(PCB_FPU | PCB_VSX);
+	tf->srr1 &= ~(PSL_FP | PSL_VSX | PSL_VEC);
+	pcb->pcb_flags &= ~(PCB_FPU | PCB_VSX | PCB_VEC);
+
+	/*
+	 * Ensure the FPU is also disabled in hardware.
+	 *
+	 * Without this, it's possible for the register reload to fail if we
+	 * don't switch to a FPU disabled context before resuming the original
+	 * thread.  Specifically, if the FPU/VSX unavailable exception is never
+	 * hit, then whatever data is still in the FP/VSX registers when
+	 * sigresume is callled will used by the resumed thread, instead of the
+	 * previously saved data from the mcontext.
+	 */
+	critical_enter();
+	msr = mfmsr() & ~(PSL_FP | PSL_VSX | PSL_VEC);
+	isync();
+	mtmsr(msr);
+	critical_exit();
 
 	if (mcp->mc_flags & _MC_FP_VALID) {
 		/* enable_fpu() will happen lazily on a fault */
@@ -536,23 +547,21 @@ set_mcontext(struct thread *td, mcontext_t *mcp)
 		for (i = 0; i < 32; i++) {
 			memcpy(&pcb->pcb_fpu.fpr[i].fpr, &mcp->mc_fpreg[i],
 			    sizeof(double));
-			memcpy(&pcb->pcb_fpu.fpr[i].vsr[2],
-			    &mcp->mc_vsxfpreg[i], sizeof(double));
+		}
+		if (mcp->mc_flags & _MC_VS_VALID) {
+			for (i = 0; i < 32; i++) {
+				memcpy(&pcb->pcb_fpu.fpr[i].vsr[2],
+				    &mcp->mc_vsxfpreg[i], sizeof(double));
+			}
 		}
 	}
 
 	if (mcp->mc_flags & _MC_AV_VALID) {
-		if ((pcb->pcb_flags & PCB_VEC) != PCB_VEC) {
-			critical_enter();
-			enable_vec(td);
-			critical_exit();
-		}
+		/* enable_vec() will happen lazily on a fault */
+		pcb->pcb_flags |= PCB_VECREGS;
 		pcb->pcb_vec.vscr = mcp->mc_vscr;
 		pcb->pcb_vec.vrsave = mcp->mc_vrsave;
 		memcpy(pcb->pcb_vec.vr, mcp->mc_avec, sizeof(mcp->mc_avec));
-	} else {
-		tf->srr1 &= ~PSL_VEC;
-		pcb->pcb_flags &= ~PCB_VEC;
 	}
 
 	return (0);
@@ -596,13 +605,13 @@ cleanup_power_extras(struct thread *td)
  * Keep this in sync with the assembly code in cpu_switch()!
  */
 void
-cpu_save_thread_regs(struct thread *td)
+cpu_update_pcb(struct thread *td)
 {
 	uint32_t pcb_flags;
 	struct pcb *pcb;
 
 	KASSERT(td == curthread,
-	    ("cpu_save_thread_regs: td is not curthread"));
+	    ("cpu_update_pcb: td is not curthread"));
 
 	pcb = td->td_pcb;
 
@@ -632,18 +641,6 @@ cpu_save_thread_regs(struct thread *td)
 	 */
 	if (pcb_flags & PCB_CDSCR)
 		pcb->pcb_dscr = mfspr(SPR_DSCRP);
-#endif
-
-#if defined(__SPE__)
-	/*
-	 * On E500v2, single-precision scalar instructions and access to
-	 * SPEFSCR may be used without PSL_VEC turned on, as long as they
-	 * limit themselves to the low word of the registers.
-	 *
-	 * As such, we need to unconditionally save SPEFSCR, even though
-	 * it is also updated in save_vec_nodrop().
-	 */
-	pcb->pcb_vec.vscr = mfspr(SPR_SPEFSCR);
 #endif
 
 	if (pcb_flags & PCB_FPU)
@@ -1080,10 +1077,15 @@ cpu_thread_clean(struct thread *td)
 void
 cpu_thread_alloc(struct thread *td)
 {
+}
+
+void
+cpu_thread_new_kstack(struct thread *td)
+{
 	struct pcb *pcb;
 
-	pcb = (struct pcb *)((td->td_kstack + td->td_kstack_pages * PAGE_SIZE -
-	    sizeof(struct pcb)) & ~0x2fUL);
+	pcb = (struct pcb *)__align_down(td_kstack_top(td) - sizeof(struct pcb),
+	    0x40);
 	td->td_pcb = pcb;
 	td->td_frame = (struct trapframe *)pcb - 1;
 }
@@ -1094,7 +1096,7 @@ cpu_thread_free(struct thread *td)
 }
 
 int
-cpu_set_user_tls(struct thread *td, void *tls_base)
+cpu_set_user_tls(struct thread *td, void *tls_base, int thr_flags __unused)
 {
 
 	if (SV_PROC_FLAG(td->td_proc, SV_LP64))
@@ -1113,7 +1115,7 @@ cpu_copy_thread(struct thread *td, struct thread *td0)
 
 	/* Ensure td0 pcb is up to date. */
 	if (td0 == curthread)
-		cpu_save_thread_regs(td0);
+		cpu_update_pcb(td0);
 
 	pcb2 = td->td_pcb;
 
@@ -1143,21 +1145,21 @@ cpu_copy_thread(struct thread *td, struct thread *td0)
 	pcb2->pcb_context[0] = pcb2->pcb_lr;
 	#endif
 	pcb2->pcb_cpu.aim.usr_vsid = 0;
-#ifdef __SPE__
-	pcb2->pcb_vec.vscr = SPEFSCR_DFLT;
-#endif
 
 	/* Setup to release spin count in fork_exit(). */
 	td->td_md.md_spinlock_count = 1;
 	td->td_md.md_saved_msr = psl_kernset;
 }
 
-void
+int
 cpu_set_upcall(struct thread *td, void (*entry)(void *), void *arg,
     stack_t *stack)
 {
 	struct trapframe *tf;
 	uintptr_t sp;
+	#ifdef __powerpc64__
+	int error;
+	#endif
 
 	tf = td->td_frame;
 	/* align stack and alloc space for frame ptr and saved LR */
@@ -1185,10 +1187,12 @@ cpu_set_upcall(struct thread *td, void (*entry)(void *), void *arg,
 			tf->srr0 = (register_t)entry;
 			/* ELFv2 ABI requires that the global entry point be in r12. */
 			tf->fixreg[12] = (register_t)entry;
-		}
-		else {
+		} else {
 			register_t entry_desc[3];
-			(void)copyin((void *)entry, entry_desc, sizeof(entry_desc));
+			error = copyin((void *)entry, entry_desc,
+			    sizeof(entry_desc));
+			if (error != 0)
+				return (error);
 			tf->srr0 = entry_desc[0];
 			tf->fixreg[2] = entry_desc[1];
 			tf->fixreg[11] = entry_desc[2];
@@ -1198,12 +1202,10 @@ cpu_set_upcall(struct thread *td, void (*entry)(void *), void *arg,
 	}
 
 	td->td_pcb->pcb_flags = 0;
-#ifdef __SPE__
-	td->td_pcb->pcb_vec.vscr = SPEFSCR_DFLT;
-#endif
 
 	td->td_retval[0] = (register_t)entry;
 	td->td_retval[1] = 0;
+	return (0);
 }
 
 static int

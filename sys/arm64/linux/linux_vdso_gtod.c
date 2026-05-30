@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2012 Konstantin Belousov <kib@FreeBSD.org>
  * Copyright (c) 2021 Dmitry Chagin <dchagin@FreeBSD.org>
@@ -26,26 +26,24 @@
  * SUCH DAMAGE.
  */
 
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/elf.h>
 #include <sys/errno.h>
-#include <sys/proc.h>
+#include <sys/stdarg.h>
 #include <sys/stddef.h>
+#include <sys/time.h>
 #define	_KERNEL
 #include <sys/vdso.h>
 #undef	_KERNEL
+
+#include <limits.h>
 #include <stdbool.h>
 
 #include <machine/atomic.h>
-#include <machine/stdarg.h>
 
 #include <arm64/linux/linux.h>
 #include <arm64/linux/linux_syscall.h>
 #include <compat/linux/linux_errno.h>
-#include <compat/linux/linux_timer.h>
+#include <compat/linux/linux_time.h>
 
 /* The kernel fixup this at vDSO install */
 uintptr_t *kern_timekeep_base = NULL;
@@ -54,7 +52,7 @@ uint32_t kern_tsc_selector = 0;
 static int
 write(int lfd, const void *lbuf, size_t lsize)
 {
-	register long svc asm("x8") = LINUX_SYS_write;
+	register long svc asm("x8") = LINUX_SYS_linux_write;
 	register int fd asm("x0") = lfd;
 	register const char *buf asm("x1") = lbuf;
 	register long size asm("x2") = lsize;

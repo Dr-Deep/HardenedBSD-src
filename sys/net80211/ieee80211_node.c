@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2001 Atsushi Onoe
  * Copyright (c) 2002-2009 Sam Leffler, Errno Consulting
@@ -27,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_wlan.h"
 
 #include <sys/param.h>
@@ -59,6 +57,12 @@ __FBSDID("$FreeBSD$");
 
 #include <net/bpf.h>
 
+#ifdef IEEE80211_DEBUG_REFCNT
+#define	__debrefcnt_used
+#else
+#define	__debrefcnt_used	__unused
+#endif
+
 /*
  * IEEE80211_NODE_HASHSIZE must be a power of 2.
  */
@@ -78,18 +82,21 @@ CTASSERT((IEEE80211_NODE_HASHSIZE & (IEEE80211_NODE_HASHSIZE-1)) == 0);
 
 static int ieee80211_sta_join1(struct ieee80211_node *);
 
+static struct ieee80211_node *ieee80211_alloc_node(
+	struct ieee80211_node_table *, struct ieee80211vap *,
+	const uint8_t macaddr[IEEE80211_ADDR_LEN], const char *, int);
 static struct ieee80211_node *node_alloc(struct ieee80211vap *,
 	const uint8_t [IEEE80211_ADDR_LEN]);
 static int node_init(struct ieee80211_node *);
 static void node_cleanup(struct ieee80211_node *);
 static void node_free(struct ieee80211_node *);
 static void node_age(struct ieee80211_node *);
-static int8_t node_getrssi(const struct ieee80211_node *);
-static void node_getsignal(const struct ieee80211_node *, int8_t *, int8_t *);
+static net80211_rssi_t node_getrssi(const struct ieee80211_node *);
+static void node_getsignal(const struct ieee80211_node *, net80211_rssi_t *, int8_t *);
 static void node_getmimoinfo(const struct ieee80211_node *,
 	struct ieee80211_mimo_info *);
 
-static void _ieee80211_free_node(struct ieee80211_node *);
+static void __ieee80211_free_node(struct ieee80211_node *);
 
 static void node_reclaim(struct ieee80211_node_table *nt,
 	struct ieee80211_node *ni);
@@ -164,11 +171,15 @@ ieee80211_node_vattach(struct ieee80211vap *vap)
 void
 ieee80211_node_latevattach(struct ieee80211vap *vap)
 {
+
+	/* XXX should ieee80211_vap_attach(), our only caller hold the lock? */
+	IEEE80211_UNLOCK_ASSERT(vap->iv_ic);
+
 	if (vap->iv_opmode == IEEE80211_M_HOSTAP) {
 		/* XXX should we allow max aid to be zero? */
 		if (vap->iv_max_aid < IEEE80211_AID_MIN) {
 			vap->iv_max_aid = IEEE80211_AID_MIN;
-			if_printf(vap->iv_ifp,
+			net80211_vap_printf(vap,
 			    "WARNING: max aid too small, changed to %d\n",
 			    vap->iv_max_aid);
 		}
@@ -178,13 +189,16 @@ ieee80211_node_latevattach(struct ieee80211vap *vap)
 			IEEE80211_M_NOWAIT | IEEE80211_M_ZERO);
 		if (vap->iv_aid_bitmap == NULL) {
 			/* XXX no way to recover */
-			printf("%s: no memory for AID bitmap, max aid %d!\n",
+			net80211_vap_printf(vap,
+			    "%s: no memory for AID bitmap, max aid %d!\n",
 			    __func__, vap->iv_max_aid);
 			vap->iv_max_aid = 0;
 		}
 	}
 
+	IEEE80211_LOCK(vap->iv_ic);
 	ieee80211_reset_bss(vap);
+	IEEE80211_UNLOCK(vap->iv_ic);
 
 	vap->iv_auth = ieee80211_authenticator_get(vap->iv_bss->ni_authmode);
 }
@@ -194,11 +208,16 @@ ieee80211_node_vdetach(struct ieee80211vap *vap)
 {
 	struct ieee80211com *ic = vap->iv_ic;
 
+	/* XXX should ieee80211_vap_detach(), our only caller hold the lock? */
+	IEEE80211_UNLOCK_ASSERT(vap->iv_ic);
+
 	ieee80211_node_table_reset(&ic->ic_sta, vap);
+	IEEE80211_LOCK(ic);
 	if (vap->iv_bss != NULL) {
 		ieee80211_free_node(vap->iv_bss);
 		vap->iv_update_bss(vap, NULL);
 	}
+	IEEE80211_UNLOCK(ic);
 	if (vap->iv_aid_bitmap != NULL) {
 		IEEE80211_FREE(vap->iv_aid_bitmap, M_80211_NODE);
 		vap->iv_aid_bitmap = NULL;
@@ -341,7 +360,8 @@ ieee80211_create_ibss(struct ieee80211vap* vap, struct ieee80211_channel *chan)
 		ieee80211_channel_type_char(chan),
 		chan->ic_flags);
 
-	ni = ieee80211_alloc_node(&ic->ic_sta, vap, vap->iv_myaddr);
+	ni = ieee80211_alloc_node(&ic->ic_sta, vap, vap->iv_myaddr,
+	    __func__, __LINE__);
 	if (ni == NULL) {
 		/* XXX recovery? */
 		return;
@@ -447,11 +467,14 @@ ieee80211_reset_bss(struct ieee80211vap *vap)
 	struct ieee80211com *ic = vap->iv_ic;
 	struct ieee80211_node *ni, *obss;
 
+	IEEE80211_LOCK_ASSERT(ic);
+
 	ieee80211_node_table_reset(&ic->ic_sta, vap);
 	/* XXX multi-bss: wrong */
 	ieee80211_vap_reset_erp(vap);
 
-	ni = ieee80211_alloc_node(&ic->ic_sta, vap, vap->iv_myaddr);
+	ni = ieee80211_alloc_node(&ic->ic_sta, vap, vap->iv_myaddr,
+	    __func__, __LINE__);
 	KASSERT(ni != NULL, ("unable to setup initial BSS node"));
 	obss = vap->iv_update_bss(vap, ieee80211_ref_node(ni));
 	if (obss != NULL) {
@@ -555,22 +578,22 @@ check_bss_debug(struct ieee80211vap *vap, struct ieee80211_node *ni)
 	    !IEEE80211_ADDR_EQ(vap->iv_des_bssid, ni->ni_bssid))
 		fail |= 0x20;
 
-	printf(" %c %s", fail ? '-' : '+', ether_sprintf(ni->ni_macaddr));
-	printf(" %s%c", ether_sprintf(ni->ni_bssid), fail & 0x20 ? '!' : ' ');
-	printf(" %3d%c",
+	net80211_printf(" %c %s", fail ? '-' : '+', ether_sprintf(ni->ni_macaddr));
+	net80211_printf(" %s%c", ether_sprintf(ni->ni_bssid), fail & 0x20 ? '!' : ' ');
+	net80211_printf(" %3d%c",
 	    ieee80211_chan2ieee(ic, ni->ni_chan), fail & 0x01 ? '!' : ' ');
-	printf(" %2dM%c", (rate & IEEE80211_RATE_VAL) / 2,
+	net80211_printf(" %2dM%c", (rate & IEEE80211_RATE_VAL) / 2,
 	    fail & 0x08 ? '!' : ' ');
-	printf(" %4s%c",
+	net80211_printf(" %4s%c",
 	    (ni->ni_capinfo & IEEE80211_CAPINFO_ESS) ? "ess" :
 	    (ni->ni_capinfo & IEEE80211_CAPINFO_IBSS) ? "ibss" :
 	    "????",
 	    fail & 0x02 ? '!' : ' ');
-	printf(" %3s%c ",
+	net80211_printf(" %3s%c ",
 	    (ni->ni_capinfo & IEEE80211_CAPINFO_PRIVACY) ?  "wep" : "no",
 	    fail & 0x04 ? '!' : ' ');
 	ieee80211_print_essid(ni->ni_essid, ni->ni_esslen);
-	printf("%s\n", fail & 0x10 ? "!" : "");
+	net80211_printf("%s\n", fail & 0x10 ? "!" : "");
 }
 #endif /* IEEE80211_DEBUG */
 
@@ -800,7 +823,7 @@ ieee80211_setupcurchan(struct ieee80211com *ic, struct ieee80211_channel *c)
 	 * based on what HT has done; it may further promote the
 	 * channel to VHT80 or above.
 	 */
-	if (ic->ic_vhtcaps != 0) {
+	if (ic->ic_vht_cap.vht_cap_info != 0) {
 		int flags = getvhtadjustflags(ic);
 		if (flags > ieee80211_vhtchanflags(c))
 			c = ieee80211_vht_adjust_channel(ic, c, flags);
@@ -845,7 +868,9 @@ ieee80211_sta_join1(struct ieee80211_node *selbs)
 	/*
 	 * Committed to selbs, setup state.
 	 */
+	IEEE80211_LOCK(ic);			/* XXX may recurse here, check callers. */
 	obss = vap->iv_update_bss(vap, selbs);	/* NB: caller assumed to bump refcnt */
+	IEEE80211_UNLOCK(ic);
 	/*
 	 * Check if old+new node have the same address in which
 	 * case we can reassociate when operating in sta mode.
@@ -858,11 +883,14 @@ ieee80211_sta_join1(struct ieee80211_node *selbs)
 		struct ieee80211_node_table *nt = obss->ni_table;
 
 		copy_bss(selbs, obss);
-		ieee80211_node_decref(obss);	/* iv_bss reference */
-
-		IEEE80211_NODE_LOCK(nt);
-		node_reclaim(nt, obss);		/* station table reference */
-		IEEE80211_NODE_UNLOCK(nt);
+		if (nt != NULL) {
+			ieee80211_node_decref(obss);	/* iv_bss reference */
+			IEEE80211_NODE_LOCK(nt);
+			node_reclaim(nt, obss);		/* station table reference */
+			IEEE80211_NODE_UNLOCK(nt);
+		} else {
+			ieee80211_free_node(obss);	/* iv_bss reference */
+		}
 
 		obss = NULL;		/* NB: guard against later use */
 	}
@@ -912,9 +940,10 @@ ieee80211_sta_join(struct ieee80211vap *vap, struct ieee80211_channel *chan,
 {
 	struct ieee80211com *ic = vap->iv_ic;
 	struct ieee80211_node *ni;
-	int do_ht = 0;
+	bool do_ht;
 
-	ni = ieee80211_alloc_node(&ic->ic_sta, vap, se->se_macaddr);
+	ni = ieee80211_alloc_node(&ic->ic_sta, vap, se->se_macaddr,
+	    __func__, __LINE__);
 	if (ni == NULL) {
 		/* XXX msg */
 		return 0;
@@ -987,6 +1016,7 @@ ieee80211_sta_join(struct ieee80211vap *vap, struct ieee80211_channel *chan,
 	 * association request/response, the only appropriate place
 	 * to setup the HT state is here.
 	 */
+	do_ht = false;
 	if (ni->ni_ies.htinfo_ie != NULL &&
 	    ni->ni_ies.htcap_ie != NULL &&
 	    vap->iv_flags_ht & IEEE80211_FHT_HT) {
@@ -994,7 +1024,7 @@ ieee80211_sta_join(struct ieee80211vap *vap, struct ieee80211_channel *chan,
 		ieee80211_ht_updateparams(ni,
 		    ni->ni_ies.htcap_ie,
 		    ni->ni_ies.htinfo_ie);
-		do_ht = 1;
+		do_ht = true;
 	}
 
 	/*
@@ -1003,22 +1033,19 @@ ieee80211_sta_join(struct ieee80211vap *vap, struct ieee80211_channel *chan,
 	 *
 	 * For now, don't allow 2GHz VHT operation.
 	 */
-	if (ni->ni_ies.vhtopmode_ie != NULL &&
+	if (do_ht && ni->ni_ies.vhtopmode_ie != NULL &&
 	    ni->ni_ies.vhtcap_ie != NULL &&
-	    vap->iv_flags_vht & IEEE80211_FVHT_VHT) {
+	    vap->iv_vht_flags & IEEE80211_FVHT_VHT) {
 		if (IEEE80211_IS_CHAN_2GHZ(ni->ni_chan)) {
-			printf("%s: BSS %6D: 2GHz channel, VHT info; ignoring\n",
-			    __func__,
-			    ni->ni_macaddr,
-			    ":");
+			net80211_vap_printf(ni->ni_vap,
+			    "%s: BSS %6D: 2GHz channel, VHT info; ignoring\n",
+			    __func__, ni->ni_macaddr, ":");
 		} else {
 			ieee80211_vht_node_init(ni);
 			ieee80211_vht_updateparams(ni,
 			    ni->ni_ies.vhtcap_ie,
 			    ni->ni_ies.vhtopmode_ie);
-			ieee80211_setup_vht_rates(ni, ni->ni_ies.vhtcap_ie,
-			    ni->ni_ies.vhtopmode_ie);
-			do_ht = 1;
+			ieee80211_setup_vht_rates(ni);
 		}
 	}
 
@@ -1139,7 +1166,7 @@ ieee80211_ies_expand(struct ieee80211_ies *ies)
 	while (ielen > 1) {
 		/* Make sure the given IE length fits into the total length. */
 		if ((2 + ie[1]) > ielen) {
-			printf("%s: malformed IEs! ies %p { data %p len %d }: "
+			net80211_printf("%s: malformed IEs! ies %p { data %p len %d }: "
 			    "ie %u len 2+%u > total len left %d\n",
 			    __func__, ies, ies->data, ies->len,
 			    ie[0], ie[1], ielen);
@@ -1314,7 +1341,7 @@ node_age(struct ieee80211_node *ni)
 		ieee80211_ht_node_age(ni);
 }
 
-static int8_t
+static net80211_rssi_t
 node_getrssi(const struct ieee80211_node *ni)
 {
 	uint32_t avgrssi = ni->ni_avgrssi;
@@ -1327,7 +1354,7 @@ node_getrssi(const struct ieee80211_node *ni)
 }
 
 static void
-node_getsignal(const struct ieee80211_node *ni, int8_t *rssi, int8_t *noise)
+node_getsignal(const struct ieee80211_node *ni, net80211_rssi_t *rssi, int8_t *noise)
 {
 	*rssi = node_getrssi(ni);
 	*noise = ni->ni_noise;
@@ -1392,9 +1419,10 @@ ieee80211_del_node_nt(struct ieee80211_node_table *nt,
 	ni->ni_table = NULL;
 }
 
-struct ieee80211_node *
+static struct ieee80211_node *
 ieee80211_alloc_node(struct ieee80211_node_table *nt,
-	struct ieee80211vap *vap, const uint8_t macaddr[IEEE80211_ADDR_LEN])
+	struct ieee80211vap *vap, const uint8_t macaddr[IEEE80211_ADDR_LEN],
+	const char *func __debrefcnt_used, int line __debrefcnt_used)
 {
 	struct ieee80211com *ic = nt->nt_ic;
 	struct ieee80211_node *ni;
@@ -1411,6 +1439,11 @@ ieee80211_alloc_node(struct ieee80211_node_table *nt,
 
 	IEEE80211_ADDR_COPY(ni->ni_macaddr, macaddr);
 	ieee80211_node_initref(ni);		/* mark referenced */
+#ifdef IEEE80211_DEBUG_REFCNT
+	IEEE80211_DPRINTF(vap, IEEE80211_MSG_NODE,
+	    "%s (%s:%u) %p<%s> refcnt %d\n", __func__, func, line, ni,
+	    ether_sprintf(ni->ni_macaddr), ieee80211_node_refcnt(ni));
+#endif
 	ni->ni_chan = IEEE80211_CHAN_ANYC;
 	ni->ni_authmode = IEEE80211_AUTH_OPEN;
 	ni->ni_txpower = ic->ic_txpowlimit;	/* max power */
@@ -1436,7 +1469,7 @@ ieee80211_alloc_node(struct ieee80211_node_table *nt,
 		vap->iv_stats.is_rx_nodealloc++;
 		ieee80211_psq_cleanup(&ni->ni_psq);
 		ieee80211_ratectl_node_deinit(ni);
-		_ieee80211_free_node(ni);
+		__ieee80211_free_node(ni);
 		return NULL;
 	}
 
@@ -1473,6 +1506,12 @@ ieee80211_tmp_node(struct ieee80211vap *vap,
 		IEEE80211_ADDR_COPY(ni->ni_macaddr, macaddr);
 		IEEE80211_ADDR_COPY(ni->ni_bssid, bss->ni_bssid);
 		ieee80211_node_initref(ni);		/* mark referenced */
+#ifdef IEEE80211_DEBUG_REFCNT
+		/* Only one caller so we skip func/line passing into the func. */
+		IEEE80211_DPRINTF(vap, IEEE80211_MSG_NODE,
+		    "%s (%s:%u) %p<%s> refcnt %d\n", __func__, "", -1, ni,
+		    ether_sprintf(ni->ni_macaddr), ieee80211_node_refcnt(ni));
+#endif
 		/* NB: required by ieee80211_fix_rate */
 		ieee80211_node_set_chan(ni, bss->ni_chan);
 		ieee80211_crypto_resetkey(vap, &ni->ni_ucastkey,
@@ -1488,7 +1527,7 @@ ieee80211_tmp_node(struct ieee80211vap *vap,
 			vap->iv_stats.is_rx_nodealloc++;
 			ieee80211_psq_cleanup(&ni->ni_psq);
 			ieee80211_ratectl_node_deinit(ni);
-			_ieee80211_free_node(ni);
+			__ieee80211_free_node(ni);
 			return NULL;
 		}
 
@@ -1506,7 +1545,7 @@ ieee80211_dup_bss(struct ieee80211vap *vap,
 	struct ieee80211com *ic = vap->iv_ic;
 	struct ieee80211_node *ni;
 
-	ni = ieee80211_alloc_node(&ic->ic_sta, vap, macaddr);
+	ni = ieee80211_alloc_node(&ic->ic_sta, vap, macaddr, __func__, __LINE__);
 	if (ni != NULL) {
 		struct ieee80211_node *bss = vap->iv_bss;
 		/*
@@ -1534,7 +1573,7 @@ ieee80211_node_create_wds(struct ieee80211vap *vap,
 	struct ieee80211_node *ni;
 
 	/* XXX check if node already in sta table? */
-	ni = ieee80211_alloc_node(&ic->ic_sta, vap, bssid);
+	ni = ieee80211_alloc_node(&ic->ic_sta, vap, bssid, __func__, __LINE__);
 	if (ni != NULL) {
 		ni->ni_wdsvap = vap;
 		IEEE80211_ADDR_COPY(ni->ni_bssid, bssid);
@@ -1567,8 +1606,9 @@ ieee80211_node_create_wds(struct ieee80211vap *vap,
 			 * ni_chan will be adjusted to an HT channel.
 			 */
 			ieee80211_ht_wds_init(ni);
-			if (vap->iv_flags_vht & IEEE80211_FVHT_VHT) {
-				printf("%s: TODO: vht_wds_init\n", __func__);
+			if (vap->iv_vht_flags & IEEE80211_FVHT_VHT) {
+				net80211_vap_printf(vap,
+				    "%s: TODO: vht_wds_init\n", __func__);
 			}
 		} else {
 			struct ieee80211_channel *c = ni->ni_chan;
@@ -1586,13 +1626,9 @@ ieee80211_node_create_wds(struct ieee80211vap *vap,
 }
 
 struct ieee80211_node *
-#ifdef IEEE80211_DEBUG_REFCNT
-ieee80211_find_node_locked_debug(struct ieee80211_node_table *nt,
-	const uint8_t macaddr[IEEE80211_ADDR_LEN], const char *func, int line)
-#else
-ieee80211_find_node_locked(struct ieee80211_node_table *nt,
-	const uint8_t macaddr[IEEE80211_ADDR_LEN])
-#endif
+_ieee80211_find_node_locked(struct ieee80211_node_table *nt,
+    const uint8_t macaddr[IEEE80211_ADDR_LEN],
+    const char *func __debrefcnt_used, int line __debrefcnt_used)
 {
 	struct ieee80211_node *ni;
 	int hash;
@@ -1617,32 +1653,22 @@ ieee80211_find_node_locked(struct ieee80211_node_table *nt,
 }
 
 struct ieee80211_node *
-#ifdef IEEE80211_DEBUG_REFCNT
-ieee80211_find_node_debug(struct ieee80211_node_table *nt,
-	const uint8_t macaddr[IEEE80211_ADDR_LEN], const char *func, int line)
-#else
-ieee80211_find_node(struct ieee80211_node_table *nt,
-	const uint8_t macaddr[IEEE80211_ADDR_LEN])
-#endif
+_ieee80211_find_node(struct ieee80211_node_table *nt,
+    const uint8_t macaddr[IEEE80211_ADDR_LEN],
+    const char *func __debrefcnt_used, int line __debrefcnt_used)
 {
 	struct ieee80211_node *ni;
 
 	IEEE80211_NODE_LOCK(nt);
-	ni = ieee80211_find_node_locked(nt, macaddr);
+	ni = _ieee80211_find_node_locked(nt, macaddr, func, line);
 	IEEE80211_NODE_UNLOCK(nt);
 	return ni;
 }
 
 struct ieee80211_node *
-#ifdef IEEE80211_DEBUG_REFCNT
-ieee80211_find_vap_node_locked_debug(struct ieee80211_node_table *nt,
-	const struct ieee80211vap *vap,
-	const uint8_t macaddr[IEEE80211_ADDR_LEN], const char *func, int line)
-#else
-ieee80211_find_vap_node_locked(struct ieee80211_node_table *nt,
-	const struct ieee80211vap *vap,
-	const uint8_t macaddr[IEEE80211_ADDR_LEN])
-#endif
+_ieee80211_find_vap_node_locked(struct ieee80211_node_table *nt,
+    const struct ieee80211vap *vap, const uint8_t macaddr[IEEE80211_ADDR_LEN],
+    const char *func __debrefcnt_used, int line __debrefcnt_used)
 {
 	struct ieee80211_node *ni;
 	int hash;
@@ -1668,27 +1694,21 @@ ieee80211_find_vap_node_locked(struct ieee80211_node_table *nt,
 }
 
 struct ieee80211_node *
-#ifdef IEEE80211_DEBUG_REFCNT
-ieee80211_find_vap_node_debug(struct ieee80211_node_table *nt,
-	const struct ieee80211vap *vap,
-	const uint8_t macaddr[IEEE80211_ADDR_LEN], const char *func, int line)
-#else
-ieee80211_find_vap_node(struct ieee80211_node_table *nt,
-	const struct ieee80211vap *vap,
-	const uint8_t macaddr[IEEE80211_ADDR_LEN])
-#endif
+_ieee80211_find_vap_node(struct ieee80211_node_table *nt,
+    const struct ieee80211vap *vap, const uint8_t macaddr[IEEE80211_ADDR_LEN],
+    const char *func __debrefcnt_used, int line __debrefcnt_used)
 {
 	struct ieee80211_node *ni;
 
 	IEEE80211_NODE_LOCK(nt);
-	ni = ieee80211_find_vap_node_locked(nt, vap, macaddr);
+	ni = _ieee80211_find_vap_node_locked(nt, vap, macaddr, func, line);
 	IEEE80211_NODE_UNLOCK(nt);
 	return ni;
 }
 
 /*
  * Fake up a node; this handles node discovery in adhoc mode.
- * Note that for the driver's benefit we we treat this like
+ * Note that for the driver's benefit we treat this like
  * an association so the driver has an opportunity to setup
  * it's private state.
  */
@@ -1822,7 +1842,7 @@ ieee80211_init_neighbor(struct ieee80211_node *ni,
 
 		if ((ni->ni_ies.vhtcap_ie != NULL) &&
 		    (ni->ni_ies.vhtopmode_ie != NULL) &&
-		    (ni->ni_vap->iv_flags_vht & IEEE80211_FVHT_VHT)) {
+		    (ni->ni_vap->iv_vht_flags & IEEE80211_FVHT_VHT)) {
 			do_vht_setup = 1;
 		}
 	}
@@ -1845,18 +1865,15 @@ ieee80211_init_neighbor(struct ieee80211_node *ni,
 
 		if (do_vht_setup) {
 			if (IEEE80211_IS_CHAN_2GHZ(ni->ni_chan)) {
-				printf("%s: BSS %6D: 2GHz channel, VHT info; ignoring\n",
-				    __func__,
-				    ni->ni_macaddr,
-				    ":");
+				net80211_vap_printf(ni->ni_vap,
+				    "%s: BSS %6D: 2GHz channel, VHT info; ignoring\n",
+				    __func__, ni->ni_macaddr, ":");
 			} else {
 				ieee80211_vht_node_init(ni);
 				ieee80211_vht_updateparams(ni,
 				    ni->ni_ies.vhtcap_ie,
 				    ni->ni_ies.vhtopmode_ie);
-				ieee80211_setup_vht_rates(ni,
-				    ni->ni_ies.vhtcap_ie,
-				    ni->ni_ies.vhtopmode_ie);
+				ieee80211_setup_vht_rates(ni);
 			}
 		}
 
@@ -1895,7 +1912,7 @@ ieee80211_init_neighbor(struct ieee80211_node *ni,
 /*
  * Do node discovery in adhoc mode on receipt of a beacon
  * or probe response frame.  Note that for the driver's
- * benefit we we treat this like an association so the
+ * benefit we treat this like an association so the
  * driver has an opportunity to setup it's private state.
  */
 struct ieee80211_node *
@@ -1933,11 +1950,12 @@ ieee80211_add_neighbor(struct ieee80211vap *vap,
 
 static __inline struct ieee80211_node *
 _find_rxnode(struct ieee80211_node_table *nt,
-    const struct ieee80211_frame_min *wh)
+    const struct ieee80211_frame_min *wh,
+    const char *func __debrefcnt_used, int line __debrefcnt_used)
 {
 	if (IS_BCAST_PROBEREQ(wh))
 		return NULL;		/* spam bcast probe req to all vap's */
-	return ieee80211_find_node_locked(nt, wh->i_addr2);
+	return _ieee80211_find_node_locked(nt, wh->i_addr2, func, line);
 }
 
 /*
@@ -1946,20 +1964,16 @@ _find_rxnode(struct ieee80211_node_table *nt,
  * we can return NULL if the sender is not in the table.
  */
 struct ieee80211_node *
-#ifdef IEEE80211_DEBUG_REFCNT
-ieee80211_find_rxnode_debug(struct ieee80211com *ic,
-	const struct ieee80211_frame_min *wh, const char *func, int line)
-#else
-ieee80211_find_rxnode(struct ieee80211com *ic,
-	const struct ieee80211_frame_min *wh)
-#endif
+_ieee80211_find_rxnode(struct ieee80211com *ic,
+    const struct ieee80211_frame_min *wh,
+    const char *func __debrefcnt_used, int line __debrefcnt_used)
 {
 	struct ieee80211_node_table *nt;
 	struct ieee80211_node *ni;
 
 	nt = &ic->ic_sta;
 	IEEE80211_NODE_LOCK(nt);
-	ni = _find_rxnode(nt, wh);
+	ni = _find_rxnode(nt, wh, func, line);
 	IEEE80211_NODE_UNLOCK(nt);
 
 	return ni;
@@ -1974,14 +1988,9 @@ ieee80211_find_rxnode(struct ieee80211com *ic,
  * key assigned to it.
  */
 struct ieee80211_node *
-#ifdef IEEE80211_DEBUG_REFCNT
-ieee80211_find_rxnode_withkey_debug(struct ieee80211com *ic,
-	const struct ieee80211_frame_min *wh, ieee80211_keyix keyix,
-	const char *func, int line)
-#else
-ieee80211_find_rxnode_withkey(struct ieee80211com *ic,
-	const struct ieee80211_frame_min *wh, ieee80211_keyix keyix)
-#endif
+_ieee80211_find_rxnode_withkey(struct ieee80211com *ic,
+    const struct ieee80211_frame_min *wh, ieee80211_keyix keyix,
+    const char *func __debrefcnt_used, int line __debrefcnt_used)
 {
 	struct ieee80211_node_table *nt;
 	struct ieee80211_node *ni;
@@ -1993,7 +2002,7 @@ ieee80211_find_rxnode_withkey(struct ieee80211com *ic,
 	else
 		ni = NULL;
 	if (ni == NULL) {
-		ni = _find_rxnode(nt, wh);
+		ni = _find_rxnode(nt, wh, func, line);
 		if (ni != NULL && nt->nt_keyixmap != NULL) {
 			/*
 			 * If the station has a unicast key cache slot
@@ -2029,14 +2038,9 @@ ieee80211_find_rxnode_withkey(struct ieee80211com *ic,
  * a data frame.  This handles node discovery in adhoc networks.
  */
 struct ieee80211_node *
-#ifdef IEEE80211_DEBUG_REFCNT
-ieee80211_find_txnode_debug(struct ieee80211vap *vap,
-	const uint8_t macaddr[IEEE80211_ADDR_LEN],
-	const char *func, int line)
-#else
-ieee80211_find_txnode(struct ieee80211vap *vap,
-	const uint8_t macaddr[IEEE80211_ADDR_LEN])
-#endif
+_ieee80211_find_txnode(struct ieee80211vap *vap,
+    const uint8_t macaddr[IEEE80211_ADDR_LEN],
+    const char *func __debrefcnt_used, int line __debrefcnt_used)
 {
 	struct ieee80211_node_table *nt = &vap->iv_ic->ic_sta;
 	struct ieee80211_node *ni;
@@ -2054,7 +2058,7 @@ ieee80211_find_txnode(struct ieee80211vap *vap,
 	    IEEE80211_IS_MULTICAST(macaddr))
 		ni = ieee80211_ref_node(vap->iv_bss);
 	else
-		ni = ieee80211_find_node_locked(nt, macaddr);
+		ni = _ieee80211_find_node_locked(nt, macaddr, func, line);
 	IEEE80211_NODE_UNLOCK(nt);
 
 	if (ni == NULL) {
@@ -2082,8 +2086,22 @@ ieee80211_find_txnode(struct ieee80211vap *vap,
 	return ni;
 }
 
+struct ieee80211_node *
+_ieee80211_ref_node(struct ieee80211_node *ni,
+    const char *func __debrefcnt_used, int line __debrefcnt_used)
+{
+
+#ifdef IEEE80211_DEBUG_REFCNT
+	IEEE80211_DPRINTF(ni->ni_vap, IEEE80211_MSG_NODE,
+	    "%s (%s:%u) %p<%s> refcnt %d\n", __func__, func, line, ni,
+	    ether_sprintf(ni->ni_macaddr), ieee80211_node_refcnt(ni)+1);
+#endif
+	ieee80211_node_incref(ni);
+	return (ni);
+}
+
 static void
-_ieee80211_free_node(struct ieee80211_node *ni)
+__ieee80211_free_node(struct ieee80211_node *ni)
 {
 	struct ieee80211_node_table *nt = ni->ni_table;
 
@@ -2132,11 +2150,8 @@ node_clear_keyixmap(struct ieee80211_node_table *nt, struct ieee80211_node *ni)
 }
 
 void
-#ifdef IEEE80211_DEBUG_REFCNT
-ieee80211_free_node_debug(struct ieee80211_node *ni, const char *func, int line)
-#else
-ieee80211_free_node(struct ieee80211_node *ni)
-#endif
+_ieee80211_free_node(struct ieee80211_node *ni,
+    const char *func __debrefcnt_used, int line __debrefcnt_used)
 {
 	struct ieee80211_node_table *nt = ni->ni_table;
 
@@ -2151,14 +2166,14 @@ ieee80211_free_node(struct ieee80211_node *ni)
 			/*
 			 * Last reference, reclaim state.
 			 */
-			_ieee80211_free_node(ni);
+			__ieee80211_free_node(ni);
 		} else if (ieee80211_node_refcnt(ni) == 1)
 			if (node_clear_keyixmap(nt, ni))
-				_ieee80211_free_node(ni);
+				__ieee80211_free_node(ni);
 		IEEE80211_NODE_UNLOCK(nt);
 	} else {
 		if (ieee80211_node_dectestref(ni))
-			_ieee80211_free_node(ni);
+			__ieee80211_free_node(ni);
 	}
 }
 
@@ -2191,7 +2206,7 @@ ieee80211_node_delucastkey(struct ieee80211_node *ni)
 		IEEE80211_NODE_LOCK(nt);
 	nikey = NULL;
 	status = 1;		/* NB: success */
-	if (ni->ni_ucastkey.wk_keyix != IEEE80211_KEYIX_NONE) {
+	if (!IEEE80211_KEY_UNDEFINED(&ni->ni_ucastkey)) {
 		keyix = ni->ni_ucastkey.wk_rxkeyix;
 		status = ieee80211_crypto_delkey(ni->ni_vap, &ni->ni_ucastkey);
 		if (nt->nt_keyixmap != NULL && keyix < nt->nt_keyixmax) {
@@ -2246,7 +2261,7 @@ node_reclaim(struct ieee80211_node_table *nt, struct ieee80211_node *ni)
 		 */
 		ieee80211_del_node_nt(nt, ni);
 	} else
-		_ieee80211_free_node(ni);
+		__ieee80211_free_node(ni);
 }
 
 /*
@@ -2326,7 +2341,7 @@ ieee80211_node_table_cleanup(struct ieee80211_node_table *nt)
 		int i;
 		for (i = 0; i < nt->nt_keyixmax; i++)
 			if (nt->nt_keyixmap[i] != NULL)
-				printf("%s: %s[%u] still active\n", __func__,
+				net80211_printf("%s: %s[%u] still active\n", __func__,
 					nt->nt_name, i);
 #endif
 		IEEE80211_FREE(nt->nt_keyixmap, M_80211_NODE);
@@ -2630,32 +2645,36 @@ void
 ieee80211_dump_node(struct ieee80211_node_table *nt __unused,
     struct ieee80211_node *ni)
 {
-	printf("%p: mac %s refcnt %d\n", ni,
+	net80211_printf("%p: mac %s refcnt %d\n", ni,
 		ether_sprintf(ni->ni_macaddr), ieee80211_node_refcnt(ni));
-	printf("\tauthmode %u flags 0x%x\n",
+	net80211_printf("\tauthmode %u flags 0x%x\n",
 		ni->ni_authmode, ni->ni_flags);
-	printf("\tassocid 0x%x txpower %u vlan %u\n",
+	net80211_printf("\tassocid 0x%x txpower %u vlan %u\n",
 		ni->ni_associd, ni->ni_txpower, ni->ni_vlan);
-	printf("\ttxseq %u rxseq %u fragno %u rxfragstamp %u\n",
+	net80211_printf("\ttxseq %u rxseq %u fragno %u rxfragstamp %u\n",
 		ni->ni_txseqs[IEEE80211_NONQOS_TID],
 		ni->ni_rxseqs[IEEE80211_NONQOS_TID] >> IEEE80211_SEQ_SEQ_SHIFT,
 		ni->ni_rxseqs[IEEE80211_NONQOS_TID] & IEEE80211_SEQ_FRAG_MASK,
 		ni->ni_rxfragstamp);
-	printf("\trssi %d noise %d intval %u capinfo 0x%x\n",
+	net80211_printf("\trssi %d noise %d intval %u capinfo 0x%x\n",
 		node_getrssi(ni), ni->ni_noise,
 		ni->ni_intval, ni->ni_capinfo);
-	printf("\tbssid %s essid \"%.*s\" channel %u:0x%x\n",
+	net80211_printf("\tbssid %s essid \"%.*s\" channel %u:0x%x\n",
 		ether_sprintf(ni->ni_bssid),
 		ni->ni_esslen, ni->ni_essid,
-		ni->ni_chan->ic_freq, ni->ni_chan->ic_flags);
-	printf("\tinact %u inact_reload %u txrate %u\n",
-		ni->ni_inact, ni->ni_inact_reload, ni->ni_txrate);
-	printf("\thtcap %x htparam %x htctlchan %u ht2ndchan %u\n",
+		(ni->ni_chan != IEEE80211_CHAN_ANYC) ? ni->ni_chan->ic_freq : 0,
+		(ni->ni_chan != IEEE80211_CHAN_ANYC) ? ni->ni_chan->ic_flags : 0);
+	net80211_printf("\tinact %u inact_reload %u txrate type %d dot11rate %u\n",
+		ni->ni_inact, ni->ni_inact_reload,
+		ni->ni_txrate.type,
+		ni->ni_txrate.dot11rate);
+	net80211_printf("\thtcap %x htparam %x htctlchan %u ht2ndchan %u\n",
 		ni->ni_htcap, ni->ni_htparam,
 		ni->ni_htctlchan, ni->ni_ht2ndchan);
-	printf("\thtopmode %x htstbc %x htchw %u\n",
-		ni->ni_htopmode, ni->ni_htstbc, ni->ni_chw);
-	printf("\tvhtcap %x freq1 %d freq2 %d vhtbasicmcs %x\n",
+	net80211_printf("\thtopmode %x htstbc %x htchw %d (%s)\n",
+		ni->ni_htopmode, ni->ni_htstbc,
+		ni->ni_chw, net80211_ni_chw_to_str(ni->ni_chw));
+	net80211_printf("\tvhtcap %x freq1 %d freq2 %d vhtbasicmcs %x\n",
 		ni->ni_vhtcap, (int) ni->ni_vht_chan1, (int) ni->ni_vht_chan2,
 		(int) ni->ni_vht_basicmcs);
 	/* XXX VHT state */
@@ -2812,7 +2831,7 @@ ieee80211_node_join(struct ieee80211_node *ni, int resp)
 	    ni->ni_flags & IEEE80211_NODE_QOS ? ", QoS" : "",
 	    /* XXX update for VHT string */
 	    ni->ni_flags & IEEE80211_NODE_HT ?
-		(ni->ni_chw == 40 ? ", HT40" : ", HT20") : "",
+		(ni->ni_chw == NET80211_STA_RX_BW_40 ? ", HT40" : ", HT20") : "",
 	    ni->ni_flags & IEEE80211_NODE_AMPDU ? " (+AMPDU)" : "",
 	    ni->ni_flags & IEEE80211_NODE_AMSDU ? " (+AMSDU)" : "",
 	    ni->ni_flags & IEEE80211_NODE_MIMO_RTS ? " (+SMPS-DYN)" :
@@ -3020,7 +3039,7 @@ get_hostap_rssi(void *arg, struct ieee80211_node *ni)
 {
 	struct rssiinfo *info = arg;
 	struct ieee80211vap *vap = ni->ni_vap;
-	int8_t rssi;
+	net80211_rssi_t rssi;
 
 	/* only associated stations */
 	if (ni->ni_associd == 0)
@@ -3037,7 +3056,7 @@ get_adhoc_rssi(void *arg, struct ieee80211_node *ni)
 {
 	struct rssiinfo *info = arg;
 	struct ieee80211vap *vap = ni->ni_vap;
-	int8_t rssi;
+	net80211_rssi_t rssi;
 
 	/* only neighbors */
 	/* XXX check bssid */
@@ -3056,7 +3075,7 @@ get_mesh_rssi(void *arg, struct ieee80211_node *ni)
 {
 	struct rssiinfo *info = arg;
 	struct ieee80211vap *vap = ni->ni_vap;
-	int8_t rssi;
+	net80211_rssi_t rssi;
 
 	/* only neighbors that peered successfully */
 	if (ni->ni_mlstate != IEEE80211_NODE_MESH_ESTABLISHED)
@@ -3069,7 +3088,7 @@ get_mesh_rssi(void *arg, struct ieee80211_node *ni)
 }
 #endif /* IEEE80211_SUPPORT_MESH */
 
-int8_t
+net80211_rssi_t
 ieee80211_getrssi(struct ieee80211vap *vap)
 {
 #define	NZ(x)	((x) == 0 ? 1 : (x))
@@ -3107,7 +3126,7 @@ ieee80211_getrssi(struct ieee80211vap *vap)
 }
 
 void
-ieee80211_getsignal(struct ieee80211vap *vap, int8_t *rssi, int8_t *noise)
+ieee80211_getsignal(struct ieee80211vap *vap, net80211_rssi_t *rssi, int8_t *noise)
 {
 
 	if (vap->iv_bss == NULL)		/* NB: shouldn't happen */
@@ -3116,4 +3135,231 @@ ieee80211_getsignal(struct ieee80211vap *vap, int8_t *rssi, int8_t *noise)
 	/* for non-station mode return avg'd rssi accounting */
 	if (vap->iv_opmode != IEEE80211_M_STA)
 		*rssi = ieee80211_getrssi(vap);
+}
+
+/**
+ * @brief Increment the given TID TX sequence, return the current one.
+ *
+ * @param ni ieee80211_node to operate on
+ * @param tid TID, or IEEE80211_NONQOS_TID
+ * @returns sequence number, from 0 .. 4095 inclusive, post increments
+ */
+ieee80211_seq ieee80211_tx_seqno_fetch_incr(struct ieee80211_node *ni,
+    uint8_t tid)
+{
+	ieee80211_seq seq;
+
+	seq = ni->ni_txseqs[tid];
+	ni->ni_txseqs[tid] = (ni->ni_txseqs[tid] + 1) % IEEE80211_SEQ_RANGE;
+	return (seq);
+}
+
+/**
+ * @brief Return the current sequence number for the given TID
+ *
+ * @param ni ieee80211_node to operate on
+ * @param tid TID, or IEEE80211_NONQOS_TID
+ * @returns sequence number, from 0 .. 4095 inclusive
+ */
+ieee80211_seq ieee80211_tx_seqno_fetch(const struct ieee80211_node *ni,
+    uint8_t tid)
+{
+	return (ni->ni_txseqs[tid]);
+}
+
+/**
+ * @brief return a dot11rate / ratecode representing the current transmit rate
+ *
+ * This is the API call for legacy / 802.11n drivers and rate control APIs
+ * which expect a dot11rate / ratecode representation for legacy and HT MCS
+ * rates.
+ *
+ * Drivers which support VHT should not use this API, as it will log an error
+ * and return a low rate if a VHT rate is selected.
+ *
+ * @param ni		the ieee80211_node to return the transmit rate for
+ * @returns		the dot11rate / ratecode for legacy/MCS, or the
+ *			lowest available dot11rate if it's VHT (and shouldn't
+ *			have been called.)
+ */
+uint8_t
+ieee80211_node_get_txrate_dot11rate(struct ieee80211_node *ni)
+{
+	switch (ni->ni_txrate.type) {
+	case IEEE80211_NODE_TXRATE_LEGACY:
+	case IEEE80211_NODE_TXRATE_HT:
+		return (ni->ni_txrate.dot11rate);
+		break;
+	case IEEE80211_NODE_TXRATE_VHT:
+	default:
+		net80211_vap_printf(ni->ni_vap,
+		    "%s: called for VHT / unknown rate (type %d)!\n",
+		    __func__, ni->ni_txrate.type);
+		return (12);		/* OFDM6 for now */
+	}
+}
+
+/**
+ * @brief return the txrate representing the current transmit rate
+ *
+ * This is the API call for drivers and rate control APIs to fetch
+ * rates.  It will populate a struct ieee80211_node_txrate with the
+ * current rate configuration to use.
+ *
+ * @param ni		the ieee80211_node to return the transmit rate for
+ * @param txrate	the struct ieee80211_node_txrate to populate
+ */
+void
+ieee80211_node_get_txrate(struct ieee80211_node *ni,
+    struct ieee80211_node_txrate *txr)
+{
+	MPASS(ni != NULL);
+	MPASS(txr != NULL);
+
+	*txr = ni->ni_txrate;
+}
+
+/**
+ * @brief Set the txrate representing the current transmit rate
+ *
+ * This is the API call for drivers and rate control APIs to set
+ * rates.  It will copy a struct ieee80211_node_txrate with the
+ * current rate configuration to use.
+ *
+ * @param ni		the ieee80211_node to return the transmit rate for
+ * @param txrate	the struct ieee80211_node_txrate to copy to the node
+ */
+void
+ieee80211_node_set_txrate(struct ieee80211_node *ni,
+    const struct ieee80211_node_txrate *txr)
+{
+	MPASS(ni != NULL);
+	MPASS(txr != NULL);
+
+	ni->ni_txrate = *txr;
+}
+
+/**
+ * @brief set the dot11rate / ratecode representing the current transmit rate
+ *
+ * This is the API call for legacy / 802.11n drivers and rate control APIs
+ * which expect a dot11rate / ratecode representation for legacy and HT MCS
+ * rates.
+ *
+ * @param ni		the ieee80211_node to return the transmit rate for
+ * @param dot11rate	the dot11rate rate code to use
+ */
+void
+ieee80211_node_set_txrate_dot11rate(struct ieee80211_node *ni,
+    uint8_t dot11Rate)
+{
+	if (dot11Rate & IEEE80211_RATE_MCS) {
+		ni->ni_txrate.type = IEEE80211_NODE_TXRATE_HT;
+		ni->ni_txrate.mcs = dot11Rate & IEEE80211_RATE_VAL;
+		ni->ni_txrate.nss = 0;
+		ni->ni_txrate.dot11rate = dot11Rate;
+	} else {
+		ni->ni_txrate.type = IEEE80211_NODE_TXRATE_LEGACY;
+		ni->ni_txrate.mcs = ni->ni_txrate.nss = 0;
+		ni->ni_txrate.dot11rate = dot11Rate;
+	}
+}
+
+/**
+ * @brief set the dot11rate / ratecode representing the current HT transmit rate
+ *
+ * This is the API call for 802.11n drivers and rate control APIs
+ * which expect a dot11rate / ratecode representation for legacy and HT MCS
+ * rates.  It expects an MCS rate code from 0 .. 76.
+ *
+ * @param ni		the ieee80211_node to return the transmit rate for
+ * @param mcs		the MCS rate to select
+ */
+void
+ieee80211_node_set_txrate_ht_mcsrate(struct ieee80211_node *ni,
+    uint8_t mcs)
+{
+	KASSERT(mcs <= 76, ("%s: MCS is not 0..76 (%d)", __func__, mcs));
+	if (mcs > 76) {
+		ic_printf(ni->ni_ic, "%s: invalid MCS (%d)\n", __func__, mcs);
+		return;
+	}
+
+	ni->ni_txrate.type = IEEE80211_NODE_TXRATE_HT;
+	ni->ni_txrate.mcs = mcs;
+	ni->ni_txrate.nss = 0;
+	ni->ni_txrate.dot11rate = IEEE80211_RATE_MCS | mcs;
+}
+
+/**
+ * @brief set the rate to the given VHT transmission rate.
+ *
+ * This sets the current transmit rate to the given VHT NSS/MCS.
+ *
+ * @param ni		the ieee80211_node to set the transmit rate for
+ * @param nss		the number of spatial streams
+ * @param mcs		the MCS rate to select
+ */
+void
+ieee80211_node_set_txrate_vht_rate(struct ieee80211_node *ni,
+    uint8_t nss, uint8_t mcs)
+{
+	MPASS(ni != NULL);
+
+	ni->ni_txrate.type = IEEE80211_NODE_TXRATE_VHT;
+	ni->ni_txrate.mcs = mcs;
+	ni->ni_txrate.nss = nss;
+	ni->ni_txrate.dot11rate = 0;
+}
+
+/*
+ * @brief Fetch the transmit rate for the given node in kbit/s.
+ *
+ * This currently only works for CCK, OFDM and HT rates.
+ *
+ * @param ni	struct ieee80211_node * to lookup
+ * @returns	current transmit rate in kbit/s
+ */
+uint32_t
+ieee80211_node_get_txrate_kbit(struct ieee80211_node *ni)
+{
+	uint32_t kbps;
+
+	switch (ni->ni_txrate.type) {
+	case IEEE80211_NODE_TXRATE_LEGACY:
+		kbps = ni->ni_txrate.dot11rate * 500;
+		break;
+	case IEEE80211_NODE_TXRATE_HT:
+		/* Note: Valid for MCS 0..76 */
+		{
+			const struct ieee80211_mcs_rates *mcs =
+			    &ieee80211_htrates[ni->ni_txrate.dot11rate &
+			    ~IEEE80211_RATE_MCS];
+
+			if (IEEE80211_IS_CHAN_HT40(ni->ni_chan)) {
+				if (ni->ni_flags & IEEE80211_NODE_SGI40)
+					kbps = mcs->ht40_rate_800ns * 500;
+				else
+					kbps = mcs->ht40_rate_400ns * 500;
+			} else {
+				if (ni->ni_flags & IEEE80211_NODE_SGI20)
+					kbps = mcs->ht20_rate_800ns * 500;
+				else
+					kbps = mcs->ht20_rate_400ns * 500;
+			}
+		}
+		break;
+	case IEEE80211_NODE_TXRATE_VHT:
+		/* Note: valid for VHT rates, assumes long-GI for now */
+		kbps = ieee80211_phy_vht_get_mcs_kbit(ni->ni_chw,
+		    ni->ni_txrate.nss, ni->ni_txrate.mcs, false);
+		break;
+	default:
+		net80211_vap_printf(ni->ni_vap,
+		    "%s: called for unknown rate (type %d)!\n", __func__,
+		    ni->ni_txrate.type);
+		return (0);
+	}
+
+	return (kbps);
 }

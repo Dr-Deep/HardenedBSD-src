@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 SYSDIR?=	${SRCTOP}/sys
 
 .PATH:		${SYSDIR}/cddl/contrib/opensolaris/uts/common/dtrace
@@ -19,13 +17,12 @@ CFLAGS+=	-I${SYSDIR}/cddl/contrib/opensolaris/uts/powerpc
 .PATH:		${SYSDIR}/cddl/contrib/opensolaris/uts/powerpc/dtrace
 .endif
 
-.PATH:		${SYSDIR}/contrib/openzfs/module/unicode
+.PATH:		${SYSDIR}/contrib/openzfs/module/zfs
 SRCS+=		u8_textprep.c
 
 .include <bsd.kmod.mk>
 
 CFLAGS+=	-include ${SYSDIR}/cddl/compat/opensolaris/sys/debug_compat.h
 
-CWARNFLAGS+=	${OPENZFS_CWARNFLAGS}
 CWARNFLAGS+=	-Wno-cast-qual
 CWARNFLAGS+=	-Wno-unused

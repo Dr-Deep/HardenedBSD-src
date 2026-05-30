@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2010 David Xu <davidxu@freebsd.org>
  * All rights reserved.
@@ -25,9 +25,6 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <stdlib.h>
 #include "thr_private.h"
@@ -65,7 +62,7 @@ _sleepq_alloc(void)
 {
 	struct sleepqueue *sq;
 
-	sq = calloc(1, sizeof(struct sleepqueue));
+	sq = __thr_calloc(1, sizeof(struct sleepqueue));
 	TAILQ_INIT(&sq->sq_blocked);
 	SLIST_INIT(&sq->sq_freeq);
 	return (sq);
@@ -74,7 +71,7 @@ _sleepq_alloc(void)
 void
 _sleepq_free(struct sleepqueue *sq)
 {
-	free(sq);
+	__thr_free(sq);
 }
 
 void

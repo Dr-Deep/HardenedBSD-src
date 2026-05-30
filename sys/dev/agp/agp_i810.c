@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2000 Doug Rabson
  * Copyright (c) 2000 Ruslan Ermilov
@@ -40,8 +40,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #if 0
 #define	KTR_AGP_I810	KTR_DEV
 #else
@@ -682,9 +680,9 @@ static void
 agp_i810_identify(driver_t *driver, device_t parent)
 {
 
-	if (device_find_child(parent, "agp", -1) == NULL &&
+	if (device_find_child(parent, "agp", DEVICE_UNIT_ANY) == NULL &&
 	    agp_i810_match(parent))
-		device_add_child(parent, "agp", -1);
+		device_add_child(parent, "agp", DEVICE_UNIT_ANY);
 }
 
 static int
@@ -1189,7 +1187,7 @@ agp_i810_install_gatt(device_t dev)
 		sc->dcache_size = 0;
 
 	/* According to the specs the gatt on the i810 must be 64k. */
-	sc->gatt->ag_virtual = (void *)kmem_alloc_contig(64 * 1024, M_NOWAIT |
+	sc->gatt->ag_virtual = kmem_alloc_contig(64 * 1024, M_NOWAIT |
 	    M_ZERO, 0, ~0, PAGE_SIZE, 0, VM_MEMATTR_WRITE_COMBINING);
 	if (sc->gatt->ag_virtual == NULL) {
 		if (bootverbose)
@@ -1236,7 +1234,7 @@ agp_gen4_install_gatt(device_t dev, const vm_size_t gtt_offset)
 	struct agp_i810_softc *sc;
 
 	sc = device_get_softc(dev);
-	pmap_change_attr((vm_offset_t)rman_get_virtual(sc->sc_res[0]) +
+	pmap_change_attr((char *)rman_get_virtual(sc->sc_res[0]) +
 	    gtt_offset, rman_get_size(sc->sc_res[0]) - gtt_offset,
 	    VM_MEMATTR_WRITE_COMBINING);
 	agp_i830_install_gatt_init(sc);
@@ -1329,7 +1327,7 @@ agp_i810_deinstall_gatt(device_t dev)
 
 	sc = device_get_softc(dev);
 	bus_write_4(sc->sc_res[0], AGP_I810_PGTBL_CTL, 0);
-	kmem_free((vm_offset_t)sc->gatt->ag_virtual, 64 * 1024);
+	kmem_free(sc->gatt->ag_virtual, 64 * 1024);
 }
 
 static void
@@ -1798,7 +1796,7 @@ agp_i810_free_memory(device_t dev, struct agp_memory *mem)
 			vm_page_unwire(m, PQ_INACTIVE);
 			VM_OBJECT_WUNLOCK(mem->am_obj);
 		} else {
-			contigfree(sc->argb_cursor, mem->am_size, M_AGP);
+			free(sc->argb_cursor, M_AGP);
 			sc->argb_cursor = NULL;
 		}
 	}
@@ -1915,7 +1913,7 @@ static device_method_t agp_i810_methods[] = {
 	DEVMETHOD(agp_bind_memory,	agp_i810_bind_memory),
 	DEVMETHOD(agp_unbind_memory,	agp_i810_unbind_memory),
 	DEVMETHOD(agp_chipset_flush,	agp_intel_gtt_chipset_flush),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t agp_i810_driver = {
@@ -2027,7 +2025,7 @@ agp_i915_chipset_flush_alloc_page(device_t dev, uint64_t start, uint64_t end)
 	vga = device_get_parent(dev);
 	sc->sc_flush_page_rid = 100;
 	sc->sc_flush_page_res = BUS_ALLOC_RESOURCE(device_get_parent(vga), dev,
-	    SYS_RES_MEMORY, &sc->sc_flush_page_rid, start, end, PAGE_SIZE,
+	    SYS_RES_MEMORY, sc->sc_flush_page_rid, start, end, PAGE_SIZE,
 	    RF_ACTIVE);
 	if (sc->sc_flush_page_res == NULL) {
 		device_printf(dev, "Failed to allocate flush page at 0x%jx\n",
@@ -2053,10 +2051,10 @@ agp_i915_chipset_flush_free_page(device_t dev)
 	vga = device_get_parent(dev);
 	if (sc->sc_flush_page_res == NULL)
 		return;
-	BUS_DEACTIVATE_RESOURCE(device_get_parent(vga), dev, SYS_RES_MEMORY,
-	    sc->sc_flush_page_rid, sc->sc_flush_page_res);
-	BUS_RELEASE_RESOURCE(device_get_parent(vga), dev, SYS_RES_MEMORY,
-	    sc->sc_flush_page_rid, sc->sc_flush_page_res);
+	BUS_DEACTIVATE_RESOURCE(device_get_parent(vga), dev,
+	    sc->sc_flush_page_res);
+	BUS_RELEASE_RESOURCE(device_get_parent(vga), dev,
+	    sc->sc_flush_page_res);
 }
 
 static int

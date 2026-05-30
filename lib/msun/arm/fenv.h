@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2004-2005 David Schultz <das@FreeBSD.ORG>
  * All rights reserved.
@@ -24,13 +24,12 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef	_FENV_H_
 #define	_FENV_H_
 
+#include <sys/cdefs.h>
 #include <sys/_types.h>
 
 #ifndef	__fenv_static
@@ -112,8 +111,43 @@ int fegetexcept(void);
 
 #define _FPU_MASK_SHIFT	8
 
+int feclearexcept(int);
+int fegetexceptflag(fexcept_t *, int);
+int fesetexceptflag(const fexcept_t *, int);
+int feraiseexcept(int);
+int fetestexcept(int);
+int fegetround(void);
+int fesetround(int);
+int fegetenv(fenv_t *);
+int feholdexcept(fenv_t *);
+int fesetenv(const fenv_t *);
+int feupdateenv(const fenv_t *);
+int fegetexcept(void);
+#if __BSD_VISIBLE
+int feenableexcept(int);
+int fedisableexcept(int);
+int fegetexcept(void);
+#endif
+
+#define	feclearexcept(a)	__feclearexcept_int(a)
+#define	fegetexceptflag(e, a)	__fegetexceptflag_int(e, a)
+#define	fesetexceptflag(e, a)	__fesetexceptflag_int(e, a)
+#define	feraiseexcept(a)	__feraiseexcept_int(a)
+#define	fetestexcept(a)		__fetestexcept_int(a)
+#define	fegetround()		__fegetround_int()
+#define	fesetround(a)		__fesetround_int(a)
+#define	fegetenv(e)		__fegetenv_int(e)
+#define	feholdexcept(e)		__feholdexcept_int(e)
+#define	fesetenv(e)		__fesetenv_int(e)
+#define	feupdateenv(e)		__feupdateenv_int(e)
+#if __BSD_VISIBLE
+#define	feenableexcept(a)	__feenableexcept_int(a)
+#define	fedisableexcept(a)	__fedisableexcept_int(a)
+#define	fegetexcept()		__fegetexcept_int()
+#endif
+
 __fenv_static inline int
-feclearexcept(int __excepts)
+__feclearexcept_int(int __excepts)
 {
 	fexcept_t __fpsr;
 
@@ -124,7 +158,7 @@ feclearexcept(int __excepts)
 }
 
 __fenv_static inline int
-fegetexceptflag(fexcept_t *__flagp, int __excepts)
+__fegetexceptflag_int(fexcept_t *__flagp, int __excepts)
 {
 	fexcept_t __fpsr;
 
@@ -134,7 +168,7 @@ fegetexceptflag(fexcept_t *__flagp, int __excepts)
 }
 
 __fenv_static inline int
-fesetexceptflag(const fexcept_t *__flagp, int __excepts)
+__fesetexceptflag_int(const fexcept_t *__flagp, int __excepts)
 {
 	fexcept_t __fpsr;
 
@@ -146,7 +180,7 @@ fesetexceptflag(const fexcept_t *__flagp, int __excepts)
 }
 
 __fenv_static inline int
-feraiseexcept(int __excepts)
+__feraiseexcept_int(int __excepts)
 {
 	fexcept_t __ex = __excepts;
 
@@ -155,7 +189,7 @@ feraiseexcept(int __excepts)
 }
 
 __fenv_static inline int
-fetestexcept(int __excepts)
+__fetestexcept_int(int __excepts)
 {
 	fexcept_t __fpsr;
 
@@ -164,7 +198,7 @@ fetestexcept(int __excepts)
 }
 
 __fenv_static inline int
-fegetround(void)
+__fegetround_int(void)
 {
 	fenv_t __fpsr;
 
@@ -173,7 +207,7 @@ fegetround(void)
 }
 
 __fenv_static inline int
-fesetround(int __round)
+__fesetround_int(int __round)
 {
 	fenv_t __fpsr;
 
@@ -185,7 +219,7 @@ fesetround(int __round)
 }
 
 __fenv_static inline int
-fegetenv(fenv_t *__envp)
+__fegetenv_int(fenv_t *__envp)
 {
 
 	vmrs_fpscr(*__envp);
@@ -193,7 +227,7 @@ fegetenv(fenv_t *__envp)
 }
 
 __fenv_static inline int
-feholdexcept(fenv_t *__envp)
+__feholdexcept_int(fenv_t *__envp)
 {
 	fenv_t __env;
 
@@ -205,7 +239,7 @@ feholdexcept(fenv_t *__envp)
 }
 
 __fenv_static inline int
-fesetenv(const fenv_t *__envp)
+__fesetenv_int(const fenv_t *__envp)
 {
 
 	vmsr_fpscr(*__envp);
@@ -213,7 +247,7 @@ fesetenv(const fenv_t *__envp)
 }
 
 __fenv_static inline int
-feupdateenv(const fenv_t *__envp)
+__feupdateenv_int(const fenv_t *__envp)
 {
 	fexcept_t __fpsr;
 
@@ -228,7 +262,7 @@ feupdateenv(const fenv_t *__envp)
 /* We currently provide no external definitions of the functions below. */
 
 __fenv_static inline int
-feenableexcept(int __mask)
+__feenableexcept_int(int __mask)
 {
 	fenv_t __old_fpsr, __new_fpsr;
 
@@ -240,7 +274,7 @@ feenableexcept(int __mask)
 }
 
 __fenv_static inline int
-fedisableexcept(int __mask)
+__fedisableexcept_int(int __mask)
 {
 	fenv_t __old_fpsr, __new_fpsr;
 
@@ -252,7 +286,7 @@ fedisableexcept(int __mask)
 }
 
 __fenv_static inline int
-fegetexcept(void)
+__fegetexcept_int(void)
 {
 	fenv_t __fpsr;
 

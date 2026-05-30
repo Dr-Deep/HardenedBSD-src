@@ -1,8 +1,6 @@
-#	@(#)Makefile	8.1 (Berkeley) 6/6/93
-# $FreeBSD$
-
 .include <src.opts.mk>
 
+PACKAGE= toolchain
 PROG=	indent
 SRCS=	indent.c io.c lexi.c parse.c pr_comment.c args.c
 

@@ -25,8 +25,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
 * X-Power AXP209/AXP211 PMU for Allwinner SoCs
 */
@@ -53,7 +51,7 @@ __FBSDID("$FreeBSD$");
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
-#include <dev/extres/regulator/regulator.h>
+#include <dev/regulator/regulator.h>
 
 #include <arm/allwinner/axp209reg.h>
 
@@ -1324,7 +1322,7 @@ axp2xx_attach(device_t dev)
 	case AXP209:
 		sc->pins = axp209_pins;
 		sc->npins = nitems(axp209_pins);
-		sc->gpiodev = gpiobus_attach_bus(dev);
+		sc->gpiodev = gpiobus_add_bus(dev);
 
 		sc->sensors = axp209_sensors;
 		sc->nsensors = nitems(axp209_sensors);
@@ -1335,7 +1333,7 @@ axp2xx_attach(device_t dev)
 	case AXP221:
 		sc->pins = axp221_pins;
 		sc->npins = nitems(axp221_pins);
-		sc->gpiodev = gpiobus_attach_bus(dev);
+		sc->gpiodev = gpiobus_add_bus(dev);
 
 		sc->sensors = axp221_sensors;
 		sc->nsensors = nitems(axp221_sensors);
@@ -1376,6 +1374,7 @@ axp2xx_attach(device_t dev)
 		}
 	}
 
+	bus_attach_children(dev);
 	return (0);
 }
 

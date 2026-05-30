@@ -1,4 +1,4 @@
-/*	$NetBSD: emacs.c,v 1.36 2016/05/09 21:46:56 christos Exp $	*/
+/*	$NetBSD: emacs.c,v 1.39 2025/12/14 18:07:40 christos Exp $	*/
 
 /*-
  * Copyright (c) 1992, 1993
@@ -37,7 +37,7 @@
 #if 0
 static char sccsid[] = "@(#)emacs.c	8.1 (Berkeley) 6/4/93";
 #else
-__RCSID("$NetBSD: emacs.c,v 1.36 2016/05/09 21:46:56 christos Exp $");
+__RCSID("$NetBSD: emacs.c,v 1.39 2025/12/14 18:07:40 christos Exp $");
 #endif
 #endif /* not lint && not SCCSID */
 
@@ -99,7 +99,7 @@ em_delete_next_word(EditLine *el, wint_t c __attribute__((__unused__)))
 	if (el->el_line.cursor == el->el_line.lastchar)
 		return CC_ERROR;
 
-	cp = c__next_word(el->el_line.cursor, el->el_line.lastchar,
+	cp = c__next_word(el, el->el_line.cursor, el->el_line.lastchar,
 	    el->el_state.argument, ce__isword);
 
 	for (p = el->el_line.cursor, kp = el->el_chared.c_kill.buf; p < cp; p++)
@@ -134,11 +134,11 @@ em_yank(EditLine *el, wint_t c __attribute__((__unused__)))
 		return CC_ERROR;
 
 	el->el_chared.c_kill.mark = el->el_line.cursor;
-	cp = el->el_line.cursor;
 
 	/* open the space, */
 	c_insert(el,
 	    (int)(el->el_chared.c_kill.last - el->el_chared.c_kill.buf));
+	cp = el->el_line.cursor;
 	/* copy the chars */
 	for (kp = el->el_chared.c_kill.buf; kp < el->el_chared.c_kill.last; kp++)
 		*cp++ = *kp;
@@ -266,7 +266,7 @@ em_next_word(EditLine *el, wint_t c __attribute__((__unused__)))
 	if (el->el_line.cursor == el->el_line.lastchar)
 		return CC_ERROR;
 
-	el->el_line.cursor = c__next_word(el->el_line.cursor,
+	el->el_line.cursor = c__next_word(el, el->el_line.cursor,
 	    el->el_line.lastchar,
 	    el->el_state.argument,
 	    ce__isword);
@@ -290,7 +290,7 @@ em_upper_case(EditLine *el, wint_t c __attribute__((__unused__)))
 {
 	wchar_t *cp, *ep;
 
-	ep = c__next_word(el->el_line.cursor, el->el_line.lastchar,
+	ep = c__next_word(el, el->el_line.cursor, el->el_line.lastchar,
 	    el->el_state.argument, ce__isword);
 
 	for (cp = el->el_line.cursor; cp < ep; cp++)
@@ -314,7 +314,7 @@ em_capitol_case(EditLine *el, wint_t c __attribute__((__unused__)))
 {
 	wchar_t *cp, *ep;
 
-	ep = c__next_word(el->el_line.cursor, el->el_line.lastchar,
+	ep = c__next_word(el, el->el_line.cursor, el->el_line.lastchar,
 	    el->el_state.argument, ce__isword);
 
 	for (cp = el->el_line.cursor; cp < ep; cp++) {
@@ -346,7 +346,7 @@ em_lower_case(EditLine *el, wint_t c __attribute__((__unused__)))
 {
 	wchar_t *cp, *ep;
 
-	ep = c__next_word(el->el_line.cursor, el->el_line.lastchar,
+	ep = c__next_word(el, el->el_line.cursor, el->el_line.lastchar,
 	    el->el_state.argument, ce__isword);
 
 	for (cp = el->el_line.cursor; cp < ep; cp++)
@@ -448,12 +448,12 @@ em_copy_prev_word(EditLine *el, wint_t c __attribute__((__unused__)))
 	if (el->el_line.cursor == el->el_line.buffer)
 		return CC_ERROR;
 
-	oldc = el->el_line.cursor;
 	/* does a bounds check */
-	cp = c__prev_word(el->el_line.cursor, el->el_line.buffer,
+	cp = c__prev_word(el, el->el_line.cursor, el->el_line.buffer,
 	    el->el_state.argument, ce__isword);
 
-	c_insert(el, (int)(oldc - cp));
+	c_insert(el, (int)(el->el_line.cursor - cp));
+	oldc = el->el_line.cursor;
 	for (dp = oldc; cp < oldc && dp < el->el_line.lastchar; cp++)
 		*dp++ = *cp;
 

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2002 Doug Rabson
  * Copyright (c) 2003 Peter Wemm
@@ -28,7 +28,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include "opt_pax.h"
 
@@ -81,7 +80,7 @@ __FBSDID("$FreeBSD$");
 CTASSERT(sizeof(struct ia32_mcontext) == 640);
 CTASSERT(sizeof(struct ia32_ucontext) == 704);
 CTASSERT(sizeof(struct ia32_sigframe) == 800);
-CTASSERT(sizeof(struct siginfo32) == 64);
+CTASSERT(sizeof(struct __siginfo32) == 64);
 #ifdef COMPAT_FREEBSD4
 CTASSERT(sizeof(struct ia32_freebsd4_mcontext) == 260);
 CTASSERT(sizeof(struct ia32_freebsd4_ucontext) == 324);
@@ -119,7 +118,6 @@ struct sysentvec ia32_freebsd_sysvec = {
 	.sv_elf_core_osabi = ELFOSABI_FREEBSD,
 	.sv_elf_core_abi_vendor = FREEBSD_ABI_VENDOR,
 	.sv_elf_core_prepare_notes = elf32_prepare_notes,
-	.sv_imgact_try	= NULL,
 	.sv_minsigstksz	= MINSIGSTKSZ,
 	.sv_minuser	= FREEBSD32_MINUSER,
 	.sv_maxuser	= FREEBSD32_MAXUSER,
@@ -132,8 +130,9 @@ struct sysentvec ia32_freebsd_sysvec = {
 	.sv_setregs	= ia32_setregs,
 	.sv_fixlimit	= ia32_fixlimit,
 	.sv_maxssiz	= &ia32_maxssiz,
-	.sv_flags	= SV_ABI_FREEBSD | SV_ASLR | SV_IA32 | SV_ILP32 |
-			    SV_SHP | SV_TIMEKEEP | SV_RNG_SEED_VER | SV_DSO_SIG,
+	.sv_flags	= SV_ABI_FREEBSD | SV_ASLR | SV_ILP32 |
+			    SV_SHP | SV_TIMEKEEP | SV_RNG_SEED_VER |
+			    SV_DSO_SIG | SV_SIGSYS,
 	.sv_set_syscall_retval = ia32_set_syscall_retval,
 	.sv_fetch_syscall_args = ia32_fetch_syscall_args,
 	.sv_syscallnames = freebsd32_syscallnames,
@@ -151,52 +150,43 @@ struct sysentvec ia32_freebsd_sysvec = {
 };
 INIT_SYSENTVEC(elf_ia32_sysvec, &ia32_freebsd_sysvec);
 
-static Elf32_Brandinfo ia32_brand_info = {
+static const Elf32_Brandinfo ia32_brand_info = {
 	.brand		= ELFOSABI_FREEBSD,
 	.machine	= EM_386,
 	.compat_3_brand	= "FreeBSD",
-	.emul_path	= NULL,
 	.interp_path	= "/libexec/ld-elf.so.1",
 	.sysvec		= &ia32_freebsd_sysvec,
 	.interp_newpath	= "/libexec/ld-elf32.so.1",
 	.brand_note	= &elf32_freebsd_brandnote,
 	.flags		= BI_CAN_EXEC_DYN | BI_BRAND_NOTE
 };
+C_SYSINIT(ia32, SI_SUB_EXEC, SI_ORDER_MIDDLE,
+    (sysinit_cfunc_t)elf32_insert_brand_entry, &ia32_brand_info);
 
-SYSINIT(ia32, SI_SUB_EXEC, SI_ORDER_MIDDLE,
-	(sysinit_cfunc_t) elf32_insert_brand_entry,
-	&ia32_brand_info);
-
-static Elf32_Brandinfo ia32_brand_oinfo = {
+static const Elf32_Brandinfo ia32_brand_oinfo = {
 	.brand		= ELFOSABI_FREEBSD,
 	.machine	= EM_386,
 	.compat_3_brand	= "FreeBSD",
-	.emul_path	= NULL,
 	.interp_path	= "/usr/libexec/ld-elf.so.1",
 	.sysvec		= &ia32_freebsd_sysvec,
 	.interp_newpath	= "/libexec/ld-elf32.so.1",
 	.brand_note	= &elf32_freebsd_brandnote,
 	.flags		= BI_CAN_EXEC_DYN | BI_BRAND_NOTE
 };
+C_SYSINIT(oia32, SI_SUB_EXEC, SI_ORDER_ANY,
+    (sysinit_cfunc_t)elf32_insert_brand_entry, &ia32_brand_oinfo);
 
-SYSINIT(oia32, SI_SUB_EXEC, SI_ORDER_ANY,
-	(sysinit_cfunc_t) elf32_insert_brand_entry,
-	&ia32_brand_oinfo);
-
-static Elf32_Brandinfo kia32_brand_info = {
+static const Elf32_Brandinfo kia32_brand_info = {
 	.brand		= ELFOSABI_FREEBSD,
 	.machine	= EM_386,
 	.compat_3_brand	= "FreeBSD",
-	.emul_path	= NULL,
 	.interp_path	= "/lib/ld.so.1",
 	.sysvec		= &ia32_freebsd_sysvec,
 	.brand_note	= &elf32_kfreebsd_brandnote,
 	.flags		= BI_CAN_EXEC_DYN | BI_BRAND_NOTE_MANDATORY
 };
-
-SYSINIT(kia32, SI_SUB_EXEC, SI_ORDER_ANY,
-	(sysinit_cfunc_t) elf32_insert_brand_entry,
-	&kia32_brand_info);
+C_SYSINIT(kia32, SI_SUB_EXEC, SI_ORDER_ANY,
+    (sysinit_cfunc_t)elf32_insert_brand_entry, &kia32_brand_info);
 
 void
 elf32_dump_thread(struct thread *td, void *dst, size_t *off)

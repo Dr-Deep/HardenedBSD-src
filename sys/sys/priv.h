@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2006 nCircle Network Security, Inc.
  * All rights reserved.
@@ -27,8 +27,6 @@
  * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
  * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -107,6 +105,8 @@
 #define	PRIV_CRED_SETRESGID	58	/* setresgid. */
 #define	PRIV_SEEOTHERGIDS	59	/* Exempt bsd.seeothergids. */
 #define	PRIV_SEEOTHERUIDS	60	/* Exempt bsd.seeotheruids. */
+#define	PRIV_SEEJAILPROC	61	/* Exempt from bsd.see_jail_proc. */
+#define	PRIV_CRED_SETCRED	62	/* setcred. */
 
 /*
  * Debugging privileges.
@@ -115,6 +115,7 @@
 #define	PRIV_DEBUG_SUGID	81	/* Exempt debugging setuid proc. */
 #define	PRIV_DEBUG_UNPRIV	82	/* Exempt unprivileged debug limit. */
 #define	PRIV_DEBUG_DENIED	83	/* Exempt P2_NOTRACE. */
+#define	PRIV_DEBUG_DIFFJAIL	84	/* Exempt debugging other jails. */
 
 /*
  * Dtrace privileges.
@@ -196,6 +197,7 @@
 #define	PRIV_SCHED_CPUSET	206	/* Can manipulate cpusets. */
 #define	PRIV_SCHED_CPUSET_INTR	207	/* Can adjust IRQ to CPU binding. */
 #define	PRIV_SCHED_IDPRIO	208	/* Can set idle time scheduling. */
+#define	PRIV_SCHED_DIFFJAIL	209	/* Exempt scheduling other jails. */
 
 /*
  * POSIX semaphore privileges.
@@ -207,6 +209,7 @@
  */
 #define	PRIV_SIGNAL_DIFFCRED	230	/* Exempt signalling other users. */
 #define	PRIV_SIGNAL_SUGID	231	/* Non-conserv signal setuid proc. */
+#define	PRIV_SIGNAL_DIFFJAIL	232	/* Exempt signalling other jails. */
 
 /*
  * Sysctl privileges.
@@ -214,6 +217,7 @@
 #define	PRIV_SYSCTL_DEBUG	240	/* Can invoke sysctl.debug. */
 #define	PRIV_SYSCTL_WRITE	241	/* Can write sysctls. */
 #define	PRIV_SYSCTL_WRITEJAIL	242	/* Can write sysctls, jail permitted. */
+#define	PRIV_SYSCTL_MEMLOCK	243	/* Large requests are not serialized. */
 
 /*
  * TTY privileges.
@@ -352,6 +356,9 @@
 #define	PRIV_NET_SETLANPCP	421	/* Set LAN priority. */
 #define	PRIV_NET_SETVLANPCP	PRIV_NET_SETLANPCP /* Alias Set VLAN priority */
 #define	PRIV_NET_OVPN		422	/* Administer OpenVPN DCO. */
+#define	PRIV_NET_ME		423	/* Administer ME interface. */
+#define	PRIV_NET_WG		424	/* Administer WireGuard interface. */
+#define	PRIV_NET_GENEVE		425	/* Administer geneve. */
 
 /*
  * 802.11-related privileges.
@@ -406,6 +413,7 @@
 #define	PRIV_NETINET_SETHDROPTS	505	/* Set certain IPv4/6 header options. */
 #define	PRIV_NETINET_BINDANY	506	/* Allow bind to any address. */
 #define	PRIV_NETINET_HASHKEY	507	/* Get and set hash keys for IPv4/6. */
+#define	PRIV_NETINET_KTLSKEYS	508	/* Read ktls session keys. */
 
 /*
  * Placeholders for IPX/SPX privileges, not supported any more.
@@ -428,11 +436,13 @@
  */
 #define	PRIV_VM86_INTCALL	550	/* Allow invoking vm86 int handlers. */
 
+#define	PRIV_PIPEBUF		560	/* Allow to allocate reserved pipebuf
+					   space */
+
 /*
  * Set of reserved privilege values, which will be allocated to code as
  * needed, in order to avoid renumbering later privileges due to insertion.
  */
-#define	_PRIV_RESERVED0		560
 #define	_PRIV_RESERVED1		561
 #define	_PRIV_RESERVED2		562
 #define	_PRIV_RESERVED3		563
@@ -515,10 +525,31 @@
  */
 #define	PRIV_KMEM_READ		680	/* Open mem/kmem for reading. */
 #define	PRIV_KMEM_WRITE		681	/* Open mem/kmem for writing. */
+#define	PRIV_PROC_MEM_WRITE	682	/* Writes via proc_rwmem */
 
-/* sysctl(9) privileges.
+/*
+ * Kernel debugger privileges.
+ */
+#define	PRIV_KDB_SET_BACKEND	690	/* Allow setting KDB backend. */
+
+/*
+ * veriexec override privileges - very rare!
+ */
+#define	PRIV_VERIEXEC_DIRECT	700	/* Can override 'indirect' */
+#define	PRIV_VERIEXEC_NOVERIFY	701	/* Can override O_VERIFY */
+#define	PRIV_VERIEXEC_CONTROL	702	/* Can configure veriexec */
+
+/*
+ * sysctl(9) privileges.
  */
 #define	PRIV_SYSCTL_ROOTONLY	800
+
+/*
+ * vmm privileges.
+ */
+#define	PRIV_VMM_PPTDEV		710	/* Can manipulate ppt devices. */
+#define	PRIV_VMM_CREATE		711	/* Can create non-temporal VMs. */
+#define	PRIV_VMM_DESTROY	712	/* Can destroy other users' VMs. */
 
 /*
  * Track end of privilege list.

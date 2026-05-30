@@ -196,8 +196,8 @@ enum sldns_enum_rr_type
 	LDNS_RR_TYPE_OPENPGPKEY = 61, /* RFC 7929 */
 	LDNS_RR_TYPE_CSYNC = 62, /* RFC 7477 */
 	LDNS_RR_TYPE_ZONEMD = 63, /* draft-ietf-dnsop-dns-zone-digest-12 */
-    LDNS_RR_TYPE_SVCB = 64, /* draft-ietf-dnsop-svcb-https-04 */
-    LDNS_RR_TYPE_HTTPS = 65, /* draft-ietf-dnsop-svcb-https-04 */
+	LDNS_RR_TYPE_SVCB = 64, /* draft-ietf-dnsop-svcb-https-04 */
+	LDNS_RR_TYPE_HTTPS = 65, /* draft-ietf-dnsop-svcb-https-04 */
 
 	LDNS_RR_TYPE_SPF = 99, /* RFC 4408 */
 
@@ -228,6 +228,8 @@ enum sldns_enum_rr_type
 	LDNS_RR_TYPE_URI = 256, /* RFC 7553 */
 	LDNS_RR_TYPE_CAA = 257, /* RFC 6844 */
 	LDNS_RR_TYPE_AVC = 258,
+
+	LDNS_RR_TYPE_RESINFO = 261, /* RFC 9606 */
 
 	/** DNSSEC Trust Authorities */
 	LDNS_RR_TYPE_TA = 32768,
@@ -341,6 +343,9 @@ enum sldns_enum_rdf_type
         /** 8 * 8 bit hex numbers separated by dashes. For EUI64. */
         LDNS_RDF_TYPE_EUI64,
 
+	/** Character string without quotes. */
+	LDNS_RDF_TYPE_UNQUOTED,
+
         /** A non-zero sequence of US-ASCII letters and numbers in lower case.
          *  For CAA.
          */
@@ -433,10 +438,13 @@ enum sldns_enum_edns_option
 	LDNS_EDNS_DHU = 6, /* RFC6975 */
 	LDNS_EDNS_N3U = 7, /* RFC6975 */
 	LDNS_EDNS_CLIENT_SUBNET = 8, /* RFC7871 */
+	LDNS_EDNS_COOKIE = 10, /* RFC7873 */
 	LDNS_EDNS_KEEPALIVE = 11, /* draft-ietf-dnsop-edns-tcp-keepalive*/
 	LDNS_EDNS_PADDING = 12, /* RFC7830 */
 	LDNS_EDNS_EDE = 15, /* RFC8914 */
-	LDNS_EDNS_CLIENT_TAG = 16 /* draft-bellis-dnsop-edns-tags-01 */
+	LDNS_EDNS_CLIENT_TAG = 16, /* draft-bellis-dnsop-edns-tags-01 */
+	LDNS_EDNS_REPORT_CHANNEL = 18, /* RFC9567 */
+	LDNS_EDNS_UNBOUND_CACHEDB_TESTFRAME_TEST = 65534
 };
 typedef enum sldns_enum_edns_option sldns_edns_option;
 
@@ -468,10 +476,17 @@ enum sldns_enum_ede_code
 	LDNS_EDE_NO_REACHABLE_AUTHORITY = 22,
 	LDNS_EDE_NETWORK_ERROR = 23,
 	LDNS_EDE_INVALID_DATA = 24,
+	LDNS_EDE_SIGNATURE_EXPIRED_BEFORE_VALID = 25,
+	LDNS_EDE_TOO_EARLY = 26,
+	LDNS_EDE_UNSUPPORTED_NSEC3_ITERATIONS = 27,
+	LDNS_EDE_BADPROXYPOLICY = 28,
+	LDNS_EDE_SYNTHESIZED = 29,
+	LDNS_EDE_INVALID_QUERY_TYPE = 30
 };
 typedef enum sldns_enum_ede_code sldns_ede_code;
 
 #define LDNS_EDNS_MASK_DO_BIT 0x8000
+#define LDNS_EDNS_MASK_CO_BIT 0x4000
 
 /** TSIG and TKEY extended rcodes (16bit), 0-15 are the normal rcodes. */
 #define LDNS_TSIG_ERROR_NOERROR  0
@@ -481,6 +496,9 @@ typedef enum sldns_enum_ede_code sldns_ede_code;
 #define LDNS_TSIG_ERROR_BADMODE  19
 #define LDNS_TSIG_ERROR_BADNAME  20
 #define LDNS_TSIG_ERROR_BADALG   21
+
+/** DNS Cookie extended rcode */
+#define LDNS_EXT_RCODE_BADCOOKIE 23
 
 /**
  * Contains all information about resource record types.

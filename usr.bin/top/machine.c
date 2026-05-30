@@ -12,13 +12,12 @@
  *          Wolfram Schneider <wosch@FreeBSD.org>
  *          Thomas Moestl <tmoestl@gmx.net>
  *          Eitan Adler <eadler@FreeBSD.org>
- *
- * $FreeBSD$
  */
 
+#include <sys/param.h>
+#include <sys/cpuset.h>
 #include <sys/errno.h>
 #include <sys/fcntl.h>
-#include <sys/param.h>
 #include <sys/priority.h>
 #include <sys/proc.h>
 #include <sys/resource.h>
@@ -191,20 +190,11 @@ static int pageshift;		/* log base 2 of the pagesize */
 #define ki_swap(kip) \
     ((kip)->ki_swrss > (kip)->ki_rssize ? (kip)->ki_swrss - (kip)->ki_rssize : 0)
 
-/*
- * Sorting orders.  The first element is the default.
- */
-static const char *ordernames[] = {
-	"cpu", "size", "res", "time", "pri", "threads",
-	"total", "read", "write", "fault", "vcsw", "ivcsw",
-	"jid", "swap", "pid", NULL
-};
-
 /* Per-cpu time states */
 static int maxcpu;
 static int maxid;
 static int ncpus;
-static unsigned long cpumask;
+static cpuset_t cpumask;
 static long *times;
 static long *pcpu_cp_time;
 static long *pcpu_cp_old;
@@ -215,6 +205,18 @@ static int *pcpu_cpu_states;
 static int battery_units;
 static int battery_life;
 
+static int compare_cpu(const void *a, const void *b);
+static int compare_size(const void *a, const void *b);
+static int compare_res(const void *a, const void *b);
+static int compare_time(const void *a, const void *b);
+static int compare_prio(const void *a, const void *b);
+static int compare_threads(const void *a, const void *b);
+static int compare_iototal(const void *a, const void *b);
+static int compare_ioread(const void *a, const void *b);
+static int compare_iowrite(const void *a, const void *b);
+static int compare_iofault(const void *a, const void *b);
+static int compare_vcsw(const void *a, const void *b);
+static int compare_ivcsw(const void *a, const void *b);
 static int compare_swap(const void *a, const void *b);
 static int compare_jid(const void *a, const void *b);
 static int compare_pid(const void *a, const void *b);
@@ -225,6 +227,77 @@ static int swapmode(int *retavail, int *retfree);
 static void update_layout(void);
 static int find_uid(uid_t needle, int *haystack);
 static int cmd_matches(struct kinfo_proc *, const char *);
+
+/*
+ * Sorting orders.  The first element is the default.
+ */
+
+typedef int (compare_fn)(const void *arg1, const void *arg2);
+static const struct sort_info {
+	const char	*si_name;
+	compare_fn	*si_compare;
+} sortdata[] = {
+	{
+		.si_name = "cpu",
+		.si_compare = &compare_cpu,
+	},
+	{
+		.si_name = "size",
+		.si_compare = &compare_size,
+	},
+	{
+		.si_name = "res",
+		.si_compare = &compare_res,
+	},
+	{
+		.si_name = "time",
+		.si_compare = &compare_time,
+	},
+	{
+		.si_name = "pri",
+		.si_compare = &compare_prio,
+	},
+	{
+		.si_name = "threads",
+		.si_compare = &compare_threads,
+	},
+	{
+		.si_name = "total",
+		.si_compare = &compare_iototal,
+	},
+	{
+		.si_name = "read",
+		.si_compare = &compare_ioread,
+	},
+	{
+		.si_name = "write",
+		.si_compare = &compare_iowrite,
+	},
+	{
+		.si_name = "fault",
+		.si_compare = &compare_iofault,
+	},
+	{
+		.si_name = "vcsw",
+		.si_compare = &compare_vcsw,
+	},
+	{
+		.si_name = "ivcsw",
+		.si_compare = &compare_ivcsw,
+	},
+	{
+		.si_name = "jid",
+		.si_compare = &compare_jid,
+	},
+	{
+		.si_name = "swap",
+		.si_compare = &compare_swap,
+	},
+	{
+		.si_name = "pid",
+		.si_compare = &compare_pid,
+	},
+};
 
 static int
 find_uid(uid_t needle, int *haystack)
@@ -294,17 +367,27 @@ machine_init(struct statics *statics)
 	size = sizeof(carc_en);
 	if (arc_enabled &&
 	    sysctlbyname("vfs.zfs.compressed_arc_enabled", &carc_en, &size,
-	    NULL, 0) == 0 && carc_en == 1)
-		carc_enabled = 1;
+	    NULL, 0) == 0 && carc_en == 1) {
+		uint64_t uncomp_sz;
+
+		/*
+		 * Don't report compression stats if no data is in the ARC.
+		 * Otherwise, we end up printing a blank line.
+		 */
+		size = sizeof(uncomp_sz);
+		if (sysctlbyname("kstat.zfs.misc.arcstats.uncompressed_size",
+		    &uncomp_sz, &size, NULL, 0) == 0 && uncomp_sz != 0)
+			carc_enabled = 1;
+	}
 
 	kd = kvm_open(NULL, _PATH_DEVNULL, NULL, O_RDONLY, "kvm_open");
 	if (kd == NULL)
 		return (-1);
 
 	size = sizeof(nswapdev);
-	if (sysctlbyname("vm.nswapdev", &nswapdev, &size, NULL,
-		0) == 0 && nswapdev != 0)
-			has_swap = 1;
+	if (sysctlbyname("vm.nswapdev", &nswapdev, &size, NULL, 0) == 0 &&
+	    nswapdev != 0)
+		has_swap = 1;
 
 	GETSYSCTL("kern.ccpu", ccpu);
 
@@ -344,11 +427,8 @@ machine_init(struct statics *statics)
 		statics->swap_names = swapnames;
 	else
 		statics->swap_names = NULL;
-	statics->order_names = ordernames;
 
 	/* Allocate state for per-CPU stats. */
-	cpumask = 0;
-	ncpus = 0;
 	GETSYSCTL("kern.smp.maxcpus", maxcpu);
 	times = calloc(maxcpu * CPUSTATES, sizeof(long));
 	if (times == NULL)
@@ -357,18 +437,18 @@ machine_init(struct statics *statics)
 	if (sysctlbyname("kern.cp_times", times, &size, NULL, 0) == -1)
 		err(1, "sysctlbyname kern.cp_times");
 	pcpu_cp_time = calloc(1, size);
-	maxid = (size / CPUSTATES / sizeof(long)) - 1;
+	maxid = MIN(size / CPUSTATES / sizeof(long) - 1, CPU_SETSIZE - 1);
+	CPU_ZERO(&cpumask);
 	for (i = 0; i <= maxid; i++) {
 		empty = 1;
 		for (j = 0; empty && j < CPUSTATES; j++) {
 			if (times[i * CPUSTATES + j] != 0)
 				empty = 0;
 		}
-		if (!empty) {
-			cpumask |= (1ul << i);
-			ncpus++;
-		}
+		if (!empty)
+			CPU_SET(i, &cpumask);
 	}
+	ncpus = CPU_COUNT(&cpumask);
 	assert(ncpus > 0);
 	pcpu_cp_old = calloc(ncpus * CPUSTATES, sizeof(long));
 	pcpu_cp_diff = calloc(ncpus * CPUSTATES, sizeof(long));
@@ -466,7 +546,7 @@ get_system_info(struct system_info *si)
 
 	/* convert cp_time counts to percentages */
 	for (i = j = 0; i <= maxid; i++) {
-		if ((cpumask & (1ul << i)) == 0)
+		if (!CPU_ISSET(i, &cpumask))
 			continue;
 		percentages(CPUSTATES, &pcpu_cpu_states[j * CPUSTATES],
 		    &pcpu_cp_time[j * CPUSTATES],
@@ -530,11 +610,11 @@ get_system_info(struct system_info *si)
 	if (arc_enabled) {
 		GETSYSCTL("kstat.zfs.misc.arcstats.size", arc_stat);
 		arc_stats[0] = arc_stat >> 10;
-		GETSYSCTL("vfs.zfs.mfu_size", arc_stat);
+		GETSYSCTL("kstat.zfs.misc.arcstats.mfu_size", arc_stat);
 		arc_stats[1] = arc_stat >> 10;
-		GETSYSCTL("vfs.zfs.mru_size", arc_stat);
+		GETSYSCTL("kstat.zfs.misc.arcstats.mru_size", arc_stat);
 		arc_stats[2] = arc_stat >> 10;
-		GETSYSCTL("vfs.zfs.anon_size", arc_stat);
+		GETSYSCTL("kstat.zfs.misc.arcstats.anon_size", arc_stat);
 		arc_stats[3] = arc_stat >> 10;
 		GETSYSCTL("kstat.zfs.misc.arcstats.hdr_size", arc_stat);
 		GETSYSCTL("kstat.zfs.misc.arcstats.l2_hdr_size", arc_stat2);
@@ -735,7 +815,7 @@ static struct handle handle;
 
 void *
 get_process_info(struct system_info *si, struct process_select *sel,
-    int (*compare)(const void *, const void *))
+    const struct sort_info *sort_info)
 {
 	int i;
 	int total_procs;
@@ -746,6 +826,9 @@ get_process_info(struct system_info *si, struct process_select *sel,
 	struct kinfo_proc **prefp;
 	struct kinfo_proc *pp;
 	struct timespec previous_proc_uptime;
+	compare_fn *compare;
+
+	compare = sort_info->si_compare;
 
 	/*
 	 * If thread state was toggled, don't cache the previous processes.
@@ -890,6 +973,43 @@ get_process_info(struct system_info *si, struct process_select *sel,
 	handle.next_proc = pref;
 	handle.remaining = active_procs;
 	return (&handle);
+}
+
+/*
+ * Returns the sort info associated with the specified order.  Currently, that's
+ * really only the comparator that we'll later use.  Specifying a NULL ordername
+ * will return the default comparator.
+ */
+const struct sort_info *
+get_sort_info(const char *ordername)
+{
+	const struct sort_info *info;
+	size_t idx;
+
+	if (ordername == NULL)
+		return (&sortdata[0]);
+
+	for (idx = 0; idx < nitems(sortdata); idx++) {
+		info = &sortdata[idx];
+
+		if (strcmp(info->si_name, ordername) == 0)
+			return (info);
+	}
+
+	return (NULL);
+}
+
+void
+dump_sort_names(FILE *fp)
+{
+	const struct sort_info *info;
+	size_t idx;
+
+	for (idx = 0; idx < nitems(sortdata); idx++) {
+		info = &sortdata[idx];
+
+		fprintf(fp, " %s", info->si_name);
+	}
 }
 
 static int
@@ -1127,7 +1247,7 @@ format_next_process(struct handle * xhandle, char *(*get_userid)(int), int flags
 			sbuf_printf(procbuf, " ");
 		}
 
-		sbuf_printf(procbuf, "%3d ", pp->ki_pri.pri_level - PZERO);
+		sbuf_printf(procbuf, "%3d ", pp->ki_pri.pri_level - PUSER);
 		sbuf_printf(procbuf, "%4s", format_nice(pp));
 		sbuf_printf(procbuf, "%7s ", format_k(PROCSIZE(pp)));
 		sbuf_printf(procbuf, "%6s ", format_k(pagetok(pp->ki_rssize)));
@@ -1257,19 +1377,19 @@ compare_tid(const void *p1, const void *p2)
  *	distinct keys.  The keys (in descending order of importance) are:
  *	percent cpu, cpu ticks, state, resident set size, total virtual
  *	memory usage.  The process states are ordered as follows (from least
- *	to most important):  WAIT, zombie, sleep, stop, start, run.  The
- *	array declaration below maps a process state index into a number
- *	that reflects this ordering.
+ *	to most important):  run, zombie, idle, interrupt wait, stop, sleep.
+ *	The array declaration below maps a process state index into a
+ *	number that reflects this ordering.
  */
 
-static int sorted_state[] = {
-	0,	/* not used		*/
-	3,	/* sleep		*/
-	1,	/* ABANDONED (WAIT)	*/
-	6,	/* run			*/
-	5,	/* start		*/
-	2,	/* zombie		*/
-	4	/* stop			*/
+static const int sorted_state[] = {
+	[SIDL] =	3,	/* being created	*/
+	[SRUN] =	1,	/* running/runnable	*/
+	[SSLEEP] =	6,	/* sleeping		*/
+	[SSTOP] =	5,	/* stopped/suspended	*/
+	[SZOMB] =	2,	/* zombie		*/
+	[SWAIT] =	4,	/* intr			*/
+	[SLOCK] =	7,	/* blocked on lock	*/
 };
 
 
@@ -1551,25 +1671,6 @@ compare_ivcsw(const void *arg1, const void *arg2)
 
 	return (flp2 - flp1);
 }
-
-int (*compares[])(const void *arg1, const void *arg2) = {
-	compare_cpu,
-	compare_size,
-	compare_res,
-	compare_time,
-	compare_prio,
-	compare_threads,
-	compare_iototal,
-	compare_ioread,
-	compare_iowrite,
-	compare_iofault,
-	compare_vcsw,
-	compare_ivcsw,
-	compare_jid,
-	compare_swap,
-	NULL
-};
-
 
 static int
 swapmode(int *retavail, int *retfree)

@@ -31,7 +31,6 @@
   POSSIBILITY OF SUCH DAMAGE.
 
 ******************************************************************************/
-/*$FreeBSD$*/
 
 #include "ixgbe_x540.h"
 #include "ixgbe_type.h"
@@ -63,6 +62,7 @@ s32 ixgbe_init_ops_X540(struct ixgbe_hw *hw)
 	struct ixgbe_phy_info *phy = &hw->phy;
 	struct ixgbe_eeprom_info *eeprom = &hw->eeprom;
 	s32 ret_val;
+	u16 i;
 
 	DEBUGFUNC("ixgbe_init_ops_X540");
 
@@ -146,7 +146,8 @@ s32 ixgbe_init_ops_X540(struct ixgbe_hw *hw)
 	mac->arc_subsystem_valid = !!(IXGBE_READ_REG(hw, IXGBE_FWSM_BY_MAC(hw))
 				     & IXGBE_FWSM_MODE_MASK);
 
-	hw->mbx.ops.init_params = ixgbe_init_mbx_params_pf;
+	for (i = 0; i < 64; i++)
+		hw->mbx.ops[i].init_params = ixgbe_init_mbx_params_pf;
 
 	/* LEDs */
 	mac->ops.blink_led_start = ixgbe_blink_led_start_X540;
@@ -877,7 +878,21 @@ void ixgbe_release_swfw_sync_X540(struct ixgbe_hw *hw, u32 mask)
 	IXGBE_WRITE_REG(hw, IXGBE_SWFW_SYNC_BY_MAC(hw), swfw_sync);
 
 	ixgbe_release_swfw_sync_semaphore(hw);
-	msec_delay(2);
+
+	/*
+	 * EEPROM / flash access requires a 2ms sleep or interacting with
+	 * them isn't stable.  However, a 2ms delay for all sync operations
+	 * is very expensive for MDIO access.
+	 *
+	 * So use a 10us delay for PHY0/PHY1 MDIO and management access and
+	 * 2ms for everything else.  This keep MDIO access (eg from a switch
+	 * driver) fast.
+	 */
+	if (mask &
+	    (IXGBE_GSSR_PHY0_SM | IXGBE_GSSR_PHY1_SM | IXGBE_GSSR_SW_MNG_SM))
+		usec_delay(10);
+	else
+		usec_delay(2000);
 }
 
 /**

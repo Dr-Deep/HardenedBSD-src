@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2021 Adrian Chadd <adrian@FreeBSD.Org>
  *
@@ -29,9 +29,6 @@
  * Qualcomm DWC3 glue
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
@@ -48,10 +45,10 @@ __FBSDID("$FreeBSD$");
 #include <dev/ofw/ofw_bus_subr.h>
 #include <dev/ofw/ofw_subr.h>
 
-#include <dev/extres/clk/clk.h>
-#include <dev/extres/hwreset/hwreset.h>
-#include <dev/extres/phy/phy_usb.h>
-#include <dev/extres/syscon/syscon.h>
+#include <dev/clk/clk.h>
+#include <dev/hwreset/hwreset.h>
+#include <dev/phy/phy_usb.h>
+#include <dev/syscon/syscon.h>
 
 static struct ofw_compat_data compat_data[] = {
 	{ "qcom,dwc3",			1},
@@ -61,7 +58,7 @@ static struct ofw_compat_data compat_data[] = {
 struct qcom_dwc3_softc {
 	struct simplebus_softc	sc;
 	device_t		dev;
-	clk_t			clk_master;
+	clk_t			clk_core;
 	clk_t			clk_sleep;
 	clk_t			clk_mock_utmi;
 	int			type;
@@ -101,8 +98,8 @@ qcom_dwc3_attach(device_t dev)
 	sc->type = ofw_bus_search_compatible(dev, compat_data)->ocd_data;
 
 	/* Mandatory clocks */
-	if (clk_get_by_ofw_name(dev, 0, "master", &sc->clk_master) != 0) {
-		device_printf(dev, "Cannot get master clock\n");
+	if (clk_get_by_ofw_name(dev, 0, "core", &sc->clk_core) != 0) {
+		device_printf(dev, "Cannot get core clock\n");
 		return (ENXIO);
 	}
 
@@ -124,10 +121,10 @@ qcom_dwc3_attach(device_t dev)
 	/*
 	 * Now, iterate over the clocks and enable them.
 	 */
-	err = clk_enable(sc->clk_master);
+	err = clk_enable(sc->clk_core);
 	if (err != 0) {
 		device_printf(dev, "Could not enable clock %s\n",
-		    clk_get_name(sc->clk_master));
+		    clk_get_name(sc->clk_core));
 		return (ENXIO);
 	}
 	err = clk_enable(sc->clk_sleep);
@@ -159,7 +156,8 @@ qcom_dwc3_attach(device_t dev)
 			device_probe_and_attach(cdev);
 	}
 
-	return (bus_generic_attach(dev));
+	bus_attach_children(dev);
+	return (0);
 }
 
 static device_method_t qcom_dwc3_methods[] = {

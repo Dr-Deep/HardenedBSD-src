@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright 1999, 2000 John D. Polstra.
  * All rights reserved.
@@ -25,7 +25,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  *	from: FreeBSD: src/libexec/rtld-elf/sparc64/lockdflt.c,v 1.3 2002/10/09
- * $FreeBSD$
  */
 
 /*
@@ -89,49 +88,39 @@ static uint32_t fsigblock;
 static void *
 def_lock_create(void)
 {
-    void *base;
-    char *p;
-    uintptr_t r;
-    Lock *l;
+	void *base;
+	char *p;
+	uintptr_t r;
+	Lock *l;
 
-    /*
-     * Arrange for the lock to occupy its own cache line.  First, we
-     * optimistically allocate just a cache line, hoping that malloc
-     * will give us a well-aligned block of memory.  If that doesn't
-     * work, we allocate a larger block and take a well-aligned cache
-     * line from it.
-     */
-    base = xmalloc(CACHE_LINE_SIZE);
-    p = (char *)base;
-    if ((uintptr_t)p % CACHE_LINE_SIZE != 0) {
-	free(base);
-	base = xmalloc(2 * CACHE_LINE_SIZE);
-	p = (char *)base;
-	if ((r = (uintptr_t)p % CACHE_LINE_SIZE) != 0)
-	    p += CACHE_LINE_SIZE - r;
-    }
-    l = (Lock *)p;
-    l->base = base;
-    l->lock = 0;
-    return l;
+	/*
+	 * Arrange for the lock to occupy its own cache line.  First, we
+	 * optimistically allocate just a cache line, hoping that malloc
+	 * will give us a well-aligned block of memory.  If that doesn't
+	 * work, we allocate a larger block and take a well-aligned cache
+	 * line from it.
+	 */
+	base = xmalloc(CACHE_LINE_SIZE);
+	p = base;
+	if ((uintptr_t)p % CACHE_LINE_SIZE != 0) {
+		free(base);
+		base = xmalloc(2 * CACHE_LINE_SIZE);
+		p = base;
+		if ((r = (uintptr_t)p % CACHE_LINE_SIZE) != 0)
+			p += CACHE_LINE_SIZE - r;
+	}
+	l = (Lock *)p;
+	l->base = base;
+	l->lock = 0;
+	return (l);
 }
 
 static void
 def_lock_destroy(void *lock)
 {
-    Lock *l = (Lock *)lock;
+	Lock *l = lock;
 
-    free(l->base);
-}
-
-static void
-def_rlock_acquire(void *lock)
-{
-    Lock *l = (Lock *)lock;
-
-    atomic_add_acq_int(&l->lock, RC_INCR);
-    while (l->lock & WAFLAG)
-	    ;	/* Spin */
+	free(l->base);
 }
 
 static void
@@ -145,24 +134,37 @@ sig_fastunblock(void)
 		__sys_sigfastblock(SIGFASTBLOCK_UNBLOCK, NULL);
 }
 
-static void
-def_wlock_acquire(void *lock)
+static bool
+def_lock_acquire_set(Lock *l, bool wlock)
 {
-	Lock *l;
+	if (wlock) {
+		if (atomic_cmpset_acq_int(&l->lock, 0, WAFLAG))
+			return (true);
+	} else {
+		atomic_add_acq_int(&l->lock, RC_INCR);
+		if ((l->lock & WAFLAG) == 0)
+			return (true);
+		atomic_add_int(&l->lock, -RC_INCR);
+	}
+	return (false);
+}
+
+static void
+def_lock_acquire(Lock *l, bool wlock)
+{
 	sigset_t tmp_oldsigmask;
 
-	l = (Lock *)lock;
 	if (ld_fast_sigblock) {
 		for (;;) {
 			atomic_add_32(&fsigblock, SIGFASTBLOCK_INC);
-			if (atomic_cmpset_acq_int(&l->lock, 0, WAFLAG))
+			if (def_lock_acquire_set(l, wlock))
 				break;
 			sig_fastunblock();
 		}
 	} else {
 		for (;;) {
 			sigprocmask(SIG_BLOCK, &fullsigmask, &tmp_oldsigmask);
-			if (atomic_cmpset_acq_int(&l->lock, 0, WAFLAG))
+			if (def_lock_acquire_set(l, wlock))
 				break;
 			sigprocmask(SIG_SETMASK, &tmp_oldsigmask, NULL);
 		}
@@ -172,26 +174,35 @@ def_wlock_acquire(void *lock)
 }
 
 static void
+def_rlock_acquire(void *lock)
+{
+	def_lock_acquire(lock, false);
+}
+
+static void
+def_wlock_acquire(void *lock)
+{
+	def_lock_acquire(lock, true);
+}
+
+static void
 def_lock_release(void *lock)
 {
-	Lock *l;
+	Lock *l = lock;
 
-	l = (Lock *)lock;
-	if ((l->lock & WAFLAG) == 0)
-		atomic_add_rel_int(&l->lock, -RC_INCR);
-	else {
-		atomic_add_rel_int(&l->lock, -WAFLAG);
-		if (ld_fast_sigblock)
-			sig_fastunblock();
-		else if (atomic_fetchadd_int(&wnested, -1) == 1)
-			sigprocmask(SIG_SETMASK, &oldsigmask, NULL);
-	}
+	atomic_add_rel_int(&l->lock, -((l->lock & WAFLAG) == 0 ?
+	    RC_INCR : WAFLAG));
+	if (ld_fast_sigblock)
+		sig_fastunblock();
+	else if (atomic_fetchadd_int(&wnested, -1) == 1)
+		sigprocmask(SIG_SETMASK, &oldsigmask, NULL);
 }
 
 static int
 def_thread_set_flag(int mask)
 {
 	int old_val = thread_flag;
+
 	thread_flag |= mask;
 	return (old_val);
 }
@@ -200,6 +211,7 @@ static int
 def_thread_clr_flag(int mask)
 {
 	int old_val = thread_flag;
+
 	thread_flag &= ~mask;
 	return (old_val);
 }
@@ -213,7 +225,7 @@ static struct RtldLockInfo deflockinfo;
 static __inline int
 thread_mask_set(int mask)
 {
-	return lockinfo.thread_set_flag(mask);
+	return (lockinfo.thread_set_flag(mask));
 }
 
 static __inline void
@@ -239,7 +251,7 @@ rlock_acquire(rtld_lock_t lock, RtldLockState *lockstate)
 	if (lockstate == NULL)
 		return;
 
-	if (thread_mask_set(lock->mask) & lock->mask) {
+	if ((thread_mask_set(lock->mask) & lock->mask) != 0) {
 		dbg("rlock_acquire: recursed");
 		lockstate->lockstate = RTLD_LOCK_UNLOCKED;
 		return;
@@ -255,7 +267,7 @@ wlock_acquire(rtld_lock_t lock, RtldLockState *lockstate)
 	if (lockstate == NULL)
 		return;
 
-	if (thread_mask_set(lock->mask) & lock->mask) {
+	if ((thread_mask_set(lock->mask) & lock->mask) != 0) {
 		dbg("wlock_acquire: recursed");
 		lockstate->lockstate = RTLD_LOCK_UNLOCKED;
 		return;
@@ -312,6 +324,12 @@ lock_restart_for_upgrade(RtldLockState *lockstate)
 	default:
 		assert(0);
 	}
+}
+
+bool
+lockstate_wlocked(const RtldLockState *lockstate)
+{
+	return (lockstate->lockstate == RTLD_LOCK_WLOCKED);
 }
 
 void
@@ -451,6 +469,7 @@ _rtld_atfork_pre(int *locks)
 
 	if (locks == NULL)
 		return;
+	bzero(ls, sizeof(ls));
 
 	/*
 	 * Warning: this did not worked well with the rtld compat
@@ -460,7 +479,8 @@ _rtld_atfork_pre(int *locks)
 	 * _rtld_atfork_pre() must provide the working implementation
 	 * of the locks anyway, and libthr locks are fine.
 	 */
-	wlock_acquire(rtld_phdr_lock, &ls[0]);
+	if (ld_get_env_var(LD_NO_DL_ITERATE_PHDR_AFTER_FORK) == NULL)
+		wlock_acquire(rtld_phdr_lock, &ls[0]);
 	wlock_acquire(rtld_bind_lock, &ls[1]);
 
 	/* XXXKIB: I am really sorry for this. */
@@ -480,5 +500,6 @@ _rtld_atfork_post(int *locks)
 	ls[0].lockstate = locks[2];
 	ls[1].lockstate = locks[0];
 	lock_release(rtld_bind_lock, &ls[1]);
-	lock_release(rtld_phdr_lock, &ls[0]);
+	if (ld_get_env_var(LD_NO_DL_ITERATE_PHDR_AFTER_FORK) == NULL)
+		lock_release(rtld_phdr_lock, &ls[0]);
 }

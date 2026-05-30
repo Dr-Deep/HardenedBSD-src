@@ -28,8 +28,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * PSIM local bus ATA controller
  */
@@ -40,8 +38,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/bus.h>
 #include <sys/malloc.h>
 #include <sys/sema.h>
+#include <sys/stdarg.h>
 #include <sys/taskqueue.h>
-#include <machine/stdarg.h>
 #include <vm/uma.h>
 #include <machine/resource.h>
 #include <machine/bus.h>
@@ -60,11 +58,10 @@ __FBSDID("$FreeBSD$");
 static  int  ata_iobus_attach(device_t dev);
 static  int  ata_iobus_probe(device_t dev);
 static  int  ata_iobus_print_child(device_t dev, device_t child);
-struct resource *ata_iobus_alloc_resource(device_t, device_t, int, int *,
+struct resource *ata_iobus_alloc_resource(device_t, device_t, int, int,
 					  rman_res_t, rman_res_t, rman_res_t,
 					  u_int);
-static int ata_iobus_release_resource(device_t, device_t, int, int,
-				      struct resource *);
+static int ata_iobus_release_resource(device_t, device_t, struct resource *);
 
 static device_method_t ata_iobus_methods[] = {
         /* Device interface */
@@ -114,8 +111,9 @@ ata_iobus_attach(device_t dev)
 	 * Add a single child per controller. Should be able
 	 * to add two
 	 */
-	device_add_child(dev, "ata", -1);
-	return (bus_generic_attach(dev));
+	device_add_child(dev, "ata", DEVICE_UNIT_ANY);
+	bus_attach_children(dev);
+	return (0);
 }
 
 static int
@@ -131,7 +129,7 @@ ata_iobus_print_child(device_t dev, device_t child)
 }
 
 struct resource *
-ata_iobus_alloc_resource(device_t dev, device_t child, int type, int *rid,
+ata_iobus_alloc_resource(device_t dev, device_t child, int type, int rid,
 			 rman_res_t start, rman_res_t end, rman_res_t count,
 			 u_int flags)
 {
@@ -154,14 +152,14 @@ ata_iobus_alloc_resource(device_t dev, device_t child, int type, int *rid,
 	 *  The resource values are calculated from these registers
 	 */
 	if (type == SYS_RES_IOPORT) {
-		switch (*rid) {
+		switch (rid) {
 		case ATA_IOADDR_RID:
 			myrid = 0;
 			start = ofw_regs[4];
 			end = start + ATA_IOSIZE - 1;
 			count = ATA_IOSIZE;
 			res = BUS_ALLOC_RESOURCE(device_get_parent(dev), child,
-						 SYS_RES_MEMORY, &myrid,
+						 SYS_RES_MEMORY, myrid,
 						 start, end, count, flags);
 			break;
 
@@ -171,7 +169,7 @@ ata_iobus_alloc_resource(device_t dev, device_t child, int type, int *rid,
 			end = start + ATA_CTLIOSIZE - 1;
 			count = ATA_CTLIOSIZE;
 			res = BUS_ALLOC_RESOURCE(device_get_parent(dev), child,
-						 SYS_RES_MEMORY, &myrid,
+						 SYS_RES_MEMORY, myrid,
 						 start, end, count, flags);
 			break;
 
@@ -181,7 +179,7 @@ ata_iobus_alloc_resource(device_t dev, device_t child, int type, int *rid,
 		}
 		return (res);
 
-	} else if (type == SYS_RES_IRQ && *rid == ATA_IRQ_RID) {
+	} else if (type == SYS_RES_IRQ && rid == ATA_IRQ_RID) {
 		/*
 		 * Pass this on to the parent
 		 */
@@ -194,8 +192,7 @@ ata_iobus_alloc_resource(device_t dev, device_t child, int type, int *rid,
 }
 
 static int
-ata_iobus_release_resource(device_t dev, device_t child, int type, int rid,
-			   struct resource *r)
+ata_iobus_release_resource(device_t dev, device_t child, struct resource *r)
 {
 	/* no hotplug... */
 	return (0);

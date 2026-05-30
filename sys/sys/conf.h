@@ -34,9 +34,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)conf.h	8.5 (Berkeley) 1/9/95
- * $FreeBSD$
  */
 
 #ifndef _SYS_CONF_H_
@@ -47,6 +44,7 @@
 #else
 #include <sys/queue.h>
 #endif
+#include <sys/_timespec.h>
 
 struct snapdata;
 struct devfs_dirent;
@@ -157,10 +155,13 @@ typedef int dumper_hdr_t(struct dumperinfo *di, struct kerneldumpheader *kdh);
 #define		GID_OPERATOR	5
 #define		GID_BIN		7
 #define		GID_GAMES	13
+#define		GID_AUDIO	43
 #define		GID_VIDEO	44
 #define		GID_RT_PRIO	47
 #define		GID_ID_PRIO	48
 #define		GID_DIALER	68
+#define		GID_U2F		116
+#define		GID_VMM		978
 #define		GID_NOGROUP	65533
 #define		GID_NOBODY	65534
 
@@ -279,6 +280,7 @@ void	destroy_dev(struct cdev *_dev);
 int	destroy_dev_sched(struct cdev *dev);
 int	destroy_dev_sched_cb(struct cdev *dev, void (*cb)(void *), void *arg);
 void	destroy_dev_drain(struct cdevsw *csw);
+void	dev_copyname(struct cdev *dev, char *path, size_t len);
 struct cdevsw *dev_refthread(struct cdev *_dev, int *_ref);
 struct cdevsw *devvn_refthread(struct vnode *vp, struct cdev **devp, int *_ref);
 void	dev_relthread(struct cdev *_dev, int _ref);
@@ -322,6 +324,8 @@ typedef void d_priv_dtor_t(void *data);
 int	devfs_get_cdevpriv(void **datap);
 int	devfs_set_cdevpriv(void *priv, d_priv_dtor_t *dtr);
 void	devfs_clear_cdevpriv(void);
+int	devfs_foreach_cdevpriv(struct cdev *dev,
+	    int (*cb)(void *data, void *arg), void *arg);
 
 ino_t	devfs_alloc_cdp_inode(void);
 void	devfs_free_cdp_inode(ino_t ino);
@@ -359,8 +363,23 @@ struct dumperinfo {
 };
 
 extern int dumping;		/* system is dumping */
+extern bool dumped_core;	/* system successfully dumped kernel core */
 
-void dump_savectx(void);
+/*
+ * Save registers for later extraction from a kernel dump.
+ *
+ * This must be inlined into the caller, which in turn must be the function that
+ * calls (mini)dumpsys().  Otherwise, the saved frame pointer will reference a
+ * stack frame that may be clobbered by subsequent function calls.
+ */
+#define	dump_savectx() do {		\
+	extern struct pcb dumppcb;	\
+	extern lwpid_t dumptid;		\
+					\
+	savectx(&dumppcb);		\
+	dumptid = curthread->td_tid;	\
+} while (0)
+
 int doadump(boolean_t);
 struct diocskerneldump_arg;
 int dumper_create(const struct dumperinfo *di_template, const char *devname,

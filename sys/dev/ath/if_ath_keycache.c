@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2002-2009 Sam Leffler, Errno Consulting
  * All rights reserved.
@@ -30,8 +30,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Driver for the Atheros Wireless LAN controller.
  *
@@ -136,12 +134,16 @@ ath_keyset_tkip(struct ath_softc *sc, const struct ieee80211_key *k,
 			 * TX key goes at first index, RX key at the rx index.
 			 * The hal handles the MIC keys at index+64.
 			 */
-			memcpy(hk->kv_mic, k->wk_txmic, sizeof(hk->kv_mic));
+			memcpy(hk->kv_mic,
+			    ieee80211_crypto_get_key_txmic_data(k),
+			    sizeof(hk->kv_mic));
 			KEYPRINTF(sc, k->wk_keyix, hk, zerobssid);
 			if (!ath_hal_keyset(ah, k->wk_keyix, hk, zerobssid))
 				return 0;
 
-			memcpy(hk->kv_mic, k->wk_rxmic, sizeof(hk->kv_mic));
+			memcpy(hk->kv_mic,
+			    ieee80211_crypto_get_key_rxmic_data(k),
+			    sizeof(hk->kv_mic));
 			KEYPRINTF(sc, k->wk_keyix+32, hk, mac);
 			/* XXX delete tx key on failure? */
 			return ath_hal_keyset(ah, k->wk_keyix+32, hk, mac);
@@ -151,8 +153,12 @@ ath_keyset_tkip(struct ath_softc *sc, const struct ieee80211_key *k,
 			 * slot, just set key at the first index; the hal
 			 * will handle the rest.
 			 */
-			memcpy(hk->kv_mic, k->wk_rxmic, sizeof(hk->kv_mic));
-			memcpy(hk->kv_txmic, k->wk_txmic, sizeof(hk->kv_txmic));
+			memcpy(hk->kv_mic,
+			    ieee80211_crypto_get_key_rxmic_data(k),
+			    sizeof(hk->kv_mic));
+			memcpy(hk->kv_txmic,
+			    ieee80211_crypto_get_key_txmic_data(k),
+			    sizeof(hk->kv_txmic));
 			KEYPRINTF(sc, k->wk_keyix, hk, mac);
 			return ath_hal_keyset(ah, k->wk_keyix, hk, mac);
 		}
@@ -162,13 +168,19 @@ ath_keyset_tkip(struct ath_softc *sc, const struct ieee80211_key *k,
 			 * NB: must pass MIC key in expected location when
 			 * the keycache only holds one MIC key per entry.
 			 */
-			memcpy(hk->kv_mic, k->wk_txmic, sizeof(hk->kv_txmic));
+			memcpy(hk->kv_mic,
+			    ieee80211_crypto_get_key_txmic_data(k),
+			    sizeof(hk->kv_txmic));
 		} else
-			memcpy(hk->kv_txmic, k->wk_txmic, sizeof(hk->kv_txmic));
+			memcpy(hk->kv_txmic,
+			    ieee80211_crypto_get_key_txmic_data(k),
+			    sizeof(hk->kv_txmic));
 		KEYPRINTF(sc, k->wk_keyix, hk, mac);
 		return ath_hal_keyset(ah, k->wk_keyix, hk, mac);
 	} else if (k->wk_flags & IEEE80211_KEY_RECV) {
-		memcpy(hk->kv_mic, k->wk_rxmic, sizeof(hk->kv_mic));
+		memcpy(hk->kv_mic,
+		    ieee80211_crypto_get_key_rxmic_data(k),
+		    sizeof(hk->kv_mic));
 		KEYPRINTF(sc, k->wk_keyix, hk, mac);
 		return ath_hal_keyset(ah, k->wk_keyix, hk, mac);
 	}
@@ -212,8 +224,10 @@ ath_keyset(struct ath_softc *sc, struct ieee80211vap *vap,
 		KASSERT(cip->ic_cipher < nitems(ciphermap),
 			("invalid cipher type %u", cip->ic_cipher));
 		hk.kv_type = ciphermap[cip->ic_cipher];
-		hk.kv_len = k->wk_keylen;
-		memcpy(hk.kv_val, k->wk_key, k->wk_keylen);
+		hk.kv_len = ieee80211_crypto_get_key_len(k);
+		memcpy(hk.kv_val,
+		    ieee80211_crypto_get_key_data(k),
+		    ieee80211_crypto_get_key_len(k));
 	} else
 		hk.kv_type = HAL_CIPHER_CLR;
 
@@ -436,8 +450,7 @@ ath_key_alloc(struct ieee80211vap *vap, struct ieee80211_key *k,
 		/*
 		 * Only global keys should have key index assigned.
 		 */
-		if (!(&vap->iv_nw_keys[0] <= k &&
-		      k < &vap->iv_nw_keys[IEEE80211_WEP_NKID])) {
+		if (!ieee80211_is_key_global(vap, k)) {
 			/* should not happen */
 			DPRINTF(sc, ATH_DEBUG_KEYCACHE,
 				"%s: bogus group key\n", __func__);

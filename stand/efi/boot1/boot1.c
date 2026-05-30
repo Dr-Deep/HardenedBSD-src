@@ -19,12 +19,11 @@
  * purpose.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
+#include <sys/stdarg.h>
+
 #include <machine/elf.h>
-#include <machine/stdarg.h>
+
 #include <stand.h>
 
 #include <efi.h>
@@ -96,10 +95,30 @@ try_boot(const boot_module_t *mod, dev_info_t *dev, void *loaderbuf, size_t load
 		buf = NULL;
 	}
 
+	/*
+	 * See if there's any env variables the module wants to set. If so,
+	 * append it to any config present.
+	 */
+	if (mod->extra_env != NULL) {
+		const char *env = mod->extra_env();
+		if (env != NULL) {
+			size_t newlen = cmdsize + strlen(env) + 1;
+
+			cmd = realloc(cmd, newlen);
+			if (cmd == NULL)
+				goto errout;
+			if (cmdsize > 0)
+				strlcat(cmd, " ", newlen);
+			strlcat(cmd, env, newlen);
+			cmdsize = strlen(cmd);
+			free(__DECONST(char *, env));
+		}
+	}
+
 	if ((status = BS->LoadImage(TRUE, IH, efi_devpath_last_node(dev->devpath),
 	    loaderbuf, loadersize, &loaderhandle)) != EFI_SUCCESS) {
 		printf("Failed to load image provided by %s, size: %zu, (%lu)\n",
-		     mod->name, loadersize, EFI_ERROR_CODE(status));
+		     mod->name, loadersize, DECODE_ERROR(status));
 		goto errout;
 	}
 
@@ -107,7 +126,7 @@ try_boot(const boot_module_t *mod, dev_info_t *dev, void *loaderbuf, size_t load
 	    (void **)&loaded_image);
 	if (status != EFI_SUCCESS) {
 		printf("Failed to query LoadedImage provided by %s (%lu)\n",
-		    mod->name, EFI_ERROR_CODE(status));
+		    mod->name, DECODE_ERROR(status));
 		goto errout;
 	}
 
@@ -133,7 +152,7 @@ try_boot(const boot_module_t *mod, dev_info_t *dev, void *loaderbuf, size_t load
 	if ((status = BS->StartImage(loaderhandle, NULL, NULL)) !=
 	    EFI_SUCCESS) {
 		printf("Failed to start image provided by %s (%lu)\n",
-		    mod->name, EFI_ERROR_CODE(status));
+		    mod->name, DECODE_ERROR(status));
 		loaded_image->LoadOptionsSize = 0;
 		loaded_image->LoadOptions = NULL;
 	}
@@ -235,7 +254,7 @@ efi_main(EFI_HANDLE Ximage, EFI_SYSTEM_TABLE *Xsystab)
 		    &DevicePathGUID, (void **)&imgpath);
 		if (status != EFI_SUCCESS) {
 			DPRINTF("Failed to get image DevicePath (%lu)\n",
-			    EFI_ERROR_CODE(status));
+			    DECODE_ERROR(status));
 		} else {
 			text = efi_devpath_name(imgpath);
 			if (text != NULL) {
@@ -277,12 +296,14 @@ efi_exit(EFI_STATUS s)
 
 	BS->FreePages(heap, EFI_SIZE_TO_PAGES(heapsize));
 	BS->Exit(IH, s, 0, NULL);
+	__unreachable();
 }
 
 void
-exit(int error __unused)
+exit(int error)
 {
-	efi_exit(EFI_LOAD_ERROR);
+	efi_exit(errno_to_efi_status(error));
+	__unreachable();
 }
 
 /*
@@ -301,6 +322,7 @@ efi_panic(EFI_STATUS s, const char *fmt, ...)
 	printf("\n");
 
 	efi_exit(s);
+	__unreachable();
 }
 
 int getchar(void)

@@ -32,12 +32,7 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)cd9660_vfsops.c	8.18 (Berkeley) 5/22/95
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -109,6 +104,12 @@ cd9660_cmount(struct mntarg *ma, void *data, uint64_t flags)
 
 	ma = mount_argsu(ma, "from", args.fspec, MAXPATHLEN);
 	ma = mount_arg(ma, "export", &args.export, sizeof(args.export));
+	if (args.flags & ISOFSMNT_UID)
+		ma = mount_argf(ma, "uid", "%d", args.uid);
+	if (args.flags & ISOFSMNT_GID)
+		ma = mount_argf(ma, "gid", "%d", args.gid);
+	ma = mount_argf(ma, "mask", "%d", args.fmask);
+	ma = mount_argf(ma, "dirmask", "%d", args.dmask);
 	ma = mount_argsu(ma, "cs_disk", args.cs_disk, 64);
 	ma = mount_argsu(ma, "cs_local", args.cs_local, 64);
 	ma = mount_argf(ma, "ssector", "%u", args.ssector);
@@ -223,6 +224,7 @@ iso_mountfs(struct vnode *devvp, struct mount *mp)
 	struct g_consumer *cp;
 	struct bufobj *bo;
 	char *cs_local, *cs_disk;
+	int v;
 
 	dev = devvp->v_rdev;
 	dev_ref(dev);
@@ -336,6 +338,13 @@ iso_mountfs(struct vnode *devvp, struct mount *mp)
 		goto out;
 	}
 
+	if (logical_block_size < cp->provider->sectorsize) {
+		printf("cd9660: Unsupported logical block size %u\n",
+		    logical_block_size);
+		error = EINVAL;
+		goto out;
+	}
+
 	rootp = (struct iso_directory_record *)
 		(high_sierra?
 		 pri_sierra->root_directory_record:
@@ -385,12 +394,28 @@ iso_mountfs(struct vnode *devvp, struct mount *mp)
 	isomp->im_mountp = mp;
 	isomp->im_dev = dev;
 	isomp->im_devvp = devvp;
+	isomp->im_fmask = isomp->im_dmask = ALLPERMS;
 
 	vfs_flagopt(mp->mnt_optnew, "norrip", &isomp->im_flags, ISOFSMNT_NORRIP);
 	vfs_flagopt(mp->mnt_optnew, "gens", &isomp->im_flags, ISOFSMNT_GENS);
 	vfs_flagopt(mp->mnt_optnew, "extatt", &isomp->im_flags, ISOFSMNT_EXTATT);
 	vfs_flagopt(mp->mnt_optnew, "nojoliet", &isomp->im_flags, ISOFSMNT_NOJOLIET);
 	vfs_flagopt(mp->mnt_optnew, "kiconv", &isomp->im_flags, ISOFSMNT_KICONV);
+
+	if (vfs_scanopt(mp->mnt_optnew, "uid", "%d", &v) == 1) {
+		isomp->im_flags |= ISOFSMNT_UID;
+		isomp->im_uid = v;
+	}
+	if (vfs_scanopt(mp->mnt_optnew, "gid", "%d", &v) == 1) {
+		isomp->im_flags |= ISOFSMNT_GID;
+		isomp->im_gid = v;
+	}
+	if (vfs_scanopt(mp->mnt_optnew, "mask", "%d", &v) == 1) {
+		isomp->im_fmask &= v;
+	}
+	if (vfs_scanopt(mp->mnt_optnew, "dirmask", "%d", &v) == 1) {
+		isomp->im_dmask &= v;
+	}
 
 	/* Check the Rock Ridge Extension support */
 	if (!(isomp->im_flags & ISOFSMNT_NORRIP)) {
@@ -523,9 +548,6 @@ cd9660_unmount(struct mount *mp, int mntflags)
 	dev_rel(isomp->im_dev);
 	free(isomp, M_ISOFSMNT);
 	mp->mnt_data = NULL;
-	MNT_ILOCK(mp);
-	mp->mnt_flag &= ~MNT_LOCAL;
-	MNT_IUNLOCK(mp);
 	return (error);
 }
 
@@ -538,7 +560,7 @@ cd9660_root(struct mount *mp, int flags, struct vnode **vpp)
 	struct iso_mnt *imp = VFSTOISOFS(mp);
 	struct iso_directory_record *dp =
 	    (struct iso_directory_record *)imp->root;
-	cd_ino_t ino = isodirino(dp, imp);
+	ino_t ino = isodirino(dp, imp);
 
 	/*
 	 * With RRIP we must use the `.' entry of the root directory.
@@ -595,13 +617,13 @@ cd9660_fhtovp(struct mount *mp, struct fid *fhp, int flags, struct vnode **vpp)
 #endif
 
 	if ((error = VFS_VGET(mp, ifh.ifid_ino, LK_EXCLUSIVE, &nvp)) != 0) {
-		*vpp = NULLVP;
+		*vpp = NULL;
 		return (error);
 	}
 	ip = VTOI(nvp);
 	if (ip->inode.iso_mode == 0) {
 		vput(nvp);
-		*vpp = NULLVP;
+		*vpp = NULL;
 		return (ESTALE);
 	}
 	*vpp = nvp;
@@ -638,15 +660,15 @@ static int
 cd9660_vfs_hash_cmp(struct vnode *vp, void *pino)
 {
 	struct iso_node *ip;
-	cd_ino_t ino;
+	ino_t ino;
 
 	ip = VTOI(vp);
-	ino = *(cd_ino_t *)pino;
+	ino = *(ino_t *)pino;
 	return (ip->i_number != ino);
 }
 
 int
-cd9660_vget_internal(struct mount *mp, cd_ino_t ino, int flags,
+cd9660_vget_internal(struct mount *mp, ino_t ino, int flags,
     struct vnode **vpp, int relocated, struct iso_directory_record *isodir)
 {
 	struct iso_mnt *imp;
@@ -682,7 +704,7 @@ cd9660_vget_internal(struct mount *mp, cd_ino_t ino, int flags,
 
 	/* Allocate a new vnode/iso_node. */
 	if ((error = getnewvnode("isofs", mp, &cd9660_vnodeops, &vp)) != 0) {
-		*vpp = NULLVP;
+		*vpp = NULL;
 		return (error);
 	}
 	ip = malloc(sizeof(struct iso_node), M_ISOFSNODE,
@@ -695,7 +717,7 @@ cd9660_vget_internal(struct mount *mp, cd_ino_t ino, int flags,
 	error = insmntque(vp, mp);
 	if (error != 0) {
 		free(ip, M_ISOFSNODE);
-		*vpp = NULLVP;
+		*vpp = NULL;
 		return (error);
 	}
 	error = vfs_hash_insert(vp, ino, flags, td, vpp, cd9660_vfs_hash_cmp,
@@ -822,6 +844,7 @@ cd9660_vget_internal(struct mount *mp, cd_ino_t ino, int flags,
 	 * XXX need generation number?
 	 */
 
+	vn_set_state(vp, VSTATE_CONSTRUCTED);
 	*vpp = vp;
 	return (0);
 }

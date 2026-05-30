@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2020 Oleksandr Tymoshenko <gonzo@FreeBSD.org>
  * Copyright (c) 2018 Jared McNeill <jmcneill@invisible.ca>
@@ -24,12 +24,7 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -45,9 +40,9 @@ __FBSDID("$FreeBSD$");
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
-#include <dev/extres/clk/clk.h>
-#include <dev/extres/hwreset/hwreset.h>
-#include <dev/extres/regulator/regulator.h>
+#include <dev/clk/clk.h>
+#include <dev/hwreset/hwreset.h>
+#include <dev/regulator/regulator.h>
 
 #include "syscon_if.h"
 
@@ -344,19 +339,9 @@ static int
 a64codec_mixer_set(struct snd_mixer *m, unsigned dev, unsigned left, unsigned right)
 {
 	struct a64codec_softc *sc;
-	struct mtx *mixer_lock;
-	uint8_t do_unlock;
 	u_int val;
 
 	sc = device_get_softc(mix_getdevinfo(m));
-	mixer_lock = mixer_get_lock(m);
-
-	if (mtx_owned(mixer_lock)) {
-		do_unlock = 0;
-	} else {
-		do_unlock = 1;
-		mtx_lock(mixer_lock);
-	}
 
 	right = left;
 
@@ -379,10 +364,6 @@ a64codec_mixer_set(struct snd_mixer *m, unsigned dev, unsigned left, unsigned ri
 		break;
 	}
 	A64CODEC_UNLOCK(sc);
-
-	if (do_unlock) {
-		mtx_unlock(mixer_lock);
-	}
 
 	return (left | (right << 8));
 }

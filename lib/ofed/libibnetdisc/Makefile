@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 .include <src.opts.mk>
 
 _spath=	${SRCTOP}/contrib/ofed/libibnetdisc
@@ -8,7 +6,6 @@ _spath=	${SRCTOP}/contrib/ofed/libibnetdisc
 SHLIBDIR?=	/usr/lib
 LIB_CXX=	ibnetdisc
 SHLIB_MAJOR=	5
-MK_PROFILE=	no
 
 SRCS= \
 chassis.c \
@@ -32,7 +29,6 @@ LIBADD=		osmcomp ibmad ibumad
 CFLAGS+=	-DHAVE_CONFIG_H=1
 CFLAGS+=	-I${_spath}
 CFLAGS+=	-I${SYSROOT:U${DESTDIR}}/${INCLUDEDIR}/infiniband
-CXXSTD=		c++11
 VERSION_MAP=	${_spath}/libibnetdisc.map
 
 .include <bsd.lib.mk>

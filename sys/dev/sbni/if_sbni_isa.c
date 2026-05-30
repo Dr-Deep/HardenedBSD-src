@@ -26,9 +26,6 @@
  *
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/socket.h>
@@ -56,7 +53,7 @@ static device_method_t sbni_isa_methods[] = {
 	/* Device interface */
 	DEVMETHOD(device_probe,	sbni_probe_isa),
 	DEVMETHOD(device_attach, sbni_attach_isa),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t sbni_isa_driver = {
@@ -132,19 +129,14 @@ sbni_attach_isa(device_t dev)
 			return (ENXIO);
 		} else {
 			device_printf(dev, "shared irq with %s\n",
-			       master->ifp->if_xname);
+			       if_name(master->ifp));
 		}
 	} 
 #endif	/* SBNI_DUAL_COMPOUND */
 
 	*(u_int32_t*)&flags = device_get_flags(dev);
 
-	error = sbni_attach(sc, device_get_unit(dev) * 2, flags);
-	if (error) {
-		device_printf(dev, "cannot initialize driver\n");
-		sbni_release_resources(sc);
-		return (error);
-	}
+	sbni_attach(sc, device_get_unit(dev) * 2, flags);
 
 	if (sc->irq_res) {
 		error = bus_setup_intr(

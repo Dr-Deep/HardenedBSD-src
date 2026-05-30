@@ -1,4 +1,5 @@
 #!/bin/ksh -p
+# SPDX-License-Identifier: CDDL-1.0
 #
 # CDDL HEADER START
 #
@@ -49,16 +50,19 @@ function cleanup
 	log_must rm -f $VDEVS
 	log_must set_tunable32 L2ARC_TRIM_AHEAD $l2arc_trimahead
 	log_must set_tunable32 L2ARC_WRITE_MAX $l2arc_writemax
+	log_must set_tunable32 L2ARC_DWPD_LIMIT $l2arc_dwpdlimit
 }
 log_onexit cleanup
 
 # The cache device $TRIM_VDEV2 has to be small enough, so that
-# dev->l2ad_hand loops around and dev->l2ad_first=0. Otherwise 
+# dev->l2ad_hand loops around and dev->l2ad_first=0. Otherwise
 # l2arc_evict() exits before evicting/trimming.
 typeset l2arc_trimahead=$(get_tunable L2ARC_TRIM_AHEAD)
 typeset l2arc_writemax=$(get_tunable L2ARC_WRITE_MAX)
+typeset l2arc_dwpdlimit=$(get_tunable L2ARC_DWPD_LIMIT)
 log_must set_tunable32 L2ARC_TRIM_AHEAD 1
 log_must set_tunable32 L2ARC_WRITE_MAX $((64 * 1024 * 1024))
+log_must set_tunable32 L2ARC_DWPD_LIMIT 0
 VDEVS="$TRIM_VDEV1 $TRIM_VDEV2"
 log_must truncate -s $((MINVDEVSIZE)) $TRIM_VDEV2
 log_must truncate -s $((4 * MINVDEVSIZE)) $TRIM_VDEV1
@@ -67,7 +71,7 @@ typeset VDEV_MIN_MB=$((MINVDEVSIZE * 0.30 / 1024 / 1024))
 log_must zpool create -f $TESTPOOL $TRIM_VDEV1 cache $TRIM_VDEV2
 verify_vdevs "-le" "$VDEV_MIN_MB" $TRIM_VDEV2
 
-typeset fill_mb=$(( floor(2 * MINVDEVSIZE) ))
+typeset fill_mb=$(( floor(3 * MINVDEVSIZE) ))
 export DIRECTORY=/$TESTPOOL
 export NUMJOBS=1
 export FILE_SIZE=${fill_mb}
@@ -77,7 +81,7 @@ export PERF_COMPCHUNK=0
 export RUNTIME=30
 export BLOCKSIZE=128K
 export SYNC_TYPE=0
-export DIRECT=1
+export DIRECT=0
 
 # Write to the pool.
 log_must fio $FIO_SCRIPTS/mkfiles.fio
@@ -89,9 +93,9 @@ log_must fio $FIO_SCRIPTS/random_reads.fio
 export RUNTIME=1
 typeset do_once=true
 while $do_once || [[ $l2_size1 -le $l2_size2 ]]; do
-	typeset l2_size1=$(get_arcstat l2_size)
+	typeset l2_size1=$(kstat arcstats.l2_size)
 	log_must fio $FIO_SCRIPTS/random_reads.fio
-	typeset l2_size2=$(get_arcstat l2_size)
+	typeset l2_size2=$(kstat arcstats.l2_size)
 	do_once=false
 done
 

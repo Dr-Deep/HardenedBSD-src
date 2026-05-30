@@ -23,9 +23,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -44,6 +41,8 @@ __FBSDID("$FreeBSD$");
 #define	TEST_IPV4	"1.1.1.1"
 #define	TEST_IPV6	"2001:4860:4860::8888"
 #define	TEST_BIND_IPV4	"127.0.0.1"
+#define	TEST_PORT	80
+#define	TEST_PORT_STR	"80"
 
 static cap_channel_t *
 create_network_service(void)
@@ -66,21 +65,24 @@ test_getnameinfo_v4(cap_channel_t *chan, int family, const char *ip)
 	struct sockaddr_in ipaddr;
 	char capfn[MAXHOSTNAMELEN];
 	char origfn[MAXHOSTNAMELEN];
-	int ret;
+	int capret, sysret;
 
 	memset(&ipaddr, 0, sizeof(ipaddr));
 	ipaddr.sin_family = family;
 	inet_pton(family, ip, &ipaddr.sin_addr);
 
-	ret = cap_getnameinfo(chan, (struct sockaddr *)&ipaddr, sizeof(ipaddr),
+	capret = cap_getnameinfo(chan, (struct sockaddr *)&ipaddr, sizeof(ipaddr),
 	    capfn, sizeof(capfn), NULL, 0, NI_NAMEREQD);
-	if (ret != 0) {
-		return (ret);
-	}
+	if (capret == EAI_SYSTEM && errno == ENOTCAPABLE)
+		return (ENOTCAPABLE);
 
-	ret = getnameinfo((struct sockaddr *)&ipaddr, sizeof(ipaddr), origfn,
+	sysret = getnameinfo((struct sockaddr *)&ipaddr, sizeof(ipaddr), origfn,
 	    sizeof(origfn), NULL, 0, NI_NAMEREQD);
-	ATF_REQUIRE(ret == 0);
+	if (sysret != 0) {
+		atf_tc_skip("getnameinfo(%s) failed: %s",
+		    ip, gai_strerror(sysret));
+	}
+	ATF_REQUIRE(capret == 0);
 	ATF_REQUIRE(strcmp(origfn, capfn) == 0);
 
 	return (0);
@@ -92,21 +94,24 @@ test_getnameinfo_v6(cap_channel_t *chan, const char *ip)
 	struct sockaddr_in6 ipaddr;
 	char capfn[MAXHOSTNAMELEN];
 	char origfn[MAXHOSTNAMELEN];
-	int ret;
+	int capret, sysret;
 
 	memset(&ipaddr, 0, sizeof(ipaddr));
 	ipaddr.sin6_family = AF_INET6;
 	inet_pton(AF_INET6, ip, &ipaddr.sin6_addr);
 
-	ret = cap_getnameinfo(chan, (struct sockaddr *)&ipaddr, sizeof(ipaddr),
+	capret = cap_getnameinfo(chan, (struct sockaddr *)&ipaddr, sizeof(ipaddr),
 	    capfn, sizeof(capfn), NULL, 0, NI_NAMEREQD);
-	if (ret != 0) {
-		return (ret);
-	}
+	if (capret == EAI_SYSTEM && errno == ENOTCAPABLE)
+		return (ENOTCAPABLE);
 
-	ret = getnameinfo((struct sockaddr *)&ipaddr, sizeof(ipaddr), origfn,
+	sysret = getnameinfo((struct sockaddr *)&ipaddr, sizeof(ipaddr), origfn,
 	    sizeof(origfn), NULL, 0, NI_NAMEREQD);
-	ATF_REQUIRE(ret == 0);
+	if (sysret != 0) {
+		atf_tc_skip("getnameinfo(%s) failed: %s",
+		    ip, gai_strerror(sysret));
+	}
+	ATF_REQUIRE(capret == 0);
 	ATF_REQUIRE(strcmp(origfn, capfn) == 0);
 
 	return (0);
@@ -133,13 +138,14 @@ test_gethostbyaddr_v4(cap_channel_t *chan, int family, const char *ip)
 	inet_pton(AF_INET, ip, &ipaddr);
 
 	caphp = cap_gethostbyaddr(chan, &ipaddr, sizeof(ipaddr), family);
-	if (caphp == NULL) {
-		return (h_errno);
-	}
+	if (caphp == NULL && h_errno == ENOTCAPABLE)
+		return (ENOTCAPABLE);
 
 	orighp = gethostbyaddr(&ipaddr, sizeof(ipaddr), family);
-	ATF_REQUIRE(orighp != NULL);
-	ATF_REQUIRE(strcmp(caphp->h_name, caphp->h_name) == 0);
+	if (orighp == NULL)
+		atf_tc_skip("gethostbyaddr(%s) failed", ip);
+	ATF_REQUIRE(caphp != NULL);
+	ATF_REQUIRE(strcmp(orighp->h_name, caphp->h_name) == 0);
 
 	return (0);
 }
@@ -154,12 +160,14 @@ test_gethostbyaddr_v6(cap_channel_t *chan, const char *ip)
 	inet_pton(AF_INET6, ip, &ipaddr);
 
 	caphp = cap_gethostbyaddr(chan, &ipaddr, sizeof(ipaddr), AF_INET6);
-	if (caphp == NULL)
-		return (h_errno);
+	if (caphp == NULL && h_errno == ENOTCAPABLE)
+		return (ENOTCAPABLE);
 
 	orighp = gethostbyaddr(&ipaddr, sizeof(ipaddr), AF_INET6);
-	ATF_REQUIRE(orighp != NULL);
-	ATF_REQUIRE(strcmp(caphp->h_name, caphp->h_name) == 0);
+	if (orighp == NULL)
+		atf_tc_skip("gethostbyaddr(%s) failed", ip);
+	ATF_REQUIRE(caphp != NULL);
+	ATF_REQUIRE(strcmp(orighp->h_name, caphp->h_name) == 0);
 
 	return (0);
 }
@@ -181,19 +189,21 @@ test_getaddrinfo(cap_channel_t *chan, int family, const char *domain,
 {
 	struct addrinfo hints, *capres, *origres, *res0, *res1;
 	bool found;
-	int ret;
+	int capret, sysret;
 
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_family = family;
 	hints.ai_socktype = SOCK_STREAM;
 
-	ret = cap_getaddrinfo(chan, domain, servname, &hints, &capres);
-	if (ret != 0) {
-		return (ret);
-	}
+	capret = cap_getaddrinfo(chan, domain, servname, &hints, &capres);
+	if (capret == EAI_SYSTEM && errno == ENOTCAPABLE)
+		return (ENOTCAPABLE);
 
-	ret = getaddrinfo(domain, servname, &hints, &origres);
-	ATF_REQUIRE(ret == 0);
+	sysret = getaddrinfo(domain, servname, &hints, &origres);
+	if (sysret != 0)
+		atf_tc_skip("getaddrinfo(%s) failed: %s",
+		    domain, gai_strerror(sysret));
+	ATF_REQUIRE(capret == 0);
 
 	for (res0 = capres; res0 != NULL; res0 = res0->ai_next) {
 		found = false;
@@ -219,14 +229,15 @@ test_gethostbyname(cap_channel_t *chan, int family, const char *domain)
 	struct hostent *caphp, *orighp;
 
 	caphp = cap_gethostbyname2(chan, domain, family);
-	if (caphp == NULL) {
+	if (caphp == NULL && h_errno == ENOTCAPABLE)
 		return (h_errno);
-	}
 
 	orighp = gethostbyname2(domain, family);
-	ATF_REQUIRE(orighp != NULL);
-	ATF_REQUIRE(strcmp(caphp->h_name, orighp->h_name) == 0);
+	if (orighp == NULL)
+		atf_tc_skip("gethostbyname2(%s) failed", domain);
 
+	ATF_REQUIRE(caphp != NULL);
+	ATF_REQUIRE(strcmp(caphp->h_name, orighp->h_name) == 0);
 	return (0);
 }
 
@@ -257,7 +268,7 @@ test_connect(cap_channel_t *chan, const char *ip, unsigned short port)
 	int capfd, ret, serrno;
 
 	capfd = socket(AF_INET, SOCK_STREAM, 0);
-	ATF_REQUIRE(capfd > 0);
+	ATF_REQUIRE(capfd >= 0);
 
 	memset(&ipv4, 0, sizeof(ipv4));
 	ipv4.sin_family = AF_INET;
@@ -266,7 +277,31 @@ test_connect(cap_channel_t *chan, const char *ip, unsigned short port)
 
 	ret = cap_connect(chan, capfd, (struct sockaddr *)&ipv4, sizeof(ipv4));
 	serrno = errno;
-	close(capfd);
+	ATF_REQUIRE(close(capfd) == 0);
+
+	if (ret < 0 && serrno != ENOTCAPABLE) {
+		int sd;
+
+		/*
+		 * If the connection failed, it might be because we can't reach
+		 * the destination host.  To check, try a plain connect() and
+		 * see if it fails with the same error.
+		 */
+		sd = socket(AF_INET, SOCK_STREAM, 0);
+		ATF_REQUIRE(sd >= 0);
+
+		memset(&ipv4, 0, sizeof(ipv4));
+		ipv4.sin_family = AF_INET;
+		ipv4.sin_port = htons(port);
+		inet_pton(AF_INET, ip, &ipv4.sin_addr);
+		ret = connect(sd, (struct sockaddr *)&ipv4, sizeof(ipv4));
+		ATF_REQUIRE(ret < 0);
+		ATF_REQUIRE_MSG(errno == serrno, "errno %d != serrno %d",
+		    errno, serrno);
+		ATF_REQUIRE(close(sd) == 0);
+		atf_tc_skip("connect(%s:%d) failed: %s",
+		    ip, port, strerror(serrno));
+	}
 
 	return (ret < 0 ? serrno : 0);
 }
@@ -296,7 +331,11 @@ test_extend_mode(cap_channel_t *capnet, int current)
 	}
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__getnameinfo);
+ATF_TC(capnet__getnameinfo);
+ATF_TC_HEAD(capnet__getnameinfo, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__getnameinfo, tc)
 {
 	cap_channel_t *capnet;
@@ -309,7 +348,11 @@ ATF_TC_BODY(capnet__getnameinfo, tc)
 	cap_close(capnet);
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__connect);
+ATF_TC(capnet__connect);
+ATF_TC_HEAD(capnet__connect, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__connect, tc)
 {
 	cap_channel_t *capnet;
@@ -321,7 +364,11 @@ ATF_TC_BODY(capnet__connect, tc)
 	cap_close(capnet);
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__bind);
+ATF_TC(capnet__bind);
+ATF_TC_HEAD(capnet__bind, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__bind, tc)
 {
 	cap_channel_t *capnet;
@@ -333,7 +380,11 @@ ATF_TC_BODY(capnet__bind, tc)
 	cap_close(capnet);
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__getaddrinfo);
+ATF_TC(capnet__getaddrinfo);
+ATF_TC_HEAD(capnet__getaddrinfo, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__getaddrinfo, tc)
 {
 	cap_channel_t *capnet;
@@ -351,7 +402,11 @@ ATF_TC_BODY(capnet__getaddrinfo, tc)
 	cap_close(capnet);
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__gethostbyname);
+ATF_TC(capnet__gethostbyname);
+ATF_TC_HEAD(capnet__gethostbyname, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__gethostbyname, tc)
 {
 	cap_channel_t *capnet;
@@ -363,7 +418,11 @@ ATF_TC_BODY(capnet__gethostbyname, tc)
 	cap_close(capnet);
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__gethostbyaddr);
+ATF_TC(capnet__gethostbyaddr);
+ATF_TC_HEAD(capnet__gethostbyaddr, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__gethostbyaddr, tc)
 {
 	cap_channel_t *capnet;
@@ -376,7 +435,54 @@ ATF_TC_BODY(capnet__gethostbyaddr, tc)
 	cap_close(capnet);
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__limits_addr2name_mode);
+ATF_TC(capnet__getnameinfo_buffer);
+ATF_TC_HEAD(capnet__getnameinfo_buffer, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
+ATF_TC_BODY(capnet__getnameinfo_buffer, tc)
+{
+	cap_channel_t *chan;
+	struct sockaddr_in sin;
+	int ret;
+	struct {
+		char host[sizeof(TEST_IPV4)];
+		char host_canary;
+		char serv[sizeof(TEST_PORT_STR)];
+		char serv_canary;
+	} buffers;
+
+	memset(&sin, 0, sizeof(sin));
+	sin.sin_family = AF_INET;
+	sin.sin_port = htons(TEST_PORT);
+	ret = inet_pton(AF_INET, TEST_IPV4, &sin.sin_addr);
+	ATF_REQUIRE_EQ(1, ret);
+
+	memset(&buffers, '!', sizeof(buffers));
+
+	chan = create_network_service();
+	ret = cap_getnameinfo(chan, (struct sockaddr *)&sin, sizeof(sin),
+	    buffers.host, sizeof(buffers.host),
+	    buffers.serv, sizeof(buffers.serv),
+	    NI_NUMERICHOST | NI_NUMERICSERV);
+	ATF_REQUIRE_EQ_MSG(0, ret, "%d", ret);
+
+	// Verify that cap_getnameinfo worked with minimally sized buffers.
+	ATF_CHECK_EQ(0, strcmp(TEST_IPV4, buffers.host));
+	ATF_CHECK_EQ(0, strcmp(TEST_PORT_STR, buffers.serv));
+
+	// Verify that cap_getnameinfo did not overflow the buffers.
+	ATF_CHECK_EQ('!', buffers.host_canary);
+	ATF_CHECK_EQ('!', buffers.serv_canary);
+
+	cap_close(chan);
+}
+
+ATF_TC(capnet__limits_addr2name_mode);
+ATF_TC_HEAD(capnet__limits_addr2name_mode, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__limits_addr2name_mode, tc)
 {
 	cap_channel_t *capnet;
@@ -407,7 +513,11 @@ ATF_TC_BODY(capnet__limits_addr2name_mode, tc)
 	cap_close(capnet);
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__limits_addr2name_family);
+ATF_TC(capnet__limits_addr2name_family);
+ATF_TC_HEAD(capnet__limits_addr2name_family, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__limits_addr2name_family, tc)
 {
 	cap_channel_t *capnet;
@@ -452,7 +562,11 @@ ATF_TC_BODY(capnet__limits_addr2name_family, tc)
 	cap_close(capnet);
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__limits_addr2name);
+ATF_TC(capnet__limits_addr2name);
+ATF_TC_HEAD(capnet__limits_addr2name, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__limits_addr2name, tc)
 {
 	cap_channel_t *capnet;
@@ -506,7 +620,11 @@ ATF_TC_BODY(capnet__limits_addr2name, tc)
 	cap_close(capnet);
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__limits_deprecated_addr2name_mode);
+ATF_TC(capnet__limits_deprecated_addr2name_mode);
+ATF_TC_HEAD(capnet__limits_deprecated_addr2name_mode, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__limits_deprecated_addr2name_mode, tc)
 {
 	cap_channel_t *capnet;
@@ -535,7 +653,11 @@ ATF_TC_BODY(capnet__limits_deprecated_addr2name_mode, tc)
 	cap_close(capnet);
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__limits_deprecated_addr2name_family);
+ATF_TC(capnet__limits_deprecated_addr2name_family);
+ATF_TC_HEAD(capnet__limits_deprecated_addr2name_family, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__limits_deprecated_addr2name_family, tc)
 {
 	cap_channel_t *capnet;
@@ -586,7 +708,11 @@ ATF_TC_BODY(capnet__limits_deprecated_addr2name_family, tc)
 	cap_close(capnet);
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__limits_deprecated_addr2name);
+ATF_TC(capnet__limits_deprecated_addr2name);
+ATF_TC_HEAD(capnet__limits_deprecated_addr2name, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__limits_deprecated_addr2name, tc)
 {
 	cap_channel_t *capnet;
@@ -638,7 +764,11 @@ ATF_TC_BODY(capnet__limits_deprecated_addr2name, tc)
 }
 
 
-ATF_TC_WITHOUT_HEAD(capnet__limits_name2addr_mode);
+ATF_TC(capnet__limits_name2addr_mode);
+ATF_TC_HEAD(capnet__limits_name2addr_mode, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__limits_name2addr_mode, tc)
 {
 	cap_channel_t *capnet;
@@ -670,7 +800,11 @@ ATF_TC_BODY(capnet__limits_name2addr_mode, tc)
 	cap_close(capnet);
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__limits_name2addr_hosts);
+ATF_TC(capnet__limits_name2addr_hosts);
+ATF_TC_HEAD(capnet__limits_name2addr_hosts, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__limits_name2addr_hosts, tc)
 {
 	cap_channel_t *capnet;
@@ -708,10 +842,26 @@ ATF_TC_BODY(capnet__limits_name2addr_hosts, tc)
 	limit = cap_net_limit_init(capnet, CAPNET_NAME2ADDR);
 	ATF_REQUIRE(cap_net_limit(limit) != 0);
 
+	/* Try to extend the limit. */
+	limit = cap_net_limit_init(capnet, CAPNET_NAME2ADDR);
+	ATF_REQUIRE(limit != NULL);
+	cap_net_limit_name2addr(limit, TEST_DOMAIN_1, NULL);
+	ATF_REQUIRE(cap_net_limit(limit) != 0);
+
+	limit = cap_net_limit_init(capnet, CAPNET_NAME2ADDR);
+	ATF_REQUIRE(limit != NULL);
+	cap_net_limit_name2addr(limit, TEST_DOMAIN_0, NULL);
+	cap_net_limit_name2addr(limit, TEST_DOMAIN_1, NULL);
+	ATF_REQUIRE(cap_net_limit(limit) != 0);
+
 	cap_close(capnet);
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__limits_name2addr_hosts_servnames_strict);
+ATF_TC(capnet__limits_name2addr_hosts_servnames_strict);
+ATF_TC_HEAD(capnet__limits_name2addr_hosts_servnames_strict, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__limits_name2addr_hosts_servnames_strict, tc)
 {
 	cap_channel_t *capnet;
@@ -743,7 +893,11 @@ ATF_TC_BODY(capnet__limits_name2addr_hosts_servnames_strict, tc)
 	cap_close(capnet);
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__limits_name2addr_hosts_servnames_mix);
+ATF_TC(capnet__limits_name2addr_hosts_servnames_mix);
+ATF_TC_HEAD(capnet__limits_name2addr_hosts_servnames_mix, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__limits_name2addr_hosts_servnames_mix, tc)
 {
 	cap_channel_t *capnet;
@@ -772,7 +926,7 @@ ATF_TC_BODY(capnet__limits_name2addr_hosts_servnames_mix, tc)
 	ATF_REQUIRE(test_getaddrinfo(capnet, AF_INET, TEST_DOMAIN_1, "snmp") ==
 	    ENOTCAPABLE);
 
-	/* Limit to HTTTP servname only. */
+	/* Limit to HTTP servname only. */
 	limit = cap_net_limit_init(capnet, CAPNET_NAME2ADDR);
 	ATF_REQUIRE(limit != NULL);
 	cap_net_limit_name2addr(limit, NULL, "http");
@@ -796,7 +950,11 @@ ATF_TC_BODY(capnet__limits_name2addr_hosts_servnames_mix, tc)
 	cap_close(capnet);
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__limits_name2addr_family);
+ATF_TC(capnet__limits_name2addr_family);
+ATF_TC_HEAD(capnet__limits_name2addr_family, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__limits_name2addr_family, tc)
 {
 	cap_channel_t *capnet;
@@ -855,7 +1013,11 @@ ATF_TC_BODY(capnet__limits_name2addr_family, tc)
 	cap_close(capnet);
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__limits_deprecated_name2addr_mode);
+ATF_TC(capnet__limits_deprecated_name2addr_mode);
+ATF_TC_HEAD(capnet__limits_deprecated_name2addr_mode, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__limits_deprecated_name2addr_mode, tc)
 {
 	cap_channel_t *capnet;
@@ -886,7 +1048,11 @@ ATF_TC_BODY(capnet__limits_deprecated_name2addr_mode, tc)
 	cap_close(capnet);
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__limits_deprecated_name2addr_hosts);
+ATF_TC(capnet__limits_deprecated_name2addr_hosts);
+ATF_TC_HEAD(capnet__limits_deprecated_name2addr_hosts, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__limits_deprecated_name2addr_hosts, tc)
 {
 	cap_channel_t *capnet;
@@ -925,7 +1091,11 @@ ATF_TC_BODY(capnet__limits_deprecated_name2addr_hosts, tc)
 	cap_close(capnet);
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__limits_deprecated_name2addr_family);
+ATF_TC(capnet__limits_deprecated_name2addr_family);
+ATF_TC_HEAD(capnet__limits_deprecated_name2addr_family, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__limits_deprecated_name2addr_family, tc)
 {
 	cap_channel_t *capnet;
@@ -979,7 +1149,11 @@ ATF_TC_BODY(capnet__limits_deprecated_name2addr_family, tc)
 	cap_close(capnet);
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__limits_bind_mode);
+ATF_TC(capnet__limits_bind_mode);
+ATF_TC_HEAD(capnet__limits_bind_mode, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__limits_bind_mode, tc)
 {
 	cap_channel_t *capnet;
@@ -1011,7 +1185,11 @@ ATF_TC_BODY(capnet__limits_bind_mode, tc)
 	cap_close(capnet);
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__limits_bind);
+ATF_TC(capnet__limits_bind);
+ATF_TC_HEAD(capnet__limits_bind, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__limits_bind, tc)
 {
 	cap_channel_t *capnet;
@@ -1036,7 +1214,11 @@ ATF_TC_BODY(capnet__limits_bind, tc)
 	cap_close(capnet);
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__limits_connect_mode);
+ATF_TC(capnet__limits_connect_mode);
+ATF_TC_HEAD(capnet__limits_connect_mode, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__limits_connect_mode, tc)
 {
 	cap_channel_t *capnet;
@@ -1068,7 +1250,11 @@ ATF_TC_BODY(capnet__limits_connect_mode, tc)
 	cap_close(capnet);
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__limits_connect_dns_mode);
+ATF_TC(capnet__limits_connect_dns_mode);
+ATF_TC_HEAD(capnet__limits_connect_dns_mode, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__limits_connect_dns_mode, tc)
 {
 	cap_channel_t *capnet;
@@ -1100,7 +1286,11 @@ ATF_TC_BODY(capnet__limits_connect_dns_mode, tc)
 	cap_close(capnet);
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__limits_connect);
+ATF_TC(capnet__limits_connect);
+ATF_TC_HEAD(capnet__limits_connect, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__limits_connect, tc)
 {
 	cap_channel_t *capnet;
@@ -1144,13 +1334,18 @@ ATF_TC_BODY(capnet__limits_connect, tc)
 	cap_close(capnet);
 }
 
-ATF_TC_WITHOUT_HEAD(capnet__limits_connecttodns);
+ATF_TC(capnet__limits_connecttodns);
+ATF_TC_HEAD(capnet__limits_connecttodns, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__limits_connecttodns, tc)
 {
 	cap_channel_t *capnet;
 	cap_net_limit_t *limit;
 	struct addrinfo hints, *capres, *res;
 	int family[] = { AF_INET };
+	int error;
 
 	capnet = create_network_service();
 
@@ -1179,9 +1374,12 @@ ATF_TC_BODY(capnet__limits_connecttodns, tc)
 		s = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
 		ATF_REQUIRE(s >= 0);
 
-		ATF_REQUIRE(cap_connect(capnet, s, res->ai_addr,
-		    res->ai_addrlen) == 0);
-		close(s);
+		error = cap_connect(capnet, s, res->ai_addr,
+		    res->ai_addrlen);
+		if (error != 0 && errno != ENOTCAPABLE)
+			atf_tc_skip("unable to connect: %s", strerror(errno));
+		ATF_REQUIRE(error == 0);
+		ATF_REQUIRE(close(s) == 0);
 	}
 
 	freeaddrinfo(capres);
@@ -1189,7 +1387,11 @@ ATF_TC_BODY(capnet__limits_connecttodns, tc)
 }
 
 
-ATF_TC_WITHOUT_HEAD(capnet__limits_deprecated_connecttodns);
+ATF_TC(capnet__limits_deprecated_connecttodns);
+ATF_TC_HEAD(capnet__limits_deprecated_connecttodns, tc)
+{
+	atf_tc_set_md_var(tc, "require.config", "allow_network_access");
+}
 ATF_TC_BODY(capnet__limits_deprecated_connecttodns, tc)
 {
 	cap_channel_t *capnet;
@@ -1198,7 +1400,7 @@ ATF_TC_BODY(capnet__limits_deprecated_connecttodns, tc)
 	struct in_addr ipaddr;
 	struct sockaddr_in connaddr;
 	int family[] = { AF_INET };
-	int i;
+	int error, i;
 
 	capnet = create_network_service();
 
@@ -1230,9 +1432,12 @@ ATF_TC_BODY(capnet__limits_deprecated_connecttodns, tc)
 		    (char *)caphp->h_addr_list[i], caphp->h_length);
 		connaddr.sin_port = htons(80);
 
-		ATF_REQUIRE(cap_connect(capnet, s, (struct sockaddr *)&connaddr,
-		    sizeof(connaddr)) == 0);
-		close(s);
+		error = cap_connect(capnet, s, (struct sockaddr *)&connaddr,
+		    sizeof(connaddr));
+		if (error != 0 && errno != ENOTCAPABLE)
+			atf_tc_skip("unable to connect: %s", strerror(errno));
+		ATF_REQUIRE(error == 0);
+		ATF_REQUIRE(close(s) == 0);
 	}
 
 	cap_close(capnet);
@@ -1247,6 +1452,8 @@ ATF_TP_ADD_TCS(tp)
 	ATF_TP_ADD_TC(tp, capnet__getaddrinfo);
 	ATF_TP_ADD_TC(tp, capnet__gethostbyname);
 	ATF_TP_ADD_TC(tp, capnet__gethostbyaddr);
+
+	ATF_TP_ADD_TC(tp, capnet__getnameinfo_buffer);
 
 	ATF_TP_ADD_TC(tp, capnet__limits_addr2name_mode);
 	ATF_TP_ADD_TC(tp, capnet__limits_addr2name_family);

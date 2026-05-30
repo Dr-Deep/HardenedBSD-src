@@ -29,9 +29,6 @@
  * and sscanf("nan(...)", ...) work identically.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <fenv.h>
 #include <float.h>
@@ -108,6 +105,9 @@ testnan(const char *nan_format)
 ATF_TC_WITHOUT_HEAD(nan);
 ATF_TC_BODY(nan, tc)
 {
+#if defined(__riscv)
+	atf_tc_expect_fail("https://bugs.freebsd.org/290099");
+#endif
 	/* Die if a signalling NaN is returned */
 	feenableexcept(FE_INVALID);
 

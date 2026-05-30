@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2005 Pawel Jakub Dawidek <pjd@FreeBSD.org>
  * All rights reserved.
@@ -25,9 +25,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -548,7 +545,7 @@ g_shsec_create(struct g_class *mp, const struct g_shsec_metadata *md)
 			return (NULL);
 		}
 	}
-	gp = g_new_geomf(mp, "%s", md->md_name);
+	gp = g_new_geom(mp, md->md_name);
 	sc = malloc(sizeof(*sc), M_SHSEC, M_WAITOK | M_ZERO);
 	gp->start = g_shsec_start;
 	gp->spoiled = g_shsec_orphan;
@@ -646,7 +643,7 @@ g_shsec_taste(struct g_class *mp, struct g_provider *pp, int flags __unused)
 
 	G_SHSEC_DEBUG(3, "Tasting %s.", pp->name);
 
-	gp = g_new_geomf(mp, "shsec:taste");
+	gp = g_new_geom(mp, "shsec:taste");
 	gp->start = g_shsec_start;
 	gp->access = g_shsec_access;
 	gp->orphan = g_shsec_orphan;

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2013 David Chisnall
  * All rights reserved.
@@ -28,8 +28,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include "input_buffer.hh"
@@ -337,6 +335,47 @@ input_buffer::consume(const char *str)
 		return true;
 	}
 	return false;
+}
+
+bool
+input_buffer::consume_char_literal(unsigned long long &outInt)
+{
+	outInt = (unsigned char)((*this)[0]);
+	cursor++;
+
+	if(outInt != '\\')
+	{
+		return true;
+	}
+	else if(cursor >= size)
+	{
+		return false;
+	}
+
+	outInt = (unsigned char)((*this)[0]);
+	cursor++;
+
+	switch (outInt) {
+		default:
+			return false;
+		case 'n':
+			outInt = (unsigned char)'\n';
+			break;
+		case 'r':
+			outInt = (unsigned char)'\r';
+			break;
+		case 't':
+			outInt = (unsigned char)'\t';
+			break;
+		case '0':
+			outInt = 0;
+			break;
+		case '\'':
+		case '\\':
+			break;
+	}
+
+	return true;
 }
 
 bool
@@ -876,6 +915,18 @@ expression_ptr text_input_buffer::parse_expression(bool stopAtParen)
 	source_location l = location();
 	switch (*(*this))
 	{
+		case '\'':
+			consume('\'');
+			if(!consume_char_literal(leftVal))
+			{
+				return nullptr;
+			}
+			if (!consume('\''))
+			{
+				return nullptr;
+			}
+			lhs.reset(new terminal_expr(l, leftVal));
+			break;
 		case '0'...'9':
 			if (!consume_integer(leftVal))
 			{

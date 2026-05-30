@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 BRSSL_CFLAGS+= -DNO_STDIO
 
 .include "Makefile.inc"
@@ -24,8 +22,8 @@ SRCS+= \
 
 # Add includes required by efi part
 CFLAGS+= \
+	-I${SRCTOP}/sys/contrib/edk2/Include \
 	-I${SRCTOP}/stand/efi/include \
-	-I${SRCTOP}/lib/libsecureboot/efi/include \
 	-I${SRCTOP}/stand/efi/include/${MACHINE}
 .endif
 
@@ -47,9 +45,12 @@ manifests.h:
 	echo '${VE_MANIFEST_LIST:@m@"$m",${.newline}@}'; \
 	echo 'NULL };' ) > ${.TARGET}
 
+# only add these if set
 XCFLAGS.verify_file+= \
-	-DVE_DEBUG_LEVEL=${VE_DEBUG_LEVEL:U0} \
-	-DVE_VERBOSE_DEFAULT=${VE_VERBOSE_DEFAULT:U0} \
+	${VE_DEBUG_LEVEL \
+	VE_VERBOSE_DEFAULT \
+	VE_VERIFY_FLAGS \
+	:L:@v@${$v:S,^,-D$v=,}@}
 
 .if !empty(MANIFEST_SKIP_ALWAYS)
 XCFLAGS.verify_file+= -DMANIFEST_SKIP_ALWAYS=\"${MANIFEST_SKIP_ALWAYS}\"

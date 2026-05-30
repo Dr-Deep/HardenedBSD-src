@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2000 Paul Saab <ps@FreeBSD.org>
  * All rights reserved.
@@ -26,11 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#ifndef lint
-#endif /* not lint */
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <err.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -54,7 +49,7 @@ main(int argc, char *argv[])
 	
 	rval = EX_OK;
 	for (i = 1; i < argc; ++i) {
-		if ((fd = open(argv[i], O_RDONLY)) == -1) {
+		if ((fd = open(argv[i], O_RDONLY | O_NONBLOCK)) == -1) {
 			warn("open %s", argv[i]);
 			if (rval == EX_OK)
 				rval = EX_NOINPUT;

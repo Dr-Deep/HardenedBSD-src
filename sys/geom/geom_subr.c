@@ -36,17 +36,16 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_ddb.h"
 
+#define	EXTERR_CATEGORY	EXTERR_CAT_GEOM
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/devicestat.h>
+#include <sys/exterrvar.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/bio.h>
-#include <sys/sysctl.h>
 #include <sys/proc.h>
 #include <sys/kthread.h>
 #include <sys/lock.h>
@@ -54,10 +53,10 @@ __FBSDID("$FreeBSD$");
 #include <sys/errno.h>
 #include <sys/sbuf.h>
 #include <sys/sdt.h>
+#include <sys/stdarg.h>
 #include <geom/geom.h>
 #include <geom/geom_dbg.h>
 #include <geom/geom_int.h>
-#include <machine/stdarg.h>
 
 #ifdef DDB
 #include <ddb/ddb.h>
@@ -270,7 +269,7 @@ g_modevent(module_t mod, int type, void *data)
 	switch (type) {
 	case MOD_LOAD:
 		g_trace(G_T_TOPOLOGY, "g_modevent(%s, LOAD)", mp->name);
-		hh = g_malloc(sizeof *hh, M_WAITOK | M_ZERO);
+		hh = g_malloc(sizeof(*hh), M_WAITOK | M_ZERO);
 		hh->mp = mp;
 		/*
 		 * Once the system is not cold, MOD_LOAD calls will be
@@ -354,7 +353,7 @@ g_retaste(struct g_class *mp)
 	if (mp->taste == NULL)
 		return (EINVAL);
 
-	hh = g_malloc(sizeof *hh, M_WAITOK | M_ZERO);
+	hh = g_malloc(sizeof(*hh), M_WAITOK | M_ZERO);
 	hh->mp = mp;
 
 	if (cold) {
@@ -371,29 +370,23 @@ g_retaste(struct g_class *mp)
 }
 
 struct g_geom *
-g_new_geomf(struct g_class *mp, const char *fmt, ...)
+g_new_geom(struct g_class *mp, const char *name)
 {
+	int len;
 	struct g_geom *gp;
-	va_list ap;
-	struct sbuf *sb;
 
 	g_topology_assert();
 	G_VALID_CLASS(mp);
-	sb = sbuf_new_auto();
-	va_start(ap, fmt);
-	sbuf_vprintf(sb, fmt, ap);
-	va_end(ap);
-	sbuf_finish(sb);
-	gp = g_malloc(sizeof *gp, M_WAITOK | M_ZERO);
-	gp->name = g_malloc(sbuf_len(sb) + 1, M_WAITOK | M_ZERO);
+	len = strlen(name);
+	gp = g_malloc(sizeof(*gp) + len + 1, M_WAITOK | M_ZERO);
+	gp->name = (char *)(gp + 1);
 	gp->class = mp;
 	gp->rank = 1;
 	LIST_INIT(&gp->consumer);
 	LIST_INIT(&gp->provider);
 	LIST_INSERT_HEAD(&mp->geom, gp, geom);
 	TAILQ_INSERT_HEAD(&geoms, gp, geoms);
-	strcpy(gp->name, sbuf_data(sb));
-	sbuf_delete(sb);
+	memcpy(gp->name, name, len);
 	/* Fill in defaults from class */
 	gp->start = mp->start;
 	gp->spoiled = mp->spoiled;
@@ -404,6 +397,23 @@ g_new_geomf(struct g_class *mp, const char *fmt, ...)
 	gp->orphan = mp->orphan;
 	gp->ioctl = mp->ioctl;
 	gp->resize = mp->resize;
+	return (gp);
+}
+
+struct g_geom *
+g_new_geomf(struct g_class *mp, const char *fmt, ...)
+{
+	struct g_geom *gp;
+	va_list ap;
+	struct sbuf *sb;
+
+	sb = sbuf_new_auto();
+	va_start(ap, fmt);
+	sbuf_vprintf(sb, fmt, ap);
+	va_end(ap);
+	sbuf_finish(sb);
+	gp = g_new_geom(mp, sbuf_data(sb));
+	sbuf_delete(sb);
 	return (gp);
 }
 
@@ -423,7 +433,6 @@ g_destroy_geom(struct g_geom *gp)
 	g_cancel_event(gp);
 	LIST_REMOVE(gp, geom);
 	TAILQ_REMOVE(&geoms, gp, geoms);
-	g_free(gp->name);
 	g_free(gp);
 }
 
@@ -477,7 +486,7 @@ g_wither_geom_close(struct g_geom *gp, int error)
 }
 
 /*
- * This function is called (repeatedly) until we cant wash away more
+ * This function is called (repeatedly) until we can't wash away more
  * withered bits at present.
  */
 void
@@ -531,7 +540,7 @@ g_new_consumer(struct g_geom *gp)
 	    ("g_new_consumer on geom(%s) (class %s) without orphan",
 	    gp->name, gp->class->name));
 
-	cp = g_malloc(sizeof *cp, M_WAITOK | M_ZERO);
+	cp = g_malloc(sizeof(*cp), M_WAITOK | M_ZERO);
 	cp->geom = gp;
 	cp->stat = devstat_new_entry(cp, -1, 0, DEVSTAT_ALL_SUPPORTED,
 	    DEVSTAT_TYPE_DIRECT, DEVSTAT_PRIORITY_MAX);
@@ -620,7 +629,7 @@ g_new_providerf(struct g_geom *gp, const char *fmt, ...)
 	sbuf_vprintf(sb, fmt, ap);
 	va_end(ap);
 	sbuf_finish(sb);
-	pp = g_malloc(sizeof *pp + sbuf_len(sb) + 1, M_WAITOK | M_ZERO);
+	pp = g_malloc(sizeof(*pp) + sbuf_len(sb) + 1, M_WAITOK | M_ZERO);
 	pp->name = (char *)(pp + 1);
 	strcpy(pp->name, sbuf_data(sb));
 	sbuf_delete(sb);
@@ -752,7 +761,7 @@ g_resize_provider(struct g_provider *pp, off_t size)
 	if (size == pp->mediasize)
 		return;
 
-	hh = g_malloc(sizeof *hh, M_WAITOK | M_ZERO);
+	hh = g_malloc(sizeof(*hh), M_WAITOK | M_ZERO);
 	hh->pp = pp;
 	hh->size = size;
 	g_post_event(g_resize_provider_event, hh, M_WAITOK, NULL);
@@ -1086,21 +1095,21 @@ int
 g_handleattr_int(struct bio *bp, const char *attribute, int val)
 {
 
-	return (g_handleattr(bp, attribute, &val, sizeof val));
+	return (g_handleattr(bp, attribute, &val, sizeof(val)));
 }
 
 int
 g_handleattr_uint16_t(struct bio *bp, const char *attribute, uint16_t val)
 {
 
-	return (g_handleattr(bp, attribute, &val, sizeof val));
+	return (g_handleattr(bp, attribute, &val, sizeof(val)));
 }
 
 int
 g_handleattr_off_t(struct bio *bp, const char *attribute, off_t val)
 {
 
-	return (g_handleattr(bp, attribute, &val, sizeof val));
+	return (g_handleattr(bp, attribute, &val, sizeof(val)));
 }
 
 int
@@ -1155,8 +1164,14 @@ g_std_done(struct bio *bp)
 	struct bio *bp2;
 
 	bp2 = bp->bio_parent;
-	if (bp2->bio_error == 0)
-		bp2->bio_error = bp->bio_error;
+	if (bp2->bio_error == 0) {
+		if ((bp->bio_flags & BIO_EXTERR) != 0) {
+			bp2->bio_flags |= BIO_EXTERR;
+			bp2->bio_exterr = bp->bio_exterr;
+		} else {
+			bp2->bio_error = bp->bio_error;
+		}
+	}
 	bp2->bio_completed += bp->bio_completed;
 	g_destroy_bio(bp);
 	bp2->bio_inbed++;
@@ -1661,6 +1676,8 @@ DB_SHOW_COMMAND(bio, db_show_bio)
 		db_printf("  caller2: %p\n", bp->bio_caller2);
 		db_printf("  bio_from: %p\n", bp->bio_from);
 		db_printf("  bio_to: %p\n", bp->bio_to);
+		if ((bp->bio_flags & BIO_EXTERR) != 0)
+			exterr_db_print(&bp->bio_exterr);
 
 #if defined(BUF_TRACKING) || defined(FULL_BUF_TRACKING)
 		db_printf("  bio_track_bp: %p\n", bp->bio_track_bp);

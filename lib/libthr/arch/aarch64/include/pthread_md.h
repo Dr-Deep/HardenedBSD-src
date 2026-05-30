@@ -26,8 +26,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -50,5 +48,12 @@ _get_curthread(void)
 
 	return (_tcb_get()->tcb_thread);
 }
+
+static __inline void
+_thr_resolve_machdep(void)
+{
+}
+
+#define	__thr_setup_tsd(thread)		_tcb_set((thread)->tcb)
 
 #endif /* _PTHREAD_MD_H_ */

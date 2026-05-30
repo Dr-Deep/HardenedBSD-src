@@ -1,4 +1,5 @@
 #! /bin/ksh -p
+# SPDX-License-Identifier: CDDL-1.0
 #
 # CDDL HEADER START
 #
@@ -41,7 +42,7 @@ verify_runnable "global"
 
 
 if ! $(grep -q "CONFIG_IO_URING=y" /boot/config-$(uname -r)); then
-	log_unsupported "Requires io_uring support"
+	log_unsupported "Requires io_uring support within Kernel"
 fi
 
 fio --ioengine=io_uring --parse-only || log_unsupported "fio io_uring support required"

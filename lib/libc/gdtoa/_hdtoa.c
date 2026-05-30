@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2004-2008 David Schultz <das@FreeBSD.ORG>
  * All rights reserved.
@@ -26,9 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <float.h>
 #include <limits.h>
 #include <math.h>
@@ -43,6 +40,7 @@ __FBSDID("$FreeBSD$");
 
 #define	DBL_ADJ	(DBL_MAX_EXP - 2)
 #define	SIGFIGS	((DBL_MANT_DIG + 3) / 4 + 1)
+#define	MAX_HEX_DIGITS	((DBL_MANT_DIG + 3 - 1) / 4 + 1)
 
 static const float one[] = { 1.0f, -1.0f };
 
@@ -114,7 +112,7 @@ __hdtoa(double d, const char *xdigs, int ndigits, int *decpt, int *sign,
 	s0 = rv_alloc(bufsize);
 
 	/* Round to the desired number of digits. */
-	if (SIGFIGS > ndigits && ndigits > 0) {
+	if (MAX_HEX_DIGITS > ndigits && ndigits > 0) {
 		float redux = one[u.bits.sign];
 		int offset = 4 * ndigits + DBL_MAX_EXP - 4 - DBL_MANT_DIG;
 		u.bits.exp = offset;

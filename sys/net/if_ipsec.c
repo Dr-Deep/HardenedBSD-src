@@ -26,8 +26,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_inet.h"
 #include "opt_inet6.h"
 #include "opt_ipsec.h"
@@ -52,6 +50,7 @@ __FBSDID("$FreeBSD$");
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_private.h>
 #include <net/if_clone.h>
 #include <net/if_types.h>
 #include <net/bpf.h>
@@ -354,7 +353,7 @@ ipsec_transmit(struct ifnet *ifp, struct mbuf *m)
 	IPSEC_RLOCK_TRACKER;
 	struct ipsec_softc *sc;
 	struct secpolicy *sp;
-	struct ip *ip;
+	struct ip *ip, iph;
 	uint32_t af;
 	int error;
 
@@ -376,7 +375,8 @@ ipsec_transmit(struct ifnet *ifp, struct mbuf *m)
 	}
 
 	/* Determine address family to correctly handle packet in BPF */
-	ip = mtod(m, struct ip *);
+	ip = &iph;
+	m_copydata(m, 0, sizeof(*ip), (char *)ip);
 	switch (ip->ip_v) {
 #ifdef INET
 	case IPVERSION:
@@ -416,12 +416,13 @@ ipsec_transmit(struct ifnet *ifp, struct mbuf *m)
 	switch (af) {
 #ifdef INET
 	case AF_INET:
-		error = ipsec4_process_packet(m, sp, NULL);
+		error = ipsec4_process_packet(ifp, m, ip, sp, NULL,
+		    ifp->if_mtu);
 		break;
 #endif
 #ifdef INET6
 	case AF_INET6:
-		error = ipsec6_process_packet(m, sp, NULL);
+		error = ipsec6_process_packet(ifp, m, sp, NULL, ifp->if_mtu);
 		break;
 #endif
 	default:
@@ -449,7 +450,8 @@ ipsec_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 }
 
 int
-ipsec_if_input(struct mbuf *m, struct secasvar *sav, uint32_t af)
+ipsec_if_input(struct mbuf *m, struct secasvar *sav, uint32_t af,
+    struct rm_priotracker *sahtree_tracker)
 {
 	IPSEC_RLOCK_TRACKER;
 	struct secasindex *saidx;
@@ -458,13 +460,16 @@ ipsec_if_input(struct mbuf *m, struct secasvar *sav, uint32_t af)
 
 	if (sav->state != SADB_SASTATE_MATURE &&
 	    sav->state != SADB_SASTATE_DYING) {
+		ipsec_sahtree_runlock(sahtree_tracker);
 		m_freem(m);
 		return (ENETDOWN);
 	}
 
 	if (sav->sah->saidx.mode != IPSEC_MODE_TUNNEL ||
-	    sav->sah->saidx.proto != IPPROTO_ESP)
+	    sav->sah->saidx.proto != IPPROTO_ESP) {
+		ipsec_sahtree_runlock(sahtree_tracker);
 		return (0);
+	}
 
 	IPSEC_RLOCK();
 	CK_LIST_FOREACH(sc, ipsec_idhash(sav->sah->saidx.reqid), idhash) {
@@ -486,6 +491,7 @@ ipsec_if_input(struct mbuf *m, struct secasvar *sav, uint32_t af)
 	}
 	if (sc == NULL) {
 		IPSEC_RUNLOCK();
+		ipsec_sahtree_runlock(sahtree_tracker);
 		/* Tunnel was not found. Nothing to do. */
 		return (0);
 	}
@@ -493,6 +499,7 @@ ipsec_if_input(struct mbuf *m, struct secasvar *sav, uint32_t af)
 	if ((ifp->if_drv_flags & IFF_DRV_RUNNING) == 0 ||
 	    (ifp->if_flags & IFF_UP) == 0) {
 		IPSEC_RUNLOCK();
+		ipsec_sahtree_runlock(sahtree_tracker);
 		m_freem(m);
 		return (ENETDOWN);
 	}
@@ -501,6 +508,8 @@ ipsec_if_input(struct mbuf *m, struct secasvar *sav, uint32_t af)
 	 * Set its ifnet as receiving interface.
 	 */
 	m->m_pkthdr.rcvif = ifp;
+
+	ipsec_sahtree_runlock(sahtree_tracker);
 
 	m_clrprotoflags(m);
 	M_SETFIB(m, ifp->if_fib);
@@ -666,6 +675,10 @@ ipsec_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			break;
 		}
 		saidx = ipsec_getsaidx(sc, IPSEC_DIR_OUTBOUND, sc->family);
+		if (saidx == NULL) {
+			error = ENXIO;
+			break;
+		}
 		switch (cmd) {
 #ifdef INET
 		case SIOCGIFPSRCADDR:
@@ -783,6 +796,8 @@ ipsec_set_running(struct ipsec_softc *sc)
 	int localip;
 
 	saidx = ipsec_getsaidx(sc, IPSEC_DIR_OUTBOUND, sc->family);
+	if (saidx == NULL)
+		return;
 	localip = 0;
 	switch (sc->family) {
 #ifdef INET
@@ -813,13 +828,17 @@ ipsec_srcaddr(void *arg __unused, const struct sockaddr *sa,
 {
 	struct ipsec_softc *sc;
 	struct secasindex *saidx;
+	struct ipsec_iflist *iflist;
 
 	/* Check that VNET is ready */
 	if (V_ipsec_idhtbl == NULL)
 		return;
 
 	NET_EPOCH_ASSERT();
-	CK_LIST_FOREACH(sc, ipsec_srchash(sa), srchash) {
+	iflist = ipsec_srchash(sa);
+	if (iflist == NULL)
+		return;
+	CK_LIST_FOREACH(sc, iflist, srchash) {
 		if (sc->family == 0)
 			continue;
 		saidx = ipsec_getsaidx(sc, IPSEC_DIR_OUTBOUND, sa->sa_family);
@@ -892,8 +911,10 @@ ipsec_newpolicies(struct ipsec_softc *sc, struct secpolicy *sp[IPSEC_SPCOUNT],
 	}
 	return (0);
 fail:
-	for (i = 0; i < IPSEC_SPCOUNT; i++)
-		key_freesp(&sp[i]);
+	for (i = 0; i < IPSEC_SPCOUNT; i++) {
+		if (sp[i] != NULL)
+			key_freesp(&sp[i]);
+	}
 	return (ENOMEM);
 }
 
@@ -1015,12 +1036,18 @@ ipsec_set_tunnel(struct ipsec_softc *sc, struct sockaddr *src,
     struct sockaddr *dst, uint32_t reqid)
 {
 	struct epoch_tracker et;
+	struct ipsec_iflist *iflist;
 	struct secpolicy *sp[IPSEC_SPCOUNT];
 	int i;
 
 	sx_assert(&ipsec_ioctl_sx, SA_XLOCKED);
 
 	/* Allocate SP with new addresses. */
+	iflist = ipsec_srchash(src);
+	if (iflist == NULL) {
+		sc->ifp->if_drv_flags &= ~IFF_DRV_RUNNING;
+		return (EAFNOSUPPORT);
+	}
 	if (ipsec_newpolicies(sc, sp, src, dst, reqid) == 0) {
 		/* Add new policies to SPDB */
 		if (key_register_ifnet(sp, IPSEC_SPCOUNT) != 0) {
@@ -1033,7 +1060,7 @@ ipsec_set_tunnel(struct ipsec_softc *sc, struct sockaddr *src,
 		for (i = 0; i < IPSEC_SPCOUNT; i++)
 			sc->sp[i] = sp[i];
 		sc->family = src->sa_family;
-		CK_LIST_INSERT_HEAD(ipsec_srchash(src), sc, srchash);
+		CK_LIST_INSERT_HEAD(iflist, sc, srchash);
 	} else {
 		sc->ifp->if_drv_flags &= ~IFF_DRV_RUNNING;
 		return (ENOMEM);

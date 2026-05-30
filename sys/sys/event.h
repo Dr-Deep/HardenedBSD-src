@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1999,2000,2001 Jonathan Lemon <jlemon@FreeBSD.org>
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _SYS_EVENT_H_
@@ -47,7 +45,9 @@
 #define EVFILT_USER		(-11)	/* User events */
 #define EVFILT_SENDFILE		(-12)	/* attached to sendfile requests */
 #define EVFILT_EMPTY		(-13)	/* empty send socket buf */
-#define EVFILT_SYSCOUNT		13
+#define EVFILT_JAIL		(-14)	/* attached to struct prison */
+#define EVFILT_JAILDESC		(-15)	/* attached to jail descriptors */
+#define EVFILT_SYSCOUNT		15
 
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L
 #define	EV_SET(kevp_, a, b, c, d, e, f) do {	\
@@ -103,7 +103,9 @@ struct freebsd11_kevent {
 };
 #endif
 
-#if defined(_WANT_KEVENT32) || (defined(_KERNEL) && defined(__LP64__))
+#if defined(_WANT_KEVENT32) || defined(_KERNEL)
+#include <sys/abi_types.h>
+
 struct kevent32 {
 	__uint32_t	ident;		/* identifier for this event */
 	short		filter;		/* filter for event */
@@ -112,12 +114,12 @@ struct kevent32 {
 #ifndef __amd64__
 	__uint32_t	pad0;
 #endif
-	__uint32_t	data1, data2;
+	freebsd32_uint64_t data;
 	__uint32_t	udata;		/* opaque user data identifier */
 #ifndef __amd64__
 	__uint32_t	pad1;
 #endif
-	__uint32_t	ext64[8];
+	freebsd32_uint64_t ext[4];
 };
 
 #ifdef _WANT_FREEBSD11_KEVENT
@@ -207,9 +209,17 @@ struct freebsd11_kevent32 {
 #define	NOTE_PDATAMASK	0x000fffff		/* mask for pid */
 
 /* additional flags for EVFILT_PROC */
-#define	NOTE_TRACK	0x00000001		/* follow across forks */
+#define	NOTE_TRACK	0x00000001		/* follow across fork/create */
 #define	NOTE_TRACKERR	0x00000002		/* could not track child */
 #define	NOTE_CHILD	0x00000004		/* am a child process */
+
+/* data/hint flags for EVFILT_JAIL and EVFILT_JAILDESC */
+#define	NOTE_JAIL_CHILD		0x80000000	/* child jail was created */
+#define	NOTE_JAIL_SET		0x40000000	/* jail was modified */
+#define	NOTE_JAIL_ATTACH	0x20000000	/* jail was attached to */
+#define	NOTE_JAIL_REMOVE	0x10000000	/* jail was removed */
+#define NOTE_JAIL_MULTI		0x08000000	/* multiple child or attach */
+#define	NOTE_JAIL_CTRLMASK	0xf0000000	/* mask for hint bits */
 
 /* additional flags for EVFILT_TIMER */
 #define NOTE_SECONDS		0x00000001	/* data is seconds */
@@ -217,6 +227,10 @@ struct freebsd11_kevent32 {
 #define NOTE_USECONDS		0x00000004	/* data is microseconds */
 #define NOTE_NSECONDS		0x00000008	/* data is nanoseconds */
 #define	NOTE_ABSTIME		0x00000010	/* timeout is absolute */
+
+/* Flags for kqueuex(2) */
+#define	KQUEUE_CLOEXEC	0x00000001	/* close on exec */
+#define	KQUEUE_CPONFORK	0x00000002	/* copy on fork */
 
 struct knote;
 SLIST_HEAD(klist, knote);
@@ -261,12 +275,18 @@ struct knlist {
 #define EVENT_REGISTER	1
 #define EVENT_PROCESS	2
 
+struct kinfo_knote;
+struct proc;
+
 struct filterops {
 	int	f_isfd;		/* true if ident == filedescriptor */
 	int	(*f_attach)(struct knote *kn);
 	void	(*f_detach)(struct knote *kn);
 	int	(*f_event)(struct knote *kn, long hint);
 	void	(*f_touch)(struct knote *kn, struct kevent *kev, u_long type);
+	int	(*f_userdump)(struct proc *p, struct knote *kn,
+		    struct kinfo_knote *kin);
+	int	(*f_copy)(struct knote *kn, struct proc *p1);
 };
 
 /*
@@ -296,16 +316,17 @@ struct knote {
 #define KN_KQUEUE	0x40			/* this knote belongs to a kq */
 #define	KN_SCAN		0x100			/* flux set in kqueue_scan() */
 	int			kn_influx;
-	int			kn_sfflags;	/* saved filter flags */
+	unsigned int		kn_sfflags;	/* saved filter flags */
 	int64_t			kn_sdata;	/* saved data field */
 	union {
 		struct		file *p_fp;	/* file data pointer */
 		struct		proc *p_proc;	/* proc pointer */
 		struct		kaiocb *p_aio;	/* AIO job pointer */
 		struct		aioliojob *p_lio;	/* LIO job pointer */
+		struct		prison *p_prison;	/* prison pointer */
 		void		*p_v;		/* generic other pointer */
 	} kn_ptr;
-	struct			filterops *kn_fop;
+	const struct		filterops *kn_fop;
 
 #define kn_id		kn_kevent.ident
 #define kn_filter	kn_kevent.filter
@@ -329,6 +350,7 @@ struct rwlock;
 
 void	knote(struct knlist *list, long hint, int lockflags);
 void	knote_fork(struct knlist *list, int pid);
+int	knote_triv_copy(struct knote *kn, struct proc *p1);
 struct knlist *knlist_alloc(struct mtx *lock);
 void	knlist_detach(struct knlist *knl);
 void	knlist_add(struct knlist *knl, struct knote *kn, int islocked);
@@ -347,7 +369,7 @@ void	knlist_cleardel(struct knlist *knl, struct thread *td,
 void	knote_fdclose(struct thread *p, int fd);
 int 	kqfd_register(int fd, struct kevent *kev, struct thread *p,
 	    int mflag);
-int	kqueue_add_filteropts(int filt, struct filterops *filtops);
+int	kqueue_add_filteropts(int filt, const struct filterops *filtops);
 int	kqueue_del_filteropts(int filt);
 void	kqueue_drain_schedtask(void);
 
@@ -358,6 +380,8 @@ struct timespec;
 
 __BEGIN_DECLS
 int     kqueue(void);
+int     kqueuex(unsigned flags);
+int     kqueue1(int flags);
 int     kevent(int kq, const struct kevent *changelist, int nchanges,
 	    struct kevent *eventlist, int nevents,
 	    const struct timespec *timeout);

@@ -27,9 +27,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)filedesc.h	8.1 (Berkeley) 6/2/93
- * $FreeBSD$
  */
 
 #ifndef _SYS_FILEDESC_H_
@@ -89,6 +86,8 @@ struct fdescenttbl {
 /*
  * This struct is copy-on-write and allocated from an SMR zone.
  * All fields are constant after initialization apart from the reference count.
+ * The ABI root directory is initialized as the root directory and changed
+ * during process transiting to or from non-native ABI.
  *
  * Check pwd_* routines for usage.
  */
@@ -97,6 +96,7 @@ struct pwd {
 	struct	vnode	*pwd_cdir;	/* current directory */
 	struct	vnode	*pwd_rdir;	/* root directory */
 	struct	vnode	*pwd_jdir;	/* jail root directory */
+	struct	vnode	*pwd_adir;	/* abi root directory */
 };
 typedef SMR_POINTER(struct pwd *) smrpwd_t;
 
@@ -148,6 +148,8 @@ struct filedesc_to_leader {
  * Per-process open flags.
  */
 #define	UF_EXCLOSE	0x01		/* auto-close on exec */
+#define	UF_RESOLVE_BENEATH 0x02		/* lookups must be beneath this dir */
+#define	UF_FOCLOSE	0x04		/* auto-close on fork */
 
 #ifdef _KERNEL
 
@@ -210,6 +212,8 @@ struct filedesc_to_leader {
 
 #ifdef _KERNEL
 
+#include <machine/atomic.h>
+
 /* Operation types for kern_dup(). */
 enum {
 	FDDUP_NORMAL,		/* dup() behavior. */
@@ -220,11 +224,13 @@ enum {
 
 /* Flags for kern_dup(). */
 #define	FDDUP_FLAG_CLOEXEC	0x1	/* Atomically set UF_EXCLOSE. */
+#define	FDDUP_FLAG_CLOFORK	0x2	/* Atomically set UF_FOCLOSE. */
 
 /* For backward compatibility. */
 #define	falloc(td, resultfp, resultfd, flags) \
 	falloc_caps(td, resultfp, resultfd, flags, NULL)
 
+struct mount;
 struct thread;
 
 static __inline void
@@ -241,6 +247,7 @@ void	filecaps_free(struct filecaps *fcaps);
 
 int	closef(struct file *fp, struct thread *td);
 void	closef_nothread(struct file *fp);
+int	descrip_check_write_mp(struct filedesc *fdp, struct mount *mp);
 int	dupfdopen(struct thread *td, struct filedesc *fdp, int dfd, int mode,
 	    int openerror, int *indxp);
 int	falloc_caps(struct thread *td, struct file **resultfp, int *resultfd,
@@ -260,7 +267,7 @@ int	fdcheckstd(struct thread *td);
 void	fdclose(struct thread *td, struct file *fp, int idx);
 void	fdcloseexec(struct thread *td);
 void	fdsetugidsafety(struct thread *td);
-struct	filedesc *fdcopy(struct filedesc *fdp);
+struct	filedesc *fdcopy(struct filedesc *fdp, struct proc *p1);
 void	fdunshare(struct thread *td);
 void	fdescfree(struct thread *td);
 int	fdlastfile(struct filedesc *fdp);
@@ -273,26 +280,45 @@ struct filedesc_to_leader *
 struct filedesc_to_leader *
 	filedesc_to_leader_share(struct filedesc_to_leader *fdtol,
 	    struct filedesc *fdp);
-int	getvnode(struct thread *td, int fd, cap_rights_t *rightsp,
+int	getvnode(struct thread *td, int fd, const cap_rights_t *rightsp,
 	    struct file **fpp);
-int	getvnode_path(struct thread *td, int fd, cap_rights_t *rightsp,
-	    struct file **fpp);
+int	getvnode_path(struct thread *td, int fd, const cap_rights_t *rightsp,
+	    uint8_t *flagsp, struct file **fpp);
 void	mountcheckdirs(struct vnode *olddp, struct vnode *newdp);
 
-int	fget_cap_noref(struct filedesc *fdp, int fd, cap_rights_t *needrightsp,
-	    struct file **fpp, struct filecaps *havecapsp);
-int	fget_cap(struct thread *td, int fd, cap_rights_t *needrightsp,
-	    struct file **fpp, struct filecaps *havecapsp);
+int	fget_cap_noref(struct filedesc *fdp, int fd,
+	    const cap_rights_t *needrightsp, struct file **fpp,
+	    struct filecaps *havecapsp);
+int	fget_cap(struct thread *td, int fd, const cap_rights_t *needrightsp,
+	    uint8_t *flagsp, struct file **fpp, struct filecaps *havecapsp);
 /* Return a referenced file from an unlocked descriptor. */
-int	fget_unlocked(struct thread *td, int fd, cap_rights_t *needrightsp,
+int	fget_unlocked(struct thread *td, int fd,
+	    const cap_rights_t *needrightsp, struct file **fpp);
+int	fget_unlocked_flags(struct thread *td, int fd,
+	    const cap_rights_t *needrightsp, uint8_t *flagsp,
 	    struct file **fpp);
 /* Return a file pointer without a ref. FILEDESC_IS_ONLY_USER must be true.  */
-int	fget_only_user(struct filedesc *fdp, int fd, cap_rights_t *needrightsp,
-	    struct file **fpp);
+int	fget_only_user(struct filedesc *fdp, int fd,
+	    const cap_rights_t *needrightsp, struct file **fpp);
 #define	fput_only_user(fdp, fp)	({					\
 	MPASS(FILEDESC_IS_ONLY_USER(fdp));				\
 	MPASS(refcount_load(&fp->f_count) > 0);				\
 })
+
+/*
+ * Look up a file description without requiring a lock.  In general the result
+ * may be immediately invalidated after the function returns, the caller must
+ * handle this.
+ */
+static inline struct file *
+fget_noref_unlocked(struct filedesc *fdp, int fd)
+{
+	if (__predict_false(
+	    (u_int)fd >= (u_int)atomic_load_int(&fdp->fd_nfiles)))
+		return (NULL);
+
+	return (atomic_load_ptr(&fdp->fd_ofiles[fd].fde_file));
+}
 
 /* Requires a FILEDESC_{S,X}LOCK held and returns without a ref. */
 static __inline struct file *
@@ -301,7 +327,7 @@ fget_noref(struct filedesc *fdp, int fd)
 
 	FILEDESC_LOCK_ASSERT(fdp);
 
-	if (__predict_false((u_int)fd >= fdp->fd_nfiles))
+	if (__predict_false((u_int)fd >= (u_int)fdp->fd_nfiles))
 		return (NULL);
 
 	return (fdp->fd_ofiles[fd].fde_file);
@@ -314,7 +340,7 @@ fdeget_noref(struct filedesc *fdp, int fd)
 
 	FILEDESC_LOCK_ASSERT(fdp);
 
-	if (__predict_false((u_int)fd >= fdp->fd_nfiles))
+	if (__predict_false((u_int)fd >= (u_int)fdp->fd_nfiles))
 		return (NULL);
 
 	fde = &fdp->fd_ofiles[fd];
@@ -333,6 +359,8 @@ fd_modified(struct filedesc *fdp, int fd, seqc_t seqc)
 }
 #endif
 
+int	proc_nfiles(struct proc *p);
+
 /* cdir/rdir/jdir manipulation functions. */
 struct pwddesc *pdcopy(struct pwddesc *pdp);
 void	pdescfree(struct thread *td);
@@ -340,6 +368,7 @@ struct pwddesc *pdinit(struct pwddesc *pdp, bool keeplock);
 struct pwddesc *pdshare(struct pwddesc *pdp);
 void	pdunshare(struct thread *td);
 
+void	pwd_altroot(struct thread *td, struct vnode *altroot_vp);
 void	pwd_chdir(struct thread *td, struct vnode *vp);
 int	pwd_chroot(struct thread *td, struct vnode *vp);
 int	pwd_chroot_chdir(struct thread *td, struct vnode *vp);

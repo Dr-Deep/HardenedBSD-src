@@ -32,12 +32,6 @@
  * SUCH DAMAGE.
  */
 
-#if defined(LIBC_SCCS) && !defined(lint)
-static char sccsid[] = "@(#)bt_split.c	8.10 (Berkeley) 1/9/95";
-#endif /* LIBC_SCCS and not lint */
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 
 #include <limits.h>
@@ -548,7 +542,7 @@ bt_broot(BTREE *t, PAGE *h, PAGE *l, PAGE *r)
 		 * If the key is on an overflow page, mark the overflow chain
 		 * so it isn't deleted when the leaf copy of the key is deleted.
 		 */
-	if (bl->flags & P_BIGKEY) {
+		if (bl->flags & P_BIGKEY) {
 			pgno_t pgno;
 			memcpy(&pgno, bl->bytes, sizeof(pgno));
 			if (bt_preserve(t, pgno) == RET_ERROR)

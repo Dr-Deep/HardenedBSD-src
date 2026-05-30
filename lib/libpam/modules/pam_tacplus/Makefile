@@ -22,11 +22,10 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 
-LIB=	pam_tacplus
-SRCS=	pam_tacplus.c
-MAN=	pam_tacplus.8
+LIB=		pam_tacplus
+SRCS=		pam_tacplus.c
+MANNODEV=	pam_tacplus.8
 
 LIBADD+=	tacplus
 

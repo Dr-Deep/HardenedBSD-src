@@ -25,6 +25,7 @@
 #include "lldb/Target/Target.h"
 #include "lldb/Target/Thread.h"
 #include "lldb/Utility/ConstString.h"
+#include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/Scalar.h"
 #include "lldb/Utility/Status.h"
@@ -47,14 +48,14 @@ AppleObjCRuntimeV1::AppleObjCRuntimeV1(Process *process)
 bool AppleObjCRuntimeV1::GetDynamicTypeAndAddress(
     ValueObject &in_value, lldb::DynamicValueType use_dynamic,
     TypeAndOrName &class_type_or_name, Address &address,
-    Value::ValueType &value_type) {
+    Value::ValueType &value_type, llvm::ArrayRef<uint8_t> &local_buffer) {
   class_type_or_name.Clear();
   value_type = Value::ValueType::Scalar;
   if (CouldHaveDynamicValue(in_value)) {
     auto class_descriptor(GetClassDescriptor(in_value));
     if (class_descriptor && class_descriptor->IsValid() &&
         class_descriptor->GetClassName()) {
-      const addr_t object_ptr = in_value.GetPointerValue();
+      const addr_t object_ptr = in_value.GetPointerValue().address;
       address.SetRawAddress(object_ptr);
       class_type_or_name.SetName(class_descriptor->GetClassName());
     }
@@ -160,7 +161,7 @@ AppleObjCRuntimeV1::CreateObjectChecker(std::string name,
                "           \n",
                name.c_str());
   assert(strformatsize < (int)sizeof(buf->contents));
-  (void)strformatsize;
+  UNUSED_IF_ASSERT_DISABLED(strformatsize);
 
   return GetTargetRef().CreateUtilityFunction(buf->contents, std::move(name),
                                               eLanguageTypeC, exe_ctx);
@@ -221,7 +222,7 @@ void AppleObjCRuntimeV1::ClassDescriptorV1::Initialize(
     return;
   }
 
-  lldb::DataBufferSP buffer_sp(new DataBufferHeap(1024, 0));
+  lldb::WritableDataBufferSP buffer_sp(new DataBufferHeap(1024, 0));
 
   size_t count = process_sp->ReadCStringFromMemory(
       name_ptr, (char *)buffer_sp->GetBytes(), 1024, error);
@@ -232,7 +233,7 @@ void AppleObjCRuntimeV1::ClassDescriptorV1::Initialize(
   }
 
   if (count)
-    m_name = ConstString((char *)buffer_sp->GetBytes());
+    m_name = ConstString(reinterpret_cast<const char *>(buffer_sp->GetBytes()));
   else
     m_name = ConstString();
 
@@ -318,7 +319,7 @@ void AppleObjCRuntimeV1::UpdateISAToDescriptorMapIfNeeded() {
     // map, whether it was successful or not.
     m_isa_to_descriptor_stop_id = process->GetStopID();
 
-    Log *log(GetLogIfAllCategoriesSet(LIBLLDB_LOG_PROCESS));
+    Log *log = GetLog(LLDBLog::Process);
 
     ProcessSP process_sp = process->shared_from_this();
 

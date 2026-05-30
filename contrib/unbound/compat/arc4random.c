@@ -38,6 +38,9 @@
 #ifndef UB_ON_WINDOWS
 #include <sys/mman.h>
 #endif
+#ifdef __QNX__
+#include "util/log.h"
+#endif /* __QNX__ */
 
 #define KEYSTREAM_ONLY
 #include "chacha_private.h"
@@ -56,6 +59,8 @@
 #define IVSZ	8
 #define BLOCKSZ	64
 #define RSBUFSZ	(16*BLOCKSZ)
+
+#define REKEY_BASE	(1024*1024) /* NB. should be a power of 2 */
 
 /* Marked MAP_INHERIT_ZERO, so zero'd out in fork children. */
 static struct {
@@ -179,12 +184,17 @@ static void
 _rs_stir(void)
 {
 	u_char rnd[KEYSZ + IVSZ];
+	uint32_t rekey_fuzz = 0;
 
 	if (getentropy(rnd, sizeof rnd) == -1) {
 		if(errno != ENOSYS ||
 			fallback_getentropy_urandom(rnd, sizeof rnd) == -1) {
 #ifdef SIGKILL
+#ifndef __QNX__
 			raise(SIGKILL);
+#else /* !__QNX__ */
+			fatal_exit("failed to getentropy");
+#endif /* __QNX__ */
 #else
 			exit(9); /* windows */
 #endif
@@ -201,7 +211,10 @@ _rs_stir(void)
 	rs->rs_have = 0;
 	memset(rsx->rs_buf, 0, sizeof(rsx->rs_buf));
 
-	rs->rs_count = 1600000;
+	/* rekey interval should not be predictable */
+	chacha_encrypt_bytes(&rsx->rs_chacha, (uint8_t *)&rekey_fuzz,
+	    (uint8_t *)&rekey_fuzz, sizeof(rekey_fuzz));
+	rs->rs_count = REKEY_BASE + (rekey_fuzz % REKEY_BASE);
 }
 
 static inline void

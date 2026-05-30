@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1999-2001 Robert N. M. Watson
  * All rights reserved.
@@ -26,8 +26,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 /*
  * Developed by the TrustedBSD Project.
@@ -55,9 +53,9 @@
  * char *extattr_namespace_names[] = EXTATTR_NAMESPACE_NAMES;
  */
 #define EXTATTR_NAMESPACE_NAMES { \
-	EXTATTR_NAMESPACE_EMPTY_STRING, \
-	EXTATTR_NAMESPACE_USER_STRING, \
-	EXTATTR_NAMESPACE_SYSTEM_STRING }
+	[EXTATTR_NAMESPACE_EMPTY] = EXTATTR_NAMESPACE_EMPTY_STRING, \
+	[EXTATTR_NAMESPACE_USER] = EXTATTR_NAMESPACE_USER_STRING, \
+	[EXTATTR_NAMESPACE_SYSTEM] = EXTATTR_NAMESPACE_SYSTEM_STRING }
 
 #define	EXTATTR_MAXNAMELEN	NAME_MAX
 
@@ -72,8 +70,6 @@ int	extattr_check_cred(struct vnode *vp, int attrnamespace,
 
 #else
 #include <sys/cdefs.h>
-
-struct iovec;
 
 __BEGIN_DECLS
 int	extattrctl(const char *_path, int _cmd, const char *_filename,

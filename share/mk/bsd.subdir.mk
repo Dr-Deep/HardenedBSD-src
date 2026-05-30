@@ -1,6 +1,3 @@
-#	from: @(#)bsd.subdir.mk	5.9 (Berkeley) 2/1/91
-# $FreeBSD$
-#
 # The include file <bsd.subdir.mk> contains the default targets
 # for building subdirectories.
 #
@@ -36,7 +33,7 @@
 #
 
 .if !target(__<bsd.subdir.mk>__)
-__<bsd.subdir.mk>__:
+__<bsd.subdir.mk>__:	.NOTMAIN
 
 .if ${MK_AUTO_OBJ} == "no"
 _obj=	obj
@@ -48,21 +45,21 @@ SUBDIR_TARGETS+= \
 		cleanobj depend distribute files includes installconfig \
 		installdirs \
 		installfiles installincludes print-dir realinstall \
-		maninstall manlint ${_obj} objlink tags \
+		maninstall manlint ${_obj} objlink stagepackages tags \
 
 # Described above.
 STANDALONE_SUBDIR_TARGETS+= \
 		all-man buildconfig buildfiles buildincludes check checkdpadd \
 		clean cleandepend cleandir cleanilinks cleanobj files includes \
 		installconfig installdirs installincludes installfiles print-dir \
-		maninstall manlint obj objlink
-
-# It is safe to install in parallel when staging.
-.if defined(NO_ROOT) || !empty(SYSROOT)
-STANDALONE_SUBDIR_TARGETS+= realinstall
-.endif
+		maninstall manlint obj objlink stagepackages
 
 .include <bsd.init.mk>
+
+.if ${MK_META_MODE} == "yes"
+.MAKE.JOB.PREFIX=
+ECHODIR=	:
+.endif
 
 .if make(print-dir)
 NEED_SUBDIR=	1
@@ -79,13 +76,14 @@ obj: .PHONY
 .endif
 
 .if !defined(NEED_SUBDIR)
-# .MAKE.DEPENDFILE==/dev/null is set by bsd.dep.mk to avoid reading
-# Makefile.depend
-.if ${.MAKE.LEVEL} == 0 && ${MK_DIRDEPS_BUILD} == "yes" && !empty(SUBDIR) && \
-    ${.MAKE.DEPENDFILE} != "/dev/null"
-.include <meta.subdir.mk>
+.if ${MK_DIRDEPS_BUILD} == "yes"
 # ignore this
 _SUBDIR:
+# .MAKE.DEPENDFILE==/dev/null is set by bsd.dep.mk to avoid reading
+# Makefile.depend
+.if ${.MAKE.LEVEL} == 0 && !empty(SUBDIR) && ${.MAKE.DEPENDFILE} != "/dev/null"
+.include <meta.subdir.mk>
+.endif
 .endif
 .endif
 
@@ -128,8 +126,8 @@ SUBDIR:=${SUBDIR:u}
 .endif
 
 .if defined(SUBDIR.)
-.error ${.CURDIR}: Found variable SUBDIR. with value "${SUBDIR.}". This was \
-        probably caused by using SUBDIR.$${MK_FOO} without including \
+.error ${.CURDIR}: Found variable 'SUBDIR.' with value "${SUBDIR.}". This was\
+        probably caused by using SUBDIR.$${MK_FOO} without including\
         <src.opts.mk> or by using an invalid $${MK_FOO} option.
 .endif
 

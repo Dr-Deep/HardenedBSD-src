@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2000 Michael Smith
  * Copyright (c) 2000 BSDi
@@ -28,8 +28,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * An interface to the FreeBSD kernel's bus/device information interface.
  *
@@ -422,7 +420,7 @@ devinfo_handle_to_device(devinfo_handle_t handle)
 	 */
 	if (handle == DEVINFO_ROOT_DEVICE) {
 		TAILQ_FOREACH(dd, &devinfo_dev, dd_link)
-		    if (dd->dd_dev.dd_parent == DEVINFO_ROOT_DEVICE)
+		    if (dd->dd_dev.dd_parent == 0)
 			    return(&dd->dd_dev);
 		return(NULL);
 	}

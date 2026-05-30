@@ -31,7 +31,6 @@
   POSSIBILITY OF SUCH DAMAGE.
 
 ******************************************************************************/
-/*$FreeBSD$*/
 
 #include "ixgbe_api.h"
 #include "ixgbe_common.h"
@@ -113,11 +112,15 @@ s32 ixgbe_init_shared_code(struct ixgbe_hw *hw)
 	case ixgbe_mac_X550EM_a:
 		status = ixgbe_init_ops_X550EM_a(hw);
 		break;
+	case ixgbe_mac_E610:
+		status = ixgbe_init_ops_E610(hw);
+		break;
 	case ixgbe_mac_82599_vf:
 	case ixgbe_mac_X540_vf:
 	case ixgbe_mac_X550_vf:
 	case ixgbe_mac_X550EM_x_vf:
 	case ixgbe_mac_X550EM_a_vf:
+	case ixgbe_mac_E610_vf:
 		status = ixgbe_init_ops_vf(hw);
 		break;
 	default:
@@ -239,6 +242,18 @@ s32 ixgbe_set_mac_type(struct ixgbe_hw *hw)
 	case IXGBE_DEV_ID_X550EM_A_VF:
 	case IXGBE_DEV_ID_X550EM_A_VF_HV:
 		hw->mac.type = ixgbe_mac_X550EM_a_vf;
+		hw->mvals = ixgbe_mvals_X550EM_a;
+		break;
+	case IXGBE_DEV_ID_E610_BACKPLANE:
+	case IXGBE_DEV_ID_E610_SFP:
+	case IXGBE_DEV_ID_E610_10G_T:
+	case IXGBE_DEV_ID_E610_2_5G_T:
+	case IXGBE_DEV_ID_E610_SGMII:
+		hw->mac.type = ixgbe_mac_E610;
+		hw->mvals = ixgbe_mvals_X550EM_a;
+		break;
+	case IXGBE_DEV_ID_E610_VF:
+		hw->mac.type = ixgbe_mac_E610_vf;
 		hw->mvals = ixgbe_mvals_X550EM_a;
 		break;
 	default:
@@ -905,7 +920,7 @@ s32 ixgbe_validate_eeprom_checksum(struct ixgbe_hw *hw, u16 *checksum_val)
 }
 
 /**
- * ixgbe_eeprom_update_checksum - Updates the EEPROM checksum
+ * ixgbe_update_eeprom_checksum - Updates the EEPROM checksum
  * @hw: pointer to hardware structure
  **/
 s32 ixgbe_update_eeprom_checksum(struct ixgbe_hw *hw)
@@ -1132,6 +1147,19 @@ s32 ixgbe_set_vlvf(struct ixgbe_hw *hw, u32 vlan, u32 vind, bool vlan_on,
 	return ixgbe_call_func(hw, hw->mac.ops.set_vlvf, (hw, vlan, vind,
 			       vlan_on, vfta_delta, vfta, vlvf_bypass),
 			       IXGBE_NOT_IMPLEMENTED);
+}
+
+/**
+ * ixgbe_toggle_txdctl - Toggle VF's queues
+ * @hw: pointer to hardware structure
+ * @vind: VMDq pool index
+ *
+ * Enable and disable each queue in VF.
+ */
+s32 ixgbe_toggle_txdctl(struct ixgbe_hw *hw, u32 vind)
+{
+	return ixgbe_call_func(hw, hw->mac.ops.toggle_txdctl, (hw,
+			       vind), IXGBE_NOT_IMPLEMENTED);
 }
 
 /**
@@ -1418,15 +1446,15 @@ s32 ixgbe_bypass_rw(struct ixgbe_hw *hw, u32 cmd, u32 *status)
 
 /**
  * ixgbe_bypass_valid_rd - Verify valid return from bit-bang.
+ * @hw: pointer to hardware structure
+ * @in_reg: The register cmd for the bit-bang read.
+ * @out_reg: The register returned from a bit-bang read.
  *
  * If we send a write we can't be sure it took until we can read back
- * that same register.  It can be a problem as some of the feilds may
+ * that same register.  It can be a problem as some of the fields may
  * for valid reasons change inbetween the time wrote the register and
  * we read it again to verify.  So this function check everything we
  * can check and then assumes it worked.
- *
- * @u32 in_reg - The register cmd for the bit-bang read.
- * @u32 out_reg - The register returned from a bit-bang read.
  **/
 bool ixgbe_bypass_valid_rd(struct ixgbe_hw *hw, u32 in_reg, u32 out_reg)
 {

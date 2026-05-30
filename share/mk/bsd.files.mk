@@ -1,4 +1,3 @@
-# $FreeBSD$
 
 .if !target(__<bsd.init.mk>__)
 .error bsd.files.mk cannot be included directly.
@@ -9,7 +8,7 @@
 .error bsd.dirs.mk must be included after bsd.files.mk.
 .endif
 
-__<bsd.files.mk>__:
+__<bsd.files.mk>__:	.NOTMAIN
 
 FILESGROUPS?=	FILES
 
@@ -39,14 +38,15 @@ ${group}DIR?=	BINDIR
 STAGE_SETS+=	${group:C,[/*],_,g}
 
 .if ${group} == "FILES"
-FILESPACKAGE=	${PACKAGE:Uutilities}
+FILESPACKAGE?=	${PACKAGE:Uutilities}
+FILESTAGS+=	${TAGS:Npackage=*}
 .endif
 
 .if defined(NO_ROOT)
 .if !defined(${group}TAGS) || ! ${${group}TAGS:Mpackage=*}
-${group}TAGS+=		package=${${group}PACKAGE:Uutilities}
+${group}TAGS+=		package=${${group}PACKAGE:U${PACKAGE:Uutilities}}
 .endif
-${group}TAG_ARGS=	-T ${${group}TAGS:[*]:S/ /,/g}
+${group}TAG_ARGS=	-T ${${group}TAGS:ts,:[*]}
 .endif
 
 
@@ -116,7 +116,7 @@ stage_as.${${_${group}DIR_${file}}:C,[/*],_,g}: ${file}
 
 installfiles-${group}: _${group}INS_${file}
 _${group}INS_${file}: ${file} installdirs-${_${group}DIR_${file}}
-	${INSTALL} ${${group}TAG_ARGS} -o ${${group}OWN_${file}} \
+	${INSTALL} -C ${${group}TAG_ARGS} -o ${${group}OWN_${file}} \
 	    -g ${${group}GRP_${file}} -m ${${group}MODE_${file}} \
 	    ${.ALLSRC:Ninstalldirs-*} ${${group}PREFIX_${file}}/${${group}NAME_${file}}
 .endfor # file in ${${group}}

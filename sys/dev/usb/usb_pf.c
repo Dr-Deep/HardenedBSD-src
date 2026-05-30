@@ -1,4 +1,3 @@
-/* $FreeBSD$ */
 /*-
  * SPDX-License-Identifier: BSD-3-Clause
  *
@@ -44,15 +43,11 @@
 #include <sys/fcntl.h>
 #include <sys/malloc.h>
 #include <sys/proc.h>
+#include <sys/epoch.h>
 #include <sys/socket.h>
 #include <sys/sockio.h>
-#include <net/if.h>
-#include <net/if_var.h>
-#include <net/if_types.h>
-#include <net/if_clone.h>
 #include <net/bpf.h>
 #include <sys/sysctl.h>
-#include <net/route.h>
 
 #include <dev/usb/usb.h>
 #include <dev/usb/usbdi.h>
@@ -66,182 +61,25 @@
 #include <dev/usb/usb_transfer.h>
 #endif			/* USB_GLOBAL_INCLUDE_FILE */
 
-static void usbpf_init(void *);
-static void usbpf_uninit(void *);
-static int usbpf_ioctl(struct ifnet *, u_long, caddr_t);
-static int usbpf_clone_match(struct if_clone *, const char *);
-static int usbpf_clone_create(struct if_clone *, char *, size_t, caddr_t);
-static int usbpf_clone_destroy(struct if_clone *, struct ifnet *);
-static struct usb_bus *usbpf_ifname2ubus(const char *);
 static uint32_t usbpf_aggregate_xferflags(struct usb_xfer_flags *);
 static uint32_t usbpf_aggregate_status(struct usb_xfer_flags_int *);
 static int usbpf_xfer_frame_is_read(struct usb_xfer *, uint32_t);
 static uint32_t usbpf_xfer_precompute_size(struct usb_xfer *, int);
 
-static struct if_clone *usbpf_cloner;
-static const char usbusname[] = "usbus";
-
-SYSINIT(usbpf_init, SI_SUB_PSEUDO, SI_ORDER_MIDDLE, usbpf_init, NULL);
-SYSUNINIT(usbpf_uninit, SI_SUB_PSEUDO, SI_ORDER_MIDDLE, usbpf_uninit, NULL);
-
-static void
-usbpf_init(void *arg)
-{
-
-	usbpf_cloner = if_clone_advanced(usbusname, 0, usbpf_clone_match,
-	    usbpf_clone_create, usbpf_clone_destroy);
-}
-
-static void
-usbpf_uninit(void *arg)
-{
-	int devlcnt;
-	device_t *devlp;
-	devclass_t dc;
-	struct usb_bus *ubus;
-	int error;
-	int i;
-
-	if_clone_detach(usbpf_cloner);
-
-	dc = devclass_find(usbusname);
-	if (dc == NULL)
-		return;
-	error = devclass_get_devices(dc, &devlp, &devlcnt);
-	if (error)
-		return;
-	for (i = 0; i < devlcnt; i++) {
-		ubus = device_get_softc(devlp[i]);
-		if (ubus != NULL && ubus->ifp != NULL)
-			usbpf_clone_destroy(usbpf_cloner, ubus->ifp);
-	}
-	free(devlp, M_TEMP);
-}
-
-static int
-usbpf_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
-{
-
-	/* No configuration allowed. */
-	return (EINVAL);
-}
-
-static struct usb_bus *
-usbpf_ifname2ubus(const char *ifname)
-{
-	device_t dev;
-	devclass_t dc;
-	int unit;
-	int error;
-
-	if (strncmp(ifname, usbusname, sizeof(usbusname) - 1) != 0)
-		return (NULL);
-	error = ifc_name2unit(ifname, &unit);
-	if (error || unit < 0)
-		return (NULL);
-	dc = devclass_find(usbusname);
-	if (dc == NULL)
-		return (NULL);
-	dev = devclass_get_device(dc, unit);
-	if (dev == NULL)
-		return (NULL);
-
-	return (device_get_softc(dev));
-}
-
-static int
-usbpf_clone_match(struct if_clone *ifc, const char *name)
-{
-	struct usb_bus *ubus;
-
-	ubus = usbpf_ifname2ubus(name);
-	if (ubus == NULL)
-		return (0);
-	if (ubus->ifp != NULL)
-		return (0);
-
-	return (1);
-}
-
-static int
-usbpf_clone_create(struct if_clone *ifc, char *name, size_t len, caddr_t params)
-{
-	int error;
-	int unit;
-	struct ifnet *ifp;
-	struct usb_bus *ubus;
-
-	error = ifc_name2unit(name, &unit);
-	if (error)
-		return (error);
- 	if (unit < 0)
-		return (EINVAL);
-
-	ubus = usbpf_ifname2ubus(name);
-	if (ubus == NULL)
-		return (1);
-	if (ubus->ifp != NULL)
-		return (1);
-
-	error = ifc_alloc_unit(ifc, &unit);
-	if (error) {
-		device_printf(ubus->parent, "usbpf: Could not allocate "
-		    "instance\n");
-		return (error);
-	}
-	ifp = ubus->ifp = if_alloc(IFT_USB);
-	if (ifp == NULL) {
-		ifc_free_unit(ifc, unit);
-		device_printf(ubus->parent, "usbpf: Could not allocate "
-		    "instance\n");
-		return (ENOSPC);
-	}
-	strlcpy(ifp->if_xname, name, sizeof(ifp->if_xname));
-	ifp->if_softc = ubus;
-	ifp->if_dname = usbusname;
-	ifp->if_dunit = unit;
-	ifp->if_ioctl = usbpf_ioctl;
-	if_attach(ifp);
-	ifp->if_flags |= IFF_UP;
-	rt_ifmsg(ifp);
+static const struct bif_methods bpf_usb_methods = {
 	/*
-	 * XXX According to the specification of DLT_USB, it indicates
-	 * packets beginning with USB setup header. But not sure all
-	 * packets would be.
+	 * XXXGL: bpf_tap() doesn't check direction, but we actually can
+	 * report it and make USB dumping able to match direction.
 	 */
-	bpfattach(ifp, DLT_USB, USBPF_HDR_LEN);
-
-	return (0);
-}
-
-static int
-usbpf_clone_destroy(struct if_clone *ifc, struct ifnet *ifp)
-{
-	struct usb_bus *ubus;
-	int unit;
-
-	ubus = ifp->if_softc;
-	unit = ifp->if_dunit;
-
-	/*
-	 * Lock USB before clearing the "ifp" pointer, to avoid
-	 * clearing the pointer in the middle of a TAP operation:
-	 */
-	USB_BUS_LOCK(ubus);
-	ubus->ifp = NULL;
-	USB_BUS_UNLOCK(ubus);
-	bpfdetach(ifp);
-	if_detach(ifp);
-	if_free(ifp);
-	ifc_free_unit(ifc, unit);
-
-	return (0);
-}
+	.bif_chkdir = NULL
+};
 
 void
 usbpf_attach(struct usb_bus *ubus)
 {
 
+	ubus->bpf = bpf_attach(device_get_nameunit(ubus->bdev), DLT_USB,
+	    USBPF_HDR_LEN, &bpf_usb_methods, ubus);
 	if (bootverbose)
 		device_printf(ubus->parent, "usbpf: Attached\n");
 }
@@ -250,8 +88,7 @@ void
 usbpf_detach(struct usb_bus *ubus)
 {
 
-	if (ubus->ifp != NULL)
-		usbpf_clone_destroy(usbpf_cloner, ubus->ifp);
+	bpf_detach(ubus->bpf);
 	if (bootverbose)
 		device_printf(ubus->parent, "usbpf: Detached\n");
 }
@@ -388,6 +225,7 @@ usbpf_xfer_precompute_size(struct usb_xfer *xfer, int type)
 void
 usbpf_xfertap(struct usb_xfer *xfer, int type)
 {
+	struct epoch_tracker et;
 	struct usb_bus *bus;
 	struct usbpf_pkthdr *up;
 	struct usbpf_framehdr *uf;
@@ -401,12 +239,6 @@ usbpf_xfertap(struct usb_xfer *xfer, int type)
 	uint8_t *ptr;
 
 	bus = xfer->xroot->bus;
-
-	/* sanity checks */
-	if (bus->ifp == NULL || bus->ifp->if_bpf == NULL)
-		return;
-	if (!bpf_peers_present(bus->ifp->if_bpf))
-		return;
 
 	totlen = usbpf_xfer_precompute_size(xfer, type);
 
@@ -528,7 +360,9 @@ usbpf_xfertap(struct usb_xfer *xfer, int type)
 		}
 	}
 
-	bpf_tap(bus->ifp->if_bpf, buf, totlen);
+	NET_EPOCH_ENTER(et);
+	bpf_tap(bus->bpf, buf, totlen);
+	NET_EPOCH_EXIT(et);
 
 	free(buf, M_TEMP);
 }

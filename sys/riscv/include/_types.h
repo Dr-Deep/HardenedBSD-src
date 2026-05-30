@@ -26,10 +26,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	From: @(#)ansi.h	8.2 (Berkeley) 1/4/94
- *	From: @(#)types.h	8.3 (Berkeley) 1/5/94
- * $FreeBSD$
  */
 
 #ifndef _MACHINE__TYPES_H_
@@ -55,6 +51,7 @@ typedef	__int64_t	__int_fast64_t;
 typedef	__int64_t	__register_t;
 typedef	__int64_t	__segsz_t;		/* segment size (in pages) */
 typedef	__int64_t	__time_t;		/* time()... */
+#define	__SIZEOF_TIME_T	__SIZEOF_INT64_T
 typedef	__uint32_t	__uint_fast8_t;
 typedef	__uint32_t	__uint_fast16_t;
 typedef	__uint32_t	__uint_fast32_t;

@@ -29,8 +29,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_hid.h"
 
 #include <sys/param.h>
@@ -41,6 +39,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/module.h>
+#include <sys/proc.h>
 #include <sys/rman.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
@@ -99,6 +98,8 @@ enum {
 #define	I2C_HID_POWER_ON		0x0
 #define	I2C_HID_POWER_OFF		0x1
 
+#define	IICHID_RESET_TIMEOUT		5	/* seconds */
+
 /*
  * Since interrupt resource acquisition is not always possible (in case of GPIO
  * interrupts) iichid now supports a sampling_mode.
@@ -108,9 +109,9 @@ enum {
  * sampling_rate_fast value too high as it may result in periodical lags of
  * cursor motion.
  */
-#define	IICHID_SAMPLING_RATE_FAST	60
+#define	IICHID_SAMPLING_RATE_FAST	80
 #define	IICHID_SAMPLING_RATE_SLOW	10
-#define	IICHID_SAMPLING_HYSTERESIS	1
+#define	IICHID_SAMPLING_HYSTERESIS	16	/* ~ 2x fast / slow */
 
 /* 5.1.1 - HID Descriptor Format */
 struct i2c_hid_desc {
@@ -157,6 +158,7 @@ enum iichid_powerstate_how {
  */
 struct iichid_softc {
 	device_t		dev;
+	struct mtx		mtx;
 
 	bool			probe_done;
 	int			probe_result;
@@ -179,16 +181,19 @@ struct iichid_softc {
 	int			sampling_rate_fast;
 	int			sampling_hysteresis;
 	int			missing_samples;	/* iicbus lock */
-	struct timeout_task	periodic_task;		/* iicbus lock */
+	int			dup_samples;		/* iicbus lock */
+	iichid_size_t		dup_size;		/* iicbus lock */
 	bool			callout_setup;		/* iicbus lock */
+	uint8_t			*dup_buf;
 	struct taskqueue	*taskqueue;
-	struct task		event_task;
+	struct timeout_task	sampling_task;		/* iicbus lock */
 #endif
 
 	struct task		suspend_task;
 	bool			open;			/* iicbus lock */
 	bool			suspend;		/* iicbus lock */
 	bool			power_on;		/* iicbus lock */
+	bool			reset_acked;		/* iichid mtx */
 };
 
 static device_probe_t	iichid_probe;
@@ -266,46 +271,45 @@ static int
 iichid_cmd_read(struct iichid_softc* sc, void *buf, iichid_size_t maxlen,
     iichid_size_t *actual_len)
 {
+	int error;
+
 	/*
 	 * 6.1.3 - Retrieval of Input Reports
 	 * DEVICE returns the length (2 Bytes) and the entire Input Report.
 	 */
-	uint8_t actbuf[2] = { 0, 0 };
-	/* Read actual input report length. */
+
+	memset(buf, 0xaa, 2);   // In case nothing gets read
 	struct iic_msg msgs[] = {
-	    { sc->addr, IIC_M_RD | IIC_M_NOSTOP, sizeof(actbuf), actbuf },
+	    { sc->addr, IIC_M_RD, maxlen, buf },
 	};
-	uint16_t actlen;
-	int error;
+
+	if (!sc->reset_acked) {
+		msgs[0].len = 2;
+	}
 
 	error = iicbus_transfer(sc->dev, msgs, nitems(msgs));
 	if (error != 0)
 		return (error);
 
-	actlen = actbuf[0] | actbuf[1] << 8;
-	if (actlen <= 2 || actlen == 0xFFFF || maxlen == 0) {
-		/* Read and discard 1 byte to send I2C STOP condition. */
-		msgs[0] = (struct iic_msg)
-		    { sc->addr, IIC_M_RD | IIC_M_NOSTART, 1, actbuf };
-		actlen = 0;
-	} else {
-		actlen -= 2;
-		if (actlen > maxlen) {
-			DPRINTF(sc, "input report too big. requested=%d "
-			    "received=%d\n", maxlen, actlen);
-			actlen = maxlen;
+	DPRINTFN(sc, 5, "%*D\n", msgs[0].len, msgs[0].buf, " ");
+
+	uint16_t actlen = le16dec(buf);
+
+	if (actlen == 0) {
+		if (!sc->reset_acked) {
+			mtx_lock(&sc->mtx);
+			sc->reset_acked = true;
+			wakeup(&sc->reset_acked);
+			mtx_unlock(&sc->mtx);
 		}
-		/* Read input report itself. */
-		msgs[0] = (struct iic_msg)
-		    { sc->addr, IIC_M_RD | IIC_M_NOSTART, actlen, buf };
 	}
 
-	error = iicbus_transfer(sc->dev, msgs, 1);
-	if (error == 0 && actual_len != NULL)
+	if (actlen <= 2 || actlen > maxlen) {
+		actlen = 0;
+	}
+	if (actual_len != NULL) {
 		*actual_len = actlen;
-
-	DPRINTFN(sc, 5,
-	    "%*D - %*D\n", 2, actbuf, " ", msgs[0].len, msgs[0].buf, " ");
+	}
 
 	return (error);
 }
@@ -519,13 +523,13 @@ iichid_cmd_set_report(struct iichid_softc* sc, const void *buf,
 
 #ifdef IICHID_SAMPLING
 static void
-iichid_event_task(void *context, int pending)
+iichid_sampling_task(void *context, int pending)
 {
 	struct iichid_softc *sc;
 	device_t parent;
 	iichid_size_t actual;
 	bool bus_requested;
-	int error;
+	int error, rate;
 
 	sc = context;
 	parent = device_get_parent(sc->dev);
@@ -541,20 +545,32 @@ iichid_event_task(void *context, int pending)
 	error = iichid_cmd_read(sc, sc->intr_buf, sc->intr_bufsize, &actual);
 	if (error == 0) {
 		if (actual > 0) {
-			sc->intr_handler(sc->intr_ctx, sc->intr_buf, actual);
+			sc->intr_handler(sc->intr_ctx, sc->intr_buf + 2, actual - 2);
 			sc->missing_samples = 0;
-		} else
-			++sc->missing_samples;
+			if (sc->dup_size != actual ||
+			    memcmp(sc->dup_buf, sc->intr_buf, actual) != 0) {
+				sc->dup_size = actual;
+				memcpy(sc->dup_buf, sc->intr_buf, actual);
+				sc->dup_samples = 0;
+			} else
+				++sc->dup_samples;
+		} else {
+			if (++sc->missing_samples == 1)
+				sc->intr_handler(sc->intr_ctx, sc->intr_buf + 2, 0);
+			sc->dup_samples = 0;
+		}
 	} else
 		DPRINTF(sc, "read error occurred: %d\n", error);
 
 rearm:
 	if (sc->callout_setup && sc->sampling_rate_slow > 0) {
-		if (sc->missing_samples == sc->sampling_hysteresis)
-			sc->intr_handler(sc->intr_ctx, sc->intr_buf, 0);
-		taskqueue_enqueue_timeout(sc->taskqueue, &sc->periodic_task,
-		    hz / MAX(sc->missing_samples >= sc->sampling_hysteresis ?
-		      sc->sampling_rate_slow : sc->sampling_rate_fast, 1));
+		if (sc->missing_samples >= sc->sampling_hysteresis ||
+		    sc->dup_samples >= sc->sampling_hysteresis)
+			rate = sc->sampling_rate_slow;
+		else
+			rate = sc->sampling_rate_fast;
+		taskqueue_enqueue_timeout_sbt(sc->taskqueue, &sc->sampling_task,
+		    SBT_1S / MAX(rate, 1), 0, C_PREL(2));
 	}
 out:
 	if (bus_requested)
@@ -567,7 +583,7 @@ iichid_intr(void *context)
 {
 	struct iichid_softc *sc;
 	device_t parent;
-	iichid_size_t maxlen, actual;
+	iichid_size_t actual;
 	int error;
 
 	sc = context;
@@ -589,13 +605,14 @@ iichid_intr(void *context)
 	 * (to ON) before any other command. As some hardware requires reads to
 	 * acknowledge interrupts we fetch only length header and discard it.
 	 */
-	maxlen = sc->power_on ? sc->intr_bufsize : 0;
-	error = iichid_cmd_read(sc, sc->intr_buf, maxlen, &actual);
+	THREAD_SLEEPING_OK();
+	error = iichid_cmd_read(sc, sc->intr_buf, sc->intr_bufsize, &actual);
+	THREAD_NO_SLEEPING();
 	if (error == 0) {
-		if (sc->power_on) {
+		if (sc->power_on && sc->open) {
 			if (actual != 0)
-				sc->intr_handler(sc->intr_ctx, sc->intr_buf,
-				    actual);
+				sc->intr_handler(sc->intr_ctx, sc->intr_buf + 2,
+				    actual - 2);
 			else
 				DPRINTF(sc, "no data received\n");
 		}
@@ -727,7 +744,9 @@ iichid_reset_callout(struct iichid_softc *sc)
 
 	/* Start with slow sampling. */
 	sc->missing_samples = sc->sampling_hysteresis;
-	taskqueue_enqueue(sc->taskqueue, &sc->event_task);
+	sc->dup_samples = 0;
+	sc->dup_size = 0;
+	taskqueue_enqueue_timeout(sc->taskqueue, &sc->sampling_task, 0);
 
 	return (0);
 }
@@ -737,7 +756,7 @@ iichid_teardown_callout(struct iichid_softc *sc)
 {
 
 	sc->callout_setup = false;
-	taskqueue_cancel_timeout(sc->taskqueue, &sc->periodic_task, NULL);
+	taskqueue_cancel_timeout(sc->taskqueue, &sc->sampling_task, NULL);
 	DPRINTF(sc, "tore callout down\n");
 }
 
@@ -791,60 +810,71 @@ iichid_sysctl_sampling_rate_handler(SYSCTL_HANDLER_ARGS)
 #endif /* IICHID_SAMPLING */
 
 static void
-iichid_intr_setup(device_t dev, hid_intr_t intr, void *context,
-    struct hid_rdesc_info *rdesc)
+iichid_intr_setup(device_t dev, device_t child __unused, hid_intr_t intr,
+    void *context, struct hid_rdesc_info *rdesc)
 {
 	struct iichid_softc *sc;
+	device_t parent;
 
 	if (intr == NULL)
 		return;
 
 	sc = device_get_softc(dev);
 	/*
-	 * Do not rely on wMaxInputLength, as some devices may set it to
-	 * a wrong length. Find the longest input report in report descriptor.
+	 * Start with wMaxInputLength to follow HID-over-I2C specs. Than if
+	 * semi-HID device like ietp(4) requested changing of input buffer
+	 * size with report descriptor overloading, find the longest input
+	 * report in the descriptor, and add two for the length field.
 	 */
-	rdesc->rdsize = rdesc->isize;
+	rdesc->rdsize = rdesc->rdsize == 0 ?
+	    le16toh(sc->desc.wMaxInputLength) - 2 : rdesc->isize;
 	/* Write and get/set_report sizes are limited by I2C-HID protocol. */
 	rdesc->grsize = rdesc->srsize = IICHID_SIZE_MAX;
 	rdesc->wrsize = IICHID_SIZE_MAX;
 
+	parent = device_get_parent(sc->dev);
+	iicbus_request_bus(parent, sc->dev, IIC_WAIT);
+
 	sc->intr_handler = intr;
 	sc->intr_ctx = context;
-	sc->intr_buf = malloc(rdesc->rdsize, M_DEVBUF, M_WAITOK | M_ZERO);
-	sc->intr_bufsize = rdesc->rdsize;
+	sc->intr_bufsize = rdesc->rdsize + 2;
+	sc->intr_buf = realloc(sc->intr_buf, sc->intr_bufsize,
+	    M_DEVBUF, M_WAITOK | M_ZERO);
 #ifdef IICHID_SAMPLING
+	sc->dup_buf = realloc(sc->dup_buf, sc->intr_bufsize,
+	    M_DEVBUF, M_WAITOK | M_ZERO);
 	taskqueue_start_threads(&sc->taskqueue, 1, PI_TTY,
 	    "%s taskq", device_get_nameunit(sc->dev));
 #endif
+	iicbus_release_bus(parent, sc->dev);
 }
 
 static void
-iichid_intr_unsetup(device_t dev)
+iichid_intr_unsetup(device_t dev, device_t child __unused)
 {
+#ifdef IICHID_SAMPLING
 	struct iichid_softc *sc;
 
 	sc = device_get_softc(dev);
-#ifdef IICHID_SAMPLING
 	taskqueue_drain_all(sc->taskqueue);
 #endif
-	free(sc->intr_buf, M_DEVBUF);
 }
 
 static int
-iichid_intr_start(device_t dev)
+iichid_intr_start(device_t dev, device_t child __unused)
 {
 	struct iichid_softc *sc;
 
 	sc = device_get_softc(dev);
 	DPRINTF(sc, "iichid device open\n");
-	iichid_set_power_state(sc, IICHID_PS_ON, IICHID_PS_NULL);
+	if (!sc->open)
+		iichid_set_power_state(sc, IICHID_PS_ON, IICHID_PS_NULL);
 
 	return (0);
 }
 
 static int
-iichid_intr_stop(device_t dev)
+iichid_intr_stop(device_t dev, device_t child __unused)
 {
 	struct iichid_softc *sc;
 
@@ -862,7 +892,7 @@ iichid_intr_stop(device_t dev)
 }
 
 static void
-iichid_intr_poll(device_t dev)
+iichid_intr_poll(device_t dev, device_t child __unused)
 {
 	struct iichid_softc *sc;
 	iichid_size_t actual;
@@ -871,14 +901,15 @@ iichid_intr_poll(device_t dev)
 	sc = device_get_softc(dev);
 	error = iichid_cmd_read(sc, sc->intr_buf, sc->intr_bufsize, &actual);
 	if (error == 0 && actual != 0)
-		sc->intr_handler(sc->intr_ctx, sc->intr_buf, actual);
+		sc->intr_handler(sc->intr_ctx, sc->intr_buf + 2, actual);
 }
 
 /*
  * HID interface
  */
 static int
-iichid_get_rdesc(device_t dev, void *buf, hid_size_t len)
+iichid_get_rdesc(device_t dev, device_t child __unused, void *buf,
+    hid_size_t len)
 {
 	struct iichid_softc *sc;
 	int error;
@@ -892,10 +923,12 @@ iichid_get_rdesc(device_t dev, void *buf, hid_size_t len)
 }
 
 static int
-iichid_read(device_t dev, void *buf, hid_size_t maxlen, hid_size_t *actlen)
+iichid_read(device_t dev, device_t child __unused, void *buf,
+    hid_size_t maxlen, hid_size_t *actlen)
 {
 	struct iichid_softc *sc;
 	device_t parent;
+	uint8_t *tmpbuf;
 	int error;
 
 	if (maxlen > IICHID_SIZE_MAX)
@@ -904,14 +937,19 @@ iichid_read(device_t dev, void *buf, hid_size_t maxlen, hid_size_t *actlen)
 	parent = device_get_parent(sc->dev);
 	error = iicbus_request_bus(parent, sc->dev, IIC_WAIT);
 	if (error == 0) {
-		error = iichid_cmd_read(sc, buf, maxlen, actlen);
+		tmpbuf = malloc(maxlen + 2, M_DEVBUF, M_WAITOK | M_ZERO);
+		error = iichid_cmd_read(sc, tmpbuf, maxlen + 2, actlen);
 		iicbus_release_bus(parent, sc->dev);
+		if (*actlen > 0)
+			memcpy(buf, tmpbuf + 2, *actlen);
+		free(tmpbuf, M_DEVBUF);
 	}
 	return (iic2errno(error));
 }
 
 static int
-iichid_write(device_t dev, const void *buf, hid_size_t len)
+iichid_write(device_t dev, device_t child __unused, const void *buf,
+    hid_size_t len)
 {
 	struct iichid_softc *sc;
 
@@ -922,8 +960,8 @@ iichid_write(device_t dev, const void *buf, hid_size_t len)
 }
 
 static int
-iichid_get_report(device_t dev, void *buf, hid_size_t maxlen,
-    hid_size_t *actlen, uint8_t type, uint8_t id)
+iichid_get_report(device_t dev, device_t child __unused, void *buf,
+    hid_size_t maxlen, hid_size_t *actlen, uint8_t type, uint8_t id)
 {
 	struct iichid_softc *sc;
 
@@ -935,8 +973,8 @@ iichid_get_report(device_t dev, void *buf, hid_size_t maxlen,
 }
 
 static int
-iichid_set_report(device_t dev, const void *buf, hid_size_t len, uint8_t type,
-    uint8_t id)
+iichid_set_report(device_t dev, device_t child __unused, const void *buf,
+    hid_size_t len, uint8_t type, uint8_t id)
 {
 	struct iichid_softc *sc;
 
@@ -947,19 +985,21 @@ iichid_set_report(device_t dev, const void *buf, hid_size_t len, uint8_t type,
 }
 
 static int
-iichid_set_idle(device_t dev, uint16_t duration, uint8_t id)
+iichid_set_idle(device_t dev, device_t child __unused,
+    uint16_t duration, uint8_t id)
 {
 	return (ENOTSUP);
 }
 
 static int
-iichid_set_protocol(device_t dev, uint16_t protocol)
+iichid_set_protocol(device_t dev, device_t child __unused, uint16_t protocol)
 {
 	return (ENOTSUP);
 }
 
 static int
-iichid_ioctl(device_t dev, unsigned long cmd, uintptr_t data)
+iichid_ioctl(device_t dev, device_t child __unused, unsigned long cmd,
+    uintptr_t data)
 {
 	int error;
 
@@ -1016,7 +1056,6 @@ iichid_probe(device_t dev)
 {
 	struct iichid_softc *sc;
 	ACPI_HANDLE handle;
-	char buf[80];
 	uint16_t config_reg;
 	int error, reg;
 
@@ -1060,7 +1099,8 @@ iichid_probe(device_t dev)
 	}
 
 	if (le16toh(sc->desc.wHIDDescLength) != 30 ||
-	    le16toh(sc->desc.bcdVersion) != 0x100) {
+	    le16toh(sc->desc.bcdVersion) != 0x100 ||
+	    le16toh(sc->desc.wMaxInputLength) < 2) {
 		DPRINTF(sc, "HID descriptor is broken\n");
 		return (ENXIO);
 	}
@@ -1076,10 +1116,8 @@ iichid_probe(device_t dev)
 
 	sc->probe_result = BUS_PROBE_DEFAULT;
 done:
-	if (sc->probe_result <= BUS_PROBE_SPECIFIC) {
-		snprintf(buf, sizeof(buf), "%s I2C HID device", sc->hw.name);
-		device_set_desc_copy(dev, buf);
-	}
+	if (sc->probe_result <= BUS_PROBE_SPECIFIC)
+		device_set_descf(dev, "%s I2C HID device", sc->hw.name);
 	return (sc->probe_result);
 }
 
@@ -1096,33 +1134,22 @@ iichid_attach(device_t dev)
 		device_printf(dev, "failed to power on: %d\n", error);
 		return (ENXIO);
 	}
-	/*
-	 * Windows driver sleeps for 1ms between the SET_POWER and RESET
-	 * commands. So we too as some devices may depend on this.
-	 */
-	pause("iichid", (hz + 999) / 1000);
-
-	error = iichid_reset(sc);
-	if (error) {
-		device_printf(dev, "failed to reset hardware: %d\n", error);
-		error = ENXIO;
-		goto done;
-	}
-
 	sc->power_on = true;
 
+	mtx_init(&sc->mtx, device_get_nameunit(dev), NULL, MTX_DEF);
+	sc->intr_bufsize = le16toh(sc->desc.wMaxInputLength) - 2;
+	sc->intr_buf = malloc(sc->intr_bufsize, M_DEVBUF, M_WAITOK | M_ZERO);
 	TASK_INIT(&sc->suspend_task, 0, iichid_suspend_task, sc);
 #ifdef IICHID_SAMPLING
-	TASK_INIT(&sc->event_task, 0, iichid_event_task, sc);
-	/* taskqueue_create can't fail with M_WAITOK mflag passed. */
-	sc->taskqueue = taskqueue_create("iichid_tq", M_WAITOK | M_ZERO,
+	sc->taskqueue = taskqueue_create_fast("iichid_tq", M_WAITOK | M_ZERO,
 	    taskqueue_thread_enqueue, &sc->taskqueue);
-	TIMEOUT_TASK_INIT(sc->taskqueue, &sc->periodic_task, 0,
-	    iichid_event_task, sc);
+	TIMEOUT_TASK_INIT(sc->taskqueue, &sc->sampling_task, 0,
+	    iichid_sampling_task, sc);
 
 	sc->sampling_rate_slow = -1;
 	sc->sampling_rate_fast = IICHID_SAMPLING_RATE_FAST;
 	sc->sampling_hysteresis = IICHID_SAMPLING_HYSTERESIS;
+	sc->dup_buf = malloc(sc->intr_bufsize, M_DEVBUF, M_WAITOK | M_ZERO);
 #endif
 
 	sc->irq_rid = 0;
@@ -1138,13 +1165,14 @@ iichid_attach(device_t dev)
 	if (sc->irq_res == NULL || error != 0) {
 #ifdef IICHID_SAMPLING
 		device_printf(sc->dev,
-		    "Interrupt setup failed. Fallback to sampling\n");
+		    "Using sampling mode\n");
 		sc->sampling_rate_slow = IICHID_SAMPLING_RATE_SLOW;
 #else
 		device_printf(sc->dev, "Interrupt setup failed\n");
 		if (sc->irq_res != NULL)
 			bus_release_resource(dev, SYS_RES_IRQ, sc->irq_rid,
 			    sc->irq_res);
+		iichid_detach(dev);
 		error = ENXIO;
 		goto done;
 #endif
@@ -1167,14 +1195,42 @@ iichid_attach(device_t dev)
 		&sc->sampling_hysteresis, 0,
 		"number of missing samples before enabling of slow mode");
 	hid_add_dynamic_quirk(&sc->hw, HQ_IICHID_SAMPLING);
-
-	if (sc->sampling_rate_slow >= 0) {
-		pause("iichid", (hz + 999) / 1000);
-		(void)iichid_cmd_read(sc, NULL, 0, NULL);
-	}
 #endif /* IICHID_SAMPLING */
 
-	child = device_add_child(dev, "hidbus", -1);
+	/*
+	 * Windows driver sleeps for 1ms between the SET_POWER and RESET
+	 * commands. So we too as some devices may depend on this.
+	 */
+	pause("iichid", (hz + 999) / 1000);
+
+	error = iichid_reset(sc);
+	if (error) {
+		device_printf(dev, "failed to reset hardware: %d\n", error);
+		iichid_detach(dev);
+		error = ENXIO;
+		goto done;
+	}
+
+	/* Wait for RESET response */
+#ifdef IICHID_SAMPLING
+	if (sc->sampling_rate_slow >= 0) {
+		pause("iichid", (hz + 999) / 1000);
+		(void)iichid_cmd_read(sc, sc->intr_buf, 0, NULL);
+	} else
+#endif /* IICHID_SAMPLING */
+	{
+		mtx_lock(&sc->mtx);
+		if (!sc->reset_acked && !cold) {
+			error = mtx_sleep(&sc->reset_acked,  &sc->mtx, 0,
+			    "iichid_reset", hz * IICHID_RESET_TIMEOUT);
+			if (error != 0)
+				device_printf(sc->dev,
+				    "Reset timeout expired\n");
+		}
+		mtx_unlock(&sc->mtx);
+	}
+
+	child = device_add_child(dev, "hidbus", DEVICE_UNIT_ANY);
 	if (child == NULL) {
 		device_printf(sc->dev, "Could not add I2C device\n");
 		iichid_detach(dev);
@@ -1183,14 +1239,15 @@ iichid_attach(device_t dev)
 	}
 
 	device_set_ivars(child, &sc->hw);
-	error = bus_generic_attach(dev);
-	if (error) {
-		device_printf(dev, "failed to attach child: error %d\n", error);
-		iichid_detach(dev);
-	}
+	bus_attach_children(dev);
+	error = 0;
 done:
-	(void)iichid_set_power(sc, I2C_HID_POWER_OFF);
-	sc->power_on = false;
+	iicbus_request_bus(device_get_parent(dev), dev, IIC_WAIT);
+	if (!sc->open) {
+		(void)iichid_set_power(sc, I2C_HID_POWER_OFF);
+		sc->power_on = false;
+	}
+	iicbus_release_bus(device_get_parent(dev), dev);
 	return (error);
 }
 
@@ -1201,7 +1258,7 @@ iichid_detach(device_t dev)
 	int error;
 
 	sc = device_get_softc(dev);
-	error = device_delete_children(dev);
+	error = bus_generic_detach(dev);
 	if (error)
 		return (error);
 	iichid_teardown_interrupt(sc);
@@ -1212,7 +1269,10 @@ iichid_detach(device_t dev)
 	if (sc->taskqueue != NULL)
 		taskqueue_free(sc->taskqueue);
 	sc->taskqueue = NULL;
+	free(sc->dup_buf, M_DEVBUF);
 #endif
+	free(sc->intr_buf, M_DEVBUF);
+	mtx_destroy(&sc->mtx);
 	return (0);
 }
 

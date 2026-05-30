@@ -25,10 +25,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\"	@(#)nfsd.8	8.4 (Berkeley) 3/29/95
-.\" $FreeBSD$
-.\"
-.Dd December 20, 2019
+.Dd December 23, 2025
 .Dt NFSD 8
 .Os
 .Sh NAME
@@ -37,24 +34,97 @@
 NFS server
 .Sh SYNOPSIS
 .Nm
-.Op Fl ardute
+.Op Fl arduteN
 .Op Fl n Ar num_servers
 .Op Fl h Ar bindip
 .Op Fl p Ar pnfs_setup
 .Op Fl m Ar mirror_level
+.Op Fl P Ar pidfile
 .Op Fl V Ar virtual_hostname
 .Op Fl Fl maxthreads Ar max_threads
 .Op Fl Fl minthreads Ar min_threads
 .Sh DESCRIPTION
 The
 .Nm
-utility runs on a server machine to service NFS requests from client machines.
+utility runs on a server machine to service NFSv4 and/or NFSv3 requests from client machines.
 At least one
 .Nm
 must be running for a machine to operate as a server.
 .Pp
 Unless otherwise specified, eight servers per CPU for UDP transport are
 started.
+.Pp
+The
+.Nm
+server may be configured to serve NFSv3, NFSv4 or both of them.
+When
+.Bd
+nfs_server_enable="YES"
+.Ed
+is set in
+.Xr rc.conf 5 ,
+.Nm
+is configured for NFSv3 only, by default.
+To configure the
+.Nm
+to serve NFSv4, you must also:
+.sp
+.Bl -bullet -compact
+.It
+Add a
+.Dq V4:
+line to
+.Xr exports 5 .
+(This is needed as well as either the ZFS sharenfs property
+or an exports line for each exported file system.)
+.It
+Either choose to do uids in
+.Dq strings ,
+which is probably
+the easiest unless you are doing
+.Xr kerberos 7
+mounts or
+run
+.Xr nfsuserd 8
+.Pq choose one, not both of these .
+Setting the sysctls MIBs
+.Va vfs.nfs.enable_uidtostring
+and
+.Va vfs.nfsd.enable_stringtouid
+to one and not running the nfsuserd chooses uids in
+.Dq strings .
+.It
+Set
+.Bd
+nfsv4_server_enable="YES"
+.Ed
+in
+.Xr rc.conf 5
+or set
+.Bd
+nfsv4_server_only="YES"
+.Ed
+in
+.Xr rc.conf 5
+if you do not want NFSv3 to be served.
+.El
+.sp
+.Pp
+When
+.Nm
+is run in an appropriately configured vnet jail, the server is restricted
+to TCP transport and no pNFS service.
+Therefore, the
+.Fl t
+option must be specified and none of the
+.Fl u ,
+.Fl p
+and
+.Fl m
+options can be specified when run in a vnet jail.
+See
+.Xr jail 8
+for more information.
 .Pp
 The following options are available:
 .Bl -tag -width Ds
@@ -71,17 +141,28 @@ options to re-register NFS if the rpcbind server is restarted.
 Unregister the NFS service with
 .Xr rpcbind 8
 without creating any servers.
+.It Fl P Ar pidfile
+Specify alternative location of a file where main process PID will be stored.
+The default location is
+.Pa /var/run/nfsd.pid .
 .It Fl V Ar virtual_hostname
 Specifies a hostname to be used as a principal name, instead of
 the default hostname.
 .It Fl n Ar threads
-Specifies how many servers to create.
-This option is equivalent to specifying
+This option is deprecated and is limited to a maximum of 256 threads.
+The options
 .Fl Fl maxthreads
 and
 .Fl Fl minthreads
-with their respective arguments to
-.Ar threads .
+should now be used.
+The
+.Ar threads
+argument for
+.Fl Fl minthreads
+and
+.Fl Fl maxthreads
+may be set to the same value to avoid dynamic
+changes to the number of threads.
 .It Fl Fl maxthreads Ar threads
 Specifies the maximum servers that will be kept around to service requests.
 .It Fl Fl minthreads Ar threads
@@ -203,15 +284,22 @@ Serve TCP NFS clients.
 Serve UDP NFS clients.
 .It Fl e
 Ignored; included for backward compatibility.
+.It Fl N
+Cause
+.Nm
+to execute in the foreground instead of in daemon mode.
 .El
 .Pp
 For example,
-.Dq Li "nfsd -u -t -n 6"
-serves UDP and TCP transports using six daemons.
+.Dq Li "nfsd -u -t --minthreads 6 --maxthreads 6"
+serves UDP and TCP transports using six kernel threads (servers).
 .Pp
-A server should run enough daemons to handle
-the maximum level of concurrency from its clients,
-typically four to six.
+For a system dedicated to servicing NFS RPCs, the number of
+threads (servers) should be sufficient to handle the peak
+client RPC load.
+For systems that perform other services, the number of
+threads (servers) may need to be limited, so that resources
+are available for these other services.
 .Pp
 The
 .Nm
@@ -304,9 +392,12 @@ just do a
 .Xr pnfs 4 ,
 .Xr pnfsserver 4 ,
 .Xr exports 5 ,
+.Xr rc.conf 5 ,
 .Xr stablerestart 5 ,
+.Xr kerberos 7 ,
 .Xr gssd 8 ,
 .Xr ipfw 8 ,
+.Xr jail 8 ,
 .Xr mountd 8 ,
 .Xr nfsiod 8 ,
 .Xr nfsrevoke 8 ,
@@ -339,3 +430,25 @@ to be set to one on the MDS as a workaround.
 Linux 5.n kernels appear to have been patched such that this
 .Xr sysctl 8
 does not need to be set.
+.Pp
+For NFSv4.2, a Copy operation can take a long time to complete.
+If there is a concurrent ExchangeID or DelegReturn operation
+which requires the exclusive lock on all NFSv4 state, this can
+result in a
+.Dq stall
+of the
+.Nm
+server.
+If your storage is on ZFS without block cloning enabled,
+setting the
+.Xr sysctl 8
+.Va vfs.zfs.dmu_offset_next_sync
+to 0 can often avoid this problem.
+It is also possible to set the
+.Xr sysctl 8
+.Va vfs.nfsd.maxcopyrange
+to 10-100 megabytes to try and reduce Copy operation times.
+As a last resort, setting
+.Xr sysctl 8
+.Va vfs.nfsd.maxcopyrange
+to 0 disables the Copy operation.

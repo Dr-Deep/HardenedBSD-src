@@ -29,19 +29,7 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
 
-__FBSDID("$FreeBSD$");
-
-#ifdef lint
-static const char sccsid[] = "@(#)main.c	8.1 (Berkeley) 6/6/93";
-#endif
-
-#ifndef lint
-static const char copyright[] __unused =
-"@(#) Copyright (c) 1980, 1992, 1993\n\
-	The Regents of the University of California.  All rights reserved.\n";
-#endif
 
 #include <sys/param.h>
 #include <sys/time.h>
@@ -76,7 +64,6 @@ char    *namp;
 char    hostname[MAXHOSTNAMELEN];
 WINDOW  *wnd;
 int     CMDLINE;
-int     use_kvm = 1;
 
 static	WINDOW *wload;			/* one line window for load average */
 
@@ -178,6 +165,9 @@ main(int argc, char **argv)
 	}
 	kd = kvm_openfiles(NULL, NULL, NULL, O_RDONLY, errbuf);
 	if (kd != NULL) {
+		struct nlist namelist[] = { { .n_name = "allproc" },
+		    { .n_name = NULL } };
+
 		/*
 		 * Try to actually read something, we may be in a jail, and
 		 * have /dev/null opened as /dev/mem.
@@ -194,7 +184,6 @@ main(int argc, char **argv)
 		 * Maybe we are lacking permissions? Retry, this time with bogus
 		 * devices. We can now use sysctl only.
 		 */
-		use_kvm = 0;
 		kd = kvm_openfiles(_PATH_DEVNULL, _PATH_DEVNULL, _PATH_DEVNULL,
 		    O_RDONLY, errbuf);
 		if (kd == NULL) {
@@ -313,9 +302,9 @@ display(void)
 	    size_t size = sizeof(arc[0]);
 	    if (sysctlbyname("kstat.zfs.misc.arcstats.size",
 		&arc[0], &size, NULL, 0) == 0 ) {
-		    GETSYSCTL("vfs.zfs.mfu_size", arc[1]);
-		    GETSYSCTL("vfs.zfs.mru_size", arc[2]);
-		    GETSYSCTL("vfs.zfs.anon_size", arc[3]);
+		    GETSYSCTL("kstat.zfs.misc.arcstats.mfu_size", arc[1]);
+		    GETSYSCTL("kstat.zfs.misc.arcstats.mru_size", arc[2]);
+		    GETSYSCTL("kstat.zfs.misc.arcstats.anon_size", arc[3]);
 		    GETSYSCTL("kstat.zfs.misc.arcstats.hdr_size", arc[4]);
 		    GETSYSCTL("kstat.zfs.misc.arcstats.l2_hdr_size", arc[5]);
 		    GETSYSCTL("kstat.zfs.misc.arcstats.bonus_size", arc[6]);

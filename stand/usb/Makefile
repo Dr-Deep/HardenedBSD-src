@@ -1,5 +1,4 @@
 #
-# $FreeBSD$
 #
 # Copyright (c) 2013 Hans Petter Selasky.
 # Copyright (c) 2014 SRI International
@@ -36,7 +35,7 @@ INTERNALLIB=
 
 CFLAGS+=	-DBOOTPROG=\"usbloader\"
 CFLAGS+=	-ffunction-sections -fdata-sections
-CFLAGS+=	-Wformat -Wall
+CFLAGS+=	-Wformat -Wall -Wno-unused
 CFLAGS+=	-g
 CFLAGS+=	-fno-pic
 

@@ -3,39 +3,44 @@
 #
 # Written in 2021 by Alfonso Sabato Siciliano
 
-VERSION = 0.2
 LIBRARY = bsddialog
 LIBRARY_SO = lib${LIBRARY:=.so}
 LIBRARY_A = lib${LIBRARY:=.a}
 HEADERS = bsddialog.h bsddialog_theme.h bsddialog_progressview.h
-SOURCES = barbox.c formbox.c infobox.c libbsddialog.c lib_util.c menubox.c \
-	messagebox.c textbox.c theme.c timebox.c
+SOURCES = barbox.c datebox.c formbox.c libbsddialog.c lib_util.c \
+	menubox.c messagebox.c slider.c textbox.c theme.c timebox.c
 OBJECTS = ${SOURCES:.c=.o}
-CFLAGS += -D_XOPEN_SOURCE_EXTENDED -fPIC -Wall -Wextra
-LDFLAGS += -fstack-protector-strong -shared -Wl,-x -Wl,--fatal-warnings \
-	-Wl,--warn-shared-textrel -Wl,-soname,${LIBRARY_SO}.${VERSION} \
-	-L/usr/lib -lformw -lncursesw -ltinfow
+PREFIX = /usr/local
 
 .if defined(DEBUG)
-# `make -DDEBUG`
-CFLAGS = -g -D_XOPEN_SOURCE_EXTENDED -fPIC -Wall -Wextra
-.else
-CFLAGS += -std=gnu99 -fstack-protector-strong
+CFLAGS += -g
 .endif
+CFLAGS += -D_XOPEN_SOURCE_EXTENDED -fPIC -Wall -Wextra -std=gnu99 \
+	-fstack-protector-strong
+LDFLAGS += -fstack-protector-strong -shared -Wl,-x -Wl,--fatal-warnings \
+	-Wl,--warn-shared-textrel -Wl,-soname,${LIBRARY_SO}.${VERSION} \
+	-L/usr/lib -lncursesw -ltinfow
 
-LOCALBASE = /usr/local
 LN = ln -s -f
 RM = rm -f
-CP = cp
-GZIP = gzip -cn
-LDCONFIG = /sbin/ldconfig -m
-MAN = ${OUTPUT}.3
-GZIP = gzip -cn
-MANDIR = ${LOCALBASE}/share/man/man3
-INSTALL = install
-RM = rm -f
 
-all : man ${LIBRARY}
+all: ${LIBRARY}
+
+install: all
+	${INSTALL} -m 0644 bsddialog.h ${DESTDIR}${PREFIX}/include/bsddialog.h
+	${INSTALL} -m 0644 bsddialog_progressview.h ${DESTDIR}${PREFIX}/include/bsddialog_progressview.h
+	${INSTALL} -m 0644 bsddialog_theme.h ${DESTDIR}${PREFIX}/include/bsddialog_theme.h
+	${INSTALL} -m 0644 ${LIBRARY_A} ${DESTDIR}${PREFIX}/lib/${LIBRARY_A}
+	${INSTALL} -m 0755 ${LIBRARY_SO}.${VERSION} ${DESTDIR}${PREFIX}/lib/${LIBRARY_SO}.${VERSION}
+	${LN} ${LIBRARY_SO}.${VERSION} ${DESTDIR}${PREFIX}/lib/${LIBRARY_SO}
+
+uninstall:
+	${RM} ${DESTDIR}${PREFIX}/include/bsddialog.h
+	${RM} ${DESTDIR}${PREFIX}/include/bsddialog_progressview.h
+	${RM} ${DESTDIR}${PREFIX}/include/bsddialog_theme.h
+	${RM} ${DESTDIR}${PREFIX}/lib/${LIBRARY_A}
+	${RM} ${DESTDIR}${PREFIX}/lib/${LIBRARY_SO}.${VERSION}
+	${RM} ${DESTDIR}${PREFIX}/lib/${LIBRARY_SO}
 
 ${LIBRARY}: ${LIBRARY_SO} ${LIBRARY_A}
 
@@ -52,24 +57,7 @@ ${LIBRARY_A}: ${OBJECTS}
 .c.o:
 	${CC} ${CFLAGS} -c ${.IMPSRC} -o ${.TARGET}
 
-man:
-	${GZIP} ${LIBRARY}.3 > ${LIBRARY}.3.gz
-
 clean:
 	${RM} ${LIBRARY_SO}* *.o *~ *.gz ${LIBRARY_A}
 
-
-install:
-	${INSTALL} -m 644 ${HEADERS} ${LOCALBASE}/include
-	${INSTALL} -m 644 -s ${LIBRARY_SO}.${VERSION} ${LOCALBASE}/lib/
-	${INSTALL} -l rs ${LOCALBASE}/lib/${LIBRARY_SO}.${VERSION} ${LOCALBASE}/lib/${LIBRARY_SO}
-	${INSTALL} -m 644 ${LIBRARY_A} ${LOCALBASE}/lib
-	${LDCONFIG} ${LOCALBASE}/lib
-	${INSTALL} -m 644 ${LIBRARY}.3.gz ${MANDIR}
-
-unistall:
-	${RM} ${LOCALBASE}/include/${LIBRARY}*.h
-	${RM} ${LOCALBASE}/lib/${LIBRARY_SO}
-	${RM} ${LOCALBASE}/lib/${LIBRARY_SO}.${VERSION}
-	${LDCONFIG} ${LOCALBASE}/lib
-	${RM} ${MANDIR}/${LIBRARY}.3.gz
+.PHONY: all install uninstall ${LIBRARY} clean

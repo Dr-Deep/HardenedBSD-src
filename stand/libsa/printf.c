@@ -30,29 +30,19 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)subr_prf.c	8.3 (Berkeley) 1/21/94
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 /*
  * Standaloneified version of the FreeBSD kernel printf family.
  */
 
 #include <sys/types.h>
+#include <sys/stdarg.h>
 #include <sys/stddef.h>
 #include <sys/stdint.h>
 #include <limits.h>
 #include <string.h>
 #include "stand.h"
-
-/*
- * Note that stdarg.h and the ANSI style va_start macro is used for both
- * ANSI and traditional C compilers.
- */
-#include <machine/stdarg.h>
 
 #define MAXNBUF (sizeof(intmax_t) * CHAR_BIT + 1)
 

@@ -22,15 +22,13 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _OPENSOLARIS_SYS_VARARGS_H_
 #define	_OPENSOLARIS_SYS_VARARGS_H_
 
 #ifdef	_KERNEL
-#include <machine/stdarg.h>
+#include <sys/stdarg.h>
 #else
 #include <stdarg.h>
 #endif

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -33,8 +34,8 @@ extern "C" {
 
 #define	ZCP_RUN_INFO_KEY "runinfo"
 
-extern unsigned long zfs_lua_max_instrlimit;
-extern unsigned long zfs_lua_max_memlimit;
+extern uint64_t zfs_lua_max_instrlimit;
+extern uint64_t zfs_lua_max_memlimit;
 
 int zcp_argerror(lua_State *, int, const char *, ...);
 
@@ -75,7 +76,6 @@ typedef struct zcp_run_info {
 	 * rather than the 'current' thread's.
 	 */
 	cred_t		*zri_cred;
-	proc_t		*zri_proc;
 
 	/*
 	 * The tx in which this channel program is running.

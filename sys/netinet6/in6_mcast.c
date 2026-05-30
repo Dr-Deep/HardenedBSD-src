@@ -34,9 +34,6 @@
  * Normative references: RFC 2292, RFC 3492, RFC 3542, RFC 3678, RFC 3810.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_inet6.h"
 
 #include <sys/param.h>
@@ -56,6 +53,7 @@ __FBSDID("$FreeBSD$");
 #include <net/if.h>
 #include <net/if_var.h>
 #include <net/if_dl.h>
+#include <net/if_private.h>
 #include <net/route.h>
 #include <net/route/nhop.h>
 #include <net/vnet.h>
@@ -102,8 +100,8 @@ RB_GENERATE(ip6_msource_tree, ip6_msource, im6s_link, ip6_msource_cmp);
 
 /*
  * Locking:
- * - Lock order is: Giant, IN6_MULTI_LOCK, INP_WLOCK,
- *   IN6_MULTI_LIST_LOCK, MLD_LOCK, IF_ADDR_LOCK.
+ * - Lock order is: IN6_MULTI_LOCK, INP_WLOCK, IN6_MULTI_LIST_LOCK, MLD_LOCK,
+ *                  IF_ADDR_LOCK.
  * - The IF_ADDR_LOCK is implicitly taken by in6m_lookup() earlier, however
  *   it can be taken by code in net/if.c also.
  * - ip6_moptions and in6_mfilter are covered by the INP_WLOCK.
@@ -346,6 +344,31 @@ im6o_mc_filter(const struct ip6_moptions *imo, const struct ifnet *ifp,
 }
 
 /*
+ * Look up an in6_multi record for an IPv6 multicast address
+ * on the interface ifp.
+ * If no record found, return NULL.
+ *
+ * SMPng: The IN6_MULTI_LOCK and must be held and must be in network epoch.
+ */
+struct in6_multi *
+in6m_lookup_locked(struct ifnet *ifp, const struct in6_addr *mcaddr)
+{
+	struct ifmultiaddr *ifma;
+	struct in6_multi *inm;
+
+	NET_EPOCH_ASSERT();
+
+	CK_STAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
+		inm = in6m_ifmultiaddr_get_inm(ifma);
+		if (inm == NULL)
+			continue;
+		if (IN6_ARE_ADDR_EQUAL(&inm->in6m_addr, mcaddr))
+			return (inm);
+	}
+	return (NULL);
+}
+
+/*
  * Find and return a reference to an in6_multi record for (ifp, group),
  * and bump its reference count.
  * If one does not exist, try to allocate it, and update link-layer multicast
@@ -377,7 +400,7 @@ in6_getmulti(struct ifnet *ifp, const struct in6_addr *group,
 	/*
 	 * Does ifp support IPv6 multicasts?
 	 */
-	if (ifp->if_afdata[AF_INET6] == NULL)
+	if (ifp->if_inet6 == NULL)
 		error = ENODEV;
 	else
 		inm = in6m_lookup_locked(ifp, group);
@@ -1394,8 +1417,6 @@ in6_leavegroup_locked(struct in6_multi *inm, /*const*/ struct in6_mfilter *imf)
  * The delta-based API applies only to exclusive-mode memberships.
  * An MLD downcall will be performed.
  *
- * SMPng: NOTE: Must take Giant as a join may create a new ifma.
- *
  * Return 0 if successful, otherwise return an appropriate error code.
  */
 static int
@@ -1434,11 +1455,11 @@ in6p_block_unblock_source(struct inpcb *inp, struct sockopt *sopt)
 
 		if (gsa->sin6.sin6_family != AF_INET6 ||
 		    gsa->sin6.sin6_len != sizeof(struct sockaddr_in6))
-			return (EINVAL);
+			return (EAFNOSUPPORT);
 
 		if (ssa->sin6.sin6_family != AF_INET6 ||
 		    ssa->sin6.sin6_len != sizeof(struct sockaddr_in6))
-			return (EINVAL);
+			return (EAFNOSUPPORT);
 
 		/*
 		 * XXXGL: this function should use ifnet_byindex_ref, or
@@ -1557,7 +1578,6 @@ out_in6p_locked:
  * Given an inpcb, return its multicast options structure pointer.  Accepts
  * an unlocked inpcb pointer, but will return it locked.  May sleep.
  *
- * SMPng: NOTE: Potentially calls malloc(M_WAITOK) with Giant held.
  * SMPng: NOTE: Returns with the INP write lock held.
  */
 static struct ip6_moptions *
@@ -1664,7 +1684,7 @@ in6p_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 
 	if (msfr.msfr_group.ss_family != AF_INET6 ||
 	    msfr.msfr_group.ss_len != sizeof(struct sockaddr_in6))
-		return (EINVAL);
+		return (EAFNOSUPPORT);
 
 	gsa = (sockunion_t *)&msfr.msfr_group;
 	if (!IN6_IS_ADDR_MULTICAST(&gsa->sin6.sin6_addr))
@@ -1943,12 +1963,13 @@ in6p_join_group(struct inpcb *inp, struct sockopt *sopt)
 
 		if (gsa->sin6.sin6_family != AF_INET6 ||
 		    gsa->sin6.sin6_len != sizeof(struct sockaddr_in6))
-			return (EINVAL);
+			return (EAFNOSUPPORT);
 
 		if (sopt->sopt_name == MCAST_JOIN_SOURCE_GROUP) {
 			if (ssa->sin6.sin6_family != AF_INET6 ||
 			    ssa->sin6.sin6_len != sizeof(struct sockaddr_in6))
-				return (EINVAL);
+				return (EAFNOSUPPORT);
+
 			if (IN6_IS_ADDR_MULTICAST(&ssa->sin6.sin6_addr))
 				return (EINVAL);
 			/*
@@ -2245,11 +2266,13 @@ in6p_leave_group(struct inpcb *inp, struct sockopt *sopt)
 
 		if (gsa->sin6.sin6_family != AF_INET6 ||
 		    gsa->sin6.sin6_len != sizeof(struct sockaddr_in6))
-			return (EINVAL);
+			return (EAFNOSUPPORT);
+
 		if (sopt->sopt_name == MCAST_LEAVE_SOURCE_GROUP) {
 			if (ssa->sin6.sin6_family != AF_INET6 ||
 			    ssa->sin6.sin6_len != sizeof(struct sockaddr_in6))
-				return (EINVAL);
+				return (EAFNOSUPPORT);
+
 			if (IN6_IS_ADDR_MULTICAST(&ssa->sin6.sin6_addr))
 				return (EINVAL);
 			/*
@@ -2489,7 +2512,7 @@ in6p_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 
 	if (msfr.msfr_group.ss_family != AF_INET6 ||
 	    msfr.msfr_group.ss_len != sizeof(struct sockaddr_in6))
-		return (EINVAL);
+		return (EAFNOSUPPORT);
 
 	gsa = (sockunion_t *)&msfr.msfr_group;
 	if (!IN6_IS_ADDR_MULTICAST(&gsa->sin6.sin6_addr))
@@ -2783,9 +2806,9 @@ sysctl_ip6_mcast_filters(SYSCTL_HANDLER_ARGS)
 
 	ifindex = name[0];
 	NET_EPOCH_ENTER(et);
-	ifp = ifnet_byindex(ifindex);
+	ifp = ifnet_byindex_ref(ifindex);
+	NET_EPOCH_EXIT(et);
 	if (ifp == NULL) {
-		NET_EPOCH_EXIT(et);
 		CTR2(KTR_MLD, "%s: no ifp for ifindex %u",
 		    __func__, ifindex);
 		return (ENOENT);
@@ -2798,7 +2821,7 @@ sysctl_ip6_mcast_filters(SYSCTL_HANDLER_ARGS)
 	retval = sysctl_wire_old_buffer(req,
 	    sizeof(uint32_t) + (in6_mcast_maxgrpsrc * sizeof(struct in6_addr)));
 	if (retval) {
-		NET_EPOCH_EXIT(et);
+		if_rele(ifp);
 		return (retval);
 	}
 
@@ -2833,7 +2856,7 @@ sysctl_ip6_mcast_filters(SYSCTL_HANDLER_ARGS)
 	}
 	IN6_MULTI_LIST_UNLOCK();
 	IN6_MULTI_UNLOCK();
-	NET_EPOCH_EXIT(et);
+	if_rele(ifp);
 
 	return (retval);
 }
@@ -2854,6 +2877,7 @@ in6m_mode_str(const int mode)
 static const char *in6m_statestrs[] = {
 	"not-member",
 	"silent",
+	"reporting",
 	"idle",
 	"lazy",
 	"sleeping",
@@ -2862,6 +2886,8 @@ static const char *in6m_statestrs[] = {
 	"sg-query-pending",
 	"leaving"
 };
+_Static_assert(nitems(in6m_statestrs) ==
+    MLD_LEAVING_MEMBER - MLD_NOT_MEMBER + 1, "Missing MLD group state");
 
 static const char *
 in6m_state_str(const int state)

@@ -23,7 +23,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 #include "test.h"
-__FBSDID("$FreeBSD$");
 
 #define __LIBARCHIVE_TEST
 #include "archive_string.h"
@@ -354,6 +353,43 @@ test_archive_string_sprintf(void)
 	archive_string_free(&s);
 }
 
+static void
+test_archive_string_dirname(void)
+{
+	static struct pair { const char *str, *exp; } pairs[] = {
+		{ "",		"." },
+		{ "/",		"/" },
+		{ "//",		"/" },
+		{ "///",	"/" },
+		{ "./",		"." },
+		{ ".",		"." },
+		{ "..",		"." },
+		{ "foo",	"." },
+		{ "foo/",	"." },
+		{ "foo//",	"." },
+		{ "foo/bar",	"foo" },
+		{ "foo/bar/",	"foo" },
+		{ "foo/bar//",	"foo" },
+		{ "foo//bar",	"foo" },
+		{ "foo//bar/",	"foo" },
+		{ "foo//bar//",	"foo" },
+		{ "/foo",	"/" },
+		{ "//foo",	"/" },
+		{ "//foo/",	"/" },
+		{ "//foo//",	"/" },
+		{ 0 },
+	};
+	struct pair *pair;
+	struct archive_string s;
+
+	archive_string_init(&s);
+	for (pair = pairs; pair->str; pair++) {
+		archive_strcpy(&s, pair->str);
+		archive_string_dirname(&s);
+		assertEqualString(pair->exp, s.s);
+	}
+}
+
 DEFINE_TEST(test_archive_string)
 {
 	test_archive_string_ensure();
@@ -365,6 +401,7 @@ DEFINE_TEST(test_archive_string)
 	test_archive_string_concat();
 	test_archive_string_copy();
 	test_archive_string_sprintf();
+	test_archive_string_dirname();
 }
 
 static const char *strings[] =
@@ -406,7 +443,7 @@ DEFINE_TEST(test_archive_string_sort)
 
   srand((unsigned int)time(NULL));
   size = sizeof(strings) / sizeof(char *);
-  assert((test_strings = (char **)calloc(1, sizeof(strings))) != NULL);
+  assert((test_strings = calloc(size, sizeof(char *))) != NULL);
   for (i = 0; i < (size - 1); i++)
     assert((test_strings[i] = strdup(strings[i])) != NULL);
 

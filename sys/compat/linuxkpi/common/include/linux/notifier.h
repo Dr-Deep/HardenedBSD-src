@@ -25,14 +25,17 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #ifndef	_LINUXKPI_LINUX_NOTIFIER_H_
 #define	_LINUXKPI_LINUX_NOTIFIER_H_
 
 #include <sys/types.h>
 #include <sys/eventhandler.h>
+
+#include <linux/errno.h>
+#include <linux/mutex.h>
+#include <linux/rwsem.h>
+#include <linux/srcu.h>
 
 #define	NOTIFY_DONE		0
 #define	NOTIFY_OK		0x0001

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2004-2005 HighPoint Technologies, Inc.
  * All rights reserved.
@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 /*
  * gui_lib.c
@@ -88,8 +86,7 @@ check_VDevice_valid(PVDevice p)
 	while(pAdapter != NULL)
 	{
 		_vbus_p = &pAdapter->VBus;
-		for (i=0;i<MAX_ARRAY_PER_VBUS;i++) 
-		{
+		for (i = 0; i<MAX_ARRAY_PER_VBUS; i++) {
 			pVDevice=ArrayTables(i);
 			if ((pVDevice->u.array.dArStamp != 0) && (pVDevice == p))
 				return 0;
@@ -246,9 +243,9 @@ static void get_array_info(PVDevice pVDevice, PHPT_ARRAY_INFO pArrayInfo)
 		if(pVDevice->u.array.pMember[i] != NULL)
 			pArrayInfo->Members[pArrayInfo->nDisk++] = VDEV_TO_ID(pVDevice->u.array.pMember[i]);
 
-	for(i=pArrayInfo->nDisk; i<MAX_ARRAY_MEMBERS; i++)
+	for (i = pArrayInfo->nDisk; i < MAX_ARRAY_MEMBERS; i++)
 		pArrayInfo->Members[i] = INVALID_DEVICEID;
-	}
+}
 
 static void get_array_info_v2(PVDevice pVDevice, PHPT_ARRAY_INFO_V2 pArrayInfo)
 {
@@ -268,7 +265,7 @@ static void get_array_info_v2(PVDevice pVDevice, PHPT_ARRAY_INFO_V2 pArrayInfo)
 		if(pVDevice->u.array.pMember[i] != NULL)
 			pArrayInfo->Members[pArrayInfo->nDisk++] = VDEV_TO_ID(pVDevice->u.array.pMember[i]);
 
-	for(i=pArrayInfo->nDisk; i<MAX_ARRAY_MEMBERS_V2; i++)
+	for (i = pArrayInfo->nDisk; i < MAX_ARRAY_MEMBERS_V2; i++)
 		pArrayInfo->Members[i] = INVALID_DEVICEID;
 }
 #endif
@@ -463,8 +460,7 @@ found:
 	pInfo->IoPort = 0;
 	pInfo->ControlPort = 0;
 	
-	for (i=0; i<2 ;i++)
-	{
+	for (i = 0; i < 2; i++) {
 		pInfo->Devices[i] = (DEVICEID)INVALID_DEVICEID;
 	}
 

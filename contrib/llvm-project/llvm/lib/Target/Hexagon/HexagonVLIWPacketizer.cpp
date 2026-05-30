@@ -55,33 +55,27 @@ using namespace llvm;
 
 #define DEBUG_TYPE "packets"
 
-static cl::opt<bool> DisablePacketizer("disable-packetizer", cl::Hidden,
-  cl::ZeroOrMore, cl::init(false),
-  cl::desc("Disable Hexagon packetizer pass"));
+static cl::opt<bool>
+    DisablePacketizer("disable-packetizer", cl::Hidden,
+                      cl::desc("Disable Hexagon packetizer pass"));
 
 static cl::opt<bool> Slot1Store("slot1-store-slot0-load", cl::Hidden,
-                                cl::ZeroOrMore, cl::init(true),
+                                cl::init(true),
                                 cl::desc("Allow slot1 store and slot0 load"));
 
-static cl::opt<bool> PacketizeVolatiles("hexagon-packetize-volatiles",
-  cl::ZeroOrMore, cl::Hidden, cl::init(true),
-  cl::desc("Allow non-solo packetization of volatile memory references"));
+static cl::opt<bool> PacketizeVolatiles(
+    "hexagon-packetize-volatiles", cl::Hidden, cl::init(true),
+    cl::desc("Allow non-solo packetization of volatile memory references"));
 
-static cl::opt<bool> EnableGenAllInsnClass("enable-gen-insn", cl::init(false),
-  cl::Hidden, cl::ZeroOrMore, cl::desc("Generate all instruction with TC"));
+static cl::opt<bool>
+    EnableGenAllInsnClass("enable-gen-insn", cl::Hidden,
+                          cl::desc("Generate all instruction with TC"));
 
-static cl::opt<bool> DisableVecDblNVStores("disable-vecdbl-nv-stores",
-  cl::init(false), cl::Hidden, cl::ZeroOrMore,
-  cl::desc("Disable vector double new-value-stores"));
+static cl::opt<bool>
+    DisableVecDblNVStores("disable-vecdbl-nv-stores", cl::Hidden,
+                          cl::desc("Disable vector double new-value-stores"));
 
 extern cl::opt<bool> ScheduleInlineAsm;
-
-namespace llvm {
-
-FunctionPass *createHexagonPacketizer(bool Minimal);
-void initializeHexagonPacketizerPass(PassRegistry&);
-
-} // end namespace llvm
 
 namespace {
 
@@ -95,11 +89,11 @@ namespace {
     void getAnalysisUsage(AnalysisUsage &AU) const override {
       AU.setPreservesCFG();
       AU.addRequired<AAResultsWrapperPass>();
-      AU.addRequired<MachineBranchProbabilityInfo>();
-      AU.addRequired<MachineDominatorTree>();
-      AU.addRequired<MachineLoopInfo>();
-      AU.addPreserved<MachineDominatorTree>();
-      AU.addPreserved<MachineLoopInfo>();
+      AU.addRequired<MachineBranchProbabilityInfoWrapperPass>();
+      AU.addRequired<MachineDominatorTreeWrapperPass>();
+      AU.addRequired<MachineLoopInfoWrapperPass>();
+      AU.addPreserved<MachineDominatorTreeWrapperPass>();
+      AU.addPreserved<MachineLoopInfoWrapperPass>();
       MachineFunctionPass::getAnalysisUsage(AU);
     }
 
@@ -107,8 +101,7 @@ namespace {
     bool runOnMachineFunction(MachineFunction &Fn) override;
 
     MachineFunctionProperties getRequiredProperties() const override {
-      return MachineFunctionProperties().set(
-          MachineFunctionProperties::Property::NoVRegs);
+      return MachineFunctionProperties().setNoVRegs();
     }
 
   private:
@@ -123,9 +116,9 @@ char HexagonPacketizer::ID = 0;
 
 INITIALIZE_PASS_BEGIN(HexagonPacketizer, "hexagon-packetizer",
                       "Hexagon Packetizer", false, false)
-INITIALIZE_PASS_DEPENDENCY(MachineDominatorTree)
-INITIALIZE_PASS_DEPENDENCY(MachineBranchProbabilityInfo)
-INITIALIZE_PASS_DEPENDENCY(MachineLoopInfo)
+INITIALIZE_PASS_DEPENDENCY(MachineDominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(MachineBranchProbabilityInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(MachineLoopInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
 INITIALIZE_PASS_END(HexagonPacketizer, "hexagon-packetizer",
                     "Hexagon Packetizer", false, false)
@@ -204,15 +197,15 @@ static MachineBasicBlock::iterator moveInstrOut(MachineInstr &MI,
 
 bool HexagonPacketizer::runOnMachineFunction(MachineFunction &MF) {
   // FIXME: This pass causes verification failures.
-  MF.getProperties().set(
-      MachineFunctionProperties::Property::FailsVerification);
+  MF.getProperties().setFailsVerification();
 
   auto &HST = MF.getSubtarget<HexagonSubtarget>();
   HII = HST.getInstrInfo();
   HRI = HST.getRegisterInfo();
-  auto &MLI = getAnalysis<MachineLoopInfo>();
+  auto &MLI = getAnalysis<MachineLoopInfoWrapperPass>().getLI();
   auto *AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
-  auto *MBPI = &getAnalysis<MachineBranchProbabilityInfo>();
+  auto *MBPI =
+      &getAnalysis<MachineBranchProbabilityInfoWrapperPass>().getMBPI();
 
   if (EnableGenAllInsnClass)
     HII->genAllInsnTimingClasses(MF);
@@ -382,7 +375,7 @@ bool HexagonPacketizerList::promoteToDotCur(MachineInstr &MI,
 
 void HexagonPacketizerList::cleanUpDotCur() {
   MachineInstr *MI = nullptr;
-  for (auto BI : CurrentPacketMIs) {
+  for (auto *BI : CurrentPacketMIs) {
     LLVM_DEBUG(dbgs() << "Cleanup packet has "; BI->dump(););
     if (HII->isDotCurInst(*BI)) {
       MI = BI;
@@ -438,8 +431,8 @@ bool HexagonPacketizerList::canPromoteToDotCur(const MachineInstr &MI,
     return false;
 
   // Check for existing uses of a vector register within the packet which
-  // would be affected by converting a vector load into .cur formt.
-  for (auto BI : CurrentPacketMIs) {
+  // would be affected by converting a vector load into .cur format.
+  for (auto *BI : CurrentPacketMIs) {
     LLVM_DEBUG(dbgs() << "packet has "; BI->dump(););
     if (BI->readsRegister(DepReg, MF.getSubtarget().getRegisterInfo()))
       return false;
@@ -667,7 +660,7 @@ bool HexagonPacketizerList::canPromoteToNewValueStore(const MachineInstr &MI,
 
   // New-value stores are of class NV (slot 0), dual stores require class ST
   // in slot 0 (PRM 5.5).
-  for (auto I : CurrentPacketMIs) {
+  for (auto *I : CurrentPacketMIs) {
     SUnit *PacketSU = MIToSUnit.find(I)->second;
     if (PacketSU->getInstr()->mayStore())
       return false;
@@ -748,12 +741,12 @@ bool HexagonPacketizerList::canPromoteToNewValueStore(const MachineInstr &MI,
   // modified by they should not be modified between the producer and the store
   // instruction as it will make them both conditional on different values.
   // We already know this to be true for all the instructions before and
-  // including PacketMI. Howerver, we need to perform the check for the
+  // including PacketMI. However, we need to perform the check for the
   // remaining instructions in the packet.
 
   unsigned StartCheck = 0;
 
-  for (auto I : CurrentPacketMIs) {
+  for (auto *I : CurrentPacketMIs) {
     SUnit *TempSU = MIToSUnit.find(I)->second;
     MachineInstr &TempMI = *TempSU->getInstr();
 
@@ -866,7 +859,7 @@ bool HexagonPacketizerList::canPromoteToDotNew(const MachineInstr &MI,
   if (PI.isImplicitDef())
     return false;
 
-  // If dependency is trough an implicitly defined register, we should not
+  // If dependency is through an implicitly defined register, we should not
   // newify the use.
   if (isImplicitDependency(PI, true, DepReg) ||
       isImplicitDependency(MI, false, DepReg))
@@ -919,7 +912,7 @@ bool HexagonPacketizerList::restrictingDepExistInPacket(MachineInstr &MI,
                                                         unsigned DepReg) {
   SUnit *PacketSUDep = MIToSUnit.find(&MI)->second;
 
-  for (auto I : CurrentPacketMIs) {
+  for (auto *I : CurrentPacketMIs) {
     // We only care for dependencies to predicated instructions
     if (!HII->isPredicated(*I))
       continue;
@@ -987,9 +980,9 @@ bool HexagonPacketizerList::arePredicatesComplements(MachineInstr &MI1,
   // We attempt to detect it by analyzing existing dependencies in the packet.
 
   // Analyze relationships between all existing members of the packet.
-  // Look for Anti dependecy on the same predicate reg as used in the
+  // Look for Anti dependency on the same predicate reg as used in the
   // candidate.
-  for (auto I : CurrentPacketMIs) {
+  for (auto *I : CurrentPacketMIs) {
     // Scheduling Unit for current insn in the packet.
     SUnit *PacketSU = MIToSUnit.find(I)->second;
 
@@ -1179,7 +1172,7 @@ void HexagonPacketizerList::unpacketizeSoloInstrs(MachineFunction &MF) {
       bool InsertBeforeBundle;
       if (MI.isInlineAsm())
         InsertBeforeBundle = !hasWriteToReadDep(MI, *BundleIt, HRI);
-      else if (MI.isDebugValue())
+      else if (MI.isDebugInstr())
         InsertBeforeBundle = true;
       else
         continue;
@@ -1274,7 +1267,7 @@ bool HexagonPacketizerList::hasRegMaskDependence(const MachineInstr &I,
   // occur on calls, and the problematic case is when we add an instruction
   // defining a register R to a packet that has a call that clobbers R via
   // a regmask. Those cannot be packetized together, because the call will
-  // be executed last. That's also a reson why it is ok to add a call
+  // be executed last. That's also a reason why it is ok to add a call
   // clobbering R to a packet that defines R.
 
   // Look for regmasks in J.
@@ -1317,7 +1310,7 @@ bool HexagonPacketizerList::hasDualStoreDependence(const MachineInstr &I,
   return (StoreJ && HII->isDeallocRet(I)) || (StoreI && HII->isDeallocRet(J));
 }
 
-// SUI is the current instruction that is out side of the current packet.
+// SUI is the current instruction that is outside of the current packet.
 // SUJ is the current instruction inside the current packet against which that
 // SUI will be packetized.
 bool HexagonPacketizerList::isLegalToPacketizeTogether(SUnit *SUI, SUnit *SUJ) {
@@ -1448,7 +1441,7 @@ bool HexagonPacketizerList::isLegalToPacketizeTogether(SUnit *SUI, SUnit *SUJ) {
           continue;
     }
 
-    // Data dpendence ok if we have load.cur.
+    // Data dependence ok if we have load.cur.
     if (DepType == SDep::Data && HII->isDotCurInst(J)) {
       if (HII->isHVXVec(I))
         continue;
@@ -1689,7 +1682,7 @@ bool HexagonPacketizerList::foundLSInPacket() {
   bool FoundLoad = false;
   bool FoundStore = false;
 
-  for (auto MJ : CurrentPacketMIs) {
+  for (auto *MJ : CurrentPacketMIs) {
     unsigned Opc = MJ->getOpcode();
     if (Opc == Hexagon::S2_allocframe || Opc == Hexagon::L2_deallocframe)
       continue;
@@ -1841,7 +1834,7 @@ bool HexagonPacketizerList::shouldAddToPacket(const MachineInstr &MI) {
   // with any other instruction in the existing packet.
   auto &HST = MI.getParent()->getParent()->getSubtarget<HexagonSubtarget>();
   // Constraint 1: Only one duplex allowed per packet.
-  // Constraint 2: Consider duplex checks only if there is atleast one
+  // Constraint 2: Consider duplex checks only if there is at least one
   // instruction in a packet.
   // Constraint 3: If one of the existing instructions in the packet has a
   // SLOT0 only instruction that can not be duplexed, do not attempt to form
@@ -1914,7 +1907,7 @@ unsigned int HexagonPacketizerList::calcStall(const MachineInstr &I) {
   // }
   // Here I2 and I3 has 0 cycle latency, but I1 and I2 has 2.
 
-  for (auto J : CurrentPacketMIs) {
+  for (auto *J : CurrentPacketMIs) {
     SUnit *SUJ = MIToSUnit[J];
     for (auto &Pred : SUI->Preds)
       if (Pred.getSUnit() == SUJ)
@@ -1925,7 +1918,7 @@ unsigned int HexagonPacketizerList::calcStall(const MachineInstr &I) {
 
   // Check if the latency is greater than one between this instruction and any
   // instruction in the previous packet.
-  for (auto J : OldPacketMIs) {
+  for (auto *J : OldPacketMIs) {
     SUnit *SUJ = MIToSUnit[J];
     for (auto &Pred : SUI->Preds)
       if (Pred.getSUnit() == SUJ && Pred.getLatency() > 1)

@@ -1,4 +1,3 @@
-# $FreeBSD$
 .include <src.opts.mk>
 
 _LIBARCHIVEDIR=	${SRCTOP}/contrib/libarchive
@@ -18,7 +17,7 @@ SRCS=	bsdtar.c	\
 	write.c
 
 .PATH: ${_LIBARCHIVEDIR}/libarchive_fe
-SRCS+=	err.c		\
+SRCS+=	lafe_err.c	\
 	line_reader.c	\
 	passphrase.c
 

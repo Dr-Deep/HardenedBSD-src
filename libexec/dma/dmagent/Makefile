@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 .include <src.opts.mk>
 
 LIBADD=	ssl crypto
@@ -17,18 +15,17 @@ SRCS=	aliases_parse.y \
 	net.c \
 	spool.c \
 	util.c
-MAN8=	dma.8
-CONFS=	dma.conf
+MAN=	dma.8
+MLINKS=	dma.8 dma.conf.5
+CONFSMODE=	0640
+CONFSGRP=	mail
+CONFS=	auth.conf dma.conf
 CONFSDIR=	${CONFDIR}/dma
+CFLAGS+=	-DOPENSSL_API_COMPAT=0x10100000L
 YFLAGS+=	-i
 CLEANFILES=	aliases_parse.i
 FILES=	mailer.conf
 FILESDIR=	${SHAREDIR}/examples/dma
-.if ${MK_SENDMAIL} == no
-CONFGROUPS=	CONFS MAILER
-MAILERDIR=	/etc/mail
-MAILER=		mailer.conf
-.endif
 
 BINMODE=	2555
 

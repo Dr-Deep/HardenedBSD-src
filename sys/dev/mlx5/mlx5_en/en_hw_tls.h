@@ -22,8 +22,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _MLX5_TLS_H_
@@ -84,9 +82,11 @@ struct mlx5e_tls {
 	struct sysctl_ctx_list ctx;
 	struct mlx5e_tls_stats stats;
 	struct workqueue_struct *wq;
+	struct workqueue_struct *prealloc_wq;
+	struct work_struct prealloc_work;
 	uma_zone_t zone;
 	uint32_t max_resources;		/* max number of resources */
-	volatile uint32_t num_resources;	/* current number of resources */
+	int zone_max;
 	int init;			/* set when ready */
 	char zname[32];
 };
@@ -94,6 +94,7 @@ struct mlx5e_tls {
 int mlx5e_tls_init(struct mlx5e_priv *);
 void mlx5e_tls_cleanup(struct mlx5e_priv *);
 int mlx5e_sq_tls_xmit(struct mlx5e_sq *, struct mlx5e_xmit_args *, struct mbuf **);
+void mlx5e_tls_prealloc_tags(struct mlx5e_priv *priv);
 
 if_snd_tag_alloc_t mlx5e_tls_snd_tag_alloc;
 

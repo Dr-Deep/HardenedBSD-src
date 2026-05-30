@@ -80,14 +80,13 @@
 #include <net/route.h>
 
 #include <netinet/in.h>
+#include <netinet/in_pcb.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
 #include <netinet/tcp_var.h>
 
 #include <net/pfvar.h>
 #include <netpfil/pf/pf_nv.h>
-
-#define	DPFPRINTF(n, x)	if (V_pf_status.debug >= (n)) printf x
 
 union pf_syncookie {
 	uint8_t		cookie;
@@ -118,15 +117,20 @@ void		pf_syncookie_rotate(void *);
 void		pf_syncookie_newkey(void);
 uint32_t	pf_syncookie_mac(struct pf_pdesc *, union pf_syncookie,
 		    uint32_t);
-uint32_t	pf_syncookie_generate(struct mbuf *m, int off, struct pf_pdesc *,
-		    uint16_t);
+uint32_t	pf_syncookie_generate(struct pf_pdesc *, uint16_t);
 
 void
 pf_syncookies_init(void)
 {
 	callout_init(&V_pf_syncookie_status.keytimeout, 1);
 	PF_RULES_WLOCK();
-	pf_syncookies_setmode(PF_SYNCOOKIES_NEVER);
+
+	V_pf_syncookie_status.hiwat = PF_SYNCOOKIES_HIWATPCT *
+	    V_pf_limits[PF_LIMIT_STATES].limit / 100;
+	V_pf_syncookie_status.lowat = PF_SYNCOOKIES_LOWATPCT *
+	    V_pf_limits[PF_LIMIT_STATES].limit / 100;
+	pf_syncookies_setmode(PF_SYNCOOKIES_ADAPTIVE);
+
 	PF_RULES_WUNLOCK();
 }
 
@@ -155,6 +159,8 @@ pf_get_syncookies(struct pfioc_nv *nv)
 	    V_pf_status.syncookies_mode == PF_SYNCOOKIES_ADAPTIVE);
 	nvlist_add_number(nvl, "highwater", V_pf_syncookie_status.hiwat);
 	nvlist_add_number(nvl, "lowwater", V_pf_syncookie_status.lowat);
+	nvlist_add_number(nvl, "halfopen_states",
+	    atomic_load_32(&V_pf_status.states_halfopen));
 
 	nvlpacked = nvlist_pack(nvl, &nv->len);
 	if (nvlpacked == NULL)
@@ -192,9 +198,6 @@ pf_set_syncookies(struct pfioc_nv *nv)
 		return (ENOMEM);
 
 	nvlpacked = malloc(nv->len, M_NVLIST, M_WAITOK);
-	if (nvlpacked == NULL)
-		return (ENOMEM);
-
 	error = copyin(nv->data, nvlpacked, nv->len);
 	if (error)
 		ERROUT(error);
@@ -260,7 +263,7 @@ pf_synflood_check(struct pf_pdesc *pd)
 	MPASS(pd->proto == IPPROTO_TCP);
 	PF_RULES_RASSERT();
 
-	if (pd->pf_mtag && (pd->pf_mtag->tag & PF_TAG_SYNCOOKIE_RECREATED))
+	if (pd->pf_mtag && (pd->pf_mtag->flags & PF_MTAG_FLAG_SYNCOOKIE_RECREATED))
 		return (0);
 
 	if (V_pf_status.syncookies_mode != PF_SYNCOOKIES_ADAPTIVE)
@@ -276,7 +279,7 @@ pf_synflood_check(struct pf_pdesc *pd)
 		    pf_syncookie_rotate, curvnet);
 		V_pf_status.syncookies_active = true;
 		DPFPRINTF(LOG_WARNING,
-		    ("synflood detected, enabling syncookies\n"));
+		    "synflood detected, enabling syncookies");
 		// XXXTODO V_pf_status.lcounters[LCNT_SYNFLOODS]++;
 	}
 
@@ -284,24 +287,25 @@ pf_synflood_check(struct pf_pdesc *pd)
 }
 
 void
-pf_syncookie_send(struct mbuf *m, int off, struct pf_pdesc *pd)
+pf_syncookie_send(struct pf_pdesc *pd, u_short *reason)
 {
 	uint16_t	mss;
 	uint32_t	iss;
 
-	mss = max(V_tcp_mssdflt, pf_get_mss(m, off, pd->hdr.tcp.th_off, pd->af));
-	iss = pf_syncookie_generate(m, off, pd, mss);
+	mss = max(V_tcp_mssdflt, pf_get_mss(pd));
+	iss = pf_syncookie_generate(pd, mss);
 	pf_send_tcp(NULL, pd->af, pd->dst, pd->src, *pd->dport, *pd->sport,
 	    iss, ntohl(pd->hdr.tcp.th_seq) + 1, TH_SYN|TH_ACK, 0, mss,
-	    0, 1, 0);
+	    0, M_SKIP_FIREWALL | (pd->m->m_flags & M_LOOP), 0, 0,
+	    pd->act.rtableid, reason);
 	counter_u64_add(V_pf_status.lcounters[KLCNT_SYNCOOKIES_SENT], 1);
 	/* XXX Maybe only in adaptive mode? */
 	atomic_add_64(&V_pf_status.syncookies_inflight[V_pf_syncookie_status.oddeven],
 	    1);
 }
 
-uint8_t
-pf_syncookie_validate(struct pf_pdesc *pd)
+bool
+pf_syncookie_check(struct pf_pdesc *pd)
 {
 	uint32_t		 hash, ack, seq;
 	union pf_syncookie	 cookie;
@@ -314,13 +318,28 @@ pf_syncookie_validate(struct pf_pdesc *pd)
 	cookie.cookie = (ack & 0xff) ^ (ack >> 24);
 
 	/* we don't know oddeven before setting the cookie (union) */
-        if (atomic_load_64(&V_pf_status.syncookies_inflight[cookie.flags.oddeven])
+	if (atomic_load_64(&V_pf_status.syncookies_inflight[cookie.flags.oddeven])
 	    == 0)
-                return (0);
+		return (0);
 
 	hash = pf_syncookie_mac(pd, cookie, seq);
 	if ((ack & ~0xff) != (hash & ~0xff))
+		return (false);
+
+	return (true);
+}
+
+uint8_t
+pf_syncookie_validate(struct pf_pdesc *pd)
+{
+	uint32_t		 ack;
+	union pf_syncookie	 cookie;
+
+	if (! pf_syncookie_check(pd))
 		return (0);
+
+	ack = ntohl(pd->hdr.tcp.th_ack) - 1;
+	cookie.cookie = (ack & 0xff) ^ (ack >> 24);
 
 	counter_u64_add(V_pf_status.lcounters[KLCNT_SYNCOOKIES_VALID], 1);
 	atomic_add_64(&V_pf_status.syncookies_inflight[cookie.flags.oddeven], -1);
@@ -346,7 +365,7 @@ pf_syncookie_rotate(void *arg)
 	    V_pf_status.syncookies_mode == PF_SYNCOOKIES_NEVER)
 			) {
 		V_pf_status.syncookies_active = false;
-		DPFPRINTF(PF_DEBUG_MISC, ("syncookies disabled\n"));
+		DPFPRINTF(PF_DEBUG_MISC, "syncookies disabled");
 	}
 
 	/* nothing in flight any more? delete keys and return */
@@ -436,8 +455,7 @@ pf_syncookie_mac(struct pf_pdesc *pd, union pf_syncookie cookie, uint32_t seq)
 }
 
 uint32_t
-pf_syncookie_generate(struct mbuf *m, int off, struct pf_pdesc *pd,
-    uint16_t mss)
+pf_syncookie_generate(struct pf_pdesc *pd, uint16_t mss)
 {
 	uint8_t			 i, wscale;
 	uint32_t		 iss, hash;
@@ -454,7 +472,7 @@ pf_syncookie_generate(struct mbuf *m, int off, struct pf_pdesc *pd,
 	cookie.flags.mss_idx = i;
 
 	/* map WSCALE */
-	wscale = pf_get_wscale(m, off, pd->hdr.tcp.th_off, pd->af);
+	wscale = pf_get_wscale(pd);
 	for (i = nitems(pf_syncookie_wstab) - 1;
 	    pf_syncookie_wstab[i] > wscale && i > 0; i--)
 		/* nada */;
@@ -477,7 +495,7 @@ pf_syncookie_generate(struct mbuf *m, int off, struct pf_pdesc *pd,
 }
 
 struct mbuf *
-pf_syncookie_recreate_syn(uint8_t ttl, int off, struct pf_pdesc *pd)
+pf_syncookie_recreate_syn(struct pf_pdesc *pd, u_short *reason)
 {
 	uint8_t			 wscale;
 	uint16_t		 mss;
@@ -496,6 +514,7 @@ pf_syncookie_recreate_syn(uint8_t ttl, int off, struct pf_pdesc *pd)
 	wscale = pf_syncookie_wstab[cookie.flags.wscale_idx];
 
 	return (pf_build_tcp(NULL, pd->af, pd->src, pd->dst, *pd->sport,
-	    *pd->dport, seq, 0, TH_SYN, wscale, mss, ttl, 0,
-	    PF_TAG_SYNCOOKIE_RECREATED));
+	    *pd->dport, seq, 0, TH_SYN, wscale, mss, pd->ttl,
+	    (pd->m->m_flags & M_LOOP), 0, PF_MTAG_FLAG_SYNCOOKIE_RECREATED,
+	    cookie.flags.sack_ok, pd->act.rtableid, reason));
 }

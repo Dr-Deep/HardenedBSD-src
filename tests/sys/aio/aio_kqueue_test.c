@@ -21,8 +21,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /* 
@@ -37,6 +35,7 @@
 #include <sys/types.h>
 #include <sys/event.h>
 #include <sys/time.h>
+#include <assert.h>
 #include <aio.h>
 #include <err.h>
 #include <errno.h>
@@ -46,7 +45,6 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "freebsd_test_suite/macros.h"
 #include "local.h"
 
 #define PATH_TEMPLATE   "aio.XXXXXXXXXX"
@@ -71,7 +69,6 @@ main (int argc, char *argv[])
 	int tmp_file = 0;
 	int i, j;
 
-	PLAIN_REQUIRE_KERNEL_MODULE("aio", 0);
 	PLAIN_REQUIRE_UNSAFE_AIO(0);
 
 	max_queue_per_proc_size = sizeof(max_queue_per_proc);
@@ -194,6 +191,7 @@ main (int argc, char *argv[])
 
 			for (j = 0; j < max_queue_per_proc && iocb[j] != kq_iocb;
 			   j++) ;
+			assert(j < max_queue_per_proc);
 #ifdef DEBUG
 			printf("kq_iocb %p\n", kq_iocb);
 

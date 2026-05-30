@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -22,6 +23,8 @@
 /*
  * Copyright 2022 Axcient.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright (c) 2024, Klara, Inc.
  */
 
 #include <err.h>
@@ -34,31 +37,7 @@
 #include <sys/zstd/zstd.h>
 #include "zfs_fletcher.h"
 #include "zstream.h"
-
-static int
-dump_record(dmu_replay_record_t *drr, void *payload, int payload_len,
-    zio_cksum_t *zc, int outfd)
-{
-	assert(offsetof(dmu_replay_record_t, drr_u.drr_checksum.drr_checksum)
-	    == sizeof (dmu_replay_record_t) - sizeof (zio_cksum_t));
-	fletcher_4_incremental_native(drr,
-	    offsetof(dmu_replay_record_t, drr_u.drr_checksum.drr_checksum), zc);
-	if (drr->drr_type != DRR_BEGIN) {
-		assert(ZIO_CHECKSUM_IS_ZERO(&drr->drr_u.
-		    drr_checksum.drr_checksum));
-		drr->drr_u.drr_checksum.drr_checksum = *zc;
-	}
-	fletcher_4_incremental_native(&drr->drr_u.drr_checksum.drr_checksum,
-	    sizeof (zio_cksum_t), zc);
-	if (write(outfd, drr, sizeof (*drr)) == -1)
-		return (errno);
-	if (payload_len != 0) {
-		fletcher_4_incremental_native(payload, payload_len, zc);
-		if (write(outfd, payload, payload_len) == -1)
-			return (errno);
-	}
-	return (0);
-}
+#include "zstream_util.h"
 
 int
 zstream_do_decompress(int argc, char *argv[])
@@ -115,7 +94,9 @@ zstream_do_decompress(int argc, char *argv[])
 		if (errno || *end != '\0')
 			errx(1, "invalid value for offset");
 		if (argv[i]) {
-			if (0 == strcmp("lz4", argv[i]))
+			if (0 == strcmp("off", argv[i]))
+				type = ZIO_COMPRESS_OFF;
+			else if (0 == strcmp("lz4", argv[i]))
 				type = ZIO_COMPRESS_LZ4;
 			else if (0 == strcmp("lzjb", argv[i]))
 				type = ZIO_COMPRESS_LZJB;
@@ -127,8 +108,8 @@ zstream_do_decompress(int argc, char *argv[])
 				type = ZIO_COMPRESS_ZSTD;
 			else {
 				fprintf(stderr, "Invalid compression type %s.\n"
-				    "Supported types are lz4, lzjb, gzip, zle, "
-				    "and zstd\n",
+				    "Supported types are off, lz4, lzjb, gzip, "
+				    "zle, and zstd\n",
 				    argv[i]);
 				exit(2);
 			}
@@ -144,7 +125,7 @@ zstream_do_decompress(int argc, char *argv[])
 		p = hsearch(e, ENTER);
 		if (p == NULL)
 			errx(1, "hsearch");
-		p->data = (void*)type;
+		p->data = (void*)(intptr_t)type;
 	}
 
 	if (isatty(STDIN_FILENO)) {
@@ -156,6 +137,8 @@ zstream_do_decompress(int argc, char *argv[])
 	}
 
 	fletcher_4_init();
+	int begin = 0;
+	boolean_t seen = B_FALSE;
 	while (sfread(drr, sizeof (*drr), stdin) != 0) {
 		struct drr_write *drrw;
 		uint64_t payload_size = 0;
@@ -172,8 +155,13 @@ zstream_do_decompress(int argc, char *argv[])
 		case DRR_BEGIN:
 		{
 			ZIO_SET_CHECKSUM(&stream_cksum, 0, 0, 0, 0);
+			VERIFY0(begin++);
+			seen = B_TRUE;
 
-			int sz = drr->drr_payloadlen;
+			uint32_t sz = drr->drr_payloadlen;
+
+			VERIFY3U(sz, <=, 1U << 28);
+
 			if (sz != 0) {
 				if (sz > bufsz) {
 					buf = realloc(buf, sz);
@@ -190,6 +178,13 @@ zstream_do_decompress(int argc, char *argv[])
 		{
 			struct drr_end *drre = &drr->drr_u.drr_end;
 			/*
+			 * We would prefer to just check --begin == 0, but
+			 * replication streams have an end of stream END
+			 * record, so we must avoid tripping it.
+			 */
+			VERIFY3B(seen, ==, B_TRUE);
+			begin--;
+			/*
 			 * Use the recalculated checksum, unless this is
 			 * the END record of a stream package, which has
 			 * no checksum.
@@ -202,6 +197,7 @@ zstream_do_decompress(int argc, char *argv[])
 		case DRR_OBJECT:
 		{
 			struct drr_object *drro = &drr->drr_u.drr_object;
+			VERIFY3S(begin, ==, 1);
 
 			if (drro->drr_bonuslen > 0) {
 				payload_size = DRR_OBJECT_PAYLOAD_SIZE(drro);
@@ -213,12 +209,14 @@ zstream_do_decompress(int argc, char *argv[])
 		case DRR_SPILL:
 		{
 			struct drr_spill *drrs = &drr->drr_u.drr_spill;
+			VERIFY3S(begin, ==, 1);
 			payload_size = DRR_SPILL_PAYLOAD_SIZE(drrs);
 			(void) sfread(buf, payload_size, stdin);
 			break;
 		}
 
 		case DRR_WRITE_BYREF:
+			VERIFY3S(begin, ==, 1);
 			fprintf(stderr,
 			    "Deduplicated streams are not supported\n");
 			exit(1);
@@ -226,6 +224,7 @@ zstream_do_decompress(int argc, char *argv[])
 
 		case DRR_WRITE:
 		{
+			VERIFY3S(begin, ==, 1);
 			drrw = &thedrr.drr_u.drr_write;
 			payload_size = DRR_WRITE_PAYLOAD_SIZE(drrw);
 			ENTRY *p;
@@ -237,66 +236,79 @@ zstream_do_decompress(int argc, char *argv[])
 			ENTRY e = {.key = key};
 
 			p = hsearch(e, FIND);
-			if (p != NULL) {
-				zio_decompress_func_t *xfunc = NULL;
-				switch ((enum zio_compress)(intptr_t)p->data) {
-				case ZIO_COMPRESS_LZJB:
-					xfunc = lzjb_decompress;
-					break;
-				case ZIO_COMPRESS_GZIP_1:
-					xfunc = gzip_decompress;
-					break;
-				case ZIO_COMPRESS_ZLE:
-					xfunc = zle_decompress;
-					break;
-				case ZIO_COMPRESS_LZ4:
-					xfunc = lz4_decompress_zfs;
-					break;
-				case ZIO_COMPRESS_ZSTD:
-					xfunc = zfs_zstd_decompress;
-					break;
-				default:
-					assert(B_FALSE);
-				}
-				assert(xfunc != NULL);
-
-
-				/*
-				 * Read and decompress the block
-				 */
-				char *lzbuf = safe_calloc(payload_size);
-				(void) sfread(lzbuf, payload_size, stdin);
-				if (0 != xfunc(lzbuf, buf,
-				    payload_size, payload_size, 0)) {
-					/*
-					 * The block must not be compressed,
-					 * possibly because it gets written
-					 * multiple times in this stream.
-					 */
-					warnx("decompression failed for "
-					    "ino %llu offset %llu",
-					    (u_longlong_t)drrw->drr_object,
-					    (u_longlong_t)drrw->drr_offset);
-					memcpy(buf, lzbuf, payload_size);
-				} else if (verbose) {
-					fprintf(stderr, "successfully "
-					    "decompressed ino %llu "
-					    "offset %llu\n",
-					    (u_longlong_t)drrw->drr_object,
-					    (u_longlong_t)drrw->drr_offset);
-				}
-				free(lzbuf);
-			} else {
+			if (p == NULL) {
 				/*
 				 * Read the contents of the block unaltered
 				 */
 				(void) sfread(buf, payload_size, stdin);
+				break;
 			}
+
+			/*
+			 * Read and decompress the block
+			 */
+			enum zio_compress c =
+			    (enum zio_compress)(intptr_t)p->data;
+
+			if (c == ZIO_COMPRESS_OFF) {
+				(void) sfread(buf, payload_size, stdin);
+				drrw->drr_compressiontype = 0;
+				drrw->drr_compressed_size = 0;
+				if (verbose)
+					fprintf(stderr,
+					    "Resetting compression type to "
+					    "off for ino %llu offset %llu\n",
+					    (u_longlong_t)drrw->drr_object,
+					    (u_longlong_t)drrw->drr_offset);
+				break;
+			}
+
+			uint64_t lsize = drrw->drr_logical_size;
+			ASSERT3U(payload_size, <=, lsize);
+
+			char *lzbuf = safe_calloc(payload_size);
+			(void) sfread(lzbuf, payload_size, stdin);
+
+			abd_t sabd, dabd;
+			abd_get_from_buf_struct(&sabd, lzbuf, payload_size);
+			abd_get_from_buf_struct(&dabd, buf, lsize);
+			int err = zio_decompress_data(c, &sabd, &dabd,
+			    payload_size, lsize, NULL);
+			abd_free(&dabd);
+			abd_free(&sabd);
+
+			if (err == 0) {
+				drrw->drr_compressiontype = 0;
+				drrw->drr_compressed_size = 0;
+				payload_size = lsize;
+				if (verbose) {
+					fprintf(stderr,
+					    "successfully decompressed "
+					    "ino %llu offset %llu\n",
+					    (u_longlong_t)drrw->drr_object,
+					    (u_longlong_t)drrw->drr_offset);
+				}
+			} else {
+				/*
+				 * The block must not be compressed, at least
+				 * not with this compression type, possibly
+				 * because it gets written multiple times in
+				 * this stream.
+				 */
+				warnx("decompression failed for "
+				    "ino %llu offset %llu",
+				    (u_longlong_t)drrw->drr_object,
+				    (u_longlong_t)drrw->drr_offset);
+				memcpy(buf, lzbuf, payload_size);
+			}
+
+			free(lzbuf);
 			break;
 		}
 
 		case DRR_WRITE_EMBEDDED:
 		{
+			VERIFY3S(begin, ==, 1);
 			struct drr_write_embedded *drrwe =
 			    &drr->drr_u.drr_write_embedded;
 			payload_size =
@@ -308,6 +320,7 @@ zstream_do_decompress(int argc, char *argv[])
 		case DRR_FREEOBJECTS:
 		case DRR_FREE:
 		case DRR_OBJECT_RANGE:
+			VERIFY3S(begin, ==, 1);
 			break;
 
 		default:

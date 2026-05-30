@@ -14,9 +14,6 @@
  * as a builtin for /bin/sh (#define SHELL).
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/types.h>
 #include <sys/stat.h>
 
@@ -119,7 +116,7 @@ enum token {
 #define TOKEN_TYPE(token) ((token) & 0xff00)
 
 static const struct t_op {
-	char op_text[2];
+	char op_text[2] __nonstring;
 	short op_num;
 } ops1[] = {
 	{"=",	STREQ},
@@ -201,7 +198,7 @@ main(int argc, char **argv)
 		p++;
 	if (strcmp(p, "[") == 0) {
 		if (strcmp(argv[--argc], "]") != 0)
-			error("missing ]");
+			error("missing ']'");
 		argv[argc] = NULL;
 	}
 

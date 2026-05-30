@@ -22,13 +22,11 @@
  * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
  * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #ifndef _SMBIOS_H_
 #define	_SMBIOS_H_
 
-void	smbios_detect(const caddr_t);
+caddr_t	smbios_detect(const caddr_t);
 int	smbios_match(const char *, const char *, const char *);
 
 #endif /* _SMBIOS_H_ */

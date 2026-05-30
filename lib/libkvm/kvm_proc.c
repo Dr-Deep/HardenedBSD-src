@@ -33,9 +33,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-__SCCSID("@(#)kvm_proc.c	8.3 (Berkeley) 9/23/93");
 
 /*
  * Proc traversal interface for kvm.  ps and w are (probably) the exclusive
@@ -124,6 +121,7 @@ kvm_proclist(kvm_t *kd, int what, int arg, struct proc *p,
 	struct thread mtd;
 	struct proc proc;
 	struct proc pproc;
+	struct proc rproc;
 	struct sysentvec sysent;
 	char svname[KI_EMULNAMELEN];
 	struct thread *td = NULL;
@@ -145,19 +143,22 @@ kvm_proclist(kvm_t *kd, int what, int arg, struct proc *p,
 		if (proc.p_state == PRS_NEW)
 			continue;
 		if (KREAD(kd, (u_long)proc.p_ucred, &ucred) == 0) {
+			kp->ki_uid = ucred.cr_uid;
 			kp->ki_ruid = ucred.cr_ruid;
 			kp->ki_svuid = ucred.cr_svuid;
 			kp->ki_rgid = ucred.cr_rgid;
 			kp->ki_svgid = ucred.cr_svgid;
-			kp->ki_cr_flags = ucred.cr_flags;
-			if (ucred.cr_ngroups > KI_NGROUPS) {
+			kp->ki_cr_flags = 0;
+			if (ucred.cr_flags & CRED_FLAG_CAPMODE)
+				kp->ki_cr_flags |= KI_CRF_CAPABILITY_MODE;
+			if (1 + ucred.cr_ngroups > KI_NGROUPS) {
 				kp->ki_ngroups = KI_NGROUPS;
 				kp->ki_cr_flags |= KI_CRF_GRP_OVERFLOW;
 			} else
-				kp->ki_ngroups = ucred.cr_ngroups;
-			kvm_read(kd, (u_long)ucred.cr_groups, kp->ki_groups,
-			    kp->ki_ngroups * sizeof(gid_t));
-			kp->ki_uid = ucred.cr_uid;
+				kp->ki_ngroups = 1 + ucred.cr_ngroups;
+			kp->ki_groups[0] = ucred.cr_gid;
+			kvm_read(kd, (u_long)ucred.cr_groups, kp->ki_groups + 1,
+			    (kp->ki_ngroups - 1) * sizeof(gid_t));
 			if (ucred.cr_prison != NULL) {
 				if (KREAD(kd, (u_long)ucred.cr_prison, &pr)) {
 					_kvm_err(kd, kd->program,
@@ -365,6 +366,13 @@ nopgrp:
 		kp->ki_xstat = KW_EXITCODE(proc.p_xexit, proc.p_xsig);
 		kp->ki_acflag = proc.p_acflag;
 		kp->ki_lock = proc.p_lock;
+		if (KREAD(kd, (u_long)proc.p_reaper, &rproc)) {
+			_kvm_err(kd, kd->program,
+			    "can't read reaper at %p", proc.p_reaper);
+			return (-1);
+		}
+		kp->ki_reaper = rproc.p_pid;
+		kp->ki_reapsubtree = proc.p_reapsubtree;
 		kp->ki_tdev_freebsd11 = kp->ki_tdev; /* truncate */
 
 		/* Per-thread items; iterate as appropriate. */

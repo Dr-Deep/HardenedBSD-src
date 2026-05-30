@@ -16,8 +16,7 @@
 
 #include <limits>
 
-namespace lld {
-namespace macho {
+namespace lld::macho {
 
 class Defined;
 class InputSection;
@@ -38,6 +37,7 @@ public:
   enum Kind {
     ConcatKind,
     SyntheticKind,
+    TextKind,
   };
 
   OutputSection(Kind kind, StringRef name) : name(name), sectionKind(kind) {}
@@ -98,7 +98,6 @@ private:
   Kind sectionKind;
 };
 
-} // namespace macho
-} // namespace lld
+} // namespace lld::macho
 
 #endif

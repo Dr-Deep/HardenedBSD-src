@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1984-2021  Mark Nudelman
+ * Copyright (C) 1984-2026  Mark Nudelman
  *
  * You may distribute under the terms of either the GNU General Public
  * License or the Less License, as specified in the README file.
@@ -32,17 +32,26 @@
 #if HAVE_ERRNO_H
 #include <errno.h>
 #endif
+#if MUST_DEFINE_ERRNO
+extern int errno;
+#endif
 #if HAVE_VALUES_H
 #include <values.h>
 #endif
 
-#if HAVE_POLL && !MSDOS_COMPILER && !defined(__APPLE__)
+#if defined(__APPLE__)
+#include <sys/utsname.h>
+#endif
+
+#if HAVE_POLL && !MSDOS_COMPILER && !defined(__MVS__)
 #define USE_POLL 1
+static lbool use_poll = TRUE;
 #else
 #define USE_POLL 0
 #endif
 #if USE_POLL
 #include <poll.h>
+static lbool any_data = FALSE;
 #endif
 
 /*
@@ -52,53 +61,173 @@
  * On other systems, setjmp() doesn't affect the signal mask and so
  * _setjmp() does not exist; we just use setjmp().
  */
-#if HAVE__SETJMP && HAVE_SIGSETMASK
-#define SET_JUMP        _setjmp
-#define LONG_JUMP       _longjmp
+#if HAVE_SIGSETJMP
+#define SET_JUMP(label)        sigsetjmp(label, 1)
+#define LONG_JUMP(label, val)  siglongjmp(label, val)
+#define JUMP_BUF               sigjmp_buf
 #else
-#define SET_JUMP        setjmp
-#define LONG_JUMP       longjmp
+#if HAVE__SETJMP && HAVE_SIGSETMASK
+#define SET_JUMP(label)        _setjmp(label)
+#define LONG_JUMP(label, val)  _longjmp(label, val)
+#define JUMP_BUF               jmp_buf
+#else
+#define SET_JUMP(label)        setjmp(label)
+#define LONG_JUMP(label, val)  longjmp(label, val)
+#define JUMP_BUF               jmp_buf
+#endif
 #endif
 
-public int reading;
+static lbool reading;
+static lbool opening;
+public lbool waiting_for_data;
+public int consecutive_nulls = 0;
+public lbool getting_one_screen = FALSE;
 
-static jmp_buf read_label;
+/* Milliseconds to wait for data before displaying "waiting for data" message. */
+static int waiting_for_data_delay = 4000;
+/* Max milliseconds expected to "normally" read and display a screen of text. */
+public int screenfill_ms = 3000;
+
+static JUMP_BUF read_label;
+static JUMP_BUF open_label;
 
 extern int sigs;
-extern int ignore_eoi;
-#if !MSDOS_COMPILER
+extern lbool ignore_eoi;
+extern int exit_F_on_close;
+extern int follow_mode;
+extern int scanning_eof;
+extern char intr_char;
+extern int is_tty;
+extern int quit_if_one_screen;
+extern int one_screen;
+#if HAVE_TIME
+extern time_type less_start_time;
+#endif
+#if LESS_IREAD_TTY
 extern int tty;
 #endif
 
+public void init_poll(void)
+{
+	constant char *delay = lgetenv("LESS_DATA_DELAY");
+	int idelay = (delay == NULL) ? 0 : atoi(delay);
+	if (idelay > 0)
+		waiting_for_data_delay = idelay;
+	delay = lgetenv("LESS_SCREENFILL_TIME");
+	idelay = (delay == NULL) ? 0 : atoi(delay);
+	if (idelay > 0)
+		screenfill_ms = idelay;
+#if USE_POLL
+#if defined(__APPLE__)
+	/* In old versions of MacOS, poll() does not work with /dev/tty. */
+	struct utsname uts;
+	if (uname(&uts) < 0 || lstrtoi(uts.release, NULL, 10) < 20)
+		use_poll = FALSE;
+#endif
+#endif
+}
+
 #if USE_POLL
 /*
- * Return true if one of the events has occurred on the specified file.
+ * Check whether data is available, either from a file/pipe or from the tty.
+ * Return READ_AGAIN if no data currently available, but caller should retry later.
+ * Return READ_INTR to abort F command (forw_loop).
+ * Return 0 if safe to read from fd.
  */
-	static int
-poll_events(fd, events)
-	int fd;
-	int events;
+static int check_poll(int fd, int tty)
 {
-	struct pollfd poller = { fd, events, 0 };
-	int n = poll(&poller, 1, 0);
-	if (n <= 0)
-		return 0;
-	return (poller.revents & events);
-}
+	struct pollfd poller[2] = { { fd, POLLIN, 0 }, { tty, POLLIN, 0 } };
+	int timeout = (waiting_for_data && !(scanning_eof && follow_mode == FOLLOW_NAME)) ? -1 : (ignore_eoi && !waiting_for_data) ? 0 : waiting_for_data_delay;
+#if HAVE_TIME
+	if (getting_one_screen && get_time() < less_start_time + screenfill_ms/1000)
+		return (0);
 #endif
+	if (!any_data)
+	{
+		/*
+		 * Don't do polling if no data has yet been received,
+		 * to allow a program piping data into less to have temporary
+		 * access to the tty (like sudo asking for a password).
+		 */
+		return (0);
+	}
+	poll(poller, 2, timeout);
+#if LESSTEST
+	if (!is_lesstest()) /* Check for ^X only on a real tty. */
+#endif /*LESSTEST*/
+	{
+		if (poller[1].revents & POLLIN) 
+		{
+			int ch = getchr();
+			if (ch < 0 || ch == intr_char)
+				/* Break out of "waiting for data". */
+				return (READ_INTR);
+			ungetcc_back((char) ch);
+		}
+	}
+	if (ignore_eoi && exit_F_on_close && (poller[0].revents & (POLLHUP|POLLIN)) == POLLHUP)
+		/* Break out of F loop on HUP due to --exit-follow-on-close. */
+		return (READ_INTR);
+	if ((poller[0].revents & (POLLIN|POLLHUP|POLLERR)) == 0)
+		/* No data available; let caller take action, then try again. */
+		return (READ_AGAIN);
+	/* There is data (or HUP/ERR) available. Safe to call read() without blocking. */
+	return (0);
+}
+#endif /* USE_POLL */
+
+/*
+ * Is a character available to be read from the tty?
+ */
+public lbool ttyin_ready(void)
+{
+#if MSDOS_COMPILER==WIN32C
+	return win32_kbhit();
+#else
+#if MSDOS_COMPILER
+	return kbhit();
+#else
+#if USE_POLL
+#if LESSTEST
+	if (is_lesstest())
+		return FALSE;
+#endif /*LESSTEST*/
+	if (!use_poll)
+		return FALSE;
+	{
+		/* {{ assert LESS_IREAD_TTY }} */
+		struct pollfd poller[1] = { { tty, POLLIN, 0 } };
+		poll(poller, 1, 0);
+		return ((poller[0].revents & POLLIN) != 0);
+	}
+#else
+	return FALSE;
+#endif
+#endif
+#endif
+}
+
+public lbool supports_ctrl_x(void)
+{
+#if MSDOS_COMPILER==WIN32C
+	return (TRUE);
+#else
+#if USE_POLL
+	return (use_poll);
+#else
+	return (FALSE);
+#endif /* USE_POLL */
+#endif /* MSDOS_COMPILER==WIN32C */
+}
 
 /*
  * Like read() system call, but is deliberately interruptible.
- * A call to intread() from a signal handler will interrupt
+ * A call to intio() from a signal handler will interrupt
  * any pending iread().
  */
-	public int
-iread(fd, buf, len)
-	int fd;
-	unsigned char *buf;
-	unsigned int len;
+public ssize_t iread(int fd, unsigned char *buf, size_t len)
 {
-	int n;
+	ssize_t n;
 
 start:
 #if MSDOS_COMPILER==WIN32C
@@ -117,12 +246,12 @@ start:
 	}
 #endif
 #endif
-	if (SET_JUMP(read_label))
+	if (!reading && SET_JUMP(read_label))
 	{
 		/*
-		 * We jumped here from intread.
+		 * We jumped here from intio.
 		 */
-		reading = 0;
+		reading = FALSE;
 #if HAVE_SIGPROCMASK
 		{
 		  sigset_t mask;
@@ -138,11 +267,16 @@ start:
 #endif
 #endif
 #endif
+#if !MSDOS_COMPILER /* {{ LESS_IREAD_TTY? }} */
+		if (fd != tty && !ABORT_SIGS())
+			/* Non-interrupt signal like SIGWINCH. */
+			return (READ_AGAIN);
+#endif
 		return (READ_INTR);
 	}
 
 	flush();
-	reading = 1;
+	reading = TRUE;
 #if MSDOS_COMPILER==DJGPPC
 	if (isatty(fd))
 	{
@@ -151,40 +285,49 @@ start:
 		 * available, because that makes some background programs
 		 * believe DOS is busy in a way that prevents those
 		 * programs from working while "less" waits.
+		 * {{ This code was added 12 Jan 2007; still needed? }}
 		 */
 		fd_set readfds;
 
 		FD_ZERO(&readfds);
 		FD_SET(fd, &readfds);
 		if (select(fd+1, &readfds, 0, 0, 0) == -1)
-			return (-1);
+		{
+			reading = FALSE;
+			return (READ_ERR);
+		}
 	}
 #endif
 #if USE_POLL
-	if (ignore_eoi && fd != tty)
+	if (is_tty && fd != tty && use_poll && !(quit_if_one_screen && one_screen))
 	{
-		if (poll_events(tty, POLLIN) && getchr() == CONTROL('X'))
+		int ret = check_poll(fd, tty);
+		if (ret != 0)
 		{
-			sigs |= S_INTERRUPT;
-			return (READ_INTR);
-		}
-		if (poll_events(fd, POLLERR|POLLHUP))
-		{
-			sigs |= S_INTERRUPT;
-			return (READ_INTR);
+			if (ret == READ_INTR)
+				sigs |= S_SWINTERRUPT;
+			reading = FALSE;
+			return (ret);
 		}
 	}
 #else
 #if MSDOS_COMPILER==WIN32C
-	if (win32_kbhit() && WIN32getch() == CONTROL('X'))
+	if (!(quit_if_one_screen && one_screen) && win32_kbhit2(TRUE))
 	{
-		sigs |= S_INTERRUPT;
-		return (READ_INTR);
+		int c = WIN32getch();
+		if (c == CONTROL('C') || c == intr_char)
+		{
+			sigs |= S_SWINTERRUPT;
+			reading = FALSE;
+			return (READ_INTR);
+		}
+		WIN32ungetch(c);
 	}
 #endif
 #endif
 	n = read(fd, buf, len);
-#if 1
+	reading = FALSE;
+#if 0
 	/*
 	 * This is a kludge to workaround a problem on some systems
 	 * where terminating a remote tty connection causes read() to
@@ -193,7 +336,6 @@ start:
 	{
 		if (!ignore_eoi)
 		{
-			static int consecutive_nulls = 0;
 			if (n == 0)
 				consecutive_nulls++;
 			else
@@ -203,16 +345,12 @@ start:
 		}
 	}
 #endif
-	reading = 0;
 	if (n < 0)
 	{
 #if HAVE_ERRNO
 		/*
 		 * Certain values of errno indicate we should just retry the read.
 		 */
-#if MUST_DEFINE_ERRNO
-		extern int errno;
-#endif
 #ifdef EINTR
 		if (errno == EINTR)
 			goto start;
@@ -222,26 +360,75 @@ start:
 			goto start;
 #endif
 #endif
-		return (-1);
+		return (READ_ERR);
+	}
+#if LESS_IREAD_TTY
+	if (fd != tty)
+#endif
+	{
+		if (n > 0)
+			polling_ok();
 	}
 	return (n);
 }
 
 /*
- * Interrupt a pending iread().
+ * Like open() system call, but is interruptible.
  */
-	public void
-intread(VOID_PARAM)
+public int iopen(constant char *filename, int flags)
 {
-	LONG_JUMP(read_label, 1);
+	int r;
+	while (!opening && SET_JUMP(open_label))
+	{
+		opening = FALSE;
+		if (sigs & (S_INTERRUPT|S_SWINTERRUPT))
+		{
+			sigs = 0;
+#if HAVE_SETTABLE_ERRNO
+#ifdef EINTR
+			errno = EINTR;
+#endif
+#endif
+			return -1;
+		}
+		psignals(); /* Handle S_STOP or S_WINCH */
+	}
+	opening = TRUE;
+	r = open(filename, flags);
+	opening = FALSE;
+	return r;
+}
+
+/*
+ * Interrupt a pending iopen() or iread().
+ */
+public void intio(void)
+{
+	if (opening)
+	{
+		LONG_JUMP(open_label, 1);
+	}
+	if (reading)
+	{
+		LONG_JUMP(read_label, 1);
+	}
+}
+
+/*
+ * We can start polling the input file.
+ */
+public void polling_ok(void)
+{
+#if USE_POLL
+	any_data = TRUE;
+#endif
 }
 
 /*
  * Return the current time.
  */
 #if HAVE_TIME
-	public time_type
-get_time(VOID_PARAM)
+public time_type get_time(void)
 {
 	time_type t;
 
@@ -255,11 +442,9 @@ get_time(VOID_PARAM)
 /*
  * Local version of strerror, if not available from the system.
  */
-	static char *
-strerror(err)
-	int err;
+static char * strerror(int err)
 {
-	static char buf[16];
+	static char buf[INT_STRLEN_BOUND(int)+12];
 #if HAVE_SYS_ERRLIST
 	extern char *sys_errlist[];
 	extern int sys_nerr;
@@ -275,86 +460,89 @@ strerror(err)
 /*
  * errno_message: Return an error message based on the value of "errno".
  */
-	public char *
-errno_message(filename)
-	char *filename;
+public char * errno_message(constant char *filename)
 {
 	char *p;
 	char *m;
-	int len;
+	size_t len;
 #if HAVE_ERRNO
-#if MUST_DEFINE_ERRNO
-	extern int errno;
-#endif
 	p = strerror(errno);
 #else
 	p = "cannot open";
 #endif
-	len = (int) (strlen(filename) + strlen(p) + 3);
+	len = strlen(filename) + strlen(p) + 3;
 	m = (char *) ecalloc(len, sizeof(char));
 	SNPRINTF2(m, len, "%s: %s", filename, p);
 	return (m);
 }
 
-/* #define HAVE_FLOAT 0 */
-
-	static POSITION
-muldiv(val, num, den)
-	POSITION val, num, den;
+/*
+ * Return a description of a signal.
+ * The return value is good until the next call to this function.
+ */
+public constant char * signal_message(int sig)
 {
-#if HAVE_FLOAT
-	double v = (((double) val) * num) / den;
-	return ((POSITION) (v + 0.5));
-#else
-	POSITION v = ((POSITION) val) * num;
-
-	if (v / num == val)
-		/* No overflow */
-		return (POSITION) (v / den);
-	else
-		/* Above calculation overflows; 
-		 * use a method that is less precise but won't overflow. */
-		return (POSITION) (val / (den / num));
+	static char sigbuf[sizeof("Signal ") + INT_STRLEN_BOUND(sig) + 1];
+#if HAVE_STRSIGNAL
+	constant char *description = strsignal(sig);
+	if (description)
+		return description;
 #endif
+	sprintf(sigbuf, "Signal %d", sig);
+	return sigbuf;
+}
+
+/*
+ * Return (VAL * NUM) / DEN, where DEN is positive
+ * and min(VAL, NUM) <= DEN so the result cannot overflow.
+ * Round to the nearest integer, breaking ties by rounding to even.
+ */
+public uintmax umuldiv(uintmax val, uintmax num, uintmax den)
+{
+	/*
+	 * Like round(val * (double) num / den), but without rounding error.
+	 * Overflow cannot occur, so there is no need for floating point.
+	 */
+	uintmax q = val / den;
+	uintmax r = val % den;
+	uintmax qnum = q * num;
+	uintmax rnum = r * num;
+	uintmax quot = qnum + rnum / den;
+	uintmax rem = rnum % den;
+	return quot + (den / 2 < rem + (quot & ~den & 1));
 }
 
 /*
  * Return the ratio of two POSITIONS, as a percentage.
  * {{ Assumes a POSITION is a long int. }}
  */
-	public int
-percentage(num, den)
-	POSITION num;
-	POSITION den;
+public int percentage(POSITION num, POSITION den)
 {
-	return (int) muldiv(num,  (POSITION) 100, den);
+	return (int) muldiv(num, 100, den);
 }
 
 /*
  * Return the specified percentage of a POSITION.
+ * Assume (0 <= POS && 0 <= PERCENT <= 100
+ *	   && 0 <= FRACTION < (PERCENT == 100 ? 1 : NUM_FRAC_DENOM)),
+ * so the result cannot overflow.  Round to even.
  */
-	public POSITION
-percent_pos(pos, percent, fraction)
-	POSITION pos;
-	int percent;
-	long fraction;
+public POSITION percent_pos(POSITION pos, int percent, long fraction)
 {
-	/* Change percent (parts per 100) to perden (parts per NUM_FRAC_DENOM). */
-	POSITION perden = (percent * (NUM_FRAC_DENOM / 100)) + (fraction / 100);
+	/*
+	 * Change from percent (parts per 100)
+	 * to pctden (parts per 100 * NUM_FRAC_DENOM).
+	 */
+	POSITION pctden = (percent * NUM_FRAC_DENOM) + fraction;
 
-	if (perden == 0)
-		return (0);
-	return (POSITION) muldiv(pos, perden, (POSITION) NUM_FRAC_DENOM);
+	return (POSITION) muldiv(pos, pctden, 100 * NUM_FRAC_DENOM);
 }
 
 #if !HAVE_STRCHR
 /*
  * strchr is used by regexp.c.
  */
-	char *
-strchr(s, c)
-	char *s;
-	int c;
+char * strchr(char *s, char c)
 {
 	for ( ;  *s != '\0';  s++)
 		if (*s == c)
@@ -366,11 +554,7 @@ strchr(s, c)
 #endif
 
 #if !HAVE_MEMCPY
-	VOID_POINTER
-memcpy(dst, src, len)
-	VOID_POINTER dst;
-	VOID_POINTER src;
-	int len;
+void * memcpy(void *dst, constant void *src, size_t len)
 {
 	char *dstp = (char *) dst;
 	char *srcp = (char *) src;
@@ -382,24 +566,38 @@ memcpy(dst, src, len)
 }
 #endif
 
+#if !HAVE_STRSTR
+char * strstr(constant char *haystack, constant char *needle)
+{
+	if (*needle == '\0')
+		return (char *) haystack;
+	for (; *haystack; haystack++) {
+		constant char *h = haystack;
+		constant char *n = needle;
+		while (*h != '\0' && *n != '\0' && *h == *n) {
+			h++;
+			n++;
+		}
+		if (*n == '\0')
+			return (char *) haystack;
+	}
+	return NULL;
+}
+#endif
+
 #ifdef _OSK_MWC32
 
 /*
  * This implements an ANSI-style intercept setup for Microware C 3.2
  */
-	public int 
-os9_signal(type, handler)
-	int type;
-	RETSIGTYPE (*handler)();
+public int os9_signal(int type, RETSIGTYPE (*handler)())
 {
 	intercept(handler);
 }
 
 #include <sgstat.h>
 
-	int 
-isatty(f)
-	int f;
+int isatty(int f)
 {
 	struct sgbuf sgbuf;
 
@@ -410,9 +608,7 @@ isatty(f)
 	
 #endif
 
-	public void
-sleep_ms(ms)
-	int ms;
+public void sleep_ms(int ms)
 {
 #if MSDOS_COMPILER==WIN32C
 	Sleep(ms);
@@ -423,9 +619,9 @@ sleep_ms(ms)
 	nanosleep(&t, NULL);
 #else
 #if HAVE_USLEEP
-	usleep(ms);
+	usleep(ms * 1000);
 #else
-	sleep((ms+999) / 1000);
+	sleep(ms / 1000 + (ms % 1000 != 0));
 #endif
 #endif
 #endif

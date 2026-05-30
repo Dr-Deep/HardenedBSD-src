@@ -30,7 +30,6 @@
   POSSIBILITY OF SUCH DAMAGE.
 
 ******************************************************************************/
-/*$FreeBSD$*/
 
 #ifndef _IXL_H_
 #define _IXL_H_
@@ -90,6 +89,7 @@
 #include <dev/pci/pcivar.h>
 #include <dev/pci/pcireg.h>
 #include <sys/proc.h>
+#include <sys/stdarg.h>
 #include <sys/sysctl.h>
 #include <sys/endian.h>
 #include <sys/taskqueue.h>
@@ -97,12 +97,9 @@
 #include <sys/smp.h>
 #include <sys/sbuf.h>
 #include <machine/smp.h>
-#include <machine/stdarg.h>
 
-#ifdef RSS
 #include <net/rss_config.h>
 #include <netinet/in_rss.h>
-#endif
 
 #include "ifdi_if.h"
 #include "i40e_type.h"
@@ -164,9 +161,6 @@
 #define IXL_VF_MAX_HDR_BUFFER	0x840
 #define IXL_VF_MAX_FRAME	0x3FFF
 
-/* ERJ: hardware can support ~2k (SW5+) filters between all functions */
-#define IXL_MAX_FILTERS		256
-
 #define IXL_NVM_VERSION_LO_SHIFT	0
 #define IXL_NVM_VERSION_LO_MASK		(0xff << IXL_NVM_VERSION_LO_SHIFT)
 #define IXL_NVM_VERSION_HI_SHIFT	12
@@ -195,7 +189,7 @@
 #define IXL_VLAN_ANY		-1
 
 /* Maximum number of MAC/VLAN filters supported by HW */
-#define IXL_MAX_VLAN_FILTERS	256
+#define IXL_MAX_VLAN_FILTERS	255
 
 #define CSUM_OFFLOAD_IPV4	(CSUM_IP|CSUM_TCP|CSUM_UDP|CSUM_SCTP)
 #define CSUM_OFFLOAD_IPV6	(CSUM_TCP_IPV6|CSUM_UDP_IPV6|CSUM_SCTP_IPV6)
@@ -206,6 +200,7 @@
 #define IXL_FLAGS_KEEP_TSO6	(1 << 1)
 #define IXL_FLAGS_USES_MSIX	(1 << 2)
 #define IXL_FLAGS_IS_VF		(1 << 3)
+#define IXL_FLAGS_MC_PROMISC	(1 << 4)
 
 #define IXL_VSI_IS_PF(v)	((v->flags & IXL_FLAGS_IS_VF) == 0)
 #define IXL_VSI_IS_VF(v)	((v->flags & IXL_FLAGS_IS_VF) != 0)
@@ -273,7 +268,6 @@
 	(CSUM_IP|CSUM_IP_TSO)
 
 /* Pre-11 counter(9) compatibility */
-#if __FreeBSD_version >= 1100036
 #define IXL_SET_IPACKETS(vsi, count)	(vsi)->ipackets = (count)
 #define IXL_SET_IERRORS(vsi, count)	(vsi)->ierrors = (count)
 #define IXL_SET_OPACKETS(vsi, count)	(vsi)->opackets = (count)
@@ -286,23 +280,11 @@
 #define IXL_SET_IQDROPS(vsi, count)	(vsi)->iqdrops = (count)
 #define IXL_SET_OQDROPS(vsi, count)	(vsi)->oqdrops = (count)
 #define IXL_SET_NOPROTO(vsi, count)	(vsi)->noproto = (count)
-#else
-#define IXL_SET_IPACKETS(vsi, count)	(vsi)->ifp->if_ipackets = (count)
-#define IXL_SET_IERRORS(vsi, count)	(vsi)->ifp->if_ierrors = (count)
-#define IXL_SET_OPACKETS(vsi, count)	(vsi)->ifp->if_opackets = (count)
-#define IXL_SET_OERRORS(vsi, count)	(vsi)->ifp->if_oerrors = (count)
-#define IXL_SET_COLLISIONS(vsi, count)	(vsi)->ifp->if_collisions = (count)
-#define IXL_SET_IBYTES(vsi, count)	(vsi)->ifp->if_ibytes = (count)
-#define IXL_SET_OBYTES(vsi, count)	(vsi)->ifp->if_obytes = (count)
-#define IXL_SET_IMCASTS(vsi, count)	(vsi)->ifp->if_imcasts = (count)
-#define IXL_SET_OMCASTS(vsi, count)	(vsi)->ifp->if_omcasts = (count)
-#define IXL_SET_IQDROPS(vsi, count)	(vsi)->ifp->if_iqdrops = (count)
-#define IXL_SET_OQDROPS(vsi, odrops)	(vsi)->ifp->if_snd.ifq_drops = (odrops)
-#define IXL_SET_NOPROTO(vsi, count)	(vsi)->noproto = (count)
-#endif
 
 /* For stats sysctl naming */
 #define IXL_QUEUE_NAME_LEN 32
+
+#define IXL_PF_MAX_LINK_POLL	SBT_1S * 5
 
 MALLOC_DECLARE(M_IXL);
 
@@ -422,7 +404,7 @@ LIST_HEAD(ixl_ftl_head, ixl_mac_filter);
 struct ixl_vsi {
 	if_ctx_t		ctx;
 	if_softc_ctx_t		shared;
-	struct ifnet		*ifp;
+	if_t			ifp;
 	device_t		dev;
 	struct i40e_hw		*hw;
 	struct ifmedia		*media;

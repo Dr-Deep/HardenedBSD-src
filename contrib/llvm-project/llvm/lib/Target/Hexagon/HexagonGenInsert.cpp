@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "BitTracker.h"
+#include "Hexagon.h"
 #include "HexagonBitTracker.h"
 #include "HexagonInstrInfo.h"
 #include "HexagonRegisterInfo.h"
@@ -47,34 +48,36 @@
 
 using namespace llvm;
 
-static cl::opt<unsigned> VRegIndexCutoff("insert-vreg-cutoff", cl::init(~0U),
-  cl::Hidden, cl::ZeroOrMore, cl::desc("Vreg# cutoff for insert generation."));
+static cl::opt<unsigned>
+    VRegIndexCutoff("insert-vreg-cutoff", cl::init(~0U), cl::Hidden,
+                    cl::desc("Vreg# cutoff for insert generation."));
 // The distance cutoff is selected based on the precheckin-perf results:
 // cutoffs 20, 25, 35, and 40 are worse than 30.
-static cl::opt<unsigned> VRegDistCutoff("insert-dist-cutoff", cl::init(30U),
-  cl::Hidden, cl::ZeroOrMore, cl::desc("Vreg distance cutoff for insert "
-  "generation."));
+static cl::opt<unsigned>
+    VRegDistCutoff("insert-dist-cutoff", cl::init(30U), cl::Hidden,
+                   cl::desc("Vreg distance cutoff for insert "
+                            "generation."));
 
 // Limit the container sizes for extreme cases where we run out of memory.
-static cl::opt<unsigned> MaxORLSize("insert-max-orl", cl::init(4096),
-  cl::Hidden, cl::ZeroOrMore, cl::desc("Maximum size of OrderedRegisterList"));
+static cl::opt<unsigned>
+    MaxORLSize("insert-max-orl", cl::init(4096), cl::Hidden,
+               cl::desc("Maximum size of OrderedRegisterList"));
 static cl::opt<unsigned> MaxIFMSize("insert-max-ifmap", cl::init(1024),
-  cl::Hidden, cl::ZeroOrMore, cl::desc("Maximum size of IFMap"));
+                                    cl::Hidden,
+                                    cl::desc("Maximum size of IFMap"));
 
-static cl::opt<bool> OptTiming("insert-timing", cl::init(false), cl::Hidden,
-  cl::ZeroOrMore, cl::desc("Enable timing of insert generation"));
-static cl::opt<bool> OptTimingDetail("insert-timing-detail", cl::init(false),
-  cl::Hidden, cl::ZeroOrMore, cl::desc("Enable detailed timing of insert "
-  "generation"));
+static cl::opt<bool> OptTiming("insert-timing", cl::Hidden,
+                               cl::desc("Enable timing of insert generation"));
+static cl::opt<bool>
+    OptTimingDetail("insert-timing-detail", cl::Hidden,
+                    cl::desc("Enable detailed timing of insert "
+                             "generation"));
 
-static cl::opt<bool> OptSelectAll0("insert-all0", cl::init(false), cl::Hidden,
-  cl::ZeroOrMore);
-static cl::opt<bool> OptSelectHas0("insert-has0", cl::init(false), cl::Hidden,
-  cl::ZeroOrMore);
+static cl::opt<bool> OptSelectAll0("insert-all0", cl::init(false), cl::Hidden);
+static cl::opt<bool> OptSelectHas0("insert-has0", cl::init(false), cl::Hidden);
 // Whether to construct constant values via "insert". Could eliminate constant
 // extenders, but often not practical.
-static cl::opt<bool> OptConst("insert-const", cl::init(false), cl::Hidden,
-  cl::ZeroOrMore);
+static cl::opt<bool> OptConst("insert-const", cl::init(false), cl::Hidden);
 
 // The preprocessor gets confused when the DEBUG macro is passed larger
 // chunks of code. Use this function to detect debugging.
@@ -92,11 +95,8 @@ namespace {
   struct RegisterSet : private BitVector {
     RegisterSet() = default;
     explicit RegisterSet(unsigned s, bool t = false) : BitVector(s, t) {}
-    RegisterSet(const RegisterSet &RS) : BitVector(RS) {}
-    RegisterSet &operator=(const RegisterSet &RS) {
-      BitVector::operator=(RS);
-      return *this;
-    }
+    RegisterSet(const RegisterSet &RS) = default;
+    RegisterSet &operator=(const RegisterSet &RS) = default;
 
     using BitVector::clear;
 
@@ -168,7 +168,7 @@ namespace {
     }
 
     static inline unsigned v2x(unsigned v) {
-      return Register::virtReg2Index(v);
+      return Register(v).virtRegIndex();
     }
 
     static inline unsigned x2v(unsigned x) {
@@ -272,7 +272,7 @@ namespace {
     CellMapShadow(const BitTracker &T) : BT(T) {}
 
     const BitTracker::RegisterCell &lookup(unsigned VR) {
-      unsigned RInd = Register::virtReg2Index(VR);
+      unsigned RInd = Register(VR).virtRegIndex();
       // Grow the vector to at least 32 elements.
       if (RInd >= CVect.size())
         CVect.resize(std::max(RInd+16, 32U), nullptr);
@@ -494,30 +494,21 @@ namespace {
 
 } // end anonymous namespace
 
-namespace llvm {
-
-  void initializeHexagonGenInsertPass(PassRegistry&);
-  FunctionPass *createHexagonGenInsert();
-
-} // end namespace llvm
-
 namespace {
 
   class HexagonGenInsert : public MachineFunctionPass {
   public:
     static char ID;
 
-    HexagonGenInsert() : MachineFunctionPass(ID) {
-      initializeHexagonGenInsertPass(*PassRegistry::getPassRegistry());
-    }
+    HexagonGenInsert() : MachineFunctionPass(ID) {}
 
     StringRef getPassName() const override {
       return "Hexagon generate \"insert\" instructions";
     }
 
     void getAnalysisUsage(AnalysisUsage &AU) const override {
-      AU.addRequired<MachineDominatorTree>();
-      AU.addPreserved<MachineDominatorTree>();
+      AU.addRequired<MachineDominatorTreeWrapperPass>();
+      AU.addPreserved<MachineDominatorTreeWrapperPass>();
       MachineFunctionPass::getAnalysisUsage(AU);
     }
 
@@ -930,6 +921,10 @@ void HexagonGenInsert::collectInBlock(MachineBasicBlock *B,
   // successors have been processed.
   RegisterSet BlockDefs, InsDefs;
   for (MachineInstr &MI : *B) {
+    // Stop if the map size is too large.
+    if (IFMap.size() >= MaxIFMSize)
+      break;
+
     InsDefs.clear();
     getInstrDefs(&MI, InsDefs);
     // Leave those alone. They are more transparent than "insert".
@@ -952,8 +947,8 @@ void HexagonGenInsert::collectInBlock(MachineBasicBlock *B,
 
         findRecordInsertForms(VR, AVs);
         // Stop if the map size is too large.
-        if (IFMap.size() > MaxIFMSize)
-          return;
+        if (IFMap.size() >= MaxIFMSize)
+          break;
       }
     }
 
@@ -1041,8 +1036,8 @@ void HexagonGenInsert::pruneEmptyLists() {
     if (I->second.empty())
       Prune.push_back(I);
   }
-  for (unsigned i = 0, n = Prune.size(); i < n; ++i)
-    IFMap.erase(Prune[i]);
+  for (const auto &It : Prune)
+    IFMap.erase(It);
 }
 
 void HexagonGenInsert::pruneCoveredSets(unsigned VR) {
@@ -1315,7 +1310,7 @@ void HexagonGenInsert::selectCandidates() {
     // element found is adequate, we will put it back on the list, other-
     // wise the list will remain empty, and the entry for this register
     // will be removed (i.e. this register will not be replaced by insert).
-    IFListType::iterator MinI = std::min_element(LL.begin(), LL.end(), IFO);
+    IFListType::iterator MinI = llvm::min_element(LL, IFO);
     assert(MinI != LL.end());
     IFRecordWithRegSet M = *MinI;
     LL.clear();
@@ -1452,7 +1447,7 @@ bool HexagonGenInsert::removeDeadCode(MachineDomTreeNode *N) {
         Opc == TargetOpcode::LIFETIME_END)
       continue;
     bool Store = false;
-    if (MI->isInlineAsm() || !MI->isSafeToMove(nullptr, Store))
+    if (MI->isInlineAsm() || !MI->isSafeToMove(Store))
       continue;
 
     bool AllDead = true;
@@ -1471,8 +1466,8 @@ bool HexagonGenInsert::removeDeadCode(MachineDomTreeNode *N) {
       continue;
 
     B->erase(MI);
-    for (unsigned I = 0, N = Regs.size(); I != N; ++I)
-      MRI->markUsesInDebugValueAsUndef(Regs[I]);
+    for (unsigned Reg : Regs)
+      MRI->markUsesInDebugValueAsUndef(Reg);
     Changed = true;
   }
 
@@ -1498,7 +1493,7 @@ bool HexagonGenInsert::runOnMachineFunction(MachineFunction &MF) {
   HRI = ST.getRegisterInfo();
   MFN = &MF;
   MRI = &MF.getRegInfo();
-  MDT = &getAnalysis<MachineDominatorTree>();
+  MDT = &getAnalysis<MachineDominatorTreeWrapperPass>().getDomTree();
 
   // Clean up before any further processing, so that dead code does not
   // get used in a newly generated "insert" instruction. Have a custom
@@ -1579,12 +1574,12 @@ bool HexagonGenInsert::runOnMachineFunction(MachineFunction &MF) {
 
     IterListType Out;
     for (IFMapType::iterator I = IFMap.begin(), E = IFMap.end(); I != E; ++I) {
-      unsigned Idx = Register::virtReg2Index(I->first);
+      unsigned Idx = Register(I->first).virtRegIndex();
       if (Idx >= Cutoff)
         Out.push_back(I);
     }
-    for (unsigned i = 0, n = Out.size(); i < n; ++i)
-      IFMap.erase(Out[i]);
+    for (const auto &It : Out)
+      IFMap.erase(It);
   }
   if (IFMap.empty())
     return Changed;
@@ -1608,6 +1603,6 @@ FunctionPass *llvm::createHexagonGenInsert() {
 
 INITIALIZE_PASS_BEGIN(HexagonGenInsert, "hexinsert",
   "Hexagon generate \"insert\" instructions", false, false)
-INITIALIZE_PASS_DEPENDENCY(MachineDominatorTree)
+INITIALIZE_PASS_DEPENDENCY(MachineDominatorTreeWrapperPass)
 INITIALIZE_PASS_END(HexagonGenInsert, "hexinsert",
   "Hexagon generate \"insert\" instructions", false, false)

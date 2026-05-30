@@ -1,7 +1,8 @@
-/*	$FreeBSD$	*/
 /*	$NetBSD: mkfs_msdos.h,v 1.3 2015/10/16 17:38:17 christos Exp $	*/
 
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
  * All rights reserved.
  *

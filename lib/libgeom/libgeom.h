@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-3-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-3-Clause
  *
  * Copyright (c) 2003 Poul-Henning Kamp
  * All rights reserved.
@@ -27,8 +27,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #ifndef _LIBGEOM_H_
 #define _LIBGEOM_H_
@@ -135,7 +133,7 @@ struct gprovider {
 	struct gconf		lg_config;
 };
 
-struct gident * geom_lookupid(struct gmesh *, const void *);
+struct gident *geom_lookupid(const struct gmesh *, const void *);
 int geom_xml2tree(struct gmesh *, char *);
 int geom_gettree(struct gmesh *);
 int geom_gettree_geom(struct gmesh *, const char *, const char *, int);

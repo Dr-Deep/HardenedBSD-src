@@ -1,4 +1,3 @@
-/*	$FreeBSD$	*/
 
 /*-
  * Copyright (c) 2005, 2006
@@ -18,8 +17,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*-
  * Ralink Technology RT2560 chipset driver
  * http://www.ralinktech.com/
@@ -283,6 +280,8 @@ rt2560_attach(device_t dev, int id)
 		| IEEE80211_C_TXFRAG		/* handle tx frags */
 #endif
 		;
+
+	ic->ic_flags_ext |= IEEE80211_FEXT_SEQNO_OFFLOAD;
 
 	rt2560_getradiocaps(ic, IEEE80211_CHAN_MAX, &ic->ic_nchans,
 	    ic->ic_channels);
@@ -1086,7 +1085,6 @@ rt2560_prio_intr(struct rt2560_softc *sc)
 static void
 rt2560_decryption_intr(struct rt2560_softc *sc)
 {
-	struct epoch_tracker et;
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct rt2560_rx_desc *desc;
 	struct rt2560_rx_data *data;
@@ -1197,13 +1195,12 @@ rt2560_decryption_intr(struct rt2560_softc *sc)
 		wh = mtod(m, struct ieee80211_frame *);
 		ni = ieee80211_find_rxnode(ic,
 		    (struct ieee80211_frame_min *)wh);
-		NET_EPOCH_ENTER(et);
 		if (ni != NULL) {
 			(void) ieee80211_input(ni, m, rssi, nf);
 			ieee80211_free_node(ni);
 		} else
 			(void) ieee80211_input_all(ic, m, rssi, nf);
-		NET_EPOCH_EXIT(et);
+
 		RAL_LOCK(sc);
 		sc->sc_flags &= ~RT2560_F_INPUT_RUNNING;
 skip:		desc->flags = htole32(RT2560_RX_BUSY);
@@ -1521,6 +1518,8 @@ rt2560_tx_mgt(struct rt2560_softc *sc, struct mbuf *m0,
 
 	wh = mtod(m0, struct ieee80211_frame *);
 
+	ieee80211_output_seqno_assign(ni, -1, m0);
+
 	if (wh->i_fc[1] & IEEE80211_FC1_PROTECTED) {
 		k = ieee80211_crypto_encap(ni, m0);
 		if (k == NULL) {
@@ -1563,10 +1562,7 @@ rt2560_tx_mgt(struct rt2560_softc *sc, struct mbuf *m0,
 		*(uint16_t *)wh->i_dur = htole16(dur);
 
 		/* tell hardware to add timestamp for probe responses */
-		if ((wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) ==
-		    IEEE80211_FC0_TYPE_MGT &&
-		    (wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK) ==
-		    IEEE80211_FC0_SUBTYPE_PROBE_RESP)
+		if (IEEE80211_IS_MGMT_PROBE_RESP(wh))
 			flags |= RT2560_TX_TIMESTAMP;
 	}
 
@@ -1748,7 +1744,7 @@ rt2560_tx_data(struct rt2560_softc *sc, struct mbuf *m0,
 		rate = tp->ucastrate;
 	} else {
 		(void) ieee80211_ratectl_rate(ni, NULL, 0);
-		rate = ni->ni_txrate;
+		rate = ieee80211_node_get_txrate_dot11rate(ni);
 	}
 
 	if (wh->i_fc[1] & IEEE80211_FC1_PROTECTED) {
@@ -1829,7 +1825,7 @@ rt2560_tx_data(struct rt2560_softc *sc, struct mbuf *m0,
 
 	/* remember link conditions for rate adaptation algorithm */
 	if (tp->ucastrate == IEEE80211_FIXED_RATE_NONE) {
-		data->rix = ni->ni_txrate;
+		data->rix = ieee80211_node_get_txrate_dot11rate(ni);
 		/* XXX probably need last rssi value and not avg */
 		data->rssi = ic->ic_node_getrssi(ni);
 	} else

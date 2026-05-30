@@ -50,8 +50,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #ifndef _SCIC_SDS_STP_REQUEST_T_
 #define _SCIC_SDS_STP_REQUEST_T_
@@ -177,7 +175,7 @@ enum SCIC_SDS_STP_REQUEST_STARTED_NON_DATA_SUBSTATES
 /**
  * @enum SCIC_SDS_STP_REQUEST_STARTED_SOFT_RESET_SUBSTATES
  *
- * @brief THis enumeration depicts the various sub-states associated with a
+ * @brief This enumeration depicts the various sub-states associated with a
  *        SATA/STP soft reset operation.
  */
 enum SCIC_SDS_STP_REQUEST_STARTED_SOFT_RESET_SUBSTATES

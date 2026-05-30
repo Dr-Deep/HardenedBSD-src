@@ -1,5 +1,3 @@
-# $FreeBSD$
-
 .include <bsd.init.mk>
 
 PROG=           boot1.elf
@@ -7,12 +5,12 @@ NEWVERSWHAT=    "Open Firmware boot block" ${MACHINE_ARCH}
 INSTALLFLAGS=   -b
 
 FILES=		boot1.hfs
-SRCS=		boot1.c ashldi3.c syncicache.c
+SRCS=		boot1.c ashldi3.c syncicache.c memset.c
 
 CFLAGS+=-I${LDRSRC}
 # Load boot1.elf below kernel.
 #
-# Due to limitiations in the way we load stuff, we have to avoid reusing
+# Due to limitations in the way we load stuff, we have to avoid reusing
 # memory until the kernel MMU code has taken over.
 #
 # 0x38000 is high enough to not interfere with the trap area, but low
@@ -23,7 +21,7 @@ CFLAGS+=-I${LDRSRC}
 # boot1.elf defined in the HFS template, but sometimes boot1.elf is written
 # directly to the PReP partition.
 #
-LDFLAGS=-nostdlib -static -Wl,-N -Wl,-Ttext=0x38000
+LDFLAGS=-nostdlib -static -Wl,-N -Wl,-Ttext=0x38000 -Wl,--image-base=0x38000
 
 .PATH:  ${SYSDIR}/libkern ${SRCTOP}/lib/libc/powerpc/gen ${.CURDIR}
 

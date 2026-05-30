@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008 Isilon Inc http://www.isilon.com/
  * Authors: Doug Rabson <dfr@rabson.org>
@@ -25,8 +25,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include "gssd.h"
@@ -54,9 +52,10 @@ struct kgss_mech {
 };
 LIST_HEAD(kgss_mech_list, kgss_mech);
 
-extern CLIENT *kgss_gssd_handle;
 extern struct mtx kgss_gssd_lock;
 extern struct kgss_mech_list kgss_mechs;
+
+VNET_DECLARE(CLIENT *, kgss_gssd_handle);
 
 CLIENT *kgss_gssd_client(void);
 int kgss_oid_equal(const gss_OID oid1, const gss_OID oid2);
@@ -67,5 +66,5 @@ extern gss_OID kgss_find_mech_by_name(const char *name);
 extern const char *kgss_find_mech_by_oid(const gss_OID oid);
 extern gss_ctx_id_t kgss_create_context(gss_OID mech_type);
 extern void kgss_delete_context(gss_ctx_id_t ctx, gss_buffer_t output_token);
-extern OM_uint32 kgss_transfer_context(gss_ctx_id_t ctx);
+extern OM_uint32 kgss_transfer_context(gss_ctx_id_t ctx, void *lctx);
 extern void kgss_copy_buffer(const gss_buffer_t from, gss_buffer_t to);

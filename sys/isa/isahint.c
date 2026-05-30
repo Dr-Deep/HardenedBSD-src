@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1999 Doug Rabson
  * All rights reserved.
@@ -26,9 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
@@ -48,7 +45,8 @@ isa_hinted_child(device_t parent, const char *name, int unit)
 	/* device-specific flag overrides any wildcard */
 	sensitive = 0;
 	if (resource_int_value(name, unit, "sensitive", &sensitive) != 0)
-		resource_int_value(name, -1, "sensitive", &sensitive);
+		resource_int_value(name, DEVICE_UNIT_ANY, "sensitive",
+		    &sensitive);
 
 	if (sensitive)
 		order = ISA_ORDER_SENSITIVE;

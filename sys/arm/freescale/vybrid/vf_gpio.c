@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2013 Ruslan Bukin <br@bsdpad.com>
  * All rights reserved.
@@ -30,9 +30,6 @@
  * Vybrid Family General-Purpose Input/Output (GPIO)
  * Chapter 7, Vybrid Reference Manual, Rev. 5, 07/2013
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -150,13 +147,14 @@ vf_gpio_attach(device_t dev)
 		    "vf_gpio%d.%d", device_get_unit(dev), i);
 	}
 
-	sc->sc_busdev = gpiobus_attach_bus(dev);
+	sc->sc_busdev = gpiobus_add_bus(dev);
 	if (sc->sc_busdev == NULL) {
 		bus_release_resources(dev, vf_gpio_spec, sc->res);
 		mtx_destroy(&sc->sc_mtx);
 		return (ENXIO);
 	}
 
+	bus_attach_children(dev);
 	return (0);
 }
 

@@ -25,8 +25,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * Driver for extra ACPI-controlled features found on HP laptops
  * that use a WMI enabled BIOS (e.g. HP Compaq 8510p and 6510p).
@@ -467,7 +465,7 @@ acpi_hp_identify(driver_t *driver, device_t parent)
 		return;
 
 	/* Add only a single device instance. */
-	if (device_find_child(parent, "acpi_hp", -1) != NULL)
+	if (device_find_child(parent, "acpi_hp", DEVICE_UNIT_ANY) != NULL)
 		return;
 
 	/* Check BIOS GUID to see whether system is compatible. */
@@ -475,7 +473,7 @@ acpi_hp_identify(driver_t *driver, device_t parent)
 	    ACPI_HP_WMI_BIOS_GUID))
 		return;
 
-	if (BUS_ADD_CHILD(parent, 0, "acpi_hp", -1) == NULL)
+	if (BUS_ADD_CHILD(parent, 0, "acpi_hp", DEVICE_UNIT_ANY) == NULL)
 		device_printf(parent, "add acpi_hp child failed\n");
 }
 

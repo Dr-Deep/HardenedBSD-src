@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2020 Vladimir Kondratyev <wulf@FreeBSD.org>
  *
@@ -26,8 +26,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
  * HID spec: https://www.usb.org/sites/default/files/documents/hid1_11.pdf
  */
@@ -61,8 +59,6 @@ enum {
 	HMS_ABS_Z,
 	HMS_HWHEEL,
 	HMS_BTN,
-	HMS_BTN_MS1,
-	HMS_BTN_MS2,
 	HMS_FINAL_CB,
 };
 
@@ -95,8 +91,6 @@ static const struct hidmap_item hms_map[] = {
 	[HMS_ABS_Z]	= HMS_MAP_ABS(HUG_Z,		ABS_Z),
 	[HMS_HWHEEL]	= HMS_MAP_REL_CN(HUC_AC_PAN,	REL_HWHEEL),
 	[HMS_BTN]	= HMS_MAP_BUT_RG(1, 16,		BTN_MOUSE),
-	[HMS_BTN_MS1]	= HMS_MAP_BUT_MS(1,		BTN_RIGHT),
-	[HMS_BTN_MS2]	= HMS_MAP_BUT_MS(2,		BTN_MIDDLE),
 	[HMS_FINAL_CB]	= HMS_FINAL_CB(hms_final_cb),
 };
 
@@ -105,6 +99,11 @@ static const struct hidmap_item hms_map_wheel[] = {
 };
 static const struct hidmap_item hms_map_wheel_rev[] = {
 	HMS_MAP_REL_REV(HUG_WHEEL,	REL_WHEEL),
+};
+
+static const struct hidmap_item hms_map_kensington_slimblade[] = {
+	HMS_MAP_BUT_MS(1,	BTN_RIGHT),
+	HMS_MAP_BUT_MS(2,	BTN_MIDDLE),
 };
 
 /* A match on these entries will load hms */
@@ -123,6 +122,7 @@ struct hms_softc {
 	hid_size_t		isize;
 	uint32_t		drift_cnt;
 	uint32_t		drift_thresh;
+	struct hid_location	wheel_loc;
 #endif
 };
 
@@ -132,6 +132,7 @@ hms_intr(void *context, void *buf, hid_size_t len)
 {
 	struct hidmap *hm = context;
 	struct hms_softc *sc = device_get_softc(hm->dev);
+	int32_t wheel;
 
 	if (len > sc->isize)
 		len = sc->isize;
@@ -141,8 +142,18 @@ hms_intr(void *context, void *buf, hid_size_t len)
 	 * to return last report data in sampling mode even after touch has
 	 * been ended.  That results in cursor drift.  Filter out such a
 	 * reports through comparing with previous one.
+	 *
+	 * Except this results in dropping consecutive mouse wheel events,
+	 * because differently from cursor movement they always move by the
+	 * same amount.  So, don't do it when there's mouse wheel movement.
 	 */
-	if (len == sc->last_irsize && memcmp(buf, sc->last_ir, len) == 0) {
+	if (sc->wheel_loc.size != 0)
+		wheel = hid_get_data(buf, len, &sc->wheel_loc);
+	else
+		wheel = 0;
+
+	if (len == sc->last_irsize && memcmp(buf, sc->last_ir, len) == 0 &&
+	    wheel == 0) {
 		sc->drift_cnt++;
 		if (sc->drift_thresh != 0 && sc->drift_cnt >= sc->drift_thresh)
 			return;
@@ -218,7 +229,7 @@ hms_probe(device_t dev)
 
 	/* There should be at least one X or Y axis */
 	if (!hidmap_test_cap(sc->caps, HMS_REL_X) &&
-	    !hidmap_test_cap(sc->caps, HMS_REL_X) &&
+	    !hidmap_test_cap(sc->caps, HMS_REL_Y) &&
 	    !hidmap_test_cap(sc->caps, HMS_ABS_X) &&
 	    !hidmap_test_cap(sc->caps, HMS_ABS_Y))
 		return (ENXIO);
@@ -261,6 +272,9 @@ hms_attach(device_t dev)
 	else
 		HIDMAP_ADD_MAP(&sc->hm, hms_map_wheel, cap_wheel);
 
+	if (hid_test_quirk(hw, HQ_MS_VENDOR_BTN))
+		HIDMAP_ADD_MAP(&sc->hm, hms_map_kensington_slimblade, NULL);
+
 #ifdef IICHID_SAMPLING
 	if (hid_test_quirk(hw, HQ_IICHID_SAMPLING) &&
 	    hidmap_test_cap(sc->caps, HMS_REL_X) &&
@@ -283,9 +297,25 @@ hms_attach(device_t dev)
 	/* Count number of input usages of variable type mapped to buttons */
 	for (hi = sc->hm.hid_items;
 	     hi < sc->hm.hid_items + sc->hm.nhid_items;
-	     hi++)
+	     hi++) {
 		if (hi->type == HIDMAP_TYPE_VARIABLE && hi->evtype == EV_KEY)
 			nbuttons++;
+#ifdef IICHID_SAMPLING
+		/*
+		 * Make note of which part of the report descriptor is the wheel.
+		 */
+		if (hi->type == HIDMAP_TYPE_VARIABLE &&
+		    hi->evtype == EV_REL && hi->code == REL_WHEEL) {
+			sc->wheel_loc = hi->loc;
+			/*
+			 * Account for the leading Report ID byte
+			 * if it is a multi-report device.
+			 */
+			if (hi->id != 0)
+				sc->wheel_loc.pos += 8;
+		}
+#endif
+	}
 
 	/* announce information about the mouse */
 	device_printf(dev, "%d buttons and [%s%s%s%s%s] coordinates ID=%u\n",

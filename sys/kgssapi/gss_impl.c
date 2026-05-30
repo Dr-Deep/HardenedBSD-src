@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008 Isilon Inc http://www.isilon.com/
  * Authors: Doug Rabson <dfr@rabson.org>
@@ -27,9 +27,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/kobj.h>
@@ -38,9 +35,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/module.h>
 #include <sys/mutex.h>
 #include <sys/priv.h>
-#include <sys/syscall.h>
-#include <sys/sysent.h>
-#include <sys/sysproto.h>
+#include <sys/proc.h>
 
 #include <kgssapi/gssapi.h>
 #include <kgssapi/gssapi_impl.h>
@@ -53,89 +48,51 @@ __FBSDID("$FreeBSD$");
 
 MALLOC_DEFINE(M_GSSAPI, "GSS-API", "GSS-API");
 
-/*
- * Syscall hooks
- */
-static struct syscall_helper_data gssd_syscalls[] = {
-	SYSCALL_INIT_HELPER(gssd_syscall),
-	SYSCALL_INIT_LAST
-};
-
 struct kgss_mech_list kgss_mechs;
-CLIENT *kgss_gssd_handle;
 struct mtx kgss_gssd_lock;
+
+CLIENT *kgss_gssd_handle;
 
 static int
 kgss_load(void)
 {
-	int error;
+	CLIENT *cl;
 
 	LIST_INIT(&kgss_mechs);
-	error = syscall_helper_register(gssd_syscalls, SY_THR_STATIC_KLD);
-	if (error != 0)
-		return (error);
+
+	cl = client_nl_create("kgss", GSSD, GSSDVERS);
+	KASSERT(cl, ("%s: netlink client already exist", __func__));
+
+	/*
+	 * The transport default is no retries at all, since there could
+	 * be no userland listener to our messages.  We will retry for 5
+	 * minutes with 10 second interval.  This will potentially cure hosts
+	 * with misconfigured startup, where kernel starts sending GSS queries
+	 * before userland had started up the gssd(8) daemon.
+	 */
+	clnt_control(cl, CLSET_RETRIES, &(int){30});
+	clnt_control(cl, CLSET_TIMEOUT, &(struct timeval){.tv_sec = 300});
+
+	/*
+	 * We literally wait on gssd(8), let's see that in top(1).
+	 */
+	clnt_control(cl, CLSET_WAITCHAN, "gssd");
+
+	mtx_lock(&kgss_gssd_lock);
+	kgss_gssd_handle = cl;
+	mtx_unlock(&kgss_gssd_lock);
+
 	return (0);
 }
 
+#if 0
 static void
 kgss_unload(void)
 {
 
-	syscall_helper_unregister(gssd_syscalls);
+	clnt_destroy(kgss_gssd_handle);
 }
-
-int
-sys_gssd_syscall(struct thread *td, struct gssd_syscall_args *uap)
-{
-        struct sockaddr_un sun;
-        struct netconfig *nconf;
-	char path[MAXPATHLEN];
-	int error;
-	CLIENT *cl, *oldcl;
-        
-	error = priv_check(td, PRIV_NFS_DAEMON);
-	if (error)
-		return (error);
-
-	error = copyinstr(uap->path, path, sizeof(path), NULL);
-	if (error)
-		return (error);
-	if (strlen(path) + 1 > sizeof(sun.sun_path))
-		return (EINVAL);
-
-	if (path[0] != '\0') {
-		sun.sun_family = AF_LOCAL;
-		strlcpy(sun.sun_path, path, sizeof(sun.sun_path));
-		sun.sun_len = SUN_LEN(&sun);
-		
-		nconf = getnetconfigent("local");
-		cl = clnt_reconnect_create(nconf,
-		    (struct sockaddr *) &sun, GSSD, GSSDVERS,
-		    RPC_MAXDATASIZE, RPC_MAXDATASIZE);
-		/*
-		 * The number of retries defaults to INT_MAX, which effectively
-		 * means an infinite, uninterruptable loop.  Limiting it to
-		 * five retries keeps it from running forever.
-		 */
-		if (cl != NULL) {
-			int retry_count = 5;
-			CLNT_CONTROL(cl, CLSET_RETRIES, &retry_count);
-		}
-	} else
-		cl = NULL;
-
-	mtx_lock(&kgss_gssd_lock);
-	oldcl = kgss_gssd_handle;
-	kgss_gssd_handle = cl;
-	mtx_unlock(&kgss_gssd_lock);
-
-	if (oldcl != NULL) {
-		CLNT_CLOSE(oldcl);
-		CLNT_RELEASE(oldcl);
-	}
-
-	return (0);
-}
+#endif
 
 int
 kgss_oid_equal(const gss_OID oid1, const gss_OID oid2)
@@ -232,15 +189,18 @@ kgss_delete_context(gss_ctx_id_t ctx, gss_buffer_t output_token)
 }
 
 OM_uint32
-kgss_transfer_context(gss_ctx_id_t ctx)
+kgss_transfer_context(gss_ctx_id_t ctx, void *lctx)
 {
 	struct export_sec_context_res res;
 	struct export_sec_context_args args;
 	enum clnt_stat stat;
 	OM_uint32 maj_stat;
 
-	if (!kgss_gssd_handle)
-		return (GSS_S_FAILURE);
+	if (lctx != NULL) {
+		maj_stat = KGSS_IMPORT(ctx, MIT_V1, lctx);
+		ctx->handle = 0;
+		return (maj_stat);
+	}
 
 	args.ctx = ctx->handle;
 	bzero(&res, sizeof(res));
@@ -319,12 +279,16 @@ kgssapi_modevent(module_t mod, int type, void *data)
 		    rpc_gss_get_principal_name;
 		rpc_gss_entries.rpc_gss_svc_max_data_length =
 		    rpc_gss_svc_max_data_length;
+		rpc_gss_entries.rpc_gss_ip_to_srv_principal =
+		    rpc_gss_ip_to_srv_principal;
 		mtx_init(&kgss_gssd_lock, "kgss_gssd_lock", NULL, MTX_DEF);
 		error = kgss_load();
 		break;
 	case MOD_UNLOAD:
+#if 0
 		kgss_unload();
 		mtx_destroy(&kgss_gssd_lock);
+#endif
 		/*
 		 * Unloading of the kgssapi module is not currently supported.
 		 * If somebody wants this, we would need to keep track of
@@ -341,7 +305,7 @@ static moduledata_t kgssapi_mod = {
 	kgssapi_modevent,
 	NULL,
 };
-DECLARE_MODULE(kgssapi, kgssapi_mod, SI_SUB_VFS, SI_ORDER_ANY);
+DECLARE_MODULE(kgssapi, kgssapi_mod, SI_SUB_VFS, SI_ORDER_SECOND);
 MODULE_DEPEND(kgssapi, xdr, 1, 1, 1);
 MODULE_DEPEND(kgssapi, krpc, 1, 1, 1);
 MODULE_VERSION(kgssapi, 1);

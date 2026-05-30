@@ -24,7 +24,6 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 #
 
 set -e
@@ -601,7 +600,7 @@ fi
 
 if [ -f /etc/localtime ] ; then
 	log_it copy localtime
-	cp /etc/localtime ${SBMNT}/etc
+	cp -P /etc/localtime ${SBMNT}/etc
 	if [ -f /var/db/zoneinfo ] ; then
 		log_it copy zoneinfo
 		cp /var/db/zoneinfo ${SBMNT}/var/db

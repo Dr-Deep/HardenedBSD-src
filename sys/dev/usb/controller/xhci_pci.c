@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2010-2022 Hans Petter Selasky
  *
@@ -24,9 +24,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/stdint.h>
 #include <sys/stddef.h>
@@ -64,6 +61,8 @@ __FBSDID("$FreeBSD$");
 
 #define	PCI_XHCI_VENDORID_AMD		0x1022
 #define	PCI_XHCI_VENDORID_INTEL		0x8086
+#define	PCI_XHCI_VENDORID_VMWARE	0x15ad
+#define	PCI_XHCI_VENDORID_ZHAOXIN	0x1d17
 
 static device_probe_t xhci_pci_probe;
 static device_detach_t xhci_pci_detach;
@@ -100,15 +99,31 @@ xhci_pci_match(device_t self)
 		return ("AMD Starship USB 3.0 controller");
 	case 0x149c1022:
 		return ("AMD Matisse USB 3.0 controller");
+	case 0x15b61022:
+	case 0x15b71022:
+		return ("AMD Raphael/Granite Ridge USB 3.1 controller");
+	case 0x15b81022:
+		return ("AMD Raphael/Granite Ridge USB 2.0 controller");
+	case 0x15e01022:
+	case 0x15e11022:
+		return ("AMD Raven USB 3.1 controller");
 	case 0x43ba1022:
 		return ("AMD X399 USB 3.0 controller");
 	case 0x43b91022: /* X370 */
 	case 0x43bb1022: /* B350 */
-		return ("AMD 300 Series USB 3.0 controller");
+		return ("AMD 300 Series USB 3.1 controller");
+	case 0x43d51022:
+		return ("AMD 400 Series USB 3.1 controller");
+	case 0x43f71022:
+		return ("AMD 600 Series USB 3.2 controller");
 	case 0x78121022:
 	case 0x78141022:
 	case 0x79141022:
 		return ("AMD FCH USB 3.0 controller");
+
+	case 0x077815ad:
+	case 0x077915ad:
+		return ("VMware USB 3.0 controller");
 
 	case 0x145f1d94:
 		return ("Hygon USB 3.0 controller");
@@ -120,6 +135,8 @@ xhci_pci_match(device_t self)
 
 	case 0x10001b73:
 		return ("Fresco Logic FL1000G USB 3.0 controller");
+	case 0x10091b73:
+		return ("Fresco Logic FL1009 USB 3.0 controller");
 	case 0x11001b73:
 		return ("Fresco Logic FL1100 USB 3.0 controller");
 
@@ -161,7 +178,11 @@ xhci_pci_match(device_t self)
 		return ("Intel Tiger Lake-H USB 3.2 controller");
 	case 0x461e8086:
 		return ("Intel Alder Lake-P Thunderbolt 4 USB controller");
+	case 0x4b7d8086:
+		return ("Intel Elkhart Lake USB 3.1 controller");
 	case 0x51ed8086:
+	case 0x54ed8086:
+	case 0x5fed8086:
 		return ("Intel Alder Lake USB 3.2 controller");
 	case 0x5aa88086:
 		return ("Intel Apollo Lake USB 3.0 controller");
@@ -199,6 +220,13 @@ xhci_pci_match(device_t self)
 
 	case 0x1ada10de:
 		return ("NVIDIA TU106 USB 3.1 controller");
+
+	case 0x92021d17:
+		return ("Zhaoxin ZX-100 USB 3.0 controller");
+	case 0x92031d17:
+		return ("Zhaoxin ZX-200 USB 3.0 controller");
+	case 0x92041d17:
+		return ("Zhaoxin ZX-E USB 3.0 controller");
 
 	default:
 		break;
@@ -371,7 +399,7 @@ xhci_pci_attach(device_t self)
 		device_printf(self, "Could not allocate IRQ\n");
 		/* goto error; FALLTHROUGH - use polling */
 	}
-	sc->sc_bus.bdev = device_add_child(self, "usbus", -1);
+	sc->sc_bus.bdev = device_add_child(self, "usbus", DEVICE_UNIT_ANY);
 	if (sc->sc_bus.bdev == NULL) {
 		device_printf(self, "Could not add USB device\n");
 		goto error;
@@ -385,6 +413,12 @@ xhci_pci_attach(device_t self)
 	case PCI_XHCI_VENDORID_INTEL:
 		strlcpy(sc->sc_vendor, "Intel", sizeof(sc->sc_vendor));
 		break;
+	case PCI_XHCI_VENDORID_VMWARE:
+		strlcpy(sc->sc_vendor, "VMware", sizeof(sc->sc_vendor));
+		break;
+	case PCI_XHCI_VENDORID_ZHAOXIN:
+		strlcpy(sc->sc_vendor, "Zhaoxin", sizeof(sc->sc_vendor));
+		break;
 	default:
 		if (bootverbose)
 			device_printf(self, "(New XHCI DeviceId=0x%08x)\n",
@@ -394,7 +428,7 @@ xhci_pci_attach(device_t self)
 		break;
 	}
 
-	if (sc->sc_irq_res != NULL) {
+	if (sc->sc_irq_res != NULL && xhci_use_polling() == 0) {
 		err = bus_setup_intr(self, sc->sc_irq_res, INTR_TYPE_BIO | INTR_MPSAFE,
 		    NULL, (driver_intr_t *)xhci_interrupt, sc, &sc->sc_intr_hdl);
 		if (err != 0) {
@@ -441,9 +475,12 @@ static int
 xhci_pci_detach(device_t self)
 {
 	struct xhci_softc *sc = device_get_softc(self);
+	int error;
 
 	/* during module unload there are lots of children leftover */
-	device_delete_children(self);
+	error = bus_generic_detach(self);
+	if (error != 0)
+		return (error);
 
 	usb_callout_drain(&sc->sc_callout);
 	xhci_halt_controller(sc);
@@ -487,7 +524,7 @@ xhci_pci_take_controller(device_t self)
 	uint16_t to;
 	uint8_t bios_sem;
 
-	cparams = XREAD4(sc, capa, XHCI_HCSPARAMS0);
+	cparams = XREAD4(sc, capa, XHCI_HCCPARAMS1);
 
 	eec = -1;
 

@@ -1,30 +1,11 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2003-2007 Tim Kientzle
  * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR(S) ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
- * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE AUTHOR(S) BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
- * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "bsdtar_platform.h"
-__FBSDID("$FreeBSD$");
 
 #ifdef HAVE_SYS_TYPES_H
 #include <sys/types.h>
@@ -76,7 +57,7 @@ __FBSDID("$FreeBSD$");
 #endif
 
 #include "bsdtar.h"
-#include "err.h"
+#include "lafe_err.h"
 
 struct progress_data {
 	struct bsdtar *bsdtar;
@@ -274,7 +255,7 @@ read_archive(struct bsdtar *bsdtar, char mode, struct archive *writer)
 			break;
 		p = archive_entry_pathname(entry);
 		if (p == NULL || p[0] == '\0') {
-			lafe_warnc(0, "Archive entry has empty or unreadable filename ... skipping.");
+			lafe_warnc(0, "Archive entry has empty or unreadable filename ... skipping");
 			bsdtar->return_value = 1;
 			continue;
 		}
@@ -372,8 +353,9 @@ read_archive(struct bsdtar *bsdtar, char mode, struct archive *writer)
 			if (r != ARCHIVE_OK) {
 				if (!bsdtar->verbose)
 					safe_fprintf(stderr, "%s", archive_entry_pathname(entry));
-				fprintf(stderr, ": %s: ", archive_error_string(a));
-				fprintf(stderr, "%s", strerror(errno));
+				safe_fprintf(stderr, ": %s: %s",
+				    archive_error_string(a),
+				    strerror(archive_errno(a)));
 				if (!bsdtar->verbose)
 					fprintf(stderr, "\n");
 				bsdtar->return_value = 1;

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1993, David Greenman
  * All rights reserved.
@@ -27,10 +27,9 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_capsicum.h"
 #include "opt_hwpmc_hooks.h"
+#include "opt_hwt_hooks.h"
 #include "opt_ktrace.h"
 #include "opt_pax.h"
 #include "opt_pledge.h"
@@ -48,6 +47,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/filedesc.h>
 #include <sys/imgact.h>
 #include <sys/imgact_elf.h>
+#include <sys/jail.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
@@ -74,6 +74,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysent.h>
 #include <sys/sysproto.h>
 #include <sys/timers.h>
+#include <sys/ucoredump.h>
 #include <sys/umtxvar.h>
 #include <sys/vnode.h>
 #include <sys/wait.h>
@@ -97,6 +98,10 @@ __FBSDID("$FreeBSD$");
 
 #ifdef HBSD_PLEDGE
 #include <sys/pledge.h>
+#endif
+
+#ifdef HWT_HOOKS
+#include <dev/hwt/hwt_hook.h>
 #endif
 
 #include <security/audit/audit.h>
@@ -145,7 +150,7 @@ SYSCTL_PROC(_kern, OID_AUTO, stackprot, CTLTYPE_INT|CTLFLAG_RD|CTLFLAG_MPSAFE,
     "Stack memory permissions");
 
 u_long ps_arg_cache_limit = PAGE_SIZE / 16;
-SYSCTL_ULONG(_kern, OID_AUTO, ps_arg_cache_limit, CTLFLAG_RW, 
+SYSCTL_ULONG(_kern, OID_AUTO, ps_arg_cache_limit, CTLFLAG_RW,
     &ps_arg_cache_limit, 0,
     "Process' command line characters cache limit");
 
@@ -231,8 +236,7 @@ sys_execve(struct thread *td, struct execve_args *uap)
 	error = pre_execve(td, &oldvmspace);
 	if (error != 0)
 		return (error);
-	error = exec_copyin_args(&args, uap->fname, UIO_USERSPACE,
-	    uap->argv, uap->envv);
+	error = exec_copyin_args(&args, uap->fname, uap->argv, uap->envv);
 	if (error == 0)
 		error = kern_execve(td, &args, NULL, oldvmspace);
 	post_execve(td, error, oldvmspace);
@@ -257,8 +261,7 @@ sys_fexecve(struct thread *td, struct fexecve_args *uap)
 	error = pre_execve(td, &oldvmspace);
 	if (error != 0)
 		return (error);
-	error = exec_copyin_args(&args, NULL, UIO_SYSSPACE,
-	    uap->argv, uap->envv);
+	error = exec_copyin_args(&args, NULL, uap->argv, uap->envv);
 	if (error == 0) {
 		args.fd = uap->fd;
 		error = kern_execve(td, &args, NULL, oldvmspace);
@@ -288,8 +291,7 @@ sys___mac_execve(struct thread *td, struct __mac_execve_args *uap)
 	error = pre_execve(td, &oldvmspace);
 	if (error != 0)
 		return (error);
-	error = exec_copyin_args(&args, uap->fname, UIO_USERSPACE,
-	    uap->argv, uap->envv);
+	error = exec_copyin_args(&args, uap->fname, uap->argv, uap->envv);
 	if (error == 0)
 		error = kern_execve(td, &args, uap->mac_p, oldvmspace);
 	post_execve(td, error, oldvmspace);
@@ -360,7 +362,21 @@ kern_execve(struct thread *td, struct image_args *args, struct mac *mac_p,
 	    exec_args_get_begin_envv(args) - args->begin_argv);
 	AUDIT_ARG_ENVV(exec_args_get_begin_envv(args), args->envc,
 	    args->endp - exec_args_get_begin_envv(args));
-
+#ifdef KTRACE
+	if (KTRPOINT(td, KTR_ARGS)) {
+		ktrdata(KTR_ARGS, args->begin_argv,
+		    exec_args_get_begin_envv(args) - args->begin_argv);
+        }
+	if (KTRPOINT(td, KTR_ENVS)) {
+		ktrdata(KTR_ENVS, exec_args_get_begin_envv(args),
+		    args->endp - exec_args_get_begin_envv(args));
+        }
+#endif
+	/* Must have at least one argument. */
+	if (args->argc == 0) {
+		exec_free_args(args);
+		return (EINVAL);
+	}
 	return (do_execve(td, args, mac_p, oldvmspace));
 }
 
@@ -389,7 +405,6 @@ do_execve(struct thread *td, struct image_args *args, struct mac *mac_p,
 	uintptr_t stack_base;
 	struct image_params image_params, *imgp;
 	struct vattr attr;
-	int (*img_first)(struct image_params *);
 	struct pargs *oldargs = NULL, *newargs = NULL;
 	struct sigacts *oldsigacts = NULL, *newsigacts = NULL;
 #ifdef KTRACE
@@ -408,7 +423,7 @@ do_execve(struct thread *td, struct image_args *args, struct mac *mac_p,
 #endif
 	int error, i, orig_osrel;
 	uint32_t orig_fctl0;
-	Elf_Brandinfo *orig_brandinfo;
+	const Elf_Brandinfo *orig_brandinfo;
 	size_t freepath_size;
 	static const char fexecv_proc_title[] = "(fexecv)";
 #ifdef PAX
@@ -442,6 +457,7 @@ do_execve(struct thread *td, struct image_args *args, struct mac *mac_p,
 	 */
 	bzero(imgp, sizeof(*imgp));
 	imgp->proc = p;
+	imgp->td = td;
 	imgp->attr = &attr;
 	imgp->args = args;
 	oldcred = p->p_ucred;
@@ -460,6 +476,8 @@ do_execve(struct thread *td, struct image_args *args, struct mac *mac_p,
 interpret:
 	if (args->fname != NULL) {
 #ifdef CAPABILITY_MODE
+		if (CAP_TRACING(td))
+			ktrcapfail(CAPFAIL_NAMEI, args->fname);
 		/*
 		 * While capability mode can't reach this point via direct
 		 * path arguments to execve(), we also don't allow
@@ -477,7 +495,7 @@ interpret:
 		 * pointer in ni_vp among other things.
 		 */
 		NDINIT(&nd, LOOKUP, ISOPEN | LOCKLEAF | LOCKSHARED | FOLLOW |
-		    SAVENAME | AUDITVNODE1 | WANTPARENT, UIO_SYSSPACE,
+		    AUDITVNODE1 | WANTPARENT, UIO_SYSSPACE,
 		    args->fname);
 
 		error = namei(&nd);
@@ -507,6 +525,18 @@ interpret:
 				imgp->execpath = args->fname;
 			vn_lock(imgp->vp, LK_SHARED | LK_RETRY);
 		}
+	} else if (imgp->interpreter_vp) {
+		/*
+		 * An image activator has already provided an open vnode
+		 */
+		newtextvp = imgp->interpreter_vp;
+		imgp->interpreter_vp = NULL;
+		if (vn_fullpath(newtextvp, &imgp->execpath,
+		    &imgp->freepath) != 0)
+			imgp->execpath = args->fname;
+		vn_lock(newtextvp, LK_SHARED | LK_RETRY);
+		AUDIT_ARG_VNODE1(newtextvp);
+		imgp->vp = newtextvp;
 	} else {
 		AUDIT_ARG_FD(args->fd);
 
@@ -558,12 +588,13 @@ interpret:
 	}
 #endif
 
-#ifdef PAX
+#ifdef PAX_HARDENING
 	error = pax_enforce_tpe(td, imgp->vp, imgp->execpath);
 	if (error) {
 		pax_log_internal(td->td_proc,
 		    PAX_LOG_P_COMM | PAX_LOG_NO_P_PAX,
-		    "uid=%u,gid=%u: TPE violation",
+		    "jid=%d,uid=%u,gid=%u: TPE violation",
+		    td->td_ucred->cr_prison->pr_id,
 		    td->td_ucred->cr_uid, td->td_ucred->cr_gid);
 		goto exec_fail_dealloc;
 	}
@@ -666,24 +697,14 @@ interpret:
 	/* The new credentials are installed into the process later. */
 
 	/*
-	 *	If the current process has a special image activator it
-	 *	wants to try first, call it.   For example, emulating shell
-	 *	scripts differently.
-	 */
-	error = -1;
-	if ((img_first = imgp->proc->p_sysent->sv_imgact_try) != NULL)
-		error = img_first(imgp);
-
-	/*
 	 *	Loop through the list of image activators, calling each one.
 	 *	An activator returns -1 if there is no match, 0 on success,
 	 *	and an error otherwise.
 	 */
+	error = -1;
 	for (i = 0; error == -1 && execsw[i]; ++i) {
-		if (execsw[i]->ex_imgact == NULL ||
-		    execsw[i]->ex_imgact == img_first) {
+		if (execsw[i]->ex_imgact == NULL)
 			continue;
-		}
 		error = (*execsw[i]->ex_imgact)(imgp);
 	}
 
@@ -741,7 +762,11 @@ interpret:
 		free(imgp->freepath, M_TEMP);
 		imgp->freepath = NULL;
 		/* set new name to that of the interpreter */
-		args->fname = imgp->interpreter_name;
+		if (imgp->interpreter_vp) {
+			args->fname = NULL;
+		} else {
+			args->fname = imgp->interpreter_name;
+		}
 		goto interpret;
 	}
 
@@ -850,10 +875,13 @@ interpret:
 	 * it that it now has its own resources back
 	 */
 	p->p_flag |= P_EXEC;
+	td->td_pflags2 &= ~TDP2_UEXTERR;
 	if ((p->p_flag2 & P2_NOTRACE_EXEC) == 0)
 		p->p_flag2 &= ~P2_NOTRACE;
 	if ((p->p_flag2 & P2_STKGAP_DISABLE_EXEC) == 0)
 		p->p_flag2 &= ~P2_STKGAP_DISABLE;
+	p->p_flag2 &= ~(P2_MEMBAR_PRIVE | P2_MEMBAR_PRIVE_SYNCORE |
+	    P2_MEMBAR_GLOBE);
 	if (p->p_flag & P_PPWAIT) {
 		p->p_flag &= ~(P_PPWAIT | P_PPTRACE);
 		cv_broadcast(&p->p_pwait);
@@ -966,9 +994,24 @@ interpret:
 	if (PMC_SYSTEM_SAMPLING_ACTIVE() || PMC_PROC_IS_USING_PMCS(p)) {
 		VOP_UNLOCK(imgp->vp);
 		pe.pm_credentialschanged = credential_changing;
-		pe.pm_entryaddr = imgp->entry_addr;
+		pe.pm_baseaddr = imgp->reloc_base;
+		pe.pm_dynaddr = imgp->et_dyn_addr;
 
 		PMC_CALL_HOOK_X(td, PMC_FN_PROCESS_EXEC, (void *) &pe);
+		vn_lock(imgp->vp, LK_SHARED | LK_RETRY);
+	}
+#endif
+
+#ifdef HWT_HOOKS
+	if ((td->td_proc->p_flag2 & P2_HWT) != 0) {
+		struct hwt_record_entry ent;
+
+		VOP_UNLOCK(imgp->vp);
+		ent.fullpath = imgp->execpath;
+		ent.addr = imgp->et_dyn_addr;
+		ent.baseaddr = imgp->reloc_base;
+		ent.record_type = HWT_RECORD_EXECUTABLE;
+		HWT_CALL_HOOK(td, HWT_EXEC, &ent);
 		vn_lock(imgp->vp, LK_SHARED | LK_RETRY);
 	}
 #endif
@@ -1114,7 +1157,7 @@ exec_map_first_page(struct image_params *imgp)
 	if (error != VM_PAGER_OK)
 		return (EIO);
 	imgp->firstpage = sf_buf_alloc(m, 0);
-	imgp->image_header = (char *)sf_buf_kva(imgp->firstpage);
+	imgp->image_header = sf_buf_kva(imgp->firstpage);
 
 	return (0);
 }
@@ -1317,8 +1360,9 @@ exec_map_stack(struct image_params *imgp)
 	imgp->stack_sz = lim_cur(curthread, RLIMIT_STACK);
 	if (ssiz < imgp->stack_sz)
 		imgp->stack_sz = ssiz;
-	error = vm_map_stack(map, stack_addr, (vm_size_t)ssiz,
-	    stack_prot, stackmaxprot, MAP_STACK_GROWS_DOWN);
+	error = vm_map_find(map, NULL, 0, &stack_addr, (vm_size_t)ssiz,
+	    sv->sv_usrstack, VMFS_NO_SPACE, stack_prot, stackmaxprot,
+	    MAP_STACK_AREA);
 	if (error != KERN_SUCCESS) {
 #ifdef PAX_ASLR
 		pax_log_aslr(p, PAX_LOG_DEFAULT,
@@ -1344,13 +1388,13 @@ exec_map_stack(struct image_params *imgp)
  */
 int
 exec_copyin_args(struct image_args *args, const char *fname,
-    enum uio_seg segflg, char **argv, char **envv)
+    char **argv, char **envv)
 {
 	u_long arg, env;
 	int error;
 
 	bzero(args, sizeof(*args));
-	if (argv == NULL)
+	if (argv == NULL || envv == NULL)
 		return (EFAULT);
 
 	/*
@@ -1364,7 +1408,7 @@ exec_copyin_args(struct image_args *args, const char *fname,
 	/*
 	 * Copy the file name.
 	 */
-	error = exec_args_add_fname(args, fname, segflg);
+	error = exec_args_add_fname(args, fname, UIO_USERSPACE);
 	if (error != 0)
 		goto err_exit;
 
@@ -1412,7 +1456,7 @@ err_exit:
 }
 
 struct exec_args_kva {
-	vm_offset_t addr;
+	void *addr;
 	u_int gen;
 	SLIST_ENTRY(exec_args_kva) next;
 };
@@ -1433,14 +1477,15 @@ exec_prealloc_args_kva(void *arg __unused)
 	mtx_init(&exec_args_kva_mtx, "exec args kva", NULL, MTX_DEF);
 	for (i = 0; i < exec_map_entries; i++) {
 		argkva = malloc(sizeof(*argkva), M_PARGS, M_WAITOK);
-		argkva->addr = kmap_alloc_wait(exec_map, exec_map_entry_size);
+		argkva->addr = kmap_alloc_wait(exec_map, exec_map_entry_size,
+		    ptoa(exec_map_guard_pages));
 		argkva->gen = exec_args_gen;
 		SLIST_INSERT_HEAD(&exec_args_kva_freelist, argkva, next);
 	}
 }
 SYSINIT(exec_args_kva, SI_SUB_EXEC, SI_ORDER_ANY, exec_prealloc_args_kva, NULL);
 
-static vm_offset_t
+static void *
 exec_alloc_args_kva(void **cookie)
 {
 	struct exec_args_kva *argkva;
@@ -1455,8 +1500,7 @@ exec_alloc_args_kva(void **cookie)
 		SLIST_REMOVE_HEAD(&exec_args_kva_freelist, next);
 		mtx_unlock(&exec_args_kva_mtx);
 	}
-	kasan_mark((void *)argkva->addr, exec_map_entry_size,
-	    exec_map_entry_size, 0);
+	kasan_mark(argkva->addr, exec_map_entry_size, exec_map_entry_size, 0);
 	*(struct exec_args_kva **)cookie = argkva;
 	return (argkva->addr);
 }
@@ -1466,9 +1510,8 @@ exec_release_args_kva(struct exec_args_kva *argkva, u_int gen)
 {
 	vm_offset_t base;
 
-	base = argkva->addr;
-	kasan_mark((void *)argkva->addr, 0, exec_map_entry_size,
-	    KASAN_EXEC_ARGS_FREED);
+	base = (vm_offset_t)argkva->addr;
+	kasan_mark(argkva->addr, 0, exec_map_entry_size, KASAN_EXEC_ARGS_FREED);
 	if (argkva->gen != gen) {
 		(void)vm_map_madvise(exec_map, base, base + exec_map_entry_size,
 		    MADV_FREE);
@@ -1491,7 +1534,7 @@ exec_free_args_kva(void *cookie)
 }
 
 static void
-exec_args_kva_lowmem(void *arg __unused)
+exec_args_kva_lowmem(void *arg __unused, int flags __unused)
 {
 	SLIST_HEAD(, exec_args_kva) head;
 	struct exec_args_kva *argkva;
@@ -1531,7 +1574,7 @@ int
 exec_alloc_args(struct image_args *args)
 {
 
-	args->buf = (char *)exec_alloc_args_kva(&args->bufkva);
+	args->buf = exec_alloc_args_kva(&args->bufkva);
 	return (0);
 }
 
@@ -1650,7 +1693,7 @@ exec_args_adjust_args(struct image_args *args, size_t consume, ssize_t extend)
 	if (args->stringspace < offset)
 		return (E2BIG);
 	memmove(args->begin_argv + extend, args->begin_argv + consume,
-	    args->endp - args->begin_argv + consume);
+	    args->endp - (args->begin_argv + consume));
 	if (args->envc > 0)
 		args->begin_envv += offset;
 	args->endp += offset;
@@ -1985,6 +2028,7 @@ compress_chunk(struct coredump_params *cp, char *base, char *buf, size_t len)
 	size_t chunk_len;
 	int error;
 
+	error = 0;
 	while (len > 0) {
 		chunk_len = MIN(len, CORE_BUF_SIZE);
 
@@ -2008,10 +2052,14 @@ int
 core_write(struct coredump_params *cp, const void *base, size_t len,
     off_t offset, enum uio_seg seg, size_t *resid)
 {
+	return ((*cp->cdw->write_fn)(cp->cdw, base, len, offset, seg,
+	    cp->active_cred, resid, cp->td));
+}
 
-	return (vn_rdwr_inchunks(UIO_WRITE, cp->vp, __DECONST(void *, base),
-	    len, offset, seg, IO_UNIT | IO_DIRECT | IO_RANGELOCKED,
-	    cp->active_cred, cp->file_cred, resid, cp->td));
+static int
+core_extend(struct coredump_params *cp, off_t newsz)
+{
+	return ((*cp->cdw->extend_fn)(cp->cdw, newsz, cp->active_cred));
 }
 
 int
@@ -2019,7 +2067,6 @@ core_output(char *base, size_t len, off_t offset, struct coredump_params *cp,
     void *tmpbuf)
 {
 	vm_map_t map;
-	struct mount *mp;
 	size_t resid, runlen;
 	int error;
 	bool success;
@@ -2030,6 +2077,7 @@ core_output(char *base, size_t len, off_t offset, struct coredump_params *cp,
 	if (cp->comp != NULL)
 		return (compress_chunk(cp, base, tmpbuf, len));
 
+	error = 0;
 	map = &cp->td->td_proc->p_vmspace->vm_map;
 	for (; len > 0; base += runlen, offset += runlen, len -= runlen) {
 		/*
@@ -2073,14 +2121,7 @@ core_output(char *base, size_t len, off_t offset, struct coredump_params *cp,
 			}
 		}
 		if (!success) {
-			error = vn_start_write(cp->vp, &mp, V_WAIT);
-			if (error != 0)
-				break;
-			vn_lock(cp->vp, LK_EXCLUSIVE | LK_RETRY);
-			error = vn_truncate_locked(cp->vp, offset + runlen,
-			    false, cp->td->td_ucred);
-			VOP_UNLOCK(cp->vp);
-			vn_finished_write(mp);
+			error = core_extend(cp, offset + runlen);
 			if (error != 0)
 				break;
 		}

@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #-
-# SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+# SPDX-License-Identifier: BSD-2-Clause
 #
 # Copyright 2004-2007 Colin Percival
 # All rights reserved
@@ -27,8 +27,6 @@
 # IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-# $FreeBSD$
-
 #### Usage function -- called from command-line handling code.
 
 # Usage instructions.  Options not listed:
@@ -49,11 +47,12 @@ Options:
                   case of an unfinished upgrade
   -j jail      -- Operate on the given jail specified by jid or name
   -k KEY       -- Trust an RSA key with SHA256 hash of KEY
-  -r release   -- Target for upgrade (e.g., 11.1-RELEASE)
+  -r release   -- Target for upgrade (e.g., 13.2-RELEASE)
   -s server    -- Server from which to fetch updates
                   (default: update.FreeBSD.org)
   -t address   -- Mail output of cron command, if any, to address
                   (default: root)
+  -v level     -- Set output verbosity to stats, nostats, or debug
   --not-running-from-cron
                -- Run without a tty, for use by automated tools
   --currently-running release
@@ -514,13 +513,13 @@ parse_cmdline () {
 			if [ $# -eq 1 ]; then usage; fi; shift
 			config_KeyPrint $1 || usage
 			;;
-		-s)
-			if [ $# -eq 1 ]; then usage; fi; shift
-			config_ServerName $1 || usage
-			;;
 		-r)
 			if [ $# -eq 1 ]; then usage; fi; shift
 			config_TargetRelease $1 || usage
+			;;
+		-s)
+			if [ $# -eq 1 ]; then usage; fi; shift
+			config_ServerName $1 || usage
 			;;
 		-t)
 			if [ $# -eq 1 ]; then usage; fi; shift
@@ -657,6 +656,59 @@ fetch_setup_verboselevel () {
 	esac
 }
 
+# Check if there are any kernel modules installed from ports.
+# In that case warn the user that a rebuild from ports (i.e. not from
+# packages) might need necessary for the modules to work in the new release.
+upgrade_check_kmod_ports() {
+	local mod_name
+	local modules
+	local pattern
+	local pkg_name
+	local port_name
+	local report
+	local w
+
+	if ! pkg -N 2>/dev/null; then
+		echo "Skipping kernel modules check. pkg(8) not present."
+		return
+	fi
+
+	# Most modules are in /boot/modules but we should actually look
+	# in every module_path passed to the kernel:
+	pattern=$(sysctl -n kern.module_path | tr ";" "|")
+
+	if [ -z "${pattern}" ]; then
+		echo "Empty kern.module_path sysctl. This should not happen."
+		echo "Aborting check of kernel modules installed from ports."
+		return
+	fi
+
+	# Check the pkg database for modules installed in those directories
+	modules=$(pkg query '%Fp' | grep -E "${pattern}")
+
+	if [ -z "${modules}" ]; then
+		return
+	fi
+
+	echo -e "\n"
+	echo "The following modules have been installed from packages."
+	echo "As a consequence they might not work when performing a major or minor upgrade."
+	echo -e "It is advised to rebuild these ports:\n"
+
+
+	report="Module Package Port\n------ ------- ----\n"
+	for module in ${modules}; do
+		w=$(pkg which "${module}")
+		mod_name=$(echo "${w}" | awk '{print $1;}')
+		pkg_name=$(echo "${w}" | awk '{print $6;}')
+		port_name=$(pkg info -o "${pkg_name}" | awk '{print $2;}')
+		report="${report}${mod_name} ${pkg_name} ${port_name}\n"
+	done
+
+	echo -e "${report}" | column -t
+	echo -e "\n"
+}
+
 # Perform sanity checks and set some final parameters
 # in preparation for fetching files.  Figure out which
 # set of updates should be downloaded: If the user is
@@ -704,6 +756,10 @@ fetchupgrade_check_params () {
 	esac
 	chmod 700 ${WORKDIR}
 	cd ${WORKDIR} || exit 1
+	if [ "$BASEDIR" != / ] && [ -z "$UNAME_r" ]; then
+		echo "$(basename $0): -b basedir requires --currently-running to be specified."
+		exit 1
+	fi
 
 	# Generate release number.  The s/SECURITY/RELEASE/ bit exists
 	# to provide an upgrade path for FreeBSD Update 1.x users, since
@@ -778,7 +834,7 @@ fetch_check_params () {
 
 	if ! [ -z "${TARGETRELEASE}" ]; then
 		echo -n "`basename $0`: "
-		echo -n "-r option is meaningless with 'fetch' command.  "
+		echo -n "'-r' option is meaningless with 'fetch' command.  "
 		echo "(Did you mean 'upgrade' instead?)"
 		exit 1
 	fi
@@ -786,8 +842,8 @@ fetch_check_params () {
 	# Check that we have updates ready to install
 	if [ -f ${BDHASH}-install/kerneldone -a $FORCEFETCH -eq 0 ]; then
 		echo "You have a partially completed upgrade pending"
-		echo "Run '$0 install' first."
-		echo "Run '$0 fetch -F' to proceed anyway."
+		echo "Run '`basename $0` [options] install' first."
+		echo "Run '`basename $0` [options] fetch -F' to proceed anyway."
 		exit 1
 	fi
 }
@@ -800,7 +856,7 @@ upgrade_check_params () {
 	NKERNCONF=${KERNCONF}
 
 	# We need TARGETRELEASE set
-	_TARGETRELEASE_z="Release target must be specified via -r option."
+	_TARGETRELEASE_z="Release target must be specified via '-r' option."
 	if [ -z "${TARGETRELEASE}" ]; then
 		echo -n "`basename $0`: "
 		echo "${_TARGETRELEASE_z}"
@@ -865,7 +921,7 @@ install_check_params () {
 	if ! [ -L ${BDHASH}-install ]; then
 		echo "No updates are available to install."
 		if [ $ISFETCHED -eq 0 ]; then
-			echo "Run '$0 fetch' first."
+			echo "Run '`basename $0` [options] fetch' first."
 			exit 2
 		fi
 		exit 0
@@ -873,7 +929,7 @@ install_check_params () {
 	if ! [ -f ${BDHASH}-install/INDEX-OLD ] ||
 	    ! [ -f ${BDHASH}-install/INDEX-NEW ]; then
 		echo "Update manifest is corrupt -- this should never happen."
-		echo "Re-run '$0 fetch'."
+		echo "Re-run '`basename $0` [options] fetch'."
 		exit 1
 	fi
 
@@ -918,7 +974,7 @@ install_create_be () {
 			echo -n "Creating snapshot of existing boot environment... "
 			VERSION=`freebsd-version -ku | sort -V | tail -n 1`
 			TIMESTAMP=`date +"%Y-%m-%d_%H%M%S"`
-			bectl create ${VERSION}_${TIMESTAMP}
+			bectl create -r ${VERSION}_${TIMESTAMP}
 			if [ $? -eq 0 ]; then
 				echo "done.";
 			else
@@ -975,7 +1031,7 @@ IDS_check_params () {
 
 	_SERVERNAME_z=\
 "SERVERNAME must be given via command line or configuration file."
-	_KEYPRINT_z="Key must be given via -k option or configuration file."
+	_KEYPRINT_z="Key must be given via '-k' option or configuration file."
 	_KEYPRINT_bad="Invalid key fingerprint: "
 	_WORKDIR_bad="Directory does not exist or is not writable: "
 
@@ -1048,16 +1104,31 @@ IDS_check_params () {
 	fetch_setup_verboselevel
 }
 
+# Return 0 if the system is managed using pkgbase, 1 otherwise.
+check_pkgbase()
+{
+	# Packaged base requires that pkg is bootstrapped.
+	if ! pkg -N -r ${BASEDIR} >/dev/null 2>/dev/null; then
+		return 1
+	fi
+	# uname(1) is used by pkg to determine ABI, so it should exist.
+	# If it comes from a package then this system uses packaged base.
+	if ! pkg -r ${BASEDIR} which /usr/bin/uname >/dev/null; then
+		return 1
+	fi
+	return 0
+}
+
 #### Core functionality -- the actual work gets done here
 
 # Use an SRV query to pick a server.  If the SRV query doesn't provide
 # a useful answer, use the server name specified by the user.
 # Put another way... look up _http._tcp.${SERVERNAME} and pick a server
 # from that; or if no servers are returned, use ${SERVERNAME}.
-# This allows a user to specify "portsnap.freebsd.org" (in which case
-# portsnap will select one of the mirrors) or "portsnap5.tld.freebsd.org"
-# (in which case portsnap will use that particular server, since there
-# won't be an SRV entry for that name).
+# This allows a user to specify "update.FreeBSD.org" (in which case
+# freebsd-update will select one of the mirrors) or "update1.freebsd.org"
+# (in which case freebsd-update will use that particular server, since
+# there won't be an SRV entry for that name).
 #
 # We ignore the Port field, since we are always going to use port 80.
 
@@ -1204,10 +1275,10 @@ fetch_progress () {
 continuep () {
 	while read -p "Does this look reasonable (y/n)? " CONTINUE; do
 		case "${CONTINUE}" in
-		y*)
+		[yY]*)
 			return 0
 			;;
-		n*)
+		[nN]*)
 			return 1
 			;;
 		esac
@@ -1256,7 +1327,7 @@ fetch_tag () {
 		return 1
 	fi
 
-	openssl rsautl -pubin -inkey pub.ssl -verify		\
+	openssl pkeyutl -pubin -inkey pub.ssl -verifyrecover	\
 	    < latest.ssl > tag.new 2>${QUIETREDIR} || true
 	rm latest.ssl
 
@@ -1336,7 +1407,7 @@ fetch_metadata_index () {
 fetch_metadata_bogus () {
 	echo
 	echo "The update metadata$1 is correctly signed, but"
-	echo "failed an integrity check."
+	echo "failed an integrity check ($2)."
 	echo "Cowardly refusing to proceed any further."
 	return 1
 }
@@ -1347,7 +1418,7 @@ fetch_metadata_index_merge () {
 	for METAFILE in $@; do
 		if [ `grep -E "^${METAFILE}\|" ${TINDEXHASH} | wc -l`	\
 		    -ne 1 ]; then
-			fetch_metadata_bogus " index"
+			fetch_metadata_bogus " index" "${METAFILE} count not 1"
 			return 1
 		fi
 
@@ -1370,7 +1441,7 @@ fetch_metadata_index_merge () {
 # specifically grepped out of ${TINDEXHASH}.
 fetch_metadata_index_sanity () {
 	if grep -qvE '^[0-9A-Z.-]+\|[0-9a-f]{64}$' tINDEX.new; then
-		fetch_metadata_bogus " index"
+		fetch_metadata_bogus " index" "unexpected entry in tINDEX.new"
 		return 1
 	fi
 }
@@ -1387,7 +1458,7 @@ fetch_metadata_sanity () {
 	# Check that the first four fields make sense.
 	if gunzip -c < files/$1.gz |
 	    grep -qvE "^[a-z]+\|[0-9a-z-]+\|${P}+\|[fdL-]\|"; then
-		fetch_metadata_bogus ""
+		fetch_metadata_bogus "" "invalid initial fields"
 		return 1
 	fi
 
@@ -1398,28 +1469,28 @@ fetch_metadata_sanity () {
 	# Sanity check entries with type 'f'
 	if grep -E '^f' sanitycheck.tmp |
 	    grep -qvE "^f\|${M}\|${H}\|${P}*\$"; then
-		fetch_metadata_bogus ""
+		fetch_metadata_bogus "" "invalid type f entry"
 		return 1
 	fi
 
 	# Sanity check entries with type 'd'
 	if grep -E '^d' sanitycheck.tmp |
 	    grep -qvE "^d\|${M}\|\|\$"; then
-		fetch_metadata_bogus ""
+		fetch_metadata_bogus "" "invalid type d entry"
 		return 1
 	fi
 
 	# Sanity check entries with type 'L'
 	if grep -E '^L' sanitycheck.tmp |
 	    grep -qvE "^L\|${M}\|${P}*\|\$"; then
-		fetch_metadata_bogus ""
+		fetch_metadata_bogus "" "invalid type L entry"
 		return 1
 	fi
 
 	# Sanity check entries with type '-'
 	if grep -E '^-' sanitycheck.tmp |
 	    grep -qvE "^-\|\|\|\|\|\|"; then
-		fetch_metadata_bogus ""
+		fetch_metadata_bogus "" "invalid type - entry"
 		return 1
 	fi
 
@@ -1677,11 +1748,12 @@ fetch_inspect_system () {
 	echo "done."
 }
 
-# For any paths matching ${MERGECHANGES}, compare $1 and $2 and find any
-# files which differ; generate $3 containing these paths and the old hashes.
+# For any paths matching ${MERGECHANGES}, compare $2 against $1 and $3 and
+# find any files with values unique to $2; generate $4 containing these paths
+# and their corresponding hashes from $1.
 fetch_filter_mergechanges () {
 	# Pull out the paths and hashes of the files matching ${MERGECHANGES}.
-	for F in $1 $2; do
+	for F in $1 $2 $3; do
 		for X in ${MERGECHANGES}; do
 			grep -E "^${X}" ${F}
 		done |
@@ -1689,9 +1761,10 @@ fetch_filter_mergechanges () {
 		    sort > ${F}-values
 	done
 
-	# Any line in $2-values which doesn't appear in $1-values and is a
-	# file means that we should list the path in $3.
-	comm -13 $1-values $2-values |
+	# Any line in $2-values which doesn't appear in $1-values or $3-values
+	# and is a file means that we should list the path in $3.
+	sort $1-values $3-values |
+	    comm -13 - $2-values |
 	    fgrep '|f|' |
 	    cut -f 1 -d '|' > $2-paths
 
@@ -1703,10 +1776,10 @@ fetch_filter_mergechanges () {
 	while read X; do
 		look "${X}|" $1-values |
 		    head -1
-	done < $2-paths > $3
+	done < $2-paths > $4
 
 	# Clean up
-	rm $1-values $2-values $2-paths
+	rm $1-values $2-values $3-values $2-paths
 }
 
 # For any paths matching ${UPDATEIFUNMODIFIED}, remove lines from $[123]
@@ -2326,7 +2399,7 @@ upgrade_guess_components () {
 WARNING: This system is running a "${KCOMP}" kernel, which is not a
 kernel configuration distributed as part of FreeBSD ${RELNUM}.
 This kernel will not be updated: you MUST update the kernel manually
-before running "$0 install".
+before running '`basename $0` [options] install'.
 			EOF
 		fi
 
@@ -2508,7 +2581,7 @@ upgrade_merge () {
 
 			# Some files need special treatment.
 			case ${F} in
-			/etc/spwd.db | /etc/pwd.db | /etc/login.conf.db)
+			/etc/spwd.db | /etc/pwd.db | /etc/login.conf.db | /etc/ssl/cert.pem)
 				# Don't merge these -- we're rebuild them
 				# after updates are installed.
 				cp merge/old/${F} merge/new/${F}
@@ -2543,8 +2616,26 @@ The following file could not be merged automatically: ${F}
 Press Enter to edit this file in ${EDITOR} and resolve the conflicts
 manually...
 			EOF
-			read dummy </dev/tty
-			${EDITOR} `pwd`/merge/new/${F} < /dev/tty
+			while true; do
+				read response </dev/tty
+				if expr "${response}" : '[Aa][Cc][Cc][Ee][Pp][Tt]' > /dev/null; then
+					echo
+					break
+				fi
+				${EDITOR} `pwd`/merge/new/${F} < /dev/tty
+
+				if ! grep -qE '^(<<<<<<<|=======|>>>>>>>)([[:space:]].*)?$' $(pwd)/merge/new/${F} ; then
+					break
+				fi
+				cat <<-EOF
+
+Merge conflict markers remain in: ${F}
+These must be resolved for the system to be functional.
+
+Press Enter to return to editing this file, or type "ACCEPT" to carry on with
+these lines remaining in the file.
+				EOF
+			done
 		done < failed.merges
 		rm failed.merges
 
@@ -2698,7 +2789,7 @@ upgrade_run () {
 
 	# Based on ${MERGECHANGES}, generate a file tomerge-old with the
 	# paths and hashes of old versions of files to merge.
-	fetch_filter_mergechanges INDEX-OLD INDEX-PRESENT tomerge-old
+	fetch_filter_mergechanges INDEX-OLD INDEX-PRESENT INDEX-NEW tomerge-old
 
 	# Based on ${UPDATEIFUNMODIFIED}, remove lines from INDEX-* which
 	# correspond to lines in INDEX-PRESENT with hashes not appearing
@@ -2752,7 +2843,7 @@ upgrade_run () {
 
 	# Remind the user that they need to run "freebsd-update install"
 	# to install the downloaded bits, in case they didn't RTFM.
-	echo "To install the downloaded upgrades, run \"$0 install\"."
+	echo "To install the downloaded upgrades, run '`basename $0` [options] install'."
 }
 
 # Make sure that all the file hashes mentioned in $@ have corresponding
@@ -2770,7 +2861,7 @@ install_verify () {
 		if ! [ -f files/${HASH}.gz ]; then
 			echo -n "Update files missing -- "
 			echo "this should never happen."
-			echo "Re-run '$0 fetch'."
+			echo "Re-run '`basename $0` [options] fetch'."
 			return 1
 		fi
 	done < filelist
@@ -2877,8 +2968,17 @@ backup_kernel () {
 	(cd ${BASEDIR}/${KERNELDIR} && find . -type f $FINDFILTER -exec \
 	    cp -pl '{}' ${BASEDIR}/${BACKUPKERNELDIR}/'{}' \;)
 
-	# Re-enable patchname expansion.
+	# Re-enable pathname expansion.
 	set +f
+}
+
+# Check for and remove an existing directory that conflicts with the file or
+# symlink that we are going to install.
+dir_conflict () {
+	if [ -d "$1" ]; then
+		echo "Removing conflicting directory $1"
+		rm -rf -- "$1"
+	fi
 }
 
 # Install new files
@@ -2890,15 +2990,22 @@ install_from_index () {
 	    while read FPATH TYPE OWNER GROUP PERM FLAGS HASH LINK; do
 		case ${TYPE} in
 		d)
-			# Create a directory
+			# Create a directory.  A file may change to a directory
+			# on upgrade (PR273661).  If that happens, remove the
+			# file first.
+			if [ -e "${BASEDIR}/${FPATH}" ] && \
+			    ! [ -d "${BASEDIR}/${FPATH}" ]; then
+				rm -f -- "${BASEDIR}/${FPATH}"
+			fi
 			install -d -o ${OWNER} -g ${GROUP}		\
 			    -m ${PERM} ${BASEDIR}/${FPATH}
 			;;
 		f)
+			dir_conflict "${BASEDIR}/${FPATH}"
 			if [ -z "${LINK}" ]; then
 				# Create a file, without setting flags.
 				gunzip < files/${HASH}.gz > ${HASH}
-				install -S -o ${OWNER} -g ${GROUP}	\
+				install -o ${OWNER} -g ${GROUP}		\
 				    -m ${PERM} ${HASH} ${BASEDIR}/${FPATH}
 				rm ${HASH}
 			else
@@ -2907,6 +3014,7 @@ install_from_index () {
 			fi
 			;;
 		L)
+			dir_conflict "${BASEDIR}/${FPATH}"
 			# Create a symlink
 			ln -sfh ${HASH} ${BASEDIR}/${FPATH}
 			;;
@@ -2943,10 +3051,14 @@ install_delete () {
 			rmdir ${BASEDIR}/${FPATH}
 			;;
 		f)
-			rm ${BASEDIR}/${FPATH}
+			if [ -f "${BASEDIR}/${FPATH}" ]; then
+				rm "${BASEDIR}/${FPATH}"
+			fi
 			;;
 		L)
-			rm ${BASEDIR}/${FPATH}
+			if [ -L "${BASEDIR}/${FPATH}" ]; then
+				rm "${BASEDIR}/${FPATH}"
+			fi
 			;;
 		esac
 	done < killfiles
@@ -2985,7 +3097,7 @@ install_files () {
 			cat <<-EOF
 
 Kernel updates have been installed.  Please reboot and run
-"$0 install" again to finish installing updates.
+'`basename $0` [options] install' again to finish installing updates.
 			EOF
 			exit 0
 		fi
@@ -3004,10 +3116,28 @@ Kernel updates have been installed.  Please reboot and run
 		    grep -E '^/libexec/ld-elf[^|]*\.so\.[0-9]+\|' > INDEX-NEW
 		install_from_index INDEX-NEW || return 1
 
-		# Install new shared libraries next
+		# Next, in order, libsys, libc, and libthr.
 		grep -vE '^/boot/' $1/INDEX-NEW |
 		    grep -vE '^[^|]+\|d\|' |
 		    grep -vE '^/libexec/ld-elf[^|]*\.so\.[0-9]+\|' |
+		    grep -E '^[^|]*/lib/libsys\.so\.[0-9]+\|' > INDEX-NEW
+		install_from_index INDEX-NEW || return 1
+		grep -vE '^/boot/' $1/INDEX-NEW |
+		    grep -vE '^[^|]+\|d\|' |
+		    grep -vE '^/libexec/ld-elf[^|]*\.so\.[0-9]+\|' |
+		    grep -E '^[^|]*/lib/libc\.so\.[0-9]+\|' > INDEX-NEW
+		install_from_index INDEX-NEW || return 1
+		grep -vE '^/boot/' $1/INDEX-NEW |
+		    grep -vE '^[^|]+\|d\|' |
+		    grep -vE '^/libexec/ld-elf[^|]*\.so\.[0-9]+\|' |
+		    grep -E '^[^|]*/lib/libthr\.so\.[0-9]+\|' > INDEX-NEW
+		install_from_index INDEX-NEW || return 1
+
+		# Install the rest of the shared libraries next
+		grep -vE '^/boot/' $1/INDEX-NEW |
+		    grep -vE '^[^|]+\|d\|' |
+		    grep -vE '^/libexec/ld-elf[^|]*\.so\.[0-9]+\|' |
+		    grep -vE '^[^|]*/lib/(libsys|libc|libthr)\.so\.[0-9]+\|' |
 		    grep -E '^[^|]*/lib/[^|]*\.so\.[0-9]+\|' > INDEX-NEW
 		install_from_index INDEX-NEW || return 1
 
@@ -3023,9 +3153,10 @@ Kernel updates have been installed.  Please reboot and run
 		install_from_index INDEX-NEW || return 1
 		install_delete INDEX-OLD INDEX-NEW || return 1
 
-		# Restart sshd if running (PR263489).  Note that this does not
-		# affect child sshd processes handling existing sessions.
-		if service sshd status >/dev/null 2>/dev/null; then
+		# Restart host sshd if running (PR263489).  Note that this does
+		# not affect child sshd processes handling existing sessions.
+		if [ "$BASEDIR" = / ] && \
+		    service sshd status >/dev/null 2>/dev/null; then
 			echo
 			echo "Restarting sshd after upgrade"
 			service sshd restart
@@ -3070,9 +3201,9 @@ Kernel updates have been installed.  Please reboot and run
 			cat <<-EOF
 
 Completing this upgrade requires removing old shared object files.
-Please rebuild all installed 3rd party software (e.g., programs
-installed from the ports tree) and then run "$0 install"
-again to finish installing updates.
+Please upgrade or rebuild all installed 3rd party software (e.g.,
+programs installed with pkg or from the ports tree) and then run
+'`basename $0` [options] install' again to finish installing updates.
 			EOF
 			rm newfiles
 			exit 0
@@ -3156,6 +3287,11 @@ rollback_setup_rollback () {
 
 # Install old files, delete new files, and update linker.hints
 rollback_files () {
+	# Create directories first.  They may be needed by files we will
+	# install in subsequent steps (PR273950).
+	awk -F \| '{if ($2 == "d") print }' $1/INDEX-OLD > INDEX-OLD
+	install_from_index INDEX-OLD || return 1
+
 	# Install old shared library files which don't have the same path as
 	# a new shared library file.
 	grep -vE '^/boot/' $1/INDEX-NEW |
@@ -3412,6 +3548,7 @@ cmd_cron () {
 	    [ ${VERBOSELEVEL} = "debug" ]; then
 		mail -s "`hostname` security updates" ${MAILTO} < ${TMPFILE}
 	fi
+	ISFETCHED=1
 
 	rm ${TMPFILE}
 }
@@ -3420,6 +3557,7 @@ cmd_cron () {
 cmd_upgrade () {
 	finalize_components_config ${COMPONENTS}
 	upgrade_check_params
+	upgrade_check_kmod_ports
 	upgrade_run || exit 1
 }
 
@@ -3446,7 +3584,7 @@ cmd_updatesready () {
 	fi
 
 	echo "There are updates available to install."
-	echo "Run '$0 install' to proceed."
+	echo "Run '`basename $0` [options] install' to proceed."
 }
 
 # Install downloaded updates.
@@ -3492,7 +3630,21 @@ fi
 # Set LC_ALL in order to avoid problems with character ranges like [A-Z].
 export LC_ALL=C
 
-get_params $@
+# Clear environment variables that may affect operation of tools that we use.
+unset GREP_OPTIONS
+
+# Parse command line options and the configuration file.
+get_params "$@"
+
+# Disallow use with packaged base.
+if check_pkgbase; then
+	cat <<EOF
+freebsd-update is incompatible with the use of packaged base.  Please see
+https://wiki.freebsd.org/PkgBase for more information.
+EOF
+	exit 1
+fi
+
 for COMMAND in ${COMMANDS}; do
 	cmd_${COMMAND}
 done

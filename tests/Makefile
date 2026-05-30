@@ -1,4 +1,4 @@
-# $FreeBSD$
+.include <src.opts.mk>
 
 PACKAGE= tests
 
@@ -9,8 +9,13 @@ ${PACKAGE}FILES+=		README __init__.py conftest.py
 KYUAFILE= yes
 
 SUBDIR+= etc
+SUBDIR+= examples
+SUBDIR+= include
 SUBDIR+= sys
 SUBDIR+= atf_python
+.if ${MK_CDDL} != "no"
+SUBDIR+= oclo
+.endif
 
 SUBDIR_PARALLEL=
 

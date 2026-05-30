@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -39,7 +40,7 @@ nvlist_equal(nvlist_t *nvla, nvlist_t *nvlb)
 	 */
 	for (nvpair_t *pair = nvlist_next_nvpair(nvla, NULL);
 	    pair != NULL; pair = nvlist_next_nvpair(nvla, pair)) {
-		char *key = nvpair_name(pair);
+		const char *key = nvpair_name(pair);
 
 		if (!nvlist_exists(nvlb, key))
 			return (B_FALSE);
@@ -129,6 +130,11 @@ run_tests(void)
 	/* Note: maximum nvlist key length is 32KB */
 	int len = 1024 * 31;
 	char *bigstring = malloc(len);
+	if (bigstring == NULL) {
+		perror("malloc");
+		exit(EXIT_FAILURE);
+	}
+
 	for (int i = 0; i < len; i++)
 		bigstring[i] = 'a' + i % 26;
 	bigstring[len - 1] = '\0';

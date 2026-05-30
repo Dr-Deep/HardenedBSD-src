@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -58,7 +59,6 @@
 #include <sys/fs/zfs.h>
 #include <sys/arc.h>
 #include <sys/callb.h>
-#include <sys/spa_boot.h>
 #include <sys/zfs_ioctl.h>
 #include <sys/dsl_scan.h>
 #include <sys/dmu_send.h>
@@ -95,6 +95,8 @@ spa_generate_rootconf(const char *name)
 	for (i = 0; i < count; i++) {
 		uint64_t txg;
 
+		if (configs[i] == NULL)
+			continue;
 		txg = fnvlist_lookup_uint64(configs[i], ZPOOL_CONFIG_POOL_TXG);
 		if (txg > best_txg) {
 			best_txg = txg;
@@ -183,7 +185,7 @@ spa_import_rootpool(const char *name, bool checkpointrewind)
 	spa_t *spa;
 	vdev_t *rvd;
 	nvlist_t *config, *nvtop;
-	char *pname;
+	const char *pname;
 	int error;
 
 	/*
@@ -191,7 +193,7 @@ spa_import_rootpool(const char *name, bool checkpointrewind)
 	 */
 	config = spa_generate_rootconf(name);
 
-	mutex_enter(&spa_namespace_lock);
+	spa_namespace_enter(FTAG);
 	if (config != NULL) {
 		pname = fnvlist_lookup_string(config, ZPOOL_CONFIG_POOL_NAME);
 		VERIFY0(strcmp(name, pname));
@@ -202,7 +204,7 @@ spa_import_rootpool(const char *name, bool checkpointrewind)
 			 * e.g., after reboot -r.
 			 */
 			if (spa->spa_state == POOL_STATE_ACTIVE) {
-				mutex_exit(&spa_namespace_lock);
+				spa_namespace_exit(FTAG);
 				fnvlist_free(config);
 				return (0);
 			}
@@ -224,7 +226,7 @@ spa_import_rootpool(const char *name, bool checkpointrewind)
 		    &spa->spa_ubsync.ub_version) != 0)
 			spa->spa_ubsync.ub_version = SPA_VERSION_INITIAL;
 	} else if ((spa = spa_lookup(name)) == NULL) {
-		mutex_exit(&spa_namespace_lock);
+		spa_namespace_exit(FTAG);
 		fnvlist_free(config);
 		cmn_err(CE_NOTE, "Cannot find the pool label for '%s'",
 		    name);
@@ -247,17 +249,17 @@ spa_import_rootpool(const char *name, bool checkpointrewind)
 	    VDEV_ALLOC_ROOTPOOL);
 	spa_config_exit(spa, SCL_ALL, FTAG);
 	if (error) {
-		mutex_exit(&spa_namespace_lock);
+		spa_namespace_exit(FTAG);
 		fnvlist_free(config);
 		cmn_err(CE_NOTE, "Can not parse the config for pool '%s'",
-		    pname);
+		    name);
 		return (error);
 	}
 
 	spa_config_enter(spa, SCL_ALL, FTAG, RW_WRITER);
 	vdev_free(rvd);
 	spa_config_exit(spa, SCL_ALL, FTAG);
-	mutex_exit(&spa_namespace_lock);
+	spa_namespace_exit(FTAG);
 
 	fnvlist_free(config);
 	return (0);

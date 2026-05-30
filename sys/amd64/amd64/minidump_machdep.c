@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2006 Peter Wemm
  * All rights reserved.
@@ -27,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_pmap.h"
 #include "opt_watchdog.h"
 
@@ -99,7 +97,7 @@ blk_write(struct dumperinfo *di, char *ptr, vm_paddr_t pa, size_t sz)
 		return (EINVAL);
 	}
 	if (ptr != NULL && pa != 0) {
-		printf("cant have both va and pa!\n");
+		printf("can't have both va and pa!\n");
 		return (EINVAL);
 	}
 	if ((((uintptr_t)pa) % PAGE_SIZE) != 0) {
@@ -188,15 +186,15 @@ cpu_minidumpsys(struct dumperinfo *di, const struct minidumpstate *state)
 	 * tables, so care must be taken to read each entry only once.
 	 */
 	pmapsize = 0;
-	for (va = VM_MIN_KERNEL_ADDRESS; va < kva_end; ) {
+	for (va = kva_layout.km_low; va < kva_end; ) {
 		/*
 		 * We always write a page, even if it is zero. Each
 		 * page written corresponds to 1GB of space
 		 */
 		pmapsize += PAGE_SIZE;
 		ii = pmap_pml4e_index(va);
-		pml4 = (uint64_t *)PHYS_TO_DMAP(KPML4phys) + ii;
-		pdp = (uint64_t *)PHYS_TO_DMAP(*pml4 & PG_FRAME);
+		pml4 = PHYS_TO_DMAP(KPML4phys);
+		pdp = PHYS_TO_DMAP(pml4[ii] & PG_FRAME);
 		pdpe = atomic_load_64(&pdp[pmap_pdpe_index(va)]);
 		if ((pdpe & PG_V) == 0) {
 			va += NBPDP;
@@ -218,7 +216,7 @@ cpu_minidumpsys(struct dumperinfo *di, const struct minidumpstate *state)
 			continue;
 		}
 
-		pd = (uint64_t *)PHYS_TO_DMAP(pdpe & PG_FRAME);
+		pd = PHYS_TO_DMAP(pdpe & PG_FRAME);
 		for (n = 0; n < NPDEPG; n++, va += NBPDR) {
 			pde = atomic_load_64(&pd[pmap_pde_index(va)]);
 
@@ -242,7 +240,7 @@ cpu_minidumpsys(struct dumperinfo *di, const struct minidumpstate *state)
 			if (vm_phys_is_dumpable(pa))
 				vm_page_dump_add(state->dump_bitset, pa);
 			/* and for each valid page in this 2MB block */
-			pt = (uint64_t *)PHYS_TO_DMAP(pde & PG_FRAME);
+			pt = PHYS_TO_DMAP(pde & PG_FRAME);
 			for (k = 0; k < NPTEPG; k++) {
 				pte = atomic_load_64(&pt[k]);
 				if ((pte & PG_V) == 0)
@@ -281,9 +279,9 @@ cpu_minidumpsys(struct dumperinfo *di, const struct minidumpstate *state)
 	mdhdr.msgbufsize = mbp->msg_size;
 	mdhdr.bitmapsize = round_page(BITSET_SIZE(vm_page_dump_pages));
 	mdhdr.pmapsize = pmapsize;
-	mdhdr.kernbase = VM_MIN_KERNEL_ADDRESS;
-	mdhdr.dmapbase = DMAP_MIN_ADDRESS;
-	mdhdr.dmapend = DMAP_MAX_ADDRESS;
+	mdhdr.kernbase = kva_layout.km_low;
+	mdhdr.dmapbase = kva_layout.dmap_low;
+	mdhdr.dmapend = kva_layout.dmap_high;
 	mdhdr.dumpavailsize = round_page(sizeof(dump_avail));
 
 	dump_init_header(di, &kdh, KERNELDUMPMAGIC, KERNELDUMP_AMD64_VERSION,
@@ -325,10 +323,10 @@ cpu_minidumpsys(struct dumperinfo *di, const struct minidumpstate *state)
 
 	/* Dump kernel page directory pages */
 	bzero(fakepd, sizeof(fakepd));
-	for (va = VM_MIN_KERNEL_ADDRESS; va < kva_end; va += NBPDP) {
+	for (va = kva_layout.km_low; va < kva_end; va += NBPDP) {
 		ii = pmap_pml4e_index(va);
-		pml4 = (uint64_t *)PHYS_TO_DMAP(KPML4phys) + ii;
-		pdp = (uint64_t *)PHYS_TO_DMAP(*pml4 & PG_FRAME);
+		pml4 = PHYS_TO_DMAP(KPML4phys);
+		pdp = PHYS_TO_DMAP(pml4[ii] & PG_FRAME);
 		pdpe = atomic_load_64(&pdp[pmap_pdpe_index(va)]);
 
 		/* We always write a page, even if it is zero */
@@ -362,7 +360,7 @@ cpu_minidumpsys(struct dumperinfo *di, const struct minidumpstate *state)
 
 		pa = pdpe & PG_FRAME;
 		if (PHYS_IN_DMAP(pa) && vm_phys_is_dumpable(pa)) {
-			pd = (uint64_t *)PHYS_TO_DMAP(pa);
+			pd = PHYS_TO_DMAP(pa);
 			error = blk_write(di, (char *)pd, 0, PAGE_SIZE);
 		} else {
 			/* Malformed pa, write the zeroed fakepd. */

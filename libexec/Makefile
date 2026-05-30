@@ -1,19 +1,20 @@
-#	@(#)Makefile	8.1 (Berkeley) 6/4/93
-# $FreeBSD$
-
 .include <src.opts.mk>
+
+.include <bsd.compat.pre.mk>
 
 SUBDIR=	${_atf} \
 	${_atrun} \
-	${_blacklistd-helper} \
+	${_blocklistd-helper} \
 	${_comsat} \
 	${_dma} \
 	flua \
 	getty \
+	${_hyperv} \
 	${_mail.local} \
 	${_makewhatis.local} \
 	${_mknetid} \
 	${_phttpget} \
+	${_pkgserve} \
 	${_pppoed} \
 	rc \
 	revnetgroup \
@@ -26,8 +27,8 @@ SUBDIR=	${_atf} \
 	${_rshd} \
 	${_rtld-elf} \
 	save-entropy \
+	${_nuageinit} \
 	${_smrsh} \
-	${_telnetd} \
 	${_tests} \
 	${_tftp-proxy} \
 	ulog-helper \
@@ -37,8 +38,8 @@ SUBDIR=	${_atf} \
 _atrun=		atrun
 .endif
 
-.if ${MK_BLACKLIST} != "no"
-_blacklistd-helper+=	blacklistd-helper
+.if ${MK_BLOCKLIST} != "no"
+_blocklistd-helper+=	blocklistd-helper
 .endif
 
 .if ${MK_BOOTPD} != "no"
@@ -53,16 +54,20 @@ SUBDIR+=	fingerd
 _phttpget=	phttpget
 .endif
 
-.if ${MK_FTP} != "no"
-SUBDIR+=	ftpd
-.endif
-
 .if ${MK_MAIL} != "no"
 _comsat=	comsat
 .endif
 
 .if ${MK_DMAGENT} != "no"
 _dma=		dma
+.endif
+
+.if ${MK_HYPERV} != "no"
+_hyperv+=	hyperv
+.endif
+
+.if ${MK_PKGSERVE} != "no"
+_pkgserve=	pkg-serve
 .endif
 
 .if ${MK_NIS} != "no"
@@ -80,7 +85,9 @@ _tftp-proxy=	tftp-proxy
 
 .if !defined(NO_PIC) && !defined(NO_RTLD)
 _rtld-elf=	rtld-elf
-SUBDIR.${MK_LIB32}+=	rtld-elf32
+.for LIBCOMPAT libcompat in ${_ALL_LIBCOMPATS_libcompats}
+SUBDIR.${MK_LIB${LIBCOMPAT}}+=	rtld-elf${libcompat}
+.endfor
 .endif
 
 .if ${MK_RBOOTD} != "no"
@@ -104,17 +111,20 @@ SUBDIR+=	talkd
 SUBDIR+=	tcpd
 .endif
 
-.if ${MK_TELNET} != "no"
-_telnetd=	telnetd
-.endif
-
 .if ${MK_TFTP} != "no"
 SUBDIR+=	tftpd
 .endif
 
 .if ${MK_TESTS} != "no"
-_atf=		atf
 _tests=		tests
+.endif
+
+.if ${MK_TESTS_SUPPORT} != "no"
+_atf=		atf
+.endif
+
+.if ${MK_NUAGEINIT} != "no"
+_nuageinit=	nuageinit
 .endif
 
 .include <bsd.arch.inc.mk>

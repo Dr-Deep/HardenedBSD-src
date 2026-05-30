@@ -23,8 +23,6 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /**
  * @file vets.c - trust store
  * @brief verify signatures
@@ -202,11 +200,13 @@ ve_utc_set(time_t utc)
 	}
 }
 
+#ifdef VERIFY_CERTS_STR
 static void
 free_cert_contents(br_x509_certificate *xc)
 {
 	xfree(xc->data);
 }
+#endif
 
 /*
  * a bit of a dance to get commonName from a certificate
@@ -241,10 +241,11 @@ x509_cn_get(br_x509_certificate *xc, char *buf, size_t len)
 	mc.vtable->start_cert(&mc.vtable, xc->data_len);
 	mc.vtable->append(&mc.vtable, xc->data, xc->data_len);
 	mc.vtable->end_cert(&mc.vtable);
-	/* we don' actually care about cert status - just its name */
+	/* we don't actually care about cert status - just its name */
 	err = mc.vtable->end_chain(&mc.vtable);
+	(void)err;			/* keep compiler quiet */
 
-	if (!cn.status)
+	if (cn.status <= 0)
 		buf = NULL;
 	return (buf);
 }
@@ -373,13 +374,15 @@ ve_trust_anchors_add_buf(unsigned char *buf, size_t len)
 	size_t num;
 
 	num = 0;
-	xcs = parse_certificates(buf, len, &num);
-	if (xcs != NULL) {
-		num = ve_trust_anchors_add(xcs, num);
+	if (len > 0) {
+		xcs = parse_certificates(buf, len, &num);
+		if (xcs != NULL) {
+			num = ve_trust_anchors_add(xcs, num);
 #ifdef VE_OPENPGP_SUPPORT
-	} else {
-		num = openpgp_trust_add_buf(buf, len);
+		} else {
+			num = openpgp_trust_add_buf(buf, len);
 #endif
+		}
 	}
 	return (num);
 }
@@ -399,15 +402,17 @@ ve_trust_anchors_revoke(unsigned char *buf, size_t len)
 	size_t num;
 
 	num = 0;
-	xcs = parse_certificates(buf, len, &num);
-	if (xcs != NULL) {
-		num = ve_forbidden_anchors_add(xcs, num);
+	if (len > 0) {
+		xcs = parse_certificates(buf, len, &num);
+		if (xcs != NULL) {
+			num = ve_forbidden_anchors_add(xcs, num);
 #ifdef VE_OPENPGP_SUPPORT
-	} else {
-		if (buf[len - 1] == '\n')
-			buf[len - 1] = '\0';
-		num = openpgp_trust_revoke((char *)buf);
+		} else {
+			if (buf[len - 1] == '\n')
+				buf[len - 1] = '\0';
+			num = openpgp_trust_revoke((char *)buf);
 #endif
+		}
 	}
 	return (num);
 }
@@ -520,7 +525,7 @@ verify_signer_xcs(br_x509_certificate *xcs,
 	br_x509_minimal_set_rsa(&mc, &br_rsa_i31_pkcs1_vrfy);
 #endif
 #if defined(UNIT_TEST) && defined(VE_DEPRECATED_RSA_SHA1_SUPPORT)
-	/* This is deprecated! do not enable unless you absoultely have to */
+	/* This is deprecated! do not enable unless you absolutely have to */
 	br_x509_minimal_set_hash(&mc, br_sha1_ID, &br_sha1_vtable);
 #endif
 	br_x509_minimal_set_hash(&mc, br_sha256_ID, &br_sha256_vtable);
@@ -569,9 +574,17 @@ verify_signer_xcs(br_x509_certificate *xcs,
 			ve_error_set("Validation failed, certificate not valid as of %s",
 			    gdate(date, sizeof(date), ve_utc));
 			break;
-		default:
-			ve_error_set("Validation failed, err = %d", err);
-			break;
+		default: {
+			const char *err_desc = NULL;
+			const char *err_name = find_error_name(err, &err_desc);
+
+			if (err_name == NULL)
+				ve_error_set("Validation failed, err = %d",
+				    err);
+			else
+				ve_error_set("Validation failed, %s (%s)",
+				    err_desc, err_name);
+			break; }
 		}
 	} else {
 		tpk = mc.vtable->get_pkey(&mc.vtable, &usages);

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2015-2016 Landon Fuller <landonf@FreeBSD.org>
  * All rights reserved.
@@ -27,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_bwn.h"
 #include "opt_wlan.h"
 
@@ -184,22 +182,11 @@ bwn_pci_attach(device_t dev)
 	sc->quirks = ident->quirks;
 
 	/* Attach bridge device */
-	if ((error = bhndb_attach_bridge(dev, &sc->bhndb_dev, -1)))
+	if ((error = bhndb_attach_bridge(dev, &sc->bhndb_dev, DEVICE_UNIT_ANY)))
 		return (ENXIO);
 
 	/* Success */
 	return (0);
-}
-
-static int
-bwn_pci_detach(device_t dev)
-{
-	int error;
-
-	if ((error = bus_generic_detach(dev)))
-		return (error);
-
-	return (device_delete_children(dev));
 }
 
 static void
@@ -270,7 +257,7 @@ static device_method_t bwn_pci_methods[] = {
 	/* Device interface */
 	DEVMETHOD(device_probe,			bwn_pci_probe),
 	DEVMETHOD(device_attach,		bwn_pci_attach),
-	DEVMETHOD(device_detach,		bwn_pci_detach),
+	DEVMETHOD(device_detach,		bus_generic_detach),
 	DEVMETHOD(device_shutdown,		bus_generic_shutdown),
 	DEVMETHOD(device_suspend,		bus_generic_suspend),
 	DEVMETHOD(device_resume,		bus_generic_resume),

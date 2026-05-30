@@ -48,6 +48,7 @@ struct Limits {
   LimitFlags Flags;
   yaml::Hex32 Minimum;
   yaml::Hex32 Maximum;
+  yaml::Hex32 PageSize;
 };
 
 struct Table {
@@ -62,11 +63,20 @@ struct Export {
   uint32_t Index;
 };
 
+struct InitExpr {
+  InitExpr() {}
+  bool Extended;
+  union {
+    wasm::WasmInitExprMVP Inst;
+    yaml::BinaryRef Body;
+  };
+};
+
 struct ElemSegment {
   uint32_t Flags;
   uint32_t TableNumber;
   ValueType ElemKind;
-  wasm::WasmInitExpr Offset;
+  InitExpr Offset;
   std::vector<uint32_t> Functions;
 };
 
@@ -74,19 +84,20 @@ struct Global {
   uint32_t Index;
   ValueType Type;
   bool Mutable;
-  wasm::WasmInitExpr InitExpr;
+  InitExpr Init;
 };
 
 struct Import {
+  Import() {}
   StringRef Module;
   StringRef Field;
   ExportKind Kind;
   union {
     uint32_t SigIndex;
-    Global GlobalImport;
     Table TableImport;
     Limits Memory;
     uint32_t TagIndex;
+    Global GlobalImport;
   };
 };
 
@@ -114,7 +125,7 @@ struct DataSegment {
   uint32_t SectionOffset;
   uint32_t InitFlags;
   uint32_t MemoryIndex;
-  wasm::WasmInitExpr Offset;
+  InitExpr Offset;
   yaml::BinaryRef Content;
 };
 
@@ -179,6 +190,7 @@ struct Section {
 
   SectionType Type;
   std::vector<Relocation> Relocations;
+  std::optional<uint8_t> HeaderSecSizeEncodingLen;
 };
 
 struct CustomSection : Section {
@@ -219,6 +231,7 @@ struct DylinkSection : CustomSection {
   std::vector<StringRef> Needed;
   std::vector<DylinkImportInfo> ImportInfo;
   std::vector<DylinkExportInfo> ExportInfo;
+  std::vector<StringRef> RuntimePath;
 };
 
 struct NameSection : CustomSection {
@@ -526,8 +539,8 @@ template <> struct MappingTraits<WasmYAML::LocalDecl> {
   static void mapping(IO &IO, WasmYAML::LocalDecl &LocalDecl);
 };
 
-template <> struct MappingTraits<wasm::WasmInitExpr> {
-  static void mapping(IO &IO, wasm::WasmInitExpr &Expr);
+template <> struct MappingTraits<WasmYAML::InitExpr> {
+  static void mapping(IO &IO, WasmYAML::InitExpr &Expr);
 };
 
 template <> struct MappingTraits<WasmYAML::DataSegment> {

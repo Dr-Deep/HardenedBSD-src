@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2006 Pawel Jakub Dawidek <pjd@FreeBSD.org>
  * All rights reserved.
@@ -25,12 +26,8 @@
  */
 
 /*
- * This file implements Solaris compatible getmntany() and hasmntopt()
- * functions.
+ * This file implements Solaris compatible hasmntopt() functions.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/mount.h>
@@ -74,7 +71,7 @@ hasmntopt(struct mnttab *mnt, const char *opt)
 
 	if (mnt->mnt_mntopts == NULL)
 		return (NULL);
-	(void) strcpy(opts, mnt->mnt_mntopts);
+	(void) strlcpy(opts, mnt->mnt_mntopts, MNT_LINE_MAX);
 	f = mntopt(&opts);
 	for (; *f; f = mntopt(&opts)) {
 		if (strncmp(opt, f, strlen(opt)) == 0)
@@ -176,38 +173,6 @@ fail:
 	allfs = 0;
 	(void) pthread_rwlock_unlock(&gsfs_lock);
 	return (error);
-}
-
-int
-getmntany(FILE *fd __unused, struct mnttab *mgetp, struct mnttab *mrefp)
-{
-	int i, error;
-
-	error = statfs_init();
-	if (error != 0)
-		return (error);
-
-	(void) pthread_rwlock_rdlock(&gsfs_lock);
-
-	for (i = 0; i < allfs; i++) {
-		if (mrefp->mnt_special != NULL &&
-		    strcmp(mrefp->mnt_special, gsfs[i].f_mntfromname) != 0) {
-			continue;
-		}
-		if (mrefp->mnt_mountp != NULL &&
-		    strcmp(mrefp->mnt_mountp, gsfs[i].f_mntonname) != 0) {
-			continue;
-		}
-		if (mrefp->mnt_fstype != NULL &&
-		    strcmp(mrefp->mnt_fstype, gsfs[i].f_fstypename) != 0) {
-			continue;
-		}
-		statfs2mnttab(&gsfs[i], mgetp);
-		(void) pthread_rwlock_unlock(&gsfs_lock);
-		return (0);
-	}
-	(void) pthread_rwlock_unlock(&gsfs_lock);
-	return (-1);
 }
 
 int

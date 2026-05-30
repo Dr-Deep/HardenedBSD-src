@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -25,7 +26,7 @@
 
 #include <sys/isa_defs.h>
 
-#if defined(__x86_64) && defined(HAVE_AVX512F)
+#if defined(__x86_64) && HAVE_SIMD(AVX512F)
 
 #include <sys/types.h>
 #include <sys/simd.h>
@@ -491,4 +492,4 @@ const raidz_impl_ops_t vdev_raidz_avx512f_impl = {
 	.name = "avx512f"
 };
 
-#endif /* defined(__x86_64) && defined(HAVE_AVX512F) */
+#endif /* defined(__x86_64) && HAVE_SIMD(AVX512F) */

@@ -59,6 +59,7 @@
 #include <dt_printf.h>
 #include <dt_string.h>
 #include <dt_provider.h>
+#include <dt_oformat.h>
 #ifndef illumos
 #include <sys/sysctl.h>
 #include <string.h>
@@ -416,6 +417,8 @@ static const dt_ident_t _dtrace_globals[] = {
 	&dt_idops_func, "void(int)" },
 { "rand", DT_IDENT_FUNC, 0, DIF_SUBR_RAND, DT_ATTR_STABCMN, DT_VERS_1_0,
 	&dt_idops_func, "int()" },
+{ "regs", DT_IDENT_ARRAY, 0, DIF_VAR_REGS, DT_ATTR_STABCMN, DT_VERS_1_13,
+	&dt_idops_regs, NULL },
 { "rindex", DT_IDENT_FUNC, 0, DIF_SUBR_RINDEX, DT_ATTR_STABCMN, DT_VERS_1_1,
 	&dt_idops_func, "int(const char *, const char *, [int])" },
 #ifdef illumos
@@ -1070,8 +1073,14 @@ dt_vopen(int version, int flags, int *errp,
 	if (flags & ~DTRACE_O_MASK)
 		return (set_open_errno(dtp, errp, EINVAL));
 
-	if ((flags & DTRACE_O_LP64) && (flags & DTRACE_O_ILP32))
+	switch (flags & DTRACE_O_MODEL_MASK) {
+	case 0: /* native model */
+	case DTRACE_O_ILP32:
+	case DTRACE_O_LP64:
+		break;
+	default:
 		return (set_open_errno(dtp, errp, EINVAL));
+	}
 
 	if (vector == NULL && arg != NULL)
 		return (set_open_errno(dtp, errp, EINVAL));
@@ -1113,6 +1122,15 @@ dt_vopen(int version, int flags, int *errp,
 	 */
 	if (err == ENOENT && modfind("dtraceall") < 0) {
 		kldload("dtraceall"); /* ignore the error */
+#if __SIZEOF_LONG__ == 8
+		if (modfind("linux64elf") >= 0)
+			kldload("systrace_linux");
+		if (modfind("linuxelf") >= 0)
+			kldload("systrace_linux32");
+#else
+		if (modfind("linuxelf") >= 0)
+			kldload("systrace_linux");
+#endif
 		dtfd = open("/dev/dtrace/dtrace", O_RDWR | O_CLOEXEC);
 		err = errno;
 	}
@@ -1171,6 +1189,7 @@ alloc:
 	dtp->dt_version = version;
 	dtp->dt_fd = dtfd;
 	dtp->dt_ftfd = ftfd;
+	dtp->dt_kinstfd = -1;
 	dtp->dt_fterr = fterr;
 	dtp->dt_cdefs_fd = -1;
 	dtp->dt_ddefs_fd = -1;
@@ -1243,19 +1262,6 @@ alloc:
 		dtp->dt_conf.dtc_ctfmodel = CTF_MODEL_LP64;
 	else if (flags & DTRACE_O_ILP32)
 		dtp->dt_conf.dtc_ctfmodel = CTF_MODEL_ILP32;
-
-#ifdef __sparc
-	/*
-	 * On SPARC systems, __sparc is always defined for <sys/isa_defs.h>
-	 * and __sparcv9 is defined if we are doing a 64-bit compile.
-	 */
-	if (dt_cpp_add_arg(dtp, "-D__sparc") == NULL)
-		return (set_open_errno(dtp, errp, EDT_NOMEM));
-
-	if (dtp->dt_conf.dtc_ctfmodel == CTF_MODEL_LP64 &&
-	    dt_cpp_add_arg(dtp, "-D__sparcv9") == NULL)
-		return (set_open_errno(dtp, errp, EDT_NOMEM));
-#endif
 
 #ifdef illumos
 #ifdef __x86
@@ -1679,6 +1685,8 @@ dtrace_close(dtrace_hdl_t *dtp)
 		(void) close(dtp->dt_fd);
 	if (dtp->dt_ftfd != -1)
 		(void) close(dtp->dt_ftfd);
+	if (dtp->dt_kinstfd != -1)
+		(void) close(dtp->dt_kinstfd);
 	if (dtp->dt_cdefs_fd != -1)
 		(void) close(dtp->dt_cdefs_fd);
 	if (dtp->dt_ddefs_fd != -1)
@@ -1722,6 +1730,8 @@ dtrace_close(dtrace_hdl_t *dtp)
 	free(dtp->dt_kmods);
 #endif
 	free(dtp->dt_provs);
+
+	xo_finish();
 	free(dtp);
 }
 

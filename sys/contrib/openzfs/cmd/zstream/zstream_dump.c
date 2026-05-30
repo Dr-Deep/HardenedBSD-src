@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -43,6 +44,7 @@
 #include <sys/zio.h>
 #include <zfs_fletcher.h>
 #include "zstream.h"
+#include "zstream_util.h"
 
 /*
  * If dump mode is enabled, the number of bytes to print per line
@@ -54,22 +56,10 @@
  */
 #define	DUMP_GROUPING	4
 
-uint64_t total_stream_len = 0;
-FILE *send_stream = 0;
-boolean_t do_byteswap = B_FALSE;
-boolean_t do_cksum = B_TRUE;
-
-void *
-safe_malloc(size_t size)
-{
-	void *rv = malloc(size);
-	if (rv == NULL) {
-		(void) fprintf(stderr, "ERROR; failed to allocate %zu bytes\n",
-		    size);
-		abort();
-	}
-	return (rv);
-}
+static uint64_t total_stream_len = 0;
+static FILE *send_stream = 0;
+static boolean_t do_byteswap = B_FALSE;
+static boolean_t do_cksum = B_TRUE;
 
 /*
  * ssread - send stream read.
@@ -363,9 +353,6 @@ zstream_do_dump(int argc, char *argv[])
 				    BSWAP_64(drrb->drr_fromguid);
 			}
 
-			featureflags =
-			    DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo);
-
 			(void) printf("BEGIN record\n");
 			(void) printf("\thdrtype = %lld\n",
 			    DMU_GET_STREAM_HDRTYPE(drrb->drr_versioninfo));
@@ -464,6 +451,9 @@ zstream_do_dump(int argc, char *argv[])
 				drro->drr_maxblkid =
 				    BSWAP_64(drro->drr_maxblkid);
 			}
+
+			featureflags =
+			    DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo);
 
 			if (featureflags & DMU_BACKUP_FEATURE_RAW &&
 			    drro->drr_bonuslen > drro->drr_raw_bonuslen) {

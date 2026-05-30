@@ -1,3 +1,6 @@
+.\"
+.\" SPDX-License-Identifier: BSD-4-Clause
+.\"
 .\" Copyright (c) 1997, 1998, 1999, 2000-2003
 .\"     Bill Paul <wpaul@windriver.com>. All rights reserved.
 .\"
@@ -28,14 +31,12 @@
 .\" ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
 .\" THE POSSIBILITY OF SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
-.Dd November 24, 2015
+.Dd May 25, 2025
 .Dt AXGE 4
 .Os
 .Sh NAME
 .Nm axge
-.Nd "ASIX Electronics AX88178A/AX88179 USB Gigabit Ethernet driver"
+.Nd "ASIX Electronics AX88178A/179/179A USB Gigabit Ethernet driver"
 .Sh SYNOPSIS
 To compile this driver into the kernel,
 place the following lines in your
@@ -61,13 +62,13 @@ if_axge_load="YES"
 The
 .Nm
 driver provides support for USB Gigabit Ethernet adapters based on the ASIX
-Electronics AX88179 USB 3.0 and AX88178A USB 2.0 chipsets.
+Electronics AX88179/AX88179A USB 3.0 and AX88178A USB 2.0 chipsets.
 .Pp
-The AX88179 and AX88178A contain a 10/100/1000 Ethernet MAC with a GMII
-interface for interfacing with the Gigabit Ethernet PHY.
+The AX88179, AX88179A and AX88178A contain a 10/100/1000 Ethernet MAC with a
+GMII interface for interfacing with the Gigabit Ethernet PHY.
 .Pp
 These devices will operate with both USB 1.x and USB 2.0 controllers, and the
-AX88179 will operate with USB 3.0 controllers.
+AX88179/AX88179A will operate with USB 3.0 controllers.
 Packets are received and transmitted over separate USB bulk transfer endpoints.
 .Pp
 The
@@ -123,6 +124,19 @@ Force half duplex operation.
 .Pp
 For more information on configuring this device, see
 .Xr ifconfig 8 .
+.Sh HARDWARE
+The
+.Nm
+driver supports the following USB Gigabit Ethernet controllers:
+.Pp
+.Bl -bullet -compact
+.It
+ASIX Electronics AX88179A
+.It
+ASIX Electronics AX88179
+.It
+ASIX Electronics AX88178A
+.El
 .Sh SEE ALSO
 .Xr altq 4 ,
 .Xr arp 4 ,

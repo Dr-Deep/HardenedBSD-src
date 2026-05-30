@@ -1,8 +1,6 @@
 /*
  * Fundamental constants relating to ethernet.
  *
- * $FreeBSD$
- *
  */
 
 #ifndef _NET_ETHERNET_H_
@@ -35,14 +33,14 @@
  * encapsulation) and whether or not an FCS is present.
  */
 #define	ETHER_MAX_FRAME(ifp, etype, hasfcs)				\
-	((ifp)->if_mtu + ETHER_HDR_LEN +				\
+	(if_getmtu(ifp) + ETHER_HDR_LEN +				\
 	 ((hasfcs) ? ETHER_CRC_LEN : 0) +				\
 	 (((etype) == ETHERTYPE_VLAN) ? ETHER_VLAN_ENCAP_LEN : 0))
 
 /*
  * Ethernet-specific mbuf flags.
  */
-#define	M_HASFCS	M_PROTO5	/* FCS included at end of frame */
+#define	M_BRIDGE_INJECT	M_PROTO6	/* if_bridge-injected frame */
 
 /*
  * Ethernet CRC32 polynomials (big- and little-endian versions).
@@ -64,6 +62,8 @@ struct ether_header {
 	u_char	ether_shost[ETHER_ADDR_LEN];
 	u_short	ether_type;
 } __packed;
+_Static_assert(sizeof(struct ether_header) == ETHER_HDR_LEN,
+    "size of struct ether_header is wrong");
 
 /*
  * Structure of a 48-bit Ethernet address.
@@ -71,6 +71,8 @@ struct ether_header {
 struct ether_addr {
 	u_char octet[ETHER_ADDR_LEN];
 } __packed;
+_Static_assert(sizeof(struct ether_addr) == ETHER_ADDR_LEN,
+    "size of struct ether_addr is wrong");
 
 #define	ETHER_IS_MULTICAST(addr) (*(addr) & 0x01) /* is address mcast/bcast? */
 #define	ETHER_IS_IPV6_MULTICAST(addr) \
@@ -83,6 +85,28 @@ struct ether_addr {
 	  (addr)[3] | (addr)[4] | (addr)[5]) == 0x00)
 
 /*
+ * 802.1q VID constants from IEEE 802.1Q-2014, table 9-2.
+ */
+
+/* Null VID: The tag contains only PCP (priority) and DEI information. */
+#define	DOT1Q_VID_NULL		0x0
+/* The default PVID for a bridge port.  NB: bridge(4) does not honor this. */
+#define	DOT1Q_VID_DEF_PVID	0x1
+/* The default SR_PVID for SRP Stream related traffic. */
+#define	DOT1Q_VID_DEF_SR_PVID	0x2
+/* A VID reserved for implementation use, not permitted on the wire. */
+#define	DOT1Q_VID_RSVD_IMPL	0xfff
+/* The lowest valid VID. */
+#define	DOT1Q_VID_MIN		0x1
+/* The highest valid VID. */
+#define	DOT1Q_VID_MAX		0xffe
+
+/*
+ * This is the type of the VLAN ID inside the tag, not the tag itself.
+ */
+typedef uint16_t ether_vlanid_t;
+
+/*
  * 802.1q Virtual LAN header.
  */
 struct ether_vlan_header {
@@ -92,6 +116,8 @@ struct ether_vlan_header {
 	uint16_t evl_tag;
 	uint16_t evl_proto;
 } __packed;
+_Static_assert(sizeof(struct ether_vlan_header) == ETHER_HDR_LEN + ETHER_VLAN_ENCAP_LEN,
+    "size of struct ether_vlan_header is wrong");
 
 #define	EVL_VLID_MASK		0x0FFF
 #define	EVL_PRI_MASK		0xE000
@@ -399,15 +425,10 @@ struct ether_vlan_header {
  * ether_vlan_mtap.  This function will re-insert VLAN tags for the duration
  * of the tap, so they show up properly for network analyzers.
  */
-#define	ETHER_BPF_MTAP(_ifp, _m) do {					\
-	if (bpf_peers_present((_ifp)->if_bpf)) {			\
-		M_ASSERTVALID(_m);					\
-		if (((_m)->m_flags & M_VLANTAG) != 0)			\
-			ether_vlan_mtap((_ifp)->if_bpf, (_m), NULL, 0);	\
-		else							\
-			bpf_mtap((_ifp)->if_bpf, (_m));			\
-	}								\
-} while (0)
+struct ifnet;
+struct mbuf;
+void ether_bpf_mtap_if(struct ifnet *ifp, struct mbuf *m);
+#define	ETHER_BPF_MTAP(_ifp, _m)	ether_bpf_mtap_if((_ifp), (_m))
 
 /*
  * Names for 802.1q priorities ("802.1p").  Notice that in this scheme,
@@ -439,10 +460,6 @@ extern	uint32_t ether_crc32_be(const uint8_t *, size_t);
 extern	void ether_demux(struct ifnet *, struct mbuf *);
 extern	void ether_ifattach(struct ifnet *, const u_int8_t *);
 extern	void ether_ifdetach(struct ifnet *);
-#ifdef VIMAGE
-struct vnet;
-extern	void ether_reassign(struct ifnet *, struct vnet *, char *);
-#endif
 extern	int  ether_ioctl(struct ifnet *, u_long, caddr_t);
 extern	int  ether_output(struct ifnet *, struct mbuf *,
 	    const struct sockaddr *, struct route *);
@@ -452,8 +469,9 @@ void	ether_vlan_mtap(struct bpf_if *, struct mbuf *,
 	    void *, u_int);
 struct mbuf  *ether_vlanencap_proto(struct mbuf *, uint16_t, uint16_t);
 bool	ether_8021q_frame(struct mbuf **mp, struct ifnet *ife,
-		struct ifnet *p, struct ether_8021q_tag *);
+		struct ifnet *p, const struct ether_8021q_tag *);
 void	ether_gen_addr(struct ifnet *ifp, struct ether_addr *hwaddr);
+void	ether_gen_addr_byname(const char *nameunit, struct ether_addr *hwaddr);
 
 static __inline struct mbuf *ether_vlanencap(struct mbuf *m, uint16_t tag)
 {

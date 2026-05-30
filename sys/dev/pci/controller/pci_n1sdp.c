@@ -31,9 +31,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/malloc.h>
@@ -86,7 +83,7 @@ static int
 n1sdp_init(struct generic_pcie_n1sdp_softc *sc)
 {
 	struct pcie_discovery_data *shared_data;
-	vm_offset_t vaddr;
+	void *vaddr;
 	vm_paddr_t paddr_rc;
 	vm_paddr_t paddr;
 	vm_page_t m[BDF_TABLE_SIZE / PAGE_SIZE];
@@ -104,7 +101,7 @@ n1sdp_init(struct generic_pcie_n1sdp_softc *sc)
 	}
 
 	vaddr = kva_alloc((vm_size_t)BDF_TABLE_SIZE);
-	if (vaddr == 0) {
+	if (vaddr == NULL) {
 		printf("%s: Can't allocate KVA memory.", __func__);
 		error = ENXIO;
 		goto out;
@@ -113,8 +110,8 @@ n1sdp_init(struct generic_pcie_n1sdp_softc *sc)
 
 	shared_data = (struct pcie_discovery_data *)vaddr;
 	paddr_rc = (vm_offset_t)shared_data->rc_base_addr;
-	error = bus_space_map(sc->acpi.base.bst, paddr_rc, PCI_CFG_SPACE_SIZE,
-	    0, &sc->n1_bsh);
+	error = bus_space_map(sc->acpi.base.res->r_bustag, paddr_rc,
+	    PCI_CFG_SPACE_SIZE, 0, &sc->n1_bsh);
 	if (error != 0)
 		goto out_pmap;
 
@@ -225,8 +222,9 @@ n1sdp_pcie_acpi_attach(device_t dev)
 	if (err)
 		return (err);
 
-	device_add_child(dev, "pci", -1);
-	return (bus_generic_attach(dev));
+	device_add_child(dev, "pci", DEVICE_UNIT_ANY);
+	bus_attach_children(dev);
+	return (0);
 }
 
 static int
@@ -245,10 +243,10 @@ n1sdp_get_bus_space(device_t dev, u_int bus, u_int slot, u_int func, u_int reg,
 			return (EINVAL);
 		*bsh = sc->n1_bsh;
 	} else {
-		*bsh = sc->acpi.base.bsh;
+		*bsh = rman_get_bushandle(sc->acpi.base.res);
 	}
 
-	*bst = sc->acpi.base.bst;
+	*bst = rman_get_bustag(sc->acpi.base.res);
 	*offset = PCIE_ADDR_OFFSET(bus - sc->acpi.base.bus_start, slot, func,
 	    reg);
 
@@ -347,6 +345,17 @@ n1sdp_pcie_write_config(device_t dev, u_int bus, u_int slot,
 	bus_space_write_4(t, h, offset & ~3, data);
 }
 
+static int
+n1sdp_pcie_acpi_request_feature(device_t pcib __unused, device_t dev __unused,
+    enum pci_feature feature __unused)
+{
+	/*
+	 * HotPlug isn't supported on the N1SDP as it causes an interrupt storm
+	 */
+	return (EINVAL);
+}
+
+
 static device_method_t n1sdp_pcie_acpi_methods[] = {
 	DEVMETHOD(device_probe,		n1sdp_pcie_acpi_probe),
 	DEVMETHOD(device_attach,	n1sdp_pcie_acpi_attach),
@@ -354,6 +363,7 @@ static device_method_t n1sdp_pcie_acpi_methods[] = {
 	/* pcib interface */
 	DEVMETHOD(pcib_read_config,	n1sdp_pcie_read_config),
 	DEVMETHOD(pcib_write_config,	n1sdp_pcie_write_config),
+	DEVMETHOD(pcib_request_feature, n1sdp_pcie_acpi_request_feature),
 
 	DEVMETHOD_END
 };

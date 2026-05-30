@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2000 Sascha Schumann. All rights reserved.
  *
@@ -27,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_pcfclock.h"
 
 #include <sys/param.h>
@@ -113,9 +111,9 @@ pcfclock_identify(driver_t *driver, device_t parent)
 
 	device_t dev;
 
-	dev = device_find_child(parent, PCFCLOCK_NAME, -1);
+	dev = device_find_child(parent, PCFCLOCK_NAME, DEVICE_UNIT_ANY);
 	if (!dev)
-		BUS_ADD_CHILD(parent, 0, PCFCLOCK_NAME, -1);
+		BUS_ADD_CHILD(parent, 0, PCFCLOCK_NAME, DEVICE_UNIT_ANY);
 }
 
 static int
@@ -323,7 +321,7 @@ static device_method_t pcfclock_methods[] = {
 	DEVMETHOD(device_identify,	pcfclock_identify),
 	DEVMETHOD(device_probe,		pcfclock_probe),
 	DEVMETHOD(device_attach,	pcfclock_attach),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t pcfclock_driver = {

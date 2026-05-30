@@ -33,10 +33,8 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*
- * Driver for the RealTek 8169S/8110S/8211B/8211C internal 10/100/1000 PHY.
+ * Driver for the Realtek 8169S/8110S/8211B/8211C internal 10/100/1000 PHY.
  */
 
 #include <sys/param.h>
@@ -95,6 +93,7 @@ static void	rgephy_disable_eee(struct mii_softc *);
 static const struct mii_phydesc rgephys[] = {
 	MII_PHY_DESC(REALTEK, RTL8169S),
 	MII_PHY_DESC(REALTEK, RTL8251),
+	MII_PHY_DESC(REALTEK, RTL8211FVD),
 	MII_PHY_END
 };
 
@@ -264,7 +263,7 @@ setit:
 
 	/*
 	 * Callback if something changed. Note that we need to poke
-	 * the DSP on the RealTek PHYs if the media changes.
+	 * the DSP on the Realtek PHYs if the media changes.
 	 *
 	 */
 	if (sc->mii_media_active != mii->mii_media_active ||
@@ -285,7 +284,7 @@ rgephy_linkup(struct mii_softc *sc)
 	linkup = 0;
 	if ((sc->mii_flags & MIIF_PHYPRIV0) == 0 &&
 	    sc->mii_mpd_rev >= RGEPHY_8211B) {
-		if (sc->mii_mpd_rev == RGEPHY_8211F) {
+		if (sc->mii_mpd_rev >= RGEPHY_8211F) {
 			reg = PHY_READ(sc, RGEPHY_F_MII_SSR);
 			if (reg & RGEPHY_F_SSR_LINK)
 				linkup++;
@@ -340,7 +339,7 @@ rgephy_status(struct mii_softc *sc)
 
 	if ((sc->mii_flags & MIIF_PHYPRIV0) == 0 &&
 	    sc->mii_mpd_rev >= RGEPHY_8211B) {
-		if (sc->mii_mpd_rev == RGEPHY_8211F) {
+		if (sc->mii_mpd_rev >= RGEPHY_8211F) {
 			ssr = PHY_READ(sc, RGEPHY_F_MII_SSR);
 			switch (ssr & RGEPHY_F_SSR_SPD_MASK) {
 			case RGEPHY_F_SSR_S1000:
@@ -460,7 +459,7 @@ rgephy_loop(struct mii_softc *sc)
 	PHY_WRITE(x, y, (PHY_READ(x, y) & ~(z)))
 
 /*
- * Initialize RealTek PHY per the datasheet. The DSP in the PHYs of
+ * Initialize Realtek PHY per the datasheet. The DSP in the PHYs of
  * existing revisions of the 8169S/8110S chips need to be tuned in
  * order to reliably negotiate a 1000Mbps link. This is only needed
  * for rev 0 and rev 1 of the PHY. Later versions work without
@@ -525,6 +524,7 @@ rgephy_reset(struct mii_softc *sc)
 
 	switch (sc->mii_mpd_rev) {
 	case RGEPHY_8211F:
+	case RGEPHY_8211FVD:
 		pcr = PHY_READ(sc, RGEPHY_F_MII_PCR1);
 		pcr &= ~(RGEPHY_F_PCR1_MDI_MM | RGEPHY_F_PCR1_ALDPS_EN);
 		PHY_WRITE(sc, RGEPHY_F_MII_PCR1, pcr);

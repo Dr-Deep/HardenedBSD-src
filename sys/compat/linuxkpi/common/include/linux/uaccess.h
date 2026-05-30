@@ -26,8 +26,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef	_LINUXKPI_LINUX_UACCESS_H_
@@ -112,6 +110,13 @@ __copy_from_user_inatomic(void *to, const void __user *from,
 	return ((copyin_nofault(__DECONST(void *, from), to, n) != 0 ? n : 0));
 }
 #define	__copy_from_user_inatomic_nocache(to, from, n)	\
+	__copy_from_user_inatomic((to), (from), (n))
+/*
+ * __copy_from_user_inatomic_nocache() was renamed to
+ * copy_from_user_inatomic_nontemporal() in Linux 7.1. The change was
+ * backported to at least several LTS branches.
+ */
+#define	copy_from_user_inatomic_nontemporal(to, from, n)	\
 	__copy_from_user_inatomic((to), (from), (n))
 
 #endif					/* _LINUXKPI_LINUX_UACCESS_H_ */

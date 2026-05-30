@@ -72,6 +72,8 @@ struct regional;
 struct edns_option;
 struct config_file;
 struct comm_point;
+struct comm_reply;
+struct cookie_secrets;
 
 /** number of buckets in parse rrset hash table. Must be power of 2. */
 #define PARSE_TABLE_SIZE 32
@@ -81,16 +83,45 @@ extern time_t MAX_TTL;
 extern time_t MIN_TTL;
 /** Maximum Negative TTL that is allowed */
 extern time_t MAX_NEG_TTL;
+/** Minimum Negative TTL that is allowed */
+extern time_t MIN_NEG_TTL;
 /** If we serve expired entries and prefetch them */
 extern int SERVE_EXPIRED;
 /** Time to serve records after expiration */
 extern time_t SERVE_EXPIRED_TTL;
+/** Reset serve expired TTL after failed update attempt */
+extern time_t SERVE_EXPIRED_TTL_RESET;
 /** TTL to use for expired records */
 extern time_t SERVE_EXPIRED_REPLY_TTL;
 /** Negative cache time (for entries without any RRs.) */
 #define NORR_TTL 5 /* seconds */
 /** If we serve the original TTL or decrementing TTLs */
 extern int SERVE_ORIGINAL_TTL;
+
+/** calculate the prefetch TTL as 90% of original. Calculation
+ * without numerical overflow (uin32_t) */
+#define PREFETCH_TTL_CALC(ttl) ((ttl) - (ttl)/10)
+
+/*  caclulate the TTL used for expired answers to somewhat make sense wrt the
+ *  original TTL; don't reply with higher TTL than the original */
+#ifdef UNBOUND_DEBUG
+time_t debug_expired_reply_ttl_calc(time_t ttl, time_t ttl_add);
+#define EXPIRED_REPLY_TTL_CALC(ttl, ttl_add)		\
+    debug_expired_reply_ttl_calc(ttl, ttl_add)
+#else
+#define EXPIRED_REPLY_TTL_CALC(ttl, ttl_add)		\
+	(SERVE_EXPIRED_REPLY_TTL < (ttl) - (ttl_add) ?	\
+	SERVE_EXPIRED_REPLY_TTL : (ttl) - (ttl_add))
+#endif
+
+/** Update the reply_info TTL from an RRSet's TTL, essentially keeping the TTL
+ *  sane with all the (progressively added) rrsets to the message */
+#define UPDATE_TTL_FROM_RRSET(ttl, rrsetttl) \
+	((ttl) = ((ttl) < (rrsetttl)) ? (ttl) : (rrsetttl))
+
+/** Check if TTL is expired. 0 TTL is considered expired.
+ *  Used mainly to identify parts of the code that do this comparison. */
+#define TTL_IS_EXPIRED(ttl, now) ((ttl) <= (now))
 
 /**
  * Data stored in scratch pad memory during parsing.
@@ -217,8 +248,6 @@ struct rr_parse {
  * region.
  */
 struct edns_data {
-	/** if EDNS OPT record was present */
-	int edns_present;
 	/** Extended RCODE */
 	uint8_t ext_rcode;
 	/** The EDNS version number */
@@ -238,7 +267,15 @@ struct edns_data {
 	struct edns_option* opt_list_inplace_cb_out;
 	/** block size to pad */
 	uint16_t padding_block_size;
-};
+	/** if EDNS OPT record was present */
+	unsigned int edns_present   : 1;
+	/** if a cookie was present */
+	unsigned int cookie_present : 1;
+	/** if the cookie validated */
+	unsigned int cookie_valid   : 1;
+	/** if the cookie holds only the client part */
+	unsigned int cookie_client  : 1;
+};	
 
 /**
  * EDNS option
@@ -296,26 +333,31 @@ int parse_extract_edns_from_response_msg(struct msg_parse* msg,
 /**
  * Skip RRs from packet
  * @param pkt: the packet. position at start must be right after the query
- *	section. At end, right after EDNS data or no movement if failed.
+ *	section. At end, right after EDNS data or partial movement if failed.
  * @param num: Limit of the number of records we want to parse.
- * @return: 0 on success, 1 on failure.
+ * @return: 1 on success, 0 on failure.
  */
 int skip_pkt_rrs(struct sldns_buffer* pkt, int num);
 
 /**
  * If EDNS data follows a query section, extract it and initialize edns struct.
  * @param pkt: the packet. position at start must be right after the query
- *	section. At end, right after EDNS data or no movement if failed.
+ *	section. At end, right after EDNS data or partial movement if failed.
  * @param edns: the edns data allocated by the caller. Does not have to be
  *	initialised.
  * @param cfg: the configuration (with nsid value etc.)
  * @param c: commpoint to determine transport (if needed)
+ * @param repinfo: commreply to determine the client address
+ * @param now: current time
  * @param region: region to alloc results in (edns option contents)
+ * @param cookie_secrets: the cookie secrets for EDNS COOKIE validation.
  * @return: 0 on success, or an RCODE on error.
  *	RCODE formerr if OPT is badly formatted and so on.
  */
 int parse_edns_from_query_pkt(struct sldns_buffer* pkt, struct edns_data* edns,
-	struct config_file* cfg, struct comm_point* c, struct regional* region);
+	struct config_file* cfg, struct comm_point* c,
+	struct comm_reply* repinfo, time_t now, struct regional* region,
+	struct cookie_secrets* cookie_secrets);
 
 /**
  * Calculate hash value for rrset in packet.
@@ -360,5 +402,23 @@ void msgparse_bucket_remove(struct msg_parse* msg, struct rrset_parse* rrset);
  */
 void log_edns_opt_list(enum verbosity_value level, const char* info_str,
 	struct edns_option* list);
+
+/**
+ * Remove RR from msgparse RRset.
+ * @param str: this string is used for logging if verbose. If NULL, there is
+ *	no logging of the remove.
+ * @param pkt: packet in buffer that is removed from. Used to log the name
+ * 	of the item removed.
+ * @param rrset: RRset that the RR is removed from.
+ * @param prev: previous RR in list, or NULL.
+ * @param rr: RR that is removed.
+ * @param addr: address used for logging, if verbose, or NULL then it is not
+ *	used.
+ * @param addrlen: length of addr, if that is not NULL.
+ * @return true if rrset is entirely bad, it would then need to be removed.
+ */
+int msgparse_rrset_remove_rr(const char* str, struct sldns_buffer* pkt,
+	struct rrset_parse* rrset, struct rr_parse* prev, struct rr_parse* rr,
+	struct sockaddr_storage* addr, socklen_t addrlen);
 
 #endif /* UTIL_DATA_MSGPARSE_H */

@@ -1,3 +1,6 @@
+.\"
+.\" SPDX-License-Identifier: BSD-2-Clause
+.\"
 .\" Copyright (c) 2018 Edward Tomasz Napierala <trasz@FreeBSD.org>
 .\"
 .\" Redistribution and use in source and binary forms, with or without
@@ -21,9 +24,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\" $FreeBSD$
-.\"
-.Dd August 18, 2022
+.Dd September 24, 2025
 .Dt DEVELOPMENT 7
 .Os
 .Sh NAME
@@ -74,23 +75,25 @@ There is also a list of public, read-only Git mirrors at:
 The
 .Ql main
 Git branch represents CURRENT;
-all changes are first committed to CURRENT and then usually cherry-picked
-back to STABLE, which refers to Git branches such as
-.Ql stable/13 .
+all changes are first committed to CURRENT and then usually
+cherry-picked back to STABLE, which refers to Git branches such as
+.Ql stable/14 .
 Every few years a new STABLE is branched from CURRENT,
 with an incremented major version number.
-Releases are then branched off STABLE and numbered with consecutive minor
-numbers.
+Releases are then branched off STABLE and numbered with consecutive
+minor numbers such as
+.Ql releng/14.3
 .Pp
-Layout of the source tree is described in
-.Xr hier 7 .
+The layout of the source tree is described in its
+.Pa README.md
+file.
 Build instructions can be found in
 .Xr build 7
 and
 .Xr release 7 .
 Kernel programming interfaces (KPIs) are documented in section 9
 manual pages; use
-.Ql "apropos -s 9 ."
+.Ql apropos -s 9 \&.
 for a list.
 Regression test suite is described in
 .Xr tests 7 .
@@ -105,11 +108,15 @@ such as freebsd-arch@ and freebsd-hackers@:
 To get your patches integrated into the main
 .Fx
 repository use Phabricator;
-it is a code review tool that allows other developers to review the changes,
-suggest improvements, and, eventually, allows them to pick up the change and
-commit it:
+it is a code review tool that allows other developers to
+review the changes, suggest improvements, and, eventually,
+allows them to pick up the change and commit it:
 .Pp
 .Lk https://reviews.FreeBSD.org
+.Pp
+Or Github:
+.Pp
+.Lk https://github.com/freebsd
 .Pp
 To check the latest
 .Fx
@@ -117,64 +124,42 @@ build and test status of CURRENT and STABLE branches,
 the continuous integration system is at:
 .Pp
 .Lk https://ci.FreeBSD.org
-.Pp
-.Sh EXAMPLES
-Check out the CURRENT branch, build it, and install, overwriting the current
-system:
-.Bd -literal -offset indent
-git clone https://git.FreeBSD.org/src.git src
-cd src
-make -sj8 buildworld buildkernel installkernel
-shutdown -r now
-.Ed
-.Pp
-After reboot:
-.Bd -literal -offset indent
-cd src
-make -j8 installworld
-reboot
-.Ed
-.Pp
-Rebuild and reinstall a single piece of userspace, in this
-case
-.Xr ls 1 :
-.Bd -literal -offset indent
-cd src/bin/ls
-make clean all install
-.Ed
-.Pp
-Quickly rebuild and reinstall the kernel, only recompiling the files
-changed since last build; note that this will only work if the full kernel
-build has been completed in the past, not on a fresh source tree:
-.Bd -literal -offset indent
-cd src
-make -sj8 kernel KERNFAST=1
-.Ed
-.Pp
-To rebuild parts of
+.Sh FILES
+.Bl -tag -compact -width "/usr/src/tools/tools/git/git-arc.sh"
+.It Pa /usr/src/CONTRIBUTING.md
 .Fx
-for another CPU architecture,
-first prepare your source tree by building the cross-toolchain:
-.Bd -literal -offset indent
-cd src
-make -sj8 toolchain TARGET_ARCH=aarch64
-.Ed
+contribution guidelines
+.It Pa /usr/src/tools/tools/git/git-arc.sh
+Phabricator review tooling
+.It Pa /usr/ports/devel/freebsd-git-arc
+Phabricator review tooling as a port
+.El
+.Sh EXAMPLES
+Apply a patch from Github pull #1234, using
+.Pa devel/gh :
 .Pp
-Afterwards, to build and install a single piece of userspace, use:
-.Bd -literal -offset indent
-cd src/bin/ls
-make buildenv TARGET_ARCH=aarch64
-make clean all install DESTDIR=/clients/arm
-.Ed
+.Dl gh pr checkout 1234
 .Pp
-Likewise, to quickly rebuild and reinstall the kernel, use:
-.Bd -literal -offset indent
-cd src
-make buildenv TARGET_ARCH=aarch64
-make -sj8 kernel KERNFAST=1 DESTDIR=/clients/arm
-.Ed
+Apply a patch from Phabricator review D1234, using
+.Xr git-arc 1 :
+.Pp
+.Dl git arc patch -c D1234
+.Pp
+Apply a manually downloaded
+.Xr git-format-patch 1 ,
+.Pa draft.patch ,
+from Bugzilla or mail:
+.Pp
+.Dl git am draft.patch
+.Pp
+Apply a manually downloaded patch,
+.Pa draft.diff ,
+from Bugzilla or mail:
+.Pp
+.Dl git apply draft.diff
 .Sh SEE ALSO
 .Xr git 1 ,
+.Xr git-arc 1 ,
 .Xr witness 4 ,
 .Xr build 7 ,
 .Xr hier 7 ,
@@ -188,8 +173,7 @@ The
 .Nm
 manual page was originally written by
 .An Matthew Dillon Aq Mt dillon@FreeBSD.org
-and first appeared
-in
+and first appeared in
 .Fx 5.0 ,
 December 2002.
 It was since extensively modified by

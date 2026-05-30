@@ -58,17 +58,11 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)ip_input.c	8.2 (Berkeley) 1/4/94
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include "opt_inet.h"
 #include "opt_inet6.h"
 #include "opt_ipsec.h"
-#include "opt_route.h"
 #include "opt_rss.h"
 #include "opt_sctp.h"
 
@@ -95,6 +89,7 @@ __FBSDID("$FreeBSD$");
 #include <net/if.h>
 #include <net/if_var.h>
 #include <net/if_types.h>
+#include <net/if_private.h>
 #include <net/if_dl.h>
 #include <net/route.h>
 #include <net/netisr.h>
@@ -122,6 +117,7 @@ __FBSDID("$FreeBSD$");
 #include <netinet6/mld6_var.h>
 #include <netinet6/nd6.h>
 #include <netinet6/in6_rss.h>
+#include <netinet6/ip6_mroute.h>
 #ifdef SCTP
 #include <netinet/sctp_pcb.h>
 #include <netinet6/sctp6_var.h>
@@ -129,11 +125,9 @@ __FBSDID("$FreeBSD$");
 
 #include <netipsec/ipsec_support.h>
 
-#include <netinet6/ip6protosw.h>
-
-ipproto_input_t		*ip6_protox[IPPROTO_MAX] = {
+ip6proto_input_t	*ip6_protox[IPPROTO_MAX] = {
 			    [0 ... IPPROTO_MAX - 1] = rip6_input };
-ipproto_ctlinput_t	*ip6_ctlprotox[IPPROTO_MAX] = {
+ip6proto_ctlinput_t	*ip6_ctlprotox[IPPROTO_MAX] = {
 			    [0 ... IPPROTO_MAX - 1] = rip6_ctlinput };
 
 VNET_DEFINE(struct in6_ifaddrhead, in6_ifaddrhead);
@@ -178,6 +172,11 @@ SYSCTL_BOOL(_net_inet6_ip6, OID_AUTO, source_address_validation,
     CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(ip6_sav), true,
     "Drop incoming packets with source address that is a local address");
 
+SYSCTL_UINT(_net_inet6_ip6, OID_AUTO, temp_max_desync_factor,
+    CTLFLAG_RD | CTLFLAG_VNET,
+    &VNET_NAME(ip6_temp_max_desync_factor), 0,
+    "RFC 8981 max desync factor");
+
 #ifdef RSS
 static struct netisr_handler ip6_direct_nh = {
 	.nh_name = "ip6_direct",
@@ -209,6 +208,7 @@ SYSCTL_PROC(_net_inet6_ip6, IPV6CTL_INTRDQMAXLEN, intr_direct_queue_maxlen,
 #endif
 
 VNET_DEFINE(pfil_head_t, inet6_pfil_head);
+VNET_DEFINE(pfil_head_t, inet6_local_pfil_head);
 
 VNET_PCPUSTAT_DEFINE(struct ip6stat, ip6stat);
 VNET_PCPUSTAT_SYSINIT(ip6stat);
@@ -219,7 +219,7 @@ VNET_PCPUSTAT_SYSUNINIT(ip6stat);
 struct rmlock in6_ifaddr_lock;
 RM_SYSINIT(in6_ifaddr_lock, &in6_ifaddr_lock, "in6_ifaddr_lock");
 
-static int ip6_hopopts_input(u_int32_t *, u_int32_t *, struct mbuf **, int *);
+static int ip6_hopopts_input(u_int32_t *, struct mbuf **, int *);
 
 /*
  * IP6 initialization: fill in IP6 protocol switch table.
@@ -234,6 +234,7 @@ ip6_vnet_init(void *arg __unused)
 	    &V_ip6_auto_linklocal);
 	TUNABLE_INT_FETCH("net.inet6.ip6.accept_rtadv", &V_ip6_accept_rtadv);
 	TUNABLE_INT_FETCH("net.inet6.ip6.no_radr", &V_ip6_no_radr);
+	TUNABLE_BOOL_FETCH("net.inet6.ip6.use_stableaddr", &V_ip6_use_stableaddr);
 
 	CK_STAILQ_INIT(&V_in6_ifaddrhead);
 	V_in6_ifaddrhashtbl = hashinit(IN6ADDR_NHASH, M_IFADDR,
@@ -245,6 +246,10 @@ ip6_vnet_init(void *arg __unused)
 	args.pa_type = PFIL_TYPE_IP6;
 	args.pa_headname = PFIL_INET6_NAME;
 	V_inet6_pfil_head = pfil_head_register(&args);
+
+	args.pa_flags = PFIL_OUT;
+	args.pa_headname = PFIL_INET6_LOCAL_NAME;
+	V_inet6_local_pfil_head = pfil_head_register(&args);
 
 	if (hhook_head_register(HHOOK_TYPE_IPSEC_IN, AF_INET6,
 	    &V_ipsec_hhh_in[HHOOK_IPSEC_INET6],
@@ -262,7 +267,10 @@ ip6_vnet_init(void *arg __unused)
 	nd6_init();
 	frag6_init();
 
-	V_ip6_desync_factor = arc4random() % MAX_TEMP_DESYNC_FACTOR;
+	V_ip6_temp_max_desync_factor = TEMP_MAX_DESYNC_FACTOR_BASE +
+	    (V_ip6_temp_preferred_lifetime >> 2) +
+	    (V_ip6_temp_preferred_lifetime >> 3);
+	V_ip6_desync_factor = arc4random() % V_ip6_temp_max_desync_factor;
 
 	/* Skip global initialization stuff for non-default instances. */
 #ifdef VIMAGE
@@ -278,6 +286,7 @@ VNET_SYSINIT(ip6_vnet_init, SI_SUB_PROTO_DOMAIN, SI_ORDER_FOURTH,
 static void
 ip6_init(void *arg __unused)
 {
+	struct ifnet *ifp;
 
 	/*
 	 * Register statically those protocols that are unlikely to ever go
@@ -304,11 +313,18 @@ ip6_init(void *arg __unused)
 #ifdef RSS
 	netisr_register(&ip6_direct_nh);
 #endif
+	/*
+         * XXXGL: we use SYSINIT() here, but go over V_ifnet.  See comment
+	 * in sys/netinet/ip_input.c:ip_init().
+         */
+        CK_STAILQ_FOREACH(ifp, &V_ifnet, if_link)
+                in6_ifarrival(NULL, ifp);
 }
 SYSINIT(ip6_init, SI_SUB_PROTO_DOMAIN, SI_ORDER_THIRD, ip6_init, NULL);
 
 int
-ip6proto_register(uint8_t proto, ipproto_input_t input, ipproto_ctlinput_t ctl)
+ip6proto_register(uint8_t proto, ip6proto_input_t input,
+    ip6proto_ctlinput_t ctl)
 {
 
 	MPASS(proto > 0);
@@ -374,7 +390,6 @@ ip6_destroy(void *unused __unused)
 		}
 		/* IF_ADDR_UNLOCK(ifp); */
 		in6_ifdetach_destroy(ifp);
-		mld_domifdetach(ifp);
 	}
 	IFNET_RUNLOCK();
 
@@ -392,14 +407,14 @@ VNET_SYSUNINIT(inet6, SI_SUB_PROTO_DOMAIN, SI_ORDER_THIRD, ip6_destroy, NULL);
 #endif
 
 static int
-ip6_input_hbh(struct mbuf **mp, uint32_t *plen, uint32_t *rtalert, int *off,
+ip6_input_hbh(struct mbuf **mp, uint32_t *rtalert, int *off,
     int *nxt, int *ours)
 {
 	struct mbuf *m;
 	struct ip6_hdr *ip6;
 	struct ip6_hbh *hbh;
 
-	if (ip6_hopopts_input(plen, rtalert, mp, off)) {
+	if (ip6_hopopts_input(rtalert, mp, off)) {
 #if 0	/*touches NULL pointer*/
 		in6_ifstat_inc((*mp)->m_pkthdr.rcvif, ifs6_in_discard);
 #endif
@@ -411,16 +426,11 @@ ip6_input_hbh(struct mbuf **mp, uint32_t *plen, uint32_t *rtalert, int *off,
 	ip6 = mtod(m, struct ip6_hdr *);
 
 	/*
-	 * if the payload length field is 0 and the next header field
-	 * indicates Hop-by-Hop Options header, then a Jumbo Payload
-	 * option MUST be included.
+	 * If the payload length field is 0 and the next header field indicates
+	 * Hop-by-Hop Options header, then a Jumbo Payload option MUST be
+	 * included. We no not support Jumbo Payloads so report an error.
 	 */
-	if (ip6->ip6_plen == 0 && *plen == 0) {
-		/*
-		 * Note that if a valid jumbo payload option is
-		 * contained, ip6_hopopts_input() must set a valid
-		 * (non-zero) payload length to the variable plen.
-		 */
+	if (ip6->ip6_plen == 0) {
 		IP6STAT_INC(ip6s_badoptions);
 		in6_ifstat_inc(m->m_pkthdr.rcvif, ifs6_in_discard);
 		in6_ifstat_inc(m->m_pkthdr.rcvif, ifs6_in_hdrerr);
@@ -535,7 +545,7 @@ ip6_input(struct mbuf *m)
 	 * Drop the packet if IPv6 operation is disabled on the interface.
 	 */
 	rcvif = m->m_pkthdr.rcvif;
-	if ((ND_IFINFO(rcvif)->flags & ND6_IFF_IFDISABLED))
+	if ((rcvif->if_inet6->nd_flags & ND6_IFF_IFDISABLED))
 		goto bad;
 
 #if defined(IPSEC) || defined(IPSEC_SUPPORT)
@@ -572,7 +582,7 @@ ip6_input(struct mbuf *m)
 			int ifindex = ifp->if_index;
 			if (ifindex >= IP6S_M2MMAX)
 				ifindex = 0;
-			IP6STAT_INC(ip6s_m2m[ifindex]);
+			IP6STAT_INC2(ip6s_m2m, ifindex);
 		} else
 			IP6STAT_INC(ip6s_m1);
 	}
@@ -616,14 +626,14 @@ ip6_input(struct mbuf *m)
 		goto bad;
 	}
 
-	IP6STAT_INC(ip6s_nxthist[ip6->ip6_nxt]);
+	IP6STAT_INC2(ip6s_nxthist, ip6->ip6_nxt);
 	IP_PROBE(receive, NULL, NULL, ip6, rcvif, NULL, ip6);
 
 	/*
-	 * Check against address spoofing/corruption.
+	 * Check against address spoofing/corruption.  The unspecified address
+	 * is checked further below.
 	 */
-	if (IN6_IS_ADDR_MULTICAST(&ip6->ip6_src) ||
-	    IN6_IS_ADDR_UNSPECIFIED(&ip6->ip6_dst)) {
+	if (IN6_IS_ADDR_MULTICAST(&ip6->ip6_src)) {
 		/*
 		 * XXX: "badscope" is not very suitable for a multicast source.
 		 */
@@ -655,12 +665,6 @@ ip6_input(struct mbuf *m)
 		in6_ifstat_inc(rcvif, ifs6_in_addrerr);
 		goto bad;
 	}
-#ifdef ALTQ
-	if (altq_input != NULL && (*altq_input)(m, AF_INET6) == 0) {
-		/* packet is dropped by traffic conditioner */
-		return;
-	}
-#endif
 	/*
 	 * The following check is not documented in specs.  A malicious
 	 * party may be able to use IPv4 mapped addr to confuse tcp/udp stack
@@ -678,21 +682,6 @@ ip6_input(struct mbuf *m)
 		in6_ifstat_inc(rcvif, ifs6_in_addrerr);
 		goto bad;
 	}
-#if 0
-	/*
-	 * Reject packets with IPv4 compatible addresses (auto tunnel).
-	 *
-	 * The code forbids auto tunnel relay case in RFC1933 (the check is
-	 * stronger than RFC1933).  We may want to re-enable it if mech-xx
-	 * is revised to forbid relaying case.
-	 */
-	if (IN6_IS_ADDR_V4COMPAT(&ip6->ip6_src) ||
-	    IN6_IS_ADDR_V4COMPAT(&ip6->ip6_dst)) {
-		IP6STAT_INC(ip6s_badscope);
-		in6_ifstat_inc(m->m_pkthdr.rcvif, ifs6_in_addrerr);
-		goto bad;
-	}
-#endif
 	/*
 	 * Try to forward the packet, but if we fail continue.
 	 * ip6_tryforward() does not generate redirects, so fall
@@ -737,7 +726,7 @@ ip6_input(struct mbuf *m)
 		goto passin;
 
 	odst = ip6->ip6_dst;
-	if (pfil_run_hooks(V_inet6_pfil_head, &m, m->m_pkthdr.rcvif, PFIL_IN,
+	if (pfil_mbuf_in(V_inet6_pfil_head, &m, m->m_pkthdr.rcvif,
 	    NULL) != PFIL_PASS)
 		return;
 	ip6 = mtod(m, struct ip6_hdr *);
@@ -754,6 +743,26 @@ ip6_input(struct mbuf *m)
 	}
 
 passin:
+	/*
+	 * The check is deferred to here to give firewalls a chance to block
+	 * (and log) such packets.  ip6_tryforward() will not process such
+	 * packets.
+	 */
+	if (__predict_false(IN6_IS_ADDR_UNSPECIFIED(&ip6->ip6_dst))) {
+		IP6STAT_INC(ip6s_badscope);
+		in6_ifstat_inc(rcvif, ifs6_in_addrerr);
+		goto bad;
+	}
+
+	plen = (uint32_t)ntohs(ip6->ip6_plen);
+
+	/*
+	 * We don't support Jumbograms, reject packets with plen == 0 as early
+	 * as we can.
+	 */
+	if (plen == 0)
+		goto bad;
+
 	/*
 	 * Disambiguate address scope zones (if there is ambiguity).
 	 * We first make sure that the original source or destination address
@@ -830,11 +839,9 @@ passin:
 	/*
 	 * Process Hop-by-Hop options header if it's contained.
 	 * m may be modified in ip6_hopopts_input().
-	 * If a JumboPayload option is included, plen will also be modified.
 	 */
-	plen = (u_int32_t)ntohs(ip6->ip6_plen);
 	if (ip6->ip6_nxt == IPPROTO_HOPOPTS) {
-		if (ip6_input_hbh(&m, &plen, &rtalert, &off, &nxt, &ours) != 0)
+		if (ip6_input_hbh(&m, &rtalert, &off, &nxt, &ours) != 0)
 			return;
 	} else
 		nxt = ip6->ip6_nxt;
@@ -868,7 +875,7 @@ passin:
 	/*
 	 * Forward if desirable.
 	 */
-	if (V_ip6_mrouter &&
+	if (V_ip6_mrouting_enabled &&
 	    IN6_IS_ADDR_MULTICAST(&ip6->ip6_dst)) {
 		/*
 		 * If we are acting as a multicast router, all
@@ -888,6 +895,18 @@ passin:
 	} else if (!ours) {
 		ip6_forward(m, srcrt);
 		return;
+	}
+
+	/*
+	 * We are going to ship the packet to the local protocol stack. Call the
+	 * filter again for this 'output' action, allowing redirect-like rules
+	 * to adjust the source address.
+	 */
+	if (PFIL_HOOKED_OUT(V_inet6_local_pfil_head)) {
+		if (pfil_mbuf_out(V_inet6_local_pfil_head, &m, V_loif, NULL) !=
+		    PFIL_PASS)
+			return;
+		ip6 = mtod(m, struct ip6_hdr *);
 	}
 
 	/*
@@ -931,13 +950,12 @@ bad:
 
 /*
  * Hop-by-Hop options header processing. If a valid jumbo payload option is
- * included, the real payload length will be stored in plenp.
+ * included report an error.
  *
  * rtalertp - XXX: should be stored more smart way
  */
 static int
-ip6_hopopts_input(u_int32_t *plenp, u_int32_t *rtalertp,
-    struct mbuf **mp, int *offp)
+ip6_hopopts_input(u_int32_t *rtalertp, struct mbuf **mp, int *offp)
 {
 	struct mbuf *m = *mp;
 	int off = *offp, hbhlen;
@@ -967,7 +985,7 @@ ip6_hopopts_input(u_int32_t *plenp, u_int32_t *rtalertp,
 	off += hbhlen;
 	hbhlen -= sizeof(struct ip6_hbh);
 	if (ip6_process_hopopts(m, (u_int8_t *)hbh + sizeof(struct ip6_hbh),
-				hbhlen, rtalertp, plenp) < 0) {
+				hbhlen, rtalertp) < 0) {
 		*mp = NULL;
 		return (-1);
 	}
@@ -989,13 +1007,11 @@ ip6_hopopts_input(u_int32_t *plenp, u_int32_t *rtalertp,
  */
 int
 ip6_process_hopopts(struct mbuf *m, u_int8_t *opthead, int hbhlen,
-    u_int32_t *rtalertp, u_int32_t *plenp)
+    u_int32_t *rtalertp)
 {
-	struct ip6_hdr *ip6;
 	int optlen = 0;
 	u_int8_t *opt = opthead;
 	u_int16_t rtalert_val;
-	u_int32_t jumboplen;
 	const int erroff = sizeof(struct ip6_hdr) + sizeof(struct ip6_hbh);
 
 	for (; hbhlen > 0; hbhlen -= optlen, opt += optlen) {
@@ -1028,71 +1044,8 @@ ip6_process_hopopts(struct mbuf *m, u_int8_t *opthead, int hbhlen,
 			*rtalertp = ntohs(rtalert_val);
 			break;
 		case IP6OPT_JUMBO:
-			/* XXX may need check for alignment */
-			if (hbhlen < IP6OPT_JUMBO_LEN) {
-				IP6STAT_INC(ip6s_toosmall);
-				goto bad;
-			}
-			if (*(opt + 1) != IP6OPT_JUMBO_LEN - 2) {
-				/* XXX stat */
-				icmp6_error(m, ICMP6_PARAM_PROB,
-				    ICMP6_PARAMPROB_HEADER,
-				    erroff + opt + 1 - opthead);
-				return (-1);
-			}
-			optlen = IP6OPT_JUMBO_LEN;
-
-			/*
-			 * IPv6 packets that have non 0 payload length
-			 * must not contain a jumbo payload option.
-			 */
-			ip6 = mtod(m, struct ip6_hdr *);
-			if (ip6->ip6_plen) {
-				IP6STAT_INC(ip6s_badoptions);
-				icmp6_error(m, ICMP6_PARAM_PROB,
-				    ICMP6_PARAMPROB_HEADER,
-				    erroff + opt - opthead);
-				return (-1);
-			}
-
-			/*
-			 * We may see jumbolen in unaligned location, so
-			 * we'd need to perform bcopy().
-			 */
-			bcopy(opt + 2, &jumboplen, sizeof(jumboplen));
-			jumboplen = (u_int32_t)htonl(jumboplen);
-
-#if 1
-			/*
-			 * if there are multiple jumbo payload options,
-			 * *plenp will be non-zero and the packet will be
-			 * rejected.
-			 * the behavior may need some debate in ipngwg -
-			 * multiple options does not make sense, however,
-			 * there's no explicit mention in specification.
-			 */
-			if (*plenp != 0) {
-				IP6STAT_INC(ip6s_badoptions);
-				icmp6_error(m, ICMP6_PARAM_PROB,
-				    ICMP6_PARAMPROB_HEADER,
-				    erroff + opt + 2 - opthead);
-				return (-1);
-			}
-#endif
-
-			/*
-			 * jumbo payload length must be larger than 65535.
-			 */
-			if (jumboplen <= IPV6_MAXPACKET) {
-				IP6STAT_INC(ip6s_badoptions);
-				icmp6_error(m, ICMP6_PARAM_PROB,
-				    ICMP6_PARAMPROB_HEADER,
-				    erroff + opt + 2 - opthead);
-				return (-1);
-			}
-			*plenp = jumboplen;
-
-			break;
+			/* We do not support the Jumbo Payload option. */
+			goto bad;
 		default:		/* unknown option */
 			if (hbhlen < IP6OPT_MINLEN) {
 				IP6STAT_INC(ip6s_toosmall);
@@ -1171,8 +1124,8 @@ ip6_savecontrol_v4(struct inpcb *inp, struct mbuf *m, struct mbuf **mp,
 {
 	struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
 
-#ifdef SO_TIMESTAMP
-	if ((inp->inp_socket->so_options & SO_TIMESTAMP) != 0) {
+#if defined(SO_TIMESTAMP) && defined(SO_BINTIME)
+	if ((inp->inp_socket->so_options & (SO_TIMESTAMP | SO_BINTIME)) != 0) {
 		union {
 			struct timeval tv;
 			struct bintime bt;
@@ -1180,10 +1133,44 @@ ip6_savecontrol_v4(struct inpcb *inp, struct mbuf *m, struct mbuf **mp,
 		} t;
 		struct bintime boottimebin, bt1;
 		struct timespec ts1;
+		int ts_clock;
 		bool stamped;
 
+		ts_clock = inp->inp_socket->so_ts_clock;
 		stamped = false;
-		switch (inp->inp_socket->so_ts_clock) {
+
+		/*
+		 * Handle BINTIME first. We create the same output options
+		 * for both SO_BINTIME and the case where SO_TIMESTAMP is
+		 * set with the timestamp clock set to SO_TS_BINTIME.
+		 */
+		if ((inp->inp_socket->so_options & SO_BINTIME) != 0 ||
+		    ts_clock == SO_TS_BINTIME) {
+			if ((m->m_flags & (M_PKTHDR | M_TSTMP)) == (M_PKTHDR |
+			    M_TSTMP)) {
+				mbuf_tstmp2timespec(m, &ts1);
+				timespec2bintime(&ts1, &t.bt);
+				getboottimebin(&boottimebin);
+				bintime_add(&t.bt, &boottimebin);
+			} else {
+				bintime(&t.bt);
+			}
+			*mp = sbcreatecontrol(&t.bt, sizeof(t.bt), SCM_BINTIME,
+			    SOL_SOCKET, M_NOWAIT);
+			if (*mp != NULL) {
+				mp = &(*mp)->m_next;
+				stamped = true;
+			}
+
+			/*
+			 * Suppress other timestamps if SO_TIMESTAMP is not
+			 * set.
+			 */
+			if ((inp->inp_socket->so_options & SO_TIMESTAMP) == 0)
+				ts_clock = SO_TS_BINTIME;
+		}
+
+		switch (ts_clock) {
 		case SO_TS_REALTIME_MICRO:
 			if ((m->m_flags & (M_PKTHDR | M_TSTMP)) == (M_PKTHDR |
 			    M_TSTMP)) {
@@ -1204,21 +1191,6 @@ ip6_savecontrol_v4(struct inpcb *inp, struct mbuf *m, struct mbuf **mp,
 			break;
 
 		case SO_TS_BINTIME:
-			if ((m->m_flags & (M_PKTHDR | M_TSTMP)) == (M_PKTHDR |
-			    M_TSTMP)) {
-				mbuf_tstmp2timespec(m, &ts1);
-				timespec2bintime(&ts1, &t.bt);
-				getboottimebin(&boottimebin);
-				bintime_add(&t.bt, &boottimebin);
-			} else {
-				bintime(&t.bt);
-			}
-			*mp = sbcreatecontrol(&t.bt, sizeof(t.bt), SCM_BINTIME,
-			    SOL_SOCKET, M_NOWAIT);
-			if (*mp != NULL) {
-				mp = &(*mp)->m_next;
-				stamped = true;
-			}
 			break;
 
 		case SO_TS_REALTIME:
@@ -1714,16 +1686,3 @@ ip6_lasthdr(const struct mbuf *m, int off, int proto, int *nxtp)
 		proto = *nxtp;
 	}
 }
-
-/*
- * System control for IP6
- */
-
-u_char	inet6ctlerrmap[PRC_NCMDS] = {
-	0,		0,		0,		0,
-	0,		EMSGSIZE,	EHOSTDOWN,	EHOSTUNREACH,
-	EHOSTUNREACH,	EHOSTUNREACH,	ECONNREFUSED,	ECONNREFUSED,
-	EMSGSIZE,	EHOSTUNREACH,	0,		0,
-	0,		0,		EHOSTUNREACH,	0,
-	ENOPROTOOPT,	ECONNREFUSED
-};

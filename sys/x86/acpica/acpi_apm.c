@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2001 Mitsuru IWASAKI
  * All rights reserved.
@@ -25,9 +25,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -63,10 +60,11 @@ static d_poll_t		apmpoll;
 static d_kqfilter_t	apmkqfilter;
 static void		apmreadfiltdetach(struct knote *kn);
 static int		apmreadfilt(struct knote *kn, long hint);
-static struct filterops	apm_readfiltops = {
+static const struct filterops apm_readfiltops = {
 	.f_isfd = 1,
 	.f_detach = apmreadfiltdetach,
 	.f_event = apmreadfilt,
+	.f_copy = knote_triv_copy,
 };
 
 static struct cdevsw apm_cdevsw = {
@@ -144,18 +142,18 @@ acpi_capm_get_info(apm_info_t aip)
 	aip->ai_capabilities= 0xff00;	/* unknown */
 
 	if (acpi_acad_get_acline(&acline))
-		aip->ai_acline = APM_UNKNOWN;	/* unknown */
+		aip->ai_acline = 1;		/* no info -- on-line best guess */
 	else
 		aip->ai_acline = acline;	/* on/off */
 
 	if (acpi_battery_get_battinfo(NULL, &batt) != 0) {
-		aip->ai_batt_stat = APM_UNKNOWN;
-		aip->ai_batt_life = APM_UNKNOWN;
-		aip->ai_batt_time = -1;		 /* unknown */
-		aip->ai_batteries = ~0U;	 /* unknown */
+		aip->ai_batt_stat = 0;		/* "high" old I/F has no unknown state */
+		aip->ai_batt_life = 255;	/* N/A, not -1 */
+		aip->ai_batt_time = -1;		/* unknown */
+		aip->ai_batteries = ~0U;	/* unknown */
 	} else {
 		aip->ai_batt_stat = acpi_capm_convert_battstate(&batt);
-		aip->ai_batt_life = batt.cap;
+		aip->ai_batt_life = (batt.cap == -1) ? 255 : batt.cap;
 		aip->ai_batt_time = (batt.min == -1) ? -1 : batt.min * 60;
 		aip->ai_batteries = acpi_battery_get_units();
 	}
@@ -189,11 +187,11 @@ acpi_capm_get_pwstatus(apm_pwstatus_t app)
 
 	app->ap_batt_stat = acpi_capm_convert_battstate(&batt);
 	app->ap_batt_flag = acpi_capm_convert_battflags(&batt);
-	app->ap_batt_life = batt.cap;
+	app->ap_batt_life = (batt.cap == -1) ? 255 : batt.cap;
 	app->ap_batt_time = (batt.min == -1) ? -1 : batt.min * 60;
 
 	if (acpi_acad_get_acline(&acline))
-		app->ap_acline = APM_UNKNOWN;
+		app->ap_acline = 1;		/* no info -- on-line best guess */
 	else
 		app->ap_acline = acline;	/* on/off */
 
@@ -238,16 +236,16 @@ apmdtor(void *data)
 	acpi_sc = clone->acpi_sc;
 
 	/* We are about to lose a reference so check if suspend should occur */
-	if (acpi_sc->acpi_next_sstate != 0 &&
+	if (acpi_sc->acpi_next_stype != POWER_STYPE_AWAKE &&
 	    clone->notify_status != APM_EV_ACKED)
 		acpi_AckSleepState(clone, 0);
 
 	/* Remove this clone's data from the list and free it. */
 	ACPI_LOCK(acpi);
 	STAILQ_REMOVE(&acpi_sc->apm_cdevs, clone, apm_clone_data, entries);
+	ACPI_UNLOCK(acpi);
 	seldrain(&clone->sel_read);
 	knlist_destroy(&clone->sel_read.si_note);
-	ACPI_UNLOCK(acpi);
 	free(clone, M_APMDEV);
 }
 
@@ -286,10 +284,10 @@ apmioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flag, struct thread *td
 	case APMIO_SUSPEND:
 		if ((flag & FWRITE) == 0)
 			return (EPERM);
-		if (acpi_sc->acpi_next_sstate == 0) {
-			if (acpi_sc->acpi_suspend_sx != ACPI_STATE_S5) {
+		if (acpi_sc->acpi_next_stype == POWER_STYPE_AWAKE) {
+			if (power_suspend_stype != POWER_STYPE_POWEROFF) {
 				error = acpi_ReqSleepState(acpi_sc,
-				    acpi_sc->acpi_suspend_sx);
+				    power_suspend_stype);
 			} else {
 				printf(
 			"power off via apm suspend not supported\n");
@@ -301,10 +299,10 @@ apmioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flag, struct thread *td
 	case APMIO_STANDBY:
 		if ((flag & FWRITE) == 0)
 			return (EPERM);
-		if (acpi_sc->acpi_next_sstate == 0) {
-			if (acpi_sc->acpi_standby_sx != ACPI_STATE_S5) {
+		if (acpi_sc->acpi_next_stype == POWER_STYPE_AWAKE) {
+			if (power_standby_stype != POWER_STYPE_POWEROFF) {
 				error = acpi_ReqSleepState(acpi_sc,
-				    acpi_sc->acpi_standby_sx);
+				    power_standby_stype);
 			} else {
 				printf(
 			"power off via apm standby not supported\n");
@@ -316,10 +314,11 @@ apmioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flag, struct thread *td
 	case APMIO_NEXTEVENT:
 		printf("apm nextevent start\n");
 		ACPI_LOCK(acpi);
-		if (acpi_sc->acpi_next_sstate != 0 && clone->notify_status ==
-		    APM_EV_NONE) {
+		if (acpi_sc->acpi_next_stype != POWER_STYPE_AWAKE &&
+		    clone->notify_status == APM_EV_NONE) {
 			ev_info = (struct apm_event_info *)addr;
-			if (acpi_sc->acpi_next_sstate <= ACPI_STATE_S3)
+			/* XXX Check this. */
+			if (acpi_sc->acpi_next_stype == POWER_STYPE_STANDBY)
 				ev_info->type = PMEV_STANDBYREQ;
 			else
 				ev_info->type = PMEV_SUSPENDREQ;
@@ -395,7 +394,7 @@ apmpoll(struct cdev *dev, int events, struct thread *td)
 	revents = 0;
 	devfs_get_cdevpriv((void **)&clone);
 	ACPI_LOCK(acpi);
-	if (clone->acpi_sc->acpi_next_sstate)
+	if (clone->acpi_sc->acpi_next_stype != POWER_STYPE_AWAKE)
 		revents |= events & (POLLIN | POLLRDNORM);
 	else
 		selrecord(td, &clone->sel_read);
@@ -409,11 +408,9 @@ apmkqfilter(struct cdev *dev, struct knote *kn)
 	struct	apm_clone_data *clone;
 
 	devfs_get_cdevpriv((void **)&clone);
-	ACPI_LOCK(acpi);
 	kn->kn_hook = clone;
 	kn->kn_fop = &apm_readfiltops;
 	knlist_add(&clone->sel_read.si_note, kn, 0);
-	ACPI_UNLOCK(acpi);
 	return (0);
 }
 
@@ -422,10 +419,8 @@ apmreadfiltdetach(struct knote *kn)
 {
 	struct	apm_clone_data *clone;
 
-	ACPI_LOCK(acpi);
 	clone = kn->kn_hook;
 	knlist_remove(&clone->sel_read.si_note, kn, 0);
-	ACPI_UNLOCK(acpi);
 }
 
 static int
@@ -434,10 +429,8 @@ apmreadfilt(struct knote *kn, long hint)
 	struct	apm_clone_data *clone;
 	int	sleeping;
 
-	ACPI_LOCK(acpi);
 	clone = kn->kn_hook;
-	sleeping = clone->acpi_sc->acpi_next_sstate ? 1 : 0;
-	ACPI_UNLOCK(acpi);
+	sleeping = clone->acpi_sc->acpi_next_stype != POWER_STYPE_AWAKE;
 	return (sleeping);
 }
 

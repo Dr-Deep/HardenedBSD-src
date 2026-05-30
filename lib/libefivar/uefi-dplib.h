@@ -21,8 +21,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -39,6 +37,7 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
 
 #ifndef _UEFI_DEVICE_PATH_LIB_H_
 #define _UEFI_DEVICE_PATH_LIB_H_
+
 #include <Uefi.h>
 #include <Protocol/DevicePathUtilities.h>
 #include <Protocol/DebugPort.h>
@@ -176,8 +175,7 @@ typedef struct {
 
 #pragma pack()
 
-#ifdef FreeBSD		/* Remove these on FreeBSD */
-
+#ifndef __FreeBSD__		/* Remove these on FreeBSD */
 /**
   Returns the size of a device path in bytes.
 
@@ -549,7 +547,7 @@ AllocateCopyPool(size_t l, const void *p)
 }
 
 static inline BOOLEAN
-CompareGuid (const GUID *g1, const GUID *g2)
+CompareGuid (const EFI_GUID *g1, const EFI_GUID *g2)
 {
 	uint32_t ignored_status;
 
@@ -580,7 +578,7 @@ StrHexToBytes(const char *str, size_t len, uint8_t *buf, size_t buflen)
 }
 
 static inline void
-StrToGuid(const char *str, GUID *guid)
+StrToGuid(const char *str, EFI_GUID *guid)
 {
 	uint32_t status;
 
@@ -601,7 +599,7 @@ WriteUnaligned64(void *ptr, uint64_t val)
  * Not to mention it's name.... Also, the error GUID is horrific.
  */
 static inline const char *
-guid_str(const GUID *g)
+guid_str(const EFI_GUID *g)
 {
 	static char buf[36 + 1];
 	char *str = NULL;
@@ -616,7 +614,7 @@ guid_str(const GUID *g)
 	free(str);
 	return buf;
 }
-#define G(x) guid_str((const GUID *)(const void *)x)
+#define G(x) guid_str((const EFI_GUID *)(const void *)x)
 #endif
 
 #undef GLOBAL_REMOVE_IF_UNREFERENCED

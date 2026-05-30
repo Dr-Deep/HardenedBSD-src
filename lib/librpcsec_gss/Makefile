@@ -1,4 +1,4 @@
-# $FreeBSD$
+.include <src.opts.mk>
 
 PACKAGE=lib${LIB}
 LIB=	rpcsec_gss
@@ -6,14 +6,17 @@ SHLIB_MAJOR= 1
 SRCS+=	rpcsec_gss.c rpcsec_gss_prot.c rpcsec_gss_conf.c rpcsec_gss_misc.c \
 	svc_rpcsec_gss.c
 
+.if ${MK_MITKRB5} == "no"
 LIBADD=	gssapi
+.else
+LIBADD=	gssapi_krb5
+.endif
 
 VERSION_DEF=	${SRCTOP}/lib/libc/Versions.def
 SYMBOL_MAPS=	${.CURDIR}/Symbol.map
 
 CFLAGS+= -I${SRCTOP}/include
 CFLAGS+= -I${SRCTOP}/lib/libc_rpc
-MK_PROFILE=	no
 
 MAN=	rpcsec_gss.3
 MAN+=	rpc_gss_seccreate.3

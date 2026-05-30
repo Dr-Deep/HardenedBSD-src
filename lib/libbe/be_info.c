@@ -1,34 +1,11 @@
-/*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
- *
+/*
  * Copyright (c) 2017 Kyle J. Kneitinger <kyle@kneit.in>
  * Copyright (c) 2018 Kyle Evans <kevans@FreeBSD.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/zfs_context.h>
 #include <libzfsbootenv.h>
 
@@ -183,8 +160,8 @@ prop_list_builder_cb(zfs_handle_t *zfs_hdl, void *data_p)
 	dataset = zfs_get_name(zfs_hdl);
 	nvlist_add_string(props, "dataset", dataset);
 
-	if (data->bootonce != NULL &&
-	    strcmp(dataset, data->bootonce) == 0)
+	if (data->lbh->bootonce != NULL &&
+	    strcmp(dataset, data->lbh->bootonce) == 0)
 		nvlist_add_boolean_value(props, "bootonce", true);
 
 	name = strrchr(dataset, '/') + 1;
@@ -253,9 +230,6 @@ be_proplist_update(prop_data_t *data)
 	if ((root_hdl = zfs_open(data->lbh->lzh, data->lbh->root,
 	    ZFS_TYPE_FILESYSTEM)) == NULL)
 		return (BE_ERR_ZFSOPEN);
-
-	(void) lzbe_get_boot_device(zpool_get_name(data->lbh->active_phandle),
-	    &data->bootonce);
 
 	/* XXX TODO: some error checking here */
 	zfs_iter_filesystems(root_hdl, prop_list_builder_cb, data);

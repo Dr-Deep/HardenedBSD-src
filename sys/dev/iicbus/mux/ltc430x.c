@@ -26,8 +26,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_platform.h"
 
 #include <sys/param.h>
@@ -168,7 +166,7 @@ ltc430x_attach(device_t dev)
 
 	/*
 	 * Check for the idle-disconnect and ctlreg2 options, first in FDT data,
-	 * then allow them to be overriden by hints data.
+	 * then allow them to be overridden by hints data.
 	 */
 #ifdef FDT
 	phandle_t node;
@@ -213,7 +211,7 @@ ltc430x_attach(device_t dev)
 	 * the probe and attach code of any child iicbus instances it added.
 	 */
 	if ((err = iicmux_attach(dev, device_get_parent(dev), numchan)) == 0)
-		bus_generic_attach(dev);
+		bus_attach_children(dev);
 
 	return (err);
 }

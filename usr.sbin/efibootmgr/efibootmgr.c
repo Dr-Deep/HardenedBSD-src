@@ -24,10 +24,7 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/stat.h>
-#include <sys/vtoc.h>
 #include <sys/param.h>
 #include <assert.h>
 #include <ctype.h>
@@ -53,16 +50,31 @@ __FBSDID("$FreeBSD$");
 #include <geom/geom_int.h>
 
 #include <efivar.h>
-#include <efiutil.h>
 #include <efichar.h>
 #include <efivar-dp.h>
 
 #ifndef LOAD_OPTION_ACTIVE
-#define LOAD_OPTION_ACTIVE 0x00000001
+#define LOAD_OPTION_ACTIVE                0x00000001
+#endif
+
+#ifndef LOAD_OPTION_FORCE_RECONNECT
+#define LOAD_OPTION_FORCE_RECONNECT       0x00000002
+#endif
+
+#ifndef LOAD_OPTION_HIDDEN
+#define LOAD_OPTION_HIDDEN                0x00000008
+#endif
+
+#ifndef LOAD_OPTION_CATEGORY
+#define LOAD_OPTION_CATEGORY              0x00001F00
 #endif
 
 #ifndef LOAD_OPTION_CATEGORY_BOOT
-#define LOAD_OPTION_CATEGORY_BOOT 0x00000000
+#define LOAD_OPTION_CATEGORY_BOOT         0x00000000
+#endif
+
+#ifndef LOAD_OPTION_CATEGORY_APP
+#define LOAD_OPTION_CATEGORY_APP          0x00000100
 #endif
 
 #define BAD_LENGTH	((size_t)-1)
@@ -70,6 +82,7 @@ __FBSDID("$FreeBSD$");
 #define EFI_OS_INDICATIONS_BOOT_TO_FW_UI 0x0000000000000001
 
 typedef struct _bmgr_opts {
+	char	*dev;
 	char	*env;
 	char	*loader;
 	char	*label;
@@ -85,6 +98,7 @@ typedef struct _bmgr_opts {
 	bool    dry_run;
 	bool	device_path;
 	bool	esp_device;
+	bool	find_dev;
 	bool    fw_ui;
 	bool    no_fw_ui;
 	bool	has_bootnum;
@@ -114,6 +128,7 @@ static struct option lopts[] = {
 	{"dry-run", no_argument, NULL, 'D'},
 	{"env", required_argument, NULL, 'e'},
 	{"esp", no_argument, NULL, 'E'},
+	{"efidev", required_argument, NULL, 'u'},
 	{"fw-ui", no_argument, NULL, 'f'},
 	{"no-fw-ui", no_argument, NULL, 'F'},
 	{"help", no_argument, NULL, 'h'},
@@ -202,9 +217,10 @@ static void
 parse_args(int argc, char *argv[])
 {
 	int ch;
+	const char *arg;
 
-	while ((ch = getopt_long(argc, argv, "AaBb:C:cdDe:EFfhk:L:l:NnOo:pTt:v",
-		    lopts, NULL)) != -1) {
+	while ((ch = getopt_long(argc, argv,
+	    "AaBb:C:cdDe:EFfhk:L:l:NnOo:pTt:u:v", lopts, NULL)) != -1) {
 		switch (ch) {
 		case 'A':
 			opts.set_inactive = true;
@@ -214,7 +230,10 @@ parse_args(int argc, char *argv[])
 			break;
 		case 'b':
 			opts.has_bootnum = true;
-			opts.bootnum = strtoul(optarg, NULL, 16);
+			arg = optarg;
+			if (strncasecmp(arg, "boot", 4) == 0)
+				arg += 4;
+			opts.bootnum = strtoul(arg, NULL, 16);
 			break;
 		case 'B':
 			opts.delete = true;
@@ -222,6 +241,8 @@ parse_args(int argc, char *argv[])
 		case 'C':
 			opts.copy = true;
 			opts.cp_src = strtoul(optarg, NULL, 16);
+			errx(1, "Copy not implemented");
+			break;
 		case 'c':
 			opts.create = true;
 			break;
@@ -283,6 +304,10 @@ parse_args(int argc, char *argv[])
 		case 't':
 			opts.set_timeout = true;
 			opts.timeout = strtoul(optarg, NULL, 10);
+			break;
+		case 'u':
+			opts.find_dev = true;
+			opts.dev = strdup(optarg);
 			break;
 		case 'v':
 			opts.verbose = true;
@@ -551,7 +576,7 @@ static char *
 make_next_boot_var_name(void)
 {
 	struct entry *v;
-	uint16_t *vals, next_free = 0;
+	uint16_t *vals;
 	char *name;
 	int cnt = 0;
 	int i;
@@ -569,21 +594,14 @@ make_next_boot_var_name(void)
 		vals[i++] = v->idx;
 	}
 	qsort(vals, cnt, sizeof(uint16_t), compare);
-	/* if the hole is at the beginning, just return zero */
-	if (vals[0] > 0) {
-		next_free = 0;
-	} else {
-		/* now just run the list looking for the first hole */
-		for (i = 0; i < cnt - 1 && next_free == 0; i++)
-			if (vals[i] + 1 != vals[i + 1])
-				next_free = vals[i] + 1;
-		if (next_free == 0)
-			next_free = vals[cnt - 1] + 1;
-		/* In theory we could have used all 65k slots -- what to do? */
-	}
+	/* Find the first hole (could be at start or end) */
+	for (i = 0; i < cnt; ++i)
+		if (vals[i] != i)
+			break;
 	free(vals);
+	/* In theory we could have used all 65k slots -- what to do? */
 
-	asprintf(&name, "%s%04X", "Boot", next_free);
+	asprintf(&name, "%s%04X", "Boot", i);
 	if (name == NULL)
 		err(1, "asprintf");
 	return name;
@@ -742,14 +760,14 @@ static void
 print_loadopt_str(uint8_t *data, size_t datalen)
 {
 	char *dev, *relpath, *abspath;
-	uint32_t attr;
+	uint32_t attr, categ;
 	uint16_t fplen;
 	efi_char *descr;
 	uint8_t *ep = data + datalen;
-	uint8_t *walker = data;
+	uint8_t *walker = data, *opt;
 	efidp dp, edp;
 	char buf[1024];
-	int len;
+	int len, optlen;
 	int rv;
 	int indent;
 
@@ -773,17 +791,21 @@ print_loadopt_str(uint8_t *data, size_t datalen)
 	if (walker > ep)
 		return;
 	edp = (efidp)walker;
-	/*
-	 * Everything left is the binary option args
-	 * opt = walker;
-	 * optlen = ep - walker;
-	 */
+
+	/* Everything left is the binary option args */
+	opt = walker;
+	optlen = ep - walker;
+
+	printf("\n");
+	printf("       dp:");
 	indent = 1;
 	while (dp < edp) {
+		if (efidp_size(dp) == 0)
+			break;
 		efidp_format_device_path(buf, sizeof(buf), dp,
 		    (intptr_t)(void *)edp - (intptr_t)(void *)dp);
 		printf("%*s%s\n", indent, "", buf);
-		indent = 10 + len + 1;
+		indent = 11;
 		rv = efivar_device_path_to_unix_path(dp, &dev, &relpath, &abspath);
 		if (rv == 0) {
 			printf("%*s%s:%s %s\n", indent + 4, "", dev, relpath, abspath);
@@ -793,6 +815,37 @@ print_loadopt_str(uint8_t *data, size_t datalen)
 		}
 		dp = (efidp)((char *)dp + efidp_size(dp));
 	}
+
+	/* Optional Data */
+	if (optlen > 0) {
+		printf("    opt/x: ");
+		efi_hexdump(opt, optlen, 11);
+		printf("    opt/a: ");
+		efi_asciidump(opt, optlen, 11);
+	}
+
+	/* Attributes */
+	printf("     attr: %#x<", attr);
+	if (attr & LOAD_OPTION_ACTIVE)
+		printf("ACTIVE,");
+	if (attr & LOAD_OPTION_FORCE_RECONNECT)
+		printf("FORCE_RECONNECT,");
+	if (attr & LOAD_OPTION_HIDDEN)
+		printf("HIDDEN,");
+	printf(">\n");
+
+	/* Category */
+	categ = (attr & LOAD_OPTION_CATEGORY);
+	printf("    categ: %#x<", categ);
+	switch (categ) {
+	case LOAD_OPTION_CATEGORY_APP:
+		printf("APP");
+		break;
+	case LOAD_OPTION_CATEGORY_BOOT:
+		printf("BOOT");
+		break;
+	}
+	printf(">\n");
 }
 
 static char *
@@ -996,7 +1049,7 @@ report_esp_device(bool do_dp, bool do_unix)
 	char *name, *dev, *relpath, *abspath;
 	uint8_t *walker, *ep;
 	efi_char *descr;
-	efidp dp, edp;
+	efidp dp;
 	char buf[PATH_MAX];
 
 	if (do_dp && do_unix)
@@ -1026,7 +1079,6 @@ report_esp_device(bool do_dp, bool do_unix)
 	// Now we have fplen bytes worth of file path stuff
 	dp = (efidp)walker;
 	walker += fplen;
-	edp = (efidp)walker;
 	if (walker > ep)
 		errx(1, "malformed boot variable %s", name);
 	if (do_dp) {
@@ -1043,7 +1095,7 @@ report_esp_device(bool do_dp, bool do_unix)
 		abspath[strlen(abspath) - strlen(relpath) - 1] = '\0';
 		printf("%s\n", abspath);
 	} else {
-		printf("%s\n", dev);
+		printf("/dev/%s\n", dev);
 	}
 	free(dev);
 	free(relpath);
@@ -1068,6 +1120,26 @@ set_boot_to_fw_ui(bool to_fw)
 		errx(1, "failed to set boot to fw ui");
 }
 
+static void
+find_efi_device(const char *path)
+{
+	efidp dp = NULL;
+	size_t len;
+	int ret;
+	char buf[1024];
+
+	ret = efivar_unix_path_to_device_path(path, &dp);
+	if (ret != 0)
+		errc(1, ret,
+		    "Cannot translate path '%s' to UEFI", path);
+	len = efidp_size(dp);
+	if (len > MAX_DP_LEN)
+		errx(1, "Resulting device path too long.");
+	efidp_format_device_path(buf, sizeof(buf), dp, len);
+	printf("%s -> %s\n", path, buf);
+	exit (0);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -1075,8 +1147,14 @@ main(int argc, char *argv[])
 	memset(&opts, 0, sizeof (bmgr_opts_t));
 	parse_args(argc, argv);
 
-	if (!efi_variables_supported())
-		errx(1, "efi variables not supported on this system. root? kldload efirt?");
+	/*
+	 * find_dev can operate without any efi variables
+	 */
+	if (!efi_variables_supported() && !opts.find_dev) {
+		if (errno == EACCES && geteuid() != 0)
+			errx(1, "must be run as root");
+		errx(1, "efi variables not supported on this system. kldload efirt?");
+	}
 
 	read_vars();
 
@@ -1107,6 +1185,8 @@ main(int argc, char *argv[])
 		set_boot_to_fw_ui(true);
 	else if (opts.no_fw_ui)
 		set_boot_to_fw_ui(false);
+	else if (opts.find_dev)
+		find_efi_device(opts.dev);
 
 	print_boot_vars(opts.verbose);
 }

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2009 Hudson River Trading LLC
  * Written by: John H. Baldwin <jhb@FreeBSD.org>
@@ -25,8 +25,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -71,14 +69,14 @@ __sym_compat(kevent, freebsd11_kevent, FBSD_1.0);
 
 __sym_compat(swapoff, freebsd13_swapoff, FBSD_1.0);
 
+__sym_compat(getgroups, freebsd14_getgroups, FBSD_1.0);
+__sym_compat(setgroups, freebsd14_setgroups, FBSD_1.0);
+
 #undef __sym_compat
 
 #define	__weak_reference(sym,alias)	\
 	.weak	alias;.equ	alias,sym
 
-__weak_reference(__sys_fcntl, __fcntl_compat)
-
 #undef __weak_reference
 
 #endif	/* __LIBC_COMPAT_H__ */
-

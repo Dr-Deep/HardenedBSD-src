@@ -1,4 +1,6 @@
-# $FreeBSD$
+.include <src.opts.mk>
+
+PACKAGE=xz
 
 PROG=	xz
 
@@ -24,6 +26,7 @@ SRCS=	args.c \
 	message.c \
 	mytime.c \
 	options.c \
+	sandbox.c \
 	signals.c \
 	suffix.c \
 	util.c
@@ -35,7 +38,9 @@ SRCS+=	tuklib_open_stdxxx.c \
 	tuklib_exit.c \
 	tuklib_cpucores.c \
 	tuklib_mbstr_width.c \
-	tuklib_mbstr_fw.c
+	tuklib_mbstr_fw.c \
+	tuklib_mbstr_nonprint.c \
+	tuklib_mbstr_wrap.c
 
 WARNS?=	3
 

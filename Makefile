@@ -1,5 +1,4 @@
 #
-# $FreeBSD$
 #
 # The common user-driven targets are (for a complete list, see build(7)):
 #
@@ -23,7 +22,7 @@
 # kernel              - buildkernel + installkernel.
 # kernel-toolchain    - Builds the subset of world necessary to build a kernel
 # kernel-toolchains   - Build kernel-toolchain for all universe targets.
-# doxygen             - Build API documentation of the kernel, needs doxygen.
+# doxygen             - Build API documentation of the kernel, needs doxygen, TeX, and graphviz.
 # checkworld          - Run test suite on installed world.
 # check-old           - List obsolete directories/files/libraries.
 # check-old-dirs      - List obsolete directories.
@@ -80,13 +79,13 @@
 #
 #  1.  `cd /usr/src'       (or to the directory containing your source tree).
 #  2.  `make buildworld'
-#  3.  `make buildkernel KERNCONF=YOUR_KERNEL_HERE'     (default is GENERIC).
-#  4.  `make installkernel KERNCONF=YOUR_KERNEL_HERE'   (default is GENERIC).
+#  3.  `make buildkernel KERNCONF=YOUR_KERNEL_HERE'     (default is HARDENEDBSD).
+#  4.  `make installkernel KERNCONF=YOUR_KERNEL_HERE'   (default is HARDENEDBSD).
 #       [steps 3. & 4. can be combined by using the "kernel" target]
 #  5.  `reboot'        (in single user mode: boot -s from the loader prompt).
-#  6.  `mergemaster -p'
+#  6.  `etcupdate -p'
 #  7.  `make installworld'
-#  8.  `mergemaster'            (you may wish to use -i, along with -U or -F).
+#  8.  `etcupdate -B'
 #  9.  `make delete-old'
 # 10.  `reboot'
 # 11.  `make delete-old-libs' (in case no 3rd party program uses them anymore)
@@ -97,14 +96,14 @@
 #
 # Once you have installed the necessary cross toolchain, simply pass
 # CROSS_TOOLCHAIN=${TARGET_ARCH}-gccN while building with the above steps,
-# e.g., `make buildworld CROSS_TOOLCHAIN=amd64-gcc6`.
+# e.g., `make buildworld CROSS_TOOLCHAIN=amd64-gcc13`.
 #
 # The ${TARGET_ARCH}-gccN packages are provided as flavors of the
 # devel/freebsd-gccN ports.
 #
 # See src/UPDATING `COMMON ITEMS' for more complete information.
 #
-# If TARGET=machine (e.g. powerpc, arm64, ...) is specified you can
+# If TARGET=machine (e.g. powerpc64, arm64, ...) is specified you can
 # cross build world for other machine types using the buildworld target,
 # and once the world is built you can cross build a kernel using the
 # buildkernel target.
@@ -119,6 +118,16 @@
 # For more information, see the build(7) manual page.
 #
 
+# Include jobs.mk early if we need it.
+# It will turn:
+# 	make buildworld-jobs
+# into
+# 	make -j${JOB_MAX} buildworld > ../buildworld.log 2>&1
+#
+.if make(*-jobs)
+.include <jobs.mk>
+.endif
+
 .if defined(UNIVERSE_TARGET) || defined(MAKE_JUST_WORLDS) || defined(WITHOUT_KERNELS)
 __DO_KERNELS=no
 .endif
@@ -128,15 +137,11 @@ __DO_WORLDS=no
 __DO_WORLDS?=yes
 __DO_KERNELS?=yes
 
-# This is included so CC is set to ccache for -V, and COMPILER_TYPE/VERSION
-# can be cached for sub-makes. We can't do this while still running on the
-# old fmake from FreeBSD 9.x or older, so avoid including it then to avoid
-# heartburn upgrading from older systems. The need for CC is done with new
-# make later in the build, and caching COMPILER_TYPE/VERSION is only an
-# optimization. Also sinclude it to be friendlier to foreign OS hosted builds.
-.if ${MAKE_VERSION} >= 20140620 && defined(.PARSEDIR)
+# This is included so CC is set to ccache for -V, and COMPILER_TYPE/VERSION can
+# be cached for sub-makes. The need for CC is done with new make later in the
+# build, and caching COMPILER_TYPE/VERSION is only an optimization. Also
+# sinclude it to be friendlier to foreign OS hosted builds.
 .sinclude <bsd.compiler.mk>
-.endif
 
 # Note: we use this awkward construct to be compatible with FreeBSD's
 # old make used in 10.0 and 9.2 and earlier.
@@ -146,30 +151,37 @@ __DO_KERNELS?=yes
 .include "targets/Makefile"
 .else
 
-TGTS=	all all-man buildenv buildenvvars buildkernel buildworld \
+.include "${.CURDIR}/share/mk/bsd.compat.pre.mk"
+
+TGTS=	all all-man buildenv buildenvvars buildetc buildkernel buildworld \
 	check check-old check-old-dirs check-old-files check-old-libs \
 	checkdpadd checkworld clean cleandepend cleandir cleankernel \
 	cleanworld cleanuniverse \
 	delete-old delete-old-dirs delete-old-files delete-old-libs \
 	depend distribute distributekernel distributekernel.debug \
 	distributeworld distrib-dirs distribution doxygen \
-	everything hier hierarchy install installcheck installkernel \
+	everything hier hierarchy install installcheck installetc installkernel \
 	installkernel.debug packagekernel packageworld \
 	reinstallkernel reinstallkernel.debug \
 	installworld kernel-toolchain libraries maninstall \
 	list-old-dirs list-old-files list-old-libs \
 	obj objlink showconfig tags toolchain \
 	makeman sysent \
-	_worldtmp _legacy _bootstrap-tools _cleanobj _obj \
+	_cleanworldtmp _worldtmp _legacy _bootstrap-tools _cleanobj _obj \
 	_build-tools _build-metadata _cross-tools _includes _libraries \
-	build32 distribute32 install32 \
 	builddtb xdev xdev-build xdev-install \
 	xdev-links native-xtools native-xtools-install stageworld stagekernel \
-	stage-packages stage-packages-kernel stage-packages-world \
-	create-packages-world create-packages-kernel create-packages \
-	update-packages packages installconfig real-packages real-update-packages \
+	stage-packages stage-packages-kernel stage-packages-world stage-packages-source \
+	create-packages-world create-packages-kernel \
+	create-packages-kernel-repo create-packages-world-repo \
+	create-packages-source create-packages \
+	installconfig real-packages real-update-packages \
 	sign-packages package-pkg print-dir test-system-compiler test-system-linker \
 	test-includes
+
+.for libcompat in ${_ALL_libcompats}
+TGTS+=	build${libcompat} distribute${libcompat} install${libcompat}
+.endfor
 
 # These targets require a TARGET and TARGET_ARCH be defined.
 XTGTS=	native-xtools native-xtools-install xdev xdev-build xdev-install \
@@ -191,11 +203,15 @@ TGTS+=	${BITGTS}
 # the interactive tty prompt.  The safest route is to just whitelist
 # the ones that benefit from it.
 META_TGT_WHITELIST+= \
-	_* build32 buildfiles buildincludes buildkernel \
+	_* buildfiles buildincludes buildkernel \
 	buildworld everything kernel-toolchain kernel-toolchains kernel \
 	kernels libraries native-xtools showconfig test-includes \
 	test-system-compiler test-system-linker tinderbox toolchain \
 	toolchains universe universe-toolchain world worlds xdev xdev-build
+
+.for libcompat in ${_ALL_libcompats}
+META_TGT_WHITELIST+=	build${libcompat}
+.endfor
 
 .ORDER: buildworld installworld
 .ORDER: buildworld distrib-dirs
@@ -203,6 +219,8 @@ META_TGT_WHITELIST+= \
 .ORDER: buildworld distribute
 .ORDER: buildworld distributeworld
 .ORDER: buildworld buildkernel
+.ORDER: buildworld packages
+.ORDER: buildworld update-packages
 .ORDER: distrib-dirs distribute
 .ORDER: distrib-dirs distributeworld
 .ORDER: distrib-dirs installworld
@@ -216,10 +234,18 @@ META_TGT_WHITELIST+= \
 .ORDER: buildkernel installkernel.debug
 .ORDER: buildkernel reinstallkernel
 .ORDER: buildkernel reinstallkernel.debug
+.ORDER: buildkernel packages
+.ORDER: buildkernel update-packages
+.ORDER: kernel-toolchain buildkernel
 
+# Only sanitize PATH on FreeBSD.
+# PATH may include tools that are required to cross-build
+# on non-FreeBSD systems.
+.if ${.MAKE.OS} == "FreeBSD"
 PATH=	/sbin:/bin:/usr/sbin:/usr/bin
+.endif
 MAKEOBJDIRPREFIX?=	/usr/obj
-_MAKEOBJDIRPREFIX!= /usr/bin/env -i PATH=${PATH} ${MAKE} MK_AUTO_OBJ=no \
+_MAKEOBJDIRPREFIX!= /usr/bin/env -i PATH=${PATH:Q} ${MAKE} MK_AUTO_OBJ=no \
     ${.MAKEFLAGS:MMAKEOBJDIRPREFIX=*} __MAKE_CONF=${__MAKE_CONF} \
     SRCCONF=${SRCCONF} SRC_ENV_CONF= \
     -f /dev/null -V MAKEOBJDIRPREFIX dummy
@@ -229,10 +255,6 @@ _MAKEOBJDIRPREFIX!= /usr/bin/env -i PATH=${PATH} ${MAKE} MK_AUTO_OBJ=no \
 .endif
 
 # We often need to use the tree's version of make to build it.
-# Choices add to complexity though.
-# We cannot blindly use a make which may not be the one we want
-# so be explicit - until all choice is removed.
-WANT_MAKE=	bmake
 .if !empty(.MAKE.MODE:Mmeta)
 # 20160604 - support missing-meta,missing-filemon and performance improvements
 WANT_MAKE_VERSION= 20160604
@@ -240,29 +262,27 @@ WANT_MAKE_VERSION= 20160604
 # 20160220 - support .dinclude for FAST_DEPEND.
 WANT_MAKE_VERSION= 20160220
 .endif
-MYMAKE=		${OBJROOT}make.${MACHINE}/${WANT_MAKE}
-.if defined(.PARSEDIR)
-HAVE_MAKE=	bmake
-.else
-HAVE_MAKE=	fmake
+.if defined(MYMAKE)
+.error MYMAKE cannot be overridden, use as command name instead
 .endif
+MYMAKE=		${OBJROOT}make.${MACHINE}/bmake
 .if defined(ALWAYS_BOOTSTRAP_MAKE) || \
-    ${HAVE_MAKE} != ${WANT_MAKE} || \
     (defined(WANT_MAKE_VERSION) && ${MAKE_VERSION} < ${WANT_MAKE_VERSION})
 NEED_MAKE_UPGRADE= t
 .endif
-.if exists(${MYMAKE})
+.if defined(NEED_MAKE_UPGRADE)
+. if exists(${MYMAKE})
 SUB_MAKE:= ${MYMAKE} -m ${.CURDIR}/share/mk
-.elif defined(NEED_MAKE_UPGRADE)
+. else
 # It may not exist yet but we may cause it to.
-# In the case of fmake, upgrade_checks may cause a newer version to be built.
 SUB_MAKE= `test -x ${MYMAKE} && echo ${MYMAKE} || echo ${MAKE}` \
 	-m ${.CURDIR}/share/mk
+. endif
 .else
 SUB_MAKE= ${MAKE} -m ${.CURDIR}/share/mk
 .endif
 
-_MAKE=	PATH=${PATH} MAKE_CMD="${MAKE}" ${SUB_MAKE} -f Makefile.inc1 \
+_MAKE=	PATH=${PATH:Q} MAKE_CMD="${MAKE}" ${SUB_MAKE} -f Makefile.inc1 \
 	TARGET=${_TARGET} TARGET_ARCH=${_TARGET_ARCH} ${_MAKEARGS}
 
 .if defined(MK_META_MODE) && ${MK_META_MODE} == "yes"
@@ -278,9 +298,7 @@ _CAN_USE_META_MODE?= yes
 .if !defined(_CAN_USE_META_MODE)
 _MAKE+=	MK_META_MODE=no
 MK_META_MODE= no
-.if defined(.PARSEDIR)
 .unexport META_MODE
-.endif
 .endif	# !defined(_CAN_USE_META_MODE)
 .endif	# empty(.MAKEOVERRIDES:MMK_META_MODE)
 
@@ -350,15 +368,16 @@ _assert_target: .PHONY .MAKE
 .endfor
 
 #
-# Make sure we have an up-to-date make(1). Only world and buildworld
-# should do this as those are the initial targets used for upgrades.
-# The user can define ALWAYS_CHECK_MAKE to have this check performed
-# for all targets.
+# Make sure we have an up-to-date make(1). Only world, buildworld and
+# kernel-toolchain should do this as those are the initial targets used
+# for upgrades. The user can define ALWAYS_CHECK_MAKE to have this check
+# performed for all targets.
 #
-.if defined(ALWAYS_CHECK_MAKE) || !defined(.PARSEDIR)
+.if defined(ALWAYS_CHECK_MAKE)
 ${TGTS}: upgrade_checks
 .else
 buildworld: upgrade_checks
+kernel-toolchain: upgrade_checks
 .endif
 
 #
@@ -447,7 +466,10 @@ kernel: buildkernel installkernel .PHONY
 #
 upgrade_checks: .PHONY
 .if defined(NEED_MAKE_UPGRADE)
-	@${_+_}(cd ${.CURDIR} && ${MAKE} ${WANT_MAKE:S,^f,,})
+	@${_+_}(cd ${.CURDIR} && ${MAKE} bmake)
+.elif exists(${MYMAKE:H})
+	@echo "Removing stale bmake(1)"
+	rm -r ${MYMAKE:H}
 .endif
 
 #
@@ -499,6 +521,9 @@ kernels: .PHONY
 worlds: .PHONY
 	@cd ${.CURDIR}; ${SUB_MAKE} UNIVERSE_TARGET=buildworld universe
 
+packages update-packages: .PHONY
+	${_+_}@cd ${.CURDIR}; ${_MAKE} DISTDIR=/ ${.TARGET}
+
 #
 # universe
 #
@@ -512,28 +537,23 @@ worlds: .PHONY
 # Don't build rarely used, semi-supported architectures unless requested.
 #
 .if defined(EXTRA_TARGETS)
-# powerpcspe excluded from main list until clang fixed
-EXTRA_ARCHES_powerpc=	powerpcspe
+EXTRA_ARCHES_powerpc=	powerpc
 .endif
-TARGETS?=amd64 arm arm64 powerpc riscv
+TARGETS?= ${TARGET_MACHINE_LIST}
 _UNIVERSE_TARGETS=	${TARGETS}
-TARGET_ARCHES_arm?=	armv6 armv7
-TARGET_ARCHES_arm64?=	aarch64
-TARGET_ARCHES_powerpc?=	powerpc powerpc64 powerpc64le ${EXTRA_ARCHES_powerpc}
-TARGET_ARCHES_riscv?=	riscv64 riscv64sf
 .for target in ${TARGETS}
-TARGET_ARCHES_${target}?= ${target}
+TARGET_ARCHES_${target}= ${MACHINE_ARCH_LIST_${target}}
 .endfor
 
 .if defined(USE_GCC_TOOLCHAINS)
-TOOLCHAINS_amd64=	amd64-gcc9
-TOOLCHAINS_arm=		armv6-gcc9 armv7-gcc9
-TOOLCHAIN_armv7=	armv7-gcc9
-TOOLCHAINS_arm64=	aarch64-gcc9
-TOOLCHAINS_i386=	i386-gcc9
-TOOLCHAINS_powerpc=	powerpc-gcc9 powerpc64-gcc9
-TOOLCHAIN_powerpc64=	powerpc64-gcc9
-TOOLCHAINS_riscv=	riscv64-gcc9
+_DEFAULT_GCC_VERSION=	gcc15
+_GCC_VERSION=		${"${USE_GCC_TOOLCHAINS:Mgcc*}" != "":?${USE_GCC_TOOLCHAINS}:${_DEFAULT_GCC_VERSION}}
+TOOLCHAINS_amd64=	amd64-${_GCC_VERSION}
+TOOLCHAINS_arm=		armv7-${_GCC_VERSION}
+TOOLCHAINS_arm64=	aarch64-${_GCC_VERSION}
+TOOLCHAINS_i386=	i386-${_GCC_VERSION}
+TOOLCHAINS_powerpc=	powerpc64-${_GCC_VERSION}
+TOOLCHAINS_riscv=	riscv64-${_GCC_VERSION}
 .endif
 
 # If a target is using an external toolchain, set MAKE_PARAMS to enable use
@@ -560,6 +580,17 @@ MAKE_PARAMS_${arch}?=	CROSS_TOOLCHAIN=${TOOLCHAIN_${arch}}
 UNIVERSE_TARGET?=	buildworld
 KERNSRCDIR?=		${.CURDIR}/sys
 
+.if ${.MAKE.OS} == "FreeBSD"
+UNIVERSE_TOOLCHAIN_TARGET?=		${MACHINE}
+UNIVERSE_TOOLCHAIN_TARGET_ARCH?=	${MACHINE_ARCH}
+.else
+# MACHINE/MACHINE_ARCH may not follow the same naming as us (e.g. x86_64 vs
+# amd64) on non-FreeBSD. Rather than attempt to sanitise it, arbitrarily use
+# amd64 as the default universe toolchain target.
+UNIVERSE_TOOLCHAIN_TARGET?=		amd64
+UNIVERSE_TOOLCHAIN_TARGET_ARCH?=	amd64
+.endif
+
 targets:	.PHONY
 	@echo "Supported TARGET/TARGET_ARCH pairs for world and kernel targets"
 .for target in ${TARGETS}
@@ -568,8 +599,9 @@ targets:	.PHONY
 .endfor
 .endfor
 
+UNIVERSE_LOGDIR?=${.CURDIR}
 .if defined(DOING_TINDERBOX)
-FAILFILE=${.CURDIR}/_.tinderbox.failed
+FAILFILE=${UNIVERSE_LOGDIR}/_.tinderbox.failed
 MAKEFAIL=tee -a ${FAILFILE}
 .else
 MAKEFAIL=cat
@@ -581,26 +613,25 @@ universe_prologue: .PHONY
 	@echo "--------------------------------------------------------------"
 	@echo ">>> make universe started on ${STARTTIME}"
 	@echo "--------------------------------------------------------------"
-.if defined(DOING_TINDERBOX)
 	@rm -f ${FAILFILE}
-.endif
 
 universe-toolchain: .PHONY universe_prologue
 	@echo "--------------------------------------------------------------"
 	@echo "> Toolchain bootstrap started on `LC_ALL=C date`"
 	@echo "--------------------------------------------------------------"
 	${_+_}@cd ${.CURDIR}; \
-	    env PATH=${PATH} ${SUB_MAKE} ${JFLAG} kernel-toolchain \
-	    TARGET=${MACHINE} TARGET_ARCH=${MACHINE_ARCH} \
+	    env PATH=${PATH:Q} ${SUB_MAKE} ${JFLAG} kernel-toolchain \
+	    TARGET=${UNIVERSE_TOOLCHAIN_TARGET} \
+	    TARGET_ARCH=${UNIVERSE_TOOLCHAIN_TARGET_ARCH} \
 	    OBJTOP="${HOST_OBJTOP}" \
 	    WITHOUT_SYSTEM_COMPILER=yes \
 	    WITHOUT_SYSTEM_LINKER=yes \
 	    TOOLS_PREFIX_UNDEF= \
 	    kernel-toolchain \
 	    MK_LLVM_TARGET_ALL=yes \
-	    > _.${.TARGET} 2>&1 || \
+	    > ${UNIVERSE_LOGDIR}/_.${.TARGET} 2>&1 || \
 	    (echo "${.TARGET} failed," \
-	    "check _.${.TARGET} for details" | \
+	    "check ${UNIVERSE_LOGDIR}/_.${.TARGET} for details" | \
 	    ${MAKEFAIL}; false)
 	@if [ ! -e "${HOST_OBJTOP}/tmp/usr/bin/cc" ]; then \
 	    echo "Missing host compiler at ${HOST_OBJTOP}/tmp/usr/bin/cc?" >&2; \
@@ -684,9 +715,9 @@ universe_${target}_${target_arch}: universe_${target}_prologue .MAKE .PHONY
 	    TARGET=${target} \
 	    TARGET_ARCH=${target_arch} \
 	    ${MAKE_PARAMS_${target_arch}} \
-	    > _.${target}.${target_arch}.${UNIVERSE_TARGET} 2>&1 || \
+	    > ${UNIVERSE_LOGDIR}/_.${target}.${target_arch}.${UNIVERSE_TARGET} 2>&1 || \
 	    (echo "${target}.${target_arch} ${UNIVERSE_TARGET} failed," \
-	    "check _.${target}.${target_arch}.${UNIVERSE_TARGET} for details" | \
+	    "check ${UNIVERSE_LOGDIR}/_.${target}.${target_arch}.${UNIVERSE_TARGET} for details" | \
 	    ${MAKEFAIL}))
 	@echo ">> ${target}.${target_arch} ${UNIVERSE_TARGET} completed on `LC_ALL=C date`"
 .endfor
@@ -727,12 +758,16 @@ KERNCONFS!=	cd ${KERNSRCDIR}/${TARGET}/conf && \
 		${_THINNER}
 universe_kernconfs: universe_kernels_prologue .PHONY
 .for kernel in ${KERNCONFS}
+.if !exists(${KERNSRCDIR}/${TARGET}/conf/${kernel})
+.warning ${TARGET}/conf/${kernel} missing; skipping.
+.else
 TARGET_ARCH_${kernel}!=	cd ${KERNSRCDIR}/${TARGET}/conf && \
 	env PATH=${HOST_OBJTOP}/tmp/legacy/bin:${PATH:Q} \
 	config -m ${KERNSRCDIR}/${TARGET}/conf/${kernel} 2> /dev/null | \
 	grep -v WARNING: | cut -f 2
 .if empty(TARGET_ARCH_${kernel})
-.error Target architecture for ${TARGET}/conf/${kernel} unknown.  config(8) likely too old.
+.error Target architecture for ${TARGET}/conf/${kernel} cannot be determined, kernconf file may be invalid!
+.endif
 .endif
 universe_kernconfs_${TARGET_ARCH_${kernel}}: universe_kernconf_${TARGET}_${kernel}
 universe_kernconf_${TARGET}_${kernel}: .MAKE
@@ -743,9 +778,9 @@ universe_kernconf_${TARGET}_${kernel}: .MAKE
 	    TARGET_ARCH=${TARGET_ARCH_${kernel}} \
 	    ${MAKE_PARAMS_${TARGET_ARCH_${kernel}}} \
 	    KERNCONF=${kernel} \
-	    > _.${TARGET}.${kernel} 2>&1 || \
+	    > ${UNIVERSE_LOGDIR}/_.${TARGET}.${kernel} 2>&1 || \
 	    (echo "${TARGET} ${kernel} kernel failed," \
-	    "check _.${TARGET}.${kernel} for details"| ${MAKEFAIL}))
+	    "check ${UNIVERSE_LOGDIR}/_.${TARGET}.${kernel} for details"| ${MAKEFAIL}))
 	@echo ">> ${TARGET}.${TARGET_ARCH_${kernel}} ${kernel} kernel completed on `LC_ALL=C date`"
 .endfor
 .for target_arch in ${TARGET_ARCHES_${TARGET}}
@@ -768,12 +803,11 @@ universe_epilogue: .PHONY
 .endif
 .endif
 
-.if defined(.PARSEDIR)
 # This makefile does not run in meta mode
 .MAKE.MODE= normal
 # Normally the things we run from here don't either.
 # Using -DWITH_META_MODE
-# we can buildworld with meta files created which are useful 
+# we can buildworld with meta files created which are useful
 # for debugging, but without any of the rest of a meta mode build.
 MK_DIRDEPS_BUILD= no
 MK_STAGING= no
@@ -788,6 +822,5 @@ UPDATE_DEPENDFILE= NO
 MAKE_JOB_ERROR_TOKEN= no
 .export MAKE_JOB_ERROR_TOKEN
 .endif
-.endif # bmake
 
 .endif				# DIRDEPS_BUILD

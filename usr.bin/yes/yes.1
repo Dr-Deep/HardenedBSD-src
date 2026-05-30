@@ -25,10 +25,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\"     @(#)yes.1	8.1 (Berkeley) 6/6/93
-.\" $FreeBSD$
-.\"
-.Dd June 4, 2014
+.Dd March 2, 2026
 .Dt YES 1
 .Os
 .Sh NAME
@@ -36,7 +33,7 @@
 .Nd be repetitively affirmative
 .Sh SYNOPSIS
 .Nm
-.Op Ar expletive
+.Op Ar expletive ...
 .Sh DESCRIPTION
 The
 .Nm
@@ -45,6 +42,8 @@ utility outputs
 or, by default,
 .Dq y ,
 forever.
+If multiple arguments are given, they are concatenated into a single
+space-separated string.
 .Sh SEE ALSO
 .Xr jot 1 ,
 .Xr seq 1

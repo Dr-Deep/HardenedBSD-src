@@ -1,10 +1,7 @@
 /*	$NetBSD: umodem.c,v 1.45 2002/09/23 05:51:23 simonb Exp $	*/
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD AND BSD-2-Clause-NetBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2003 M. Warner Losh <imp@FreeBSD.org>
  *
@@ -359,7 +356,9 @@ umodem_attach(device_t dev)
 
 	/* get the data interface number */
 
-	cmd = umodem_get_desc(uaa, UDESC_CS_INTERFACE, UDESCSUB_CDC_CM);
+	cmd = NULL;
+	if (!usb_test_quirk(uaa, UQ_IGNORE_CDC_CM))
+		cmd = umodem_get_desc(uaa, UDESC_CS_INTERFACE, UDESCSUB_CDC_CM);
 
 	if ((cmd == NULL) || (cmd->bLength < sizeof(*cmd))) {
 		cud = usbd_find_descriptor(uaa->device, NULL,

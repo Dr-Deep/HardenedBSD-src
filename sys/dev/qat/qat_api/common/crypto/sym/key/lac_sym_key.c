@@ -1,8 +1,5 @@
-/***************************************************************************
- *
- * <COPYRIGHT_TAG>
- *
- ***************************************************************************/
+/* SPDX-License-Identifier: BSD-3-Clause */
+/* Copyright(c) 2007-2025 Intel Corporation */
 
 /**
  *****************************************************************************
@@ -365,7 +362,6 @@ cpaCyKeyGenQueryStats(CpaInstanceHandle instanceHandle_in,
 {
 	CpaInstanceHandle instanceHandle = NULL;
 
-
 	if (CPA_INSTANCE_HANDLE_SINGLE == instanceHandle_in) {
 		instanceHandle =
 		    Lac_GetFirstHandle(SAL_SERVICE_TYPE_CRYPTO_SYM);
@@ -392,7 +388,6 @@ cpaCyKeyGenQueryStats64(CpaInstanceHandle instanceHandle_in,
 			CpaCyKeyGenStats64 *pSymKeyStats)
 {
 	CpaInstanceHandle instanceHandle = NULL;
-
 
 	if (CPA_INSTANCE_HANDLE_SINGLE == instanceHandle_in) {
 		instanceHandle =
@@ -798,8 +793,9 @@ LacSymKey_MgfCommon(const CpaInstanceHandle instanceHandle,
 		    ICP_QAT_FW_SLICE_DRAM_WR,
 		    ICP_QAT_HW_AUTH_MODE0, /* just a plain hash */
 		    CPA_FALSE, /* Not using sym Constants Table in Shared SRAM
-				  */
+				*/
 		    CPA_FALSE, /* not using the optimised Content Desc */
+		    CPA_FALSE, /* Not using the stateful SHA3 Content Desc */
 		    NULL,
 		    &hashBlkSizeInBytes);
 
@@ -916,7 +912,6 @@ cpaCyKeyGenMgf(const CpaInstanceHandle instanceHandle_in,
 {
 	CpaInstanceHandle instanceHandle = NULL;
 
-
 	if (CPA_INSTANCE_HANDLE_SINGLE == instanceHandle_in) {
 		instanceHandle =
 		    Lac_GetFirstHandle(SAL_SERVICE_TYPE_CRYPTO_SYM);
@@ -954,7 +949,6 @@ cpaCyKeyGenMgfExt(const CpaInstanceHandle instanceHandle_in,
 		  CpaFlatBuffer *pGeneratedMaskBuffer)
 {
 	CpaInstanceHandle instanceHandle = NULL;
-
 
 	if (CPA_INSTANCE_HANDLE_SINGLE == instanceHandle_in) {
 		instanceHandle =
@@ -1550,9 +1544,11 @@ LacSymKey_KeyGenSslTls_GenCommon(CpaInstanceHandle instanceHandle,
 		    LAC_SYM_KEY_NO_HASH_BLK_OFFSET_QW,
 		    ICP_QAT_FW_SLICE_DRAM_WR,
 		    qatHashMode,
-		    CPA_FALSE, /* Not using sym Constants Table in SRAM */
-		    CPA_FALSE, /* Not using the optimised content Desc */
-		    NULL,      /* Precompute data */
+		    CPA_FALSE, /* Not using sym Constants Table in Shared SRAM
+				*/
+		    CPA_FALSE, /* not using the optimised content Desc */
+		    CPA_FALSE, /* Not using the stateful SHA3 Content Desc */
+		    NULL,      /* precompute data */
 		    &hashBlkSizeInBytes);
 
 		/* SSL3 */
@@ -2164,6 +2160,14 @@ LacSymKey_CheckParamSslTls(const void *pKeyGenOpData,
 			}
 		}
 
+		/* check 0 secret length as it is not valid for SSL3 Key Gen
+		 * request */
+		if (0 == uSecretLen) {
+			LAC_INVALID_PARAM_LOG1("%u secret.dataLenInBytes",
+					       uSecretLen);
+			return CPA_STATUS_INVALID_PARAM;
+		}
+
 		/* Only seed length for SSL3 Key Gen request */
 		if (maxSeedLen != uSeedLen) {
 			LAC_INVALID_PARAM_LOG("seed.dataLenInBytes");
@@ -2191,11 +2195,11 @@ LacSymKey_CheckParamSslTls(const void *pKeyGenOpData,
 			/* Api max value */
 			/* ICP_QAT_FW_LA_TLS_V1_1_SECRET_LEN_MAX needs to be
 			 * multiplied
-			 * by 4 in order to verifiy the 512 conditions. We did
+			 * by 4 in order to verify the 512 conditions. We did
 			 * not change
 			 * ICP_QAT_FW_LA_TLS_V1_1_SECRET_LEN_MAX as it
 			 * represents
-			 * the max value tha firmware can handle.
+			 * the max value that firmware can handle.
 			 */
 			maxSecretLen =
 			    ICP_QAT_FW_LA_TLS_V1_1_SECRET_LEN_MAX * 4;
@@ -2203,11 +2207,11 @@ LacSymKey_CheckParamSslTls(const void *pKeyGenOpData,
 			/* Api max value */
 			/* ICP_QAT_FW_LA_TLS_V1_2_SECRET_LEN_MAX needs to be
 			 * multiplied
-			 * by 8 in order to verifiy the 512 conditions. We did
+			 * by 8 in order to verify the 512 conditions. We did
 			 * not change
 			 * ICP_QAT_FW_LA_TLS_V1_2_SECRET_LEN_MAX as it
 			 * represents
-			 * the max value tha firmware can handle.
+			 * the max value that firmware can handle.
 			 */
 			maxSecretLen =
 			    ICP_QAT_FW_LA_TLS_V1_2_SECRET_LEN_MAX * 8;
@@ -2446,20 +2450,12 @@ LacSymKey_KeyGenSslTls(const CpaInstanceHandle instanceHandle_in,
 {
 	CpaStatus status = CPA_STATUS_FAIL;
 	CpaInstanceHandle instanceHandle = LacKey_GetHandle(instanceHandle_in);
-	CpaCyCapabilitiesInfo cyCapInfo;
 
 	LAC_CHECK_INSTANCE_HANDLE(instanceHandle);
 	SAL_CHECK_INSTANCE_TYPE(instanceHandle,
 				(SAL_SERVICE_TYPE_CRYPTO |
 				 SAL_SERVICE_TYPE_CRYPTO_SYM));
-
 	SAL_RUNNING_CHECK(instanceHandle);
-	SalCtrl_CyQueryCapabilities(instanceHandle, &cyCapInfo);
-
-	if (IS_HKDF_UNSUPPORTED(cmdId, cyCapInfo.hkdfSupported)) {
-		LAC_LOG_ERROR("The device does not support HKDF");
-		return CPA_STATUS_UNSUPPORTED;
-	}
 
 	status = LacSymKey_CheckParamSslTls(pKeyGenOpData,
 					    hashAlgorithm,
@@ -2601,7 +2597,6 @@ cpaCyKeyGenTls(const CpaInstanceHandle instanceHandle_in,
 {
 	CpaInstanceHandle instanceHandle = NULL;
 
-
 	if (CPA_INSTANCE_HANDLE_SINGLE == instanceHandle_in) {
 		instanceHandle =
 		    Lac_GetFirstHandle(SAL_SERVICE_TYPE_CRYPTO_SYM);
@@ -2673,7 +2668,6 @@ cpaCyKeyGenTls2(const CpaInstanceHandle instanceHandle_in,
 		CpaFlatBuffer *pGeneratedKeyBuffer)
 {
 	CpaInstanceHandle instanceHandle = NULL;
-
 
 	if (CPA_INSTANCE_HANDLE_SINGLE == instanceHandle_in) {
 		instanceHandle =
@@ -2760,7 +2754,6 @@ cpaCyKeyGenTls3(const CpaInstanceHandle instanceHandle_in,
 		LAC_INVALID_PARAM_LOG("HKDF operation not supported");
 		return CPA_STATUS_INVALID_PARAM;
 	}
-
 
 	return LacSymKey_KeyGenSslTls(instanceHandle_in,
 				      pKeyGenCb,

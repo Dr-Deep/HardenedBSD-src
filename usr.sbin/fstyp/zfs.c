@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2015 Allan Jude <allanjude@FreeBSD.org>
  * Copyright (c) 2015 Xin LI <delphij@FreeBSD.org>
  *
@@ -24,9 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/types.h>
 #include <sys/time.h>
 #include <stdint.h>
@@ -45,7 +44,7 @@ fstyp_zfs(FILE *fp, char *label, size_t labelsize)
 {
 	vdev_label_t *vdev_label = NULL;
 	vdev_phys_t *vdev_phys;
-	char *zpool_name = NULL;
+	const char *zpool_name = NULL;
 	nvlist_t *config = NULL;
 	int err = 0;
 

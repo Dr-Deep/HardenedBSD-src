@@ -24,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef RTLD_UTRACE_H
@@ -51,7 +49,7 @@
 #define	RTLD_UTRACE_SIG			"RTLD"
 
 struct utrace_rtld {
-	char sig[RTLD_UTRACE_SIG_SZ];
+	char sig[RTLD_UTRACE_SIG_SZ] __nonstring;
 	int event;
 	void *handle;
 	void *mapbase;			/* Used for 'parent' and 'init/fini' */

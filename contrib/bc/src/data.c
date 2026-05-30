@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * Copyright (c) 2018-2021 Gavin D. Howard and contributors.
+ * Copyright (c) 2018-2025 Gavin D. Howard and contributors.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -70,8 +70,8 @@ const uchar dc_sig_msg_len = (uchar) (sizeof(dc_sig_msg) - 1);
 
 /// The copyright banner.
 const char bc_copyright[] =
-	"Copyright (c) 2018-2022 Gavin D. Howard and contributors\n"
-	"Report bugs at: https://git.yzena.com/gavin/bc\n\n"
+	"Copyright (c) 2018-2025 Gavin D. Howard and contributors\n"
+	"Report bugs at: https://github.com/gavinhoward/bc\n\n"
 	"This is free software with ABSOLUTELY NO WARRANTY.\n";
 
 // clang-format on
@@ -141,6 +141,7 @@ const char bc_pledge_end[] = "";
 /// end.
 const BcOptLong bc_args_lopt[] = {
 
+	{ "digit-clamp", BC_OPT_NONE, 'c' },
 	{ "expression", BC_OPT_REQUIRED, 'e' },
 	{ "file", BC_OPT_REQUIRED, 'f' },
 	{ "help", BC_OPT_NONE, 'h' },
@@ -149,6 +150,7 @@ const BcOptLong bc_args_lopt[] = {
 	{ "leading-zeroes", BC_OPT_NONE, 'z' },
 	{ "no-line-length", BC_OPT_NONE, 'L' },
 	{ "obase", BC_OPT_REQUIRED, 'O' },
+	{ "no-digit-clamp", BC_OPT_NONE, 'C' },
 	{ "no-prompt", BC_OPT_NONE, 'P' },
 	{ "no-read-prompt", BC_OPT_NONE, 'R' },
 	{ "scale", BC_OPT_REQUIRED, 'S' },
@@ -172,11 +174,64 @@ const BcOptLong bc_args_lopt[] = {
 
 };
 
-/// The function header for error messages.
-const char* const bc_err_func_header = "Function:";
+#if BC_ENABLE_OSSFUZZ
 
-/// The line format string for error messages.
-const char* const bc_err_line = ":%zu";
+const char* bc_fuzzer_args_c[] = {
+	"bc",
+	"-lqc",
+	"-e",
+	"seed = 82507683022933941343198991100880559238.7080266844215897551270760113"
+	"4734858017748592704189096562163085637164174146616055338762825421827784"
+	"566630725748836994171142578125",
+	NULL,
+};
+
+const char* dc_fuzzer_args_c[] = {
+	"dc",
+	"-xc",
+	"-e",
+	"82507683022933941343198991100880559238.7080266844215897551270760113"
+	"4734858017748592704189096562163085637164174146616055338762825421827784"
+	"566630725748836994171142578125j",
+	NULL,
+};
+
+const char* bc_fuzzer_args_C[] = {
+	"bc",
+	"-lqC",
+	"-e",
+	"seed = 82507683022933941343198991100880559238.7080266844215897551270760113"
+	"4734858017748592704189096562163085637164174146616055338762825421827784"
+	"566630725748836994171142578125",
+	NULL,
+};
+
+const char* dc_fuzzer_args_C[] = {
+	"dc",
+	"-xC",
+	"-e",
+	"82507683022933941343198991100880559238.7080266844215897551270760113"
+	"4734858017748592704189096562163085637164174146616055338762825421827784"
+	"566630725748836994171142578125j",
+	NULL,
+};
+
+const size_t bc_fuzzer_args_len = sizeof(bc_fuzzer_args_c) / sizeof(char*);
+
+#if BC_C11
+
+_Static_assert(sizeof(bc_fuzzer_args_C) / sizeof(char*) == bc_fuzzer_args_len,
+               "Wrong number of bc fuzzer args");
+
+_Static_assert(sizeof(dc_fuzzer_args_c) / sizeof(char*) == bc_fuzzer_args_len,
+               "Wrong number of dc fuzzer args");
+
+_Static_assert(sizeof(dc_fuzzer_args_C) / sizeof(char*) == bc_fuzzer_args_len,
+               "Wrong number of dc fuzzer args");
+
+#endif // BC_C11
+
+#endif // BC_ENABLE_OSSFUZZ
 
 // clang-format off
 
@@ -312,9 +367,9 @@ const BcVecFree bc_vec_dtors[] = {
 	bc_vec_free,
 	bc_num_free,
 #if !BC_ENABLE_LIBRARY
-#ifndef NDEBUG
+#if BC_DEBUG
 	bc_func_free,
-#endif // NDEBUG
+#endif // BC_DEBUG
 	bc_slab_free,
 	bc_const_free,
 	bc_result_free,
@@ -717,6 +772,8 @@ const char* bc_inst_names[] = {
 	"BC_INST_SCALE_FUNC",
 	"BC_INST_SQRT",
 	"BC_INST_ABS",
+	"BC_INST_IS_NUMBER",
+	"BC_INST_IS_STRING",
 #if BC_ENABLE_EXTRA_MATH
 	"BC_INST_IRAND",
 #endif // BC_ENABLE_EXTRA_MATH
@@ -793,49 +850,51 @@ const char bc_parse_one[2] = "1";
 
 /// A list of keywords for bc. This needs to be updated if keywords change.
 const BcLexKeyword bc_lex_kws[] = {
-	BC_LEX_KW_ENTRY("auto", 4, true),
-	BC_LEX_KW_ENTRY("break", 5, true),
-	BC_LEX_KW_ENTRY("continue", 8, false),
-	BC_LEX_KW_ENTRY("define", 6, true),
-	BC_LEX_KW_ENTRY("for", 3, true),
-	BC_LEX_KW_ENTRY("if", 2, true),
-	BC_LEX_KW_ENTRY("limits", 6, false),
-	BC_LEX_KW_ENTRY("return", 6, true),
-	BC_LEX_KW_ENTRY("while", 5, true),
-	BC_LEX_KW_ENTRY("halt", 4, false),
-	BC_LEX_KW_ENTRY("last", 4, false),
-	BC_LEX_KW_ENTRY("ibase", 5, true),
-	BC_LEX_KW_ENTRY("obase", 5, true),
-	BC_LEX_KW_ENTRY("scale", 5, true),
+	BC_LEX_KW_ENTRY("auto", 4, 1),
+	BC_LEX_KW_ENTRY("break", 5, 1),
+	BC_LEX_KW_ENTRY("continue", 8, 0),
+	BC_LEX_KW_ENTRY("define", 6, 1),
+	BC_LEX_KW_ENTRY("for", 3, 1),
+	BC_LEX_KW_ENTRY("if", 2, 1),
+	BC_LEX_KW_ENTRY("limits", 6, 0),
+	BC_LEX_KW_ENTRY("return", 6, 1),
+	BC_LEX_KW_ENTRY("while", 5, 1),
+	BC_LEX_KW_ENTRY("halt", 4, 0),
+	BC_LEX_KW_ENTRY("last", 4, 0),
+	BC_LEX_KW_ENTRY("ibase", 5, 1),
+	BC_LEX_KW_ENTRY("obase", 5, 1),
+	BC_LEX_KW_ENTRY("scale", 5, 1),
 #if BC_ENABLE_EXTRA_MATH
-	BC_LEX_KW_ENTRY("seed", 4, false),
+	BC_LEX_KW_ENTRY("seed", 4, 0),
 #endif // BC_ENABLE_EXTRA_MATH
-	BC_LEX_KW_ENTRY("length", 6, true),
-	BC_LEX_KW_ENTRY("print", 5, false),
-	BC_LEX_KW_ENTRY("sqrt", 4, true),
-	BC_LEX_KW_ENTRY("abs", 3, false),
+	BC_LEX_KW_ENTRY("length", 6, 1),
+	BC_LEX_KW_ENTRY("print", 5, 0),
+	BC_LEX_KW_ENTRY("sqrt", 4, 1),
+	BC_LEX_KW_ENTRY("abs", 3, 0),
+	BC_LEX_KW_ENTRY("is_number", 9, 0),
+	BC_LEX_KW_ENTRY("is_string", 9, 0),
 #if BC_ENABLE_EXTRA_MATH
-	BC_LEX_KW_ENTRY("irand", 5, false),
+	BC_LEX_KW_ENTRY("irand", 5, 0),
 #endif // BC_ENABLE_EXTRA_MATH
-	BC_LEX_KW_ENTRY("asciify", 7, false),
-	BC_LEX_KW_ENTRY("modexp", 6, false),
-	BC_LEX_KW_ENTRY("divmod", 6, false),
-	BC_LEX_KW_ENTRY("quit", 4, true),
-	BC_LEX_KW_ENTRY("read", 4, false),
+	BC_LEX_KW_ENTRY("asciify", 7, 0),
+	BC_LEX_KW_ENTRY("modexp", 6, 0),
+	BC_LEX_KW_ENTRY("divmod", 6, 0),
+	BC_LEX_KW_ENTRY("quit", 4, 1),
+	BC_LEX_KW_ENTRY("read", 4, 0),
 #if BC_ENABLE_EXTRA_MATH
-	BC_LEX_KW_ENTRY("rand", 4, false),
+	BC_LEX_KW_ENTRY("rand", 4, 0),
 #endif // BC_ENABLE_EXTRA_MATH
-	BC_LEX_KW_ENTRY("maxibase", 8, false),
-	BC_LEX_KW_ENTRY("maxobase", 8, false),
-	BC_LEX_KW_ENTRY("maxscale", 8, false),
+	BC_LEX_KW_ENTRY("maxibase", 8, 0),
+	BC_LEX_KW_ENTRY("maxobase", 8, 0),
+	BC_LEX_KW_ENTRY("maxscale", 8, 0),
 #if BC_ENABLE_EXTRA_MATH
-	BC_LEX_KW_ENTRY("maxrand", 7, false),
+	BC_LEX_KW_ENTRY("maxrand", 7, 0),
 #endif // BC_ENABLE_EXTRA_MATH
-	BC_LEX_KW_ENTRY("line_length", 11, false),
-	BC_LEX_KW_ENTRY("global_stacks", 13, false),
-	BC_LEX_KW_ENTRY("leading_zero", 12, false),
-	BC_LEX_KW_ENTRY("stream", 6, false),
-	BC_LEX_KW_ENTRY("else", 4, false),
+	BC_LEX_KW_ENTRY("line_length", 11, 0),
+	BC_LEX_KW_ENTRY("global_stacks", 13, 0),
+	BC_LEX_KW_ENTRY("leading_zero", 12, 0),
+	BC_LEX_KW_ENTRY("stream", 6, 0),
+	BC_LEX_KW_ENTRY("else", 4, 0),
 };
 
 /// The length of the list of bc keywords.
@@ -858,86 +917,90 @@ _Static_assert(sizeof(bc_lex_kws) / sizeof(BcLexKeyword) == BC_LEX_NKWS,
 const uint8_t bc_parse_exprs[] = {
 
 	// Starts with BC_LEX_EOF.
-	BC_PARSE_EXPR_ENTRY(false, false, true, true, true, true, true, true),
+	BC_PARSE_EXPR_ENTRY(0, 0, 1, 1, 1, 1, 1, 1),
 
 	// Starts with BC_LEX_OP_MULTIPLY if extra math is enabled, BC_LEX_OP_DIVIDE
 	// otherwise.
-	BC_PARSE_EXPR_ENTRY(true, true, true, true, true, true, true, true),
+	BC_PARSE_EXPR_ENTRY(1, 1, 1, 1, 1, 1, 1, 1),
 
 	// Starts with BC_LEX_OP_REL_EQ if extra math is enabled, BC_LEX_OP_REL_LT
 	// otherwise.
-	BC_PARSE_EXPR_ENTRY(true, true, true, true, true, true, true, true),
+	BC_PARSE_EXPR_ENTRY(1, 1, 1, 1, 1, 1, 1, 1),
 
 #if BC_ENABLE_EXTRA_MATH
 
 	// Starts with BC_LEX_OP_ASSIGN_POWER.
-	BC_PARSE_EXPR_ENTRY(true, true, true, true, true, true, true, true),
+	BC_PARSE_EXPR_ENTRY(1, 1, 1, 1, 1, 1, 1, 1),
 
 	// Starts with BC_LEX_OP_ASSIGN_RSHIFT.
-	BC_PARSE_EXPR_ENTRY(true, true, false, false, true, true, false, false),
+	BC_PARSE_EXPR_ENTRY(1, 1, 0, 0, 1, 1, 0, 0),
 
 	// Starts with BC_LEX_RBRACKET.
-	BC_PARSE_EXPR_ENTRY(false, false, false, false, true, true, true, false),
+	BC_PARSE_EXPR_ENTRY(0, 0, 0, 0, 1, 1, 1, 0),
 
 	// Starts with BC_LEX_KW_BREAK.
-	BC_PARSE_EXPR_ENTRY(false, false, false, false, false, false, false, false),
+	BC_PARSE_EXPR_ENTRY(0, 0, 0, 0, 0, 0, 0, 0),
 
 	// Starts with BC_LEX_KW_HALT.
-	BC_PARSE_EXPR_ENTRY(false, true, true, true, true, true, true, false),
+	BC_PARSE_EXPR_ENTRY(0, 1, 1, 1, 1, 1, 1, 0),
 
 	// Starts with BC_LEX_KW_SQRT.
-	BC_PARSE_EXPR_ENTRY(true, true, true, true, true, true, false, true),
+	BC_PARSE_EXPR_ENTRY(1, 1, 1, 1, 1, 1, 1, 1),
 
-	// Starts with BC_LEX_KW_MAXIBASE.
-	BC_PARSE_EXPR_ENTRY(true, true, true, true, true, true, true, true),
+	// Starts with BC_LEX_KW_QUIT.
+	BC_PARSE_EXPR_ENTRY(0, 1, 1, 1, 1, 1, 1, 1),
 
-	// Starts with BC_LEX_KW_STREAM.
-	BC_PARSE_EXPR_ENTRY(false, false, 0, 0, 0, 0, 0, 0)
+	// Starts with BC_LEX_KW_GLOBAL_STACKS.
+	BC_PARSE_EXPR_ENTRY(1, 1, 0, 0, 0, 0, 0, 0)
 
 #else // BC_ENABLE_EXTRA_MATH
 
 	// Starts with BC_LEX_OP_ASSIGN_PLUS.
-	BC_PARSE_EXPR_ENTRY(true, true, true, false, false, true, true, false),
+	BC_PARSE_EXPR_ENTRY(1, 1, 1, 0, 0, 1, 1, 0),
 
 	// Starts with BC_LEX_COMMA.
-	BC_PARSE_EXPR_ENTRY(false, false, false, false, false, true, true, true),
+	BC_PARSE_EXPR_ENTRY(0, 0, 0, 0, 0, 1, 1, 1),
 
 	// Starts with BC_LEX_KW_AUTO.
-	BC_PARSE_EXPR_ENTRY(false, false, false, false, false, false, false, false),
+	BC_PARSE_EXPR_ENTRY(0, 0, 0, 0, 0, 0, 0, 0),
 
 	// Starts with BC_LEX_KW_WHILE.
-	BC_PARSE_EXPR_ENTRY(false, false, true, true, true, true, true, false),
+	BC_PARSE_EXPR_ENTRY(0, 0, 1, 1, 1, 1, 1, 0),
 
 	// Starts with BC_LEX_KW_SQRT.
-	BC_PARSE_EXPR_ENTRY(true, true, true, true, true, false, true, true),
+	BC_PARSE_EXPR_ENTRY(1, 1, 1, 1, 1, 1, 1, 0),
 
-	// Starts with BC_LEX_KW_MAXSCALE,
-	BC_PARSE_EXPR_ENTRY(true, true, true, true, true, false, false, 0)
+	// Starts with BC_LEX_KW_MAXIBASE.
+	BC_PARSE_EXPR_ENTRY(1, 1, 1, 1, 1, 1, 1, 0),
+
+	// Starts with  BC_LEX_KW_ELSE.
+	BC_PARSE_EXPR_ENTRY(0, 0, 0, 0, 0, 0, 0, 0)
 
 #endif // BC_ENABLE_EXTRA_MATH
 };
 
-/// An array of data for operators that correspond to token types.
+/// An array of data for operators that correspond to token types. Note that a
+/// lower precedence *value* means a higher precedence.
 const uchar bc_parse_ops[] = {
-	BC_PARSE_OP(0, false), BC_PARSE_OP(0, false), BC_PARSE_OP(1, false),
-	BC_PARSE_OP(1, false),
+	BC_PARSE_OP(0, 0), BC_PARSE_OP(0, 0), BC_PARSE_OP(1, 0),
+	BC_PARSE_OP(1, 0),
 #if BC_ENABLE_EXTRA_MATH
-	BC_PARSE_OP(2, false),
+	BC_PARSE_OP(2, 0),
 #endif // BC_ENABLE_EXTRA_MATH
-	BC_PARSE_OP(4, false), BC_PARSE_OP(5, true),  BC_PARSE_OP(5, true),
-	BC_PARSE_OP(5, true),  BC_PARSE_OP(6, true),  BC_PARSE_OP(6, true),
+	BC_PARSE_OP(4, 0), BC_PARSE_OP(5, 1),  BC_PARSE_OP(5, 1),
+	BC_PARSE_OP(5, 1),  BC_PARSE_OP(6, 1),  BC_PARSE_OP(6, 1),
 #if BC_ENABLE_EXTRA_MATH
-	BC_PARSE_OP(3, false), BC_PARSE_OP(7, true),  BC_PARSE_OP(7, true),
+	BC_PARSE_OP(3, 0), BC_PARSE_OP(7, 1),  BC_PARSE_OP(7, 1),
 #endif // BC_ENABLE_EXTRA_MATH
-	BC_PARSE_OP(9, true),  BC_PARSE_OP(9, true),  BC_PARSE_OP(9, true),
-	BC_PARSE_OP(9, true),  BC_PARSE_OP(9, true),  BC_PARSE_OP(9, true),
-	BC_PARSE_OP(11, true), BC_PARSE_OP(10, true), BC_PARSE_OP(8, false),
-	BC_PARSE_OP(8, false), BC_PARSE_OP(8, false), BC_PARSE_OP(8, false),
-	BC_PARSE_OP(8, false), BC_PARSE_OP(8, false),
+	BC_PARSE_OP(9, 1),  BC_PARSE_OP(9, 1),  BC_PARSE_OP(9, 1),
+	BC_PARSE_OP(9, 1),  BC_PARSE_OP(9, 1),  BC_PARSE_OP(9, 1),
+	BC_PARSE_OP(11, 1), BC_PARSE_OP(10, 1), BC_PARSE_OP(8, 0),
+	BC_PARSE_OP(8, 0), BC_PARSE_OP(8, 0), BC_PARSE_OP(8, 0),
+	BC_PARSE_OP(8, 0), BC_PARSE_OP(8, 0),
 #if BC_ENABLE_EXTRA_MATH
-	BC_PARSE_OP(8, false), BC_PARSE_OP(8, false), BC_PARSE_OP(8, false),
+	BC_PARSE_OP(8, 0), BC_PARSE_OP(8, 0), BC_PARSE_OP(8, 0),
 #endif // BC_ENABLE_EXTRA_MATH
-	BC_PARSE_OP(8, false),
+	BC_PARSE_OP(8, 0),
 };
 
 // These identify what tokens can come after expressions in certain cases.
@@ -1120,8 +1183,8 @@ const uchar dc_lex_tokens[] = {
 	BC_LEX_KW_QUIT,
 	BC_LEX_SWAP,
 	BC_LEX_OP_ASSIGN,
-	BC_LEX_INVALID,
-	BC_LEX_INVALID,
+	BC_LEX_KW_IS_STRING,
+	BC_LEX_KW_IS_NUMBER,
 	BC_LEX_KW_SQRT,
 	BC_LEX_INVALID,
 	BC_LEX_EXECUTE,
@@ -1135,7 +1198,7 @@ const uchar dc_lex_tokens[] = {
 };
 
 /// A list of instructions that correspond to lex tokens. If an entry is
-/// BC_INST_INVALID, that lex token needs extra parsing in the dc parser.
+/// @a BC_INST_INVALID, that lex token needs extra parsing in the dc parser.
 /// Otherwise, the token can trivially be replaced by the entry. This needs to
 /// be updated if the tokens change.
 const uchar dc_parse_insts[] = {
@@ -1147,47 +1210,60 @@ const uchar dc_parse_insts[] = {
 #if BC_ENABLE_EXTRA_MATH
 	BC_INST_TRUNC,
 #endif // BC_ENABLE_EXTRA_MATH
-	BC_INST_POWER,        BC_INST_MULTIPLY,     BC_INST_DIVIDE,
-	BC_INST_MODULUS,      BC_INST_PLUS,         BC_INST_MINUS,
+	BC_INST_POWER,        BC_INST_MULTIPLY,
+	BC_INST_DIVIDE,       BC_INST_MODULUS,
+	BC_INST_PLUS,         BC_INST_MINUS,
 #if BC_ENABLE_EXTRA_MATH
-	BC_INST_PLACES,       BC_INST_LSHIFT,       BC_INST_RSHIFT,
+	BC_INST_PLACES,       BC_INST_LSHIFT,
+	BC_INST_RSHIFT,
 #endif // BC_ENABLE_EXTRA_MATH
-	BC_INST_INVALID,      BC_INST_INVALID,      BC_INST_INVALID,
-	BC_INST_INVALID,      BC_INST_INVALID,      BC_INST_INVALID,
+	BC_INST_INVALID,      BC_INST_INVALID,
+	BC_INST_INVALID,      BC_INST_INVALID,
+	BC_INST_INVALID,      BC_INST_INVALID,
 	BC_INST_BOOL_OR,      BC_INST_BOOL_AND,
 #if BC_ENABLED
-	BC_INST_INVALID,      BC_INST_INVALID,      BC_INST_INVALID,
-	BC_INST_INVALID,      BC_INST_INVALID,      BC_INST_INVALID,
+	BC_INST_INVALID,      BC_INST_INVALID,
+	BC_INST_INVALID,      BC_INST_INVALID,
+	BC_INST_INVALID,      BC_INST_INVALID,
 #if BC_ENABLE_EXTRA_MATH
-	BC_INST_INVALID,      BC_INST_INVALID,      BC_INST_INVALID,
+	BC_INST_INVALID,      BC_INST_INVALID,
+	BC_INST_INVALID,
 #endif // BC_ENABLE_EXTRA_MATH
 #endif // BC_ENABLED
-	BC_INST_INVALID,      BC_INST_INVALID,      BC_INST_INVALID,
-	BC_INST_REL_GT,       BC_INST_REL_LT,       BC_INST_INVALID,
-	BC_INST_INVALID,      BC_INST_INVALID,      BC_INST_REL_GE,
-	BC_INST_INVALID,      BC_INST_REL_LE,       BC_INST_INVALID,
+	BC_INST_INVALID,      BC_INST_INVALID,
+	BC_INST_INVALID,      BC_INST_REL_GT,
+	BC_INST_REL_LT,       BC_INST_INVALID,
+	BC_INST_INVALID,      BC_INST_INVALID,
+	BC_INST_REL_GE,       BC_INST_INVALID,
+	BC_INST_REL_LE,       BC_INST_INVALID,
 	BC_INST_INVALID,      BC_INST_INVALID,
 #if BC_ENABLED
-	BC_INST_INVALID,      BC_INST_INVALID,      BC_INST_INVALID,
-	BC_INST_INVALID,      BC_INST_INVALID,      BC_INST_INVALID,
-	BC_INST_INVALID,      BC_INST_INVALID,      BC_INST_INVALID,
 	BC_INST_INVALID,      BC_INST_INVALID,
+	BC_INST_INVALID,      BC_INST_INVALID,
+	BC_INST_INVALID,      BC_INST_INVALID,
+	BC_INST_INVALID,      BC_INST_INVALID,
+	BC_INST_INVALID,      BC_INST_INVALID,
+	BC_INST_INVALID,
 #endif // BC_ENABLED
-	BC_INST_IBASE,        BC_INST_OBASE,        BC_INST_SCALE,
+	BC_INST_IBASE,        BC_INST_OBASE,
+	BC_INST_SCALE,
 #if BC_ENABLE_EXTRA_MATH
 	BC_INST_SEED,
 #endif // BC_ENABLE_EXTRA_MATH
-	BC_INST_LENGTH,       BC_INST_PRINT,        BC_INST_SQRT,
-	BC_INST_ABS,
+	BC_INST_LENGTH,       BC_INST_PRINT,
+	BC_INST_SQRT,         BC_INST_ABS,
+	BC_INST_IS_NUMBER,    BC_INST_IS_STRING,
 #if BC_ENABLE_EXTRA_MATH
 	BC_INST_IRAND,
 #endif // BC_ENABLE_EXTRA_MATH
-	BC_INST_ASCIIFY,      BC_INST_MODEXP,       BC_INST_DIVMOD,
-	BC_INST_QUIT,         BC_INST_INVALID,
+	BC_INST_ASCIIFY,      BC_INST_MODEXP,
+	BC_INST_DIVMOD,       BC_INST_QUIT,
+	BC_INST_INVALID,
 #if BC_ENABLE_EXTRA_MATH
 	BC_INST_RAND,
 #endif // BC_ENABLE_EXTRA_MATH
-	BC_INST_MAXIBASE,     BC_INST_MAXOBASE,     BC_INST_MAXSCALE,
+	BC_INST_MAXIBASE,     BC_INST_MAXOBASE,
+	BC_INST_MAXSCALE,
 #if BC_ENABLE_EXTRA_MATH
 	BC_INST_MAXRAND,
 #endif // BC_ENABLE_EXTRA_MATH
@@ -1195,17 +1271,21 @@ const uchar dc_parse_insts[] = {
 #if BC_ENABLED
 	BC_INST_INVALID,
 #endif // BC_ENABLED
-	BC_INST_LEADING_ZERO, BC_INST_PRINT_STREAM, BC_INST_INVALID,
-	BC_INST_REL_EQ,       BC_INST_INVALID,      BC_INST_EXECUTE,
-	BC_INST_PRINT_STACK,  BC_INST_CLEAR_STACK,  BC_INST_INVALID,
-	BC_INST_STACK_LEN,    BC_INST_DUPLICATE,    BC_INST_SWAP,
-	BC_INST_POP,          BC_INST_INVALID,      BC_INST_INVALID,
+	BC_INST_LEADING_ZERO, BC_INST_PRINT_STREAM,
+	BC_INST_INVALID,      BC_INST_EXTENDED_REGISTERS,
+	BC_INST_REL_EQ,       BC_INST_INVALID,
+	BC_INST_EXECUTE,      BC_INST_PRINT_STACK,
+	BC_INST_CLEAR_STACK,  BC_INST_INVALID,
+	BC_INST_STACK_LEN,    BC_INST_DUPLICATE,
+	BC_INST_SWAP,         BC_INST_POP,
+	BC_INST_INVALID,      BC_INST_INVALID,
 	BC_INST_INVALID,
 #if BC_ENABLE_EXTRA_MATH
 	BC_INST_INVALID,
 #endif // BC_ENABLE_EXTRA_MATH
-	BC_INST_INVALID,      BC_INST_INVALID,      BC_INST_INVALID,
-	BC_INST_PRINT_POP,    BC_INST_NQUIT,        BC_INST_EXEC_STACK_LEN,
+	BC_INST_INVALID,      BC_INST_INVALID,
+	BC_INST_INVALID,      BC_INST_PRINT_POP,
+	BC_INST_NQUIT,        BC_INST_EXEC_STACK_LEN,
 	BC_INST_SCALE_FUNC,   BC_INST_INVALID,
 };
 #endif // DC_ENABLED

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1998-2003 Poul-Henning Kamp
  * All rights reserved.
@@ -27,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_clock.h"
 
 #include <sys/param.h>
@@ -141,7 +139,7 @@ tsc_freq_vmware(void)
 {
 	u_int regs[4];
 
-	vmware_hvcall(VMW_HVCMD_GETHZ, regs);
+	vmware_hvcall(0, VMW_HVCMD_GETHZ, VMW_HVCMD_DEFAULT_PARAM, regs);
 	if (regs[1] != UINT_MAX)
 		tsc_freq = regs[0] | ((uint64_t)regs[1] << 32);
 	tsc_early_calib_exact = 1;
@@ -422,7 +420,7 @@ probe_tsc_freq_late(void)
 	} else {
 		/*
 		 * Calibrate against a timecounter or the 8254 PIT.  This
-		 * estimate will be refined later in tsc_calib().
+		 * estimate will be refined later in tsc_calibrate().
 		 */
 		tsc_freq_tc(&tsc_freq);
 		if (bootverbose)
@@ -435,6 +433,8 @@ probe_tsc_freq_late(void)
 void
 start_TSC(void)
 {
+	uint64_t mperf, aperf;
+
 	if ((cpu_feature & CPUID_TSC) == 0 || tsc_disabled)
 		return;
 
@@ -444,11 +444,12 @@ start_TSC(void)
 		/*
 		 * XXX Some emulators expose host CPUID without actual support
 		 * for these MSRs.  We must test whether they really work.
+		 * They may also be read-only, so test for increment.
 		 */
-		wrmsr(MSR_MPERF, 0);
-		wrmsr(MSR_APERF, 0);
+		mperf = rdmsr(MSR_MPERF);
+		aperf = rdmsr(MSR_APERF);
 		DELAY(10);
-		if (rdmsr(MSR_MPERF) > 0 && rdmsr(MSR_APERF) > 0)
+		if (rdmsr(MSR_MPERF) != mperf && rdmsr(MSR_APERF) != aperf)
 			tsc_perf_stat = 1;
 	}
 
@@ -652,7 +653,7 @@ retry:
 #endif /* SMP */
 
 static void
-init_TSC_tc(void)
+init_TSC_tc(void *dummy __unused)
 {
 	uint64_t max_freq;
 	int shift;
@@ -990,7 +991,8 @@ x86_tsc_vdso_timehands32(struct vdso_timehands32 *vdso_th32,
 	vdso_th32->th_algo = VDSO_TH_ALGO_X86_TSC;
 	vdso_th32->th_x86_shift = (int)(intptr_t)tc->tc_priv;
 	vdso_th32->th_x86_hpet_idx = 0xffffffff;
-	vdso_th32->th_x86_pvc_last_systime = 0;
+	vdso_th32->th_x86_pvc_last_systime[0] = 0;
+	vdso_th32->th_x86_pvc_last_systime[1] = 0;
 	vdso_th32->th_x86_pvc_stable_mask = 0;
 	bzero(vdso_th32->th_res, sizeof(vdso_th32->th_res));
 	return (1);

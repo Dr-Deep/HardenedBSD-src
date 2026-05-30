@@ -1,6 +1,6 @@
 %{
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2012 The FreeBSD Foundation
  *
@@ -27,8 +27,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include <stdio.h>
@@ -56,21 +54,26 @@ backend			{ return BACKEND; }
 blocksize		{ return BLOCKSIZE; }
 chap			{ return CHAP; }
 chap-mutual		{ return CHAP_MUTUAL; }
+controller		{ return CONTROLLER; }
 ctl-lun			{ return CTL_LUN; }
 debug			{ return DEBUG; }
 device-id		{ return DEVICE_ID; }
 device-type		{ return DEVICE_TYPE; }
 discovery-auth-group	{ return DISCOVERY_AUTH_GROUP; }
 discovery-filter	{ return DISCOVERY_FILTER; }
+discovery-tcp		{ return DISCOVERY_TCP; }
 dscp			{ return DSCP; }
 pcp			{ return PCP; }
 foreign			{ return FOREIGN; }
+host-address		{ return HOST_ADDRESS; }
+host-nqn		{ return HOST_NQN; }
 initiator-name		{ return INITIATOR_NAME; }
 initiator-portal	{ return INITIATOR_PORTAL; }
 listen			{ return LISTEN; }
 listen-iser		{ return LISTEN_ISER; }
 lun			{ return LUN; }
 maxproc			{ return MAXPROC; }
+namespace		{ return NAMESPACE; }
 offload			{ return OFFLOAD; }
 option			{ return OPTION; }
 path			{ return PATH; }
@@ -85,7 +88,9 @@ serial			{ return SERIAL; }
 size			{ return SIZE; }
 tag			{ return TAG; }
 target			{ return TARGET; }
+tcp			{ return TCP; }
 timeout			{ return TIMEOUT; }
+transport-group		{ return TRANSPORT_GROUP; }
 af11			{ return AF11; }
 af12			{ return AF12; }
 af13			{ return AF13; }

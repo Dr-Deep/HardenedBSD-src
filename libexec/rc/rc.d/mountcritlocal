@@ -1,6 +1,5 @@
 #!/bin/sh
 #
-# $FreeBSD$
 #
 
 # PROVIDE: mountcritlocal
@@ -27,6 +26,15 @@ mountcritlocal_start()
 		netfs_types="${netfs_types} ${extra_netfs_types}"
 		;;
 	esac
+
+	while read a b vfstype rest; do
+		if [ "$vfstype" = "zfs" -a "${a#\#}" = "$a" ]; then
+			# zpool is needed for legacy ZFS
+			echo 'Importing zpools for legacy ZFS'
+			/etc/rc.d/zpool start
+			break
+		fi
+	done < /etc/fstab
 
 	# Mount everything except nfs filesystems.
 	startmsg -n 'Mounting local filesystems:'
@@ -61,4 +69,8 @@ mountcritlocal_start()
 }
 
 load_rc_config $name
+
+# mounting shall not be performed in a svcj
+mountcritlocal_svcj="NO"
+
 run_rc_command "$1"

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2006 Stephane E. Potvin <sepotvin@videotron.ca>
  * Copyright (c) 2006 Ariff Abdullah <ariff@FreeBSD.org>
@@ -51,11 +51,9 @@
 
 #define HDA_DRV_TEST_REV	"20120126_0002"
 
-SND_DECLARE_FILE("$FreeBSD$");
-
-#define hdac_lock(sc)		snd_mtxlock((sc)->lock)
-#define hdac_unlock(sc)		snd_mtxunlock((sc)->lock)
-#define hdac_lockassert(sc)	snd_mtxassert((sc)->lock)
+#define hdac_lock(sc)		mtx_lock(&(sc)->lock)
+#define hdac_unlock(sc)		mtx_unlock(&(sc)->lock)
+#define hdac_lockassert(sc)	mtx_assert(&(sc)->lock, MA_OWNED)
 
 #define HDAC_QUIRK_64BIT	(1 << 0)
 #define HDAC_QUIRK_DMAPOS	(1 << 1)
@@ -108,11 +106,22 @@ static const struct {
 	{ HDA_INTEL_CMLKS,   "Intel Comet Lake-S",	0, 0 },
 	{ HDA_INTEL_CNLK,    "Intel Cannon Lake",	0, 0 },
 	{ HDA_INTEL_ICLK,    "Intel Ice Lake",		0, 0 },
-	{ HDA_INTEL_CMLKLP,  "Intel Comet Lake-LP",	0, 0 },
-	{ HDA_INTEL_CMLKH,   "Intel Comet Lake-H",	0, 0 },
 	{ HDA_INTEL_TGLK,    "Intel Tiger Lake",	0, 0 },
+	{ HDA_INTEL_TGLKH,   "Intel Tiger Lake-H",	0, 0 },
 	{ HDA_INTEL_GMLK,    "Intel Gemini Lake",	0, 0 },
 	{ HDA_INTEL_ALLK,    "Intel Alder Lake",	0, 0 },
+	{ HDA_INTEL_ALLKM,   "Intel Alder Lake-M",	0, 0 },
+	{ HDA_INTEL_ALLKN,   "Intel Alder Lake-N",	0, 0 },
+	{ HDA_INTEL_ALLKP1,  "Intel Alder Lake-P",	0, 0 },
+	{ HDA_INTEL_ALLKP2,  "Intel Alder Lake-P",	0, 0 },
+	{ HDA_INTEL_ALLKPS,  "Intel Alder Lake-PS",	0, 0 },
+	{ HDA_INTEL_RPTLK1,  "Intel Raptor Lake-P",	0, 0 },
+	{ HDA_INTEL_RPTLK2,  "Intel Raptor Lake-P",	0, 0 },
+	{ HDA_INTEL_RPTLK3,  "Intel Raptor Lake-S",	0, 0 },
+	{ HDA_INTEL_MTL,     "Intel Meteor Lake-P",	0, 0 },
+	{ HDA_INTEL_ARLS,    "Intel Arrow Lake-S",	0, 0 },
+	{ HDA_INTEL_ARL,     "Intel Arrow Lake",	0, 0 },
+	{ HDA_INTEL_LNLP,    "Intel Lunar Lake-P",	0, 0 },
 	{ HDA_INTEL_82801F,  "Intel 82801F",	0, 0 },
 	{ HDA_INTEL_63XXESB, "Intel 631x/632xESB",	0, 0 },
 	{ HDA_INTEL_82801G,  "Intel 82801G",	0, 0 },
@@ -124,6 +133,7 @@ static const struct {
 	{ HDA_INTEL_PCH,     "Intel Ibex Peak",	0, 0 },
 	{ HDA_INTEL_PCH2,    "Intel Ibex Peak",	0, 0 },
 	{ HDA_INTEL_ELLK,    "Intel Elkhart Lake",	0, 0 },
+	{ HDA_INTEL_ELLK2,   "Intel Elkhart Lake",	0, 0 },
 	{ HDA_INTEL_JLK2,    "Intel Jasper Lake",	0, 0 },
 	{ HDA_INTEL_BXTNP,   "Intel Broxton-P",	0, 0 },
 	{ HDA_INTEL_SCH,     "Intel SCH",	0, 0 },
@@ -160,6 +170,7 @@ static const struct {
 	{ HDA_NVIDIA_GF119,  "NVIDIA GF119",	0, 0 },
 	{ HDA_NVIDIA_GF110_1, "NVIDIA GF110",	0, HDAC_QUIRK_MSI },
 	{ HDA_NVIDIA_GF110_2, "NVIDIA GF110",	0, HDAC_QUIRK_MSI },
+	{ HDA_ATI_RAVEN,     "ATI Raven",	0, 0 },
 	{ HDA_ATI_SB450,     "ATI SB450",	0, 0 },
 	{ HDA_ATI_SB600,     "ATI SB600",	0, 0 },
 	{ HDA_ATI_RS600,     "ATI RS600",	0, 0 },
@@ -184,6 +195,7 @@ static const struct {
 	{ HDA_ATI_RV940,     "ATI RV940",	0, 0 },
 	{ HDA_ATI_RV970,     "ATI RV970",	0, 0 },
 	{ HDA_ATI_R1000,     "ATI R1000",	0, 0 },
+	{ HDA_ATI_OLAND,     "ATI Oland",	0, 0 },
 	{ HDA_ATI_KABINI,    "ATI Kabini",	0, 0 },
 	{ HDA_ATI_TRINITY,   "ATI Trinity",	0, 0 },
 	{ HDA_AMD_X370,      "AMD X370",	0, 0 },
@@ -193,8 +205,10 @@ static const struct {
 	{ HDA_AMD_HUDSON2,   "AMD Hudson-2",	0, 0 },
 	{ HDA_RDC_M3010,     "RDC M3010",	0, 0 },
 	{ HDA_VIA_VT82XX,    "VIA VT8251/8237A",0, 0 },
+	{ HDA_VMWARE,        "VMware",		0, 0 },
 	{ HDA_SIS_966,       "SiS 966/968",	0, 0 },
 	{ HDA_ULI_M5461,     "ULI M5461",	0, 0 },
+	{ HDA_CREATIVE_SB1570,	"Creative SB Audigy FX", 0, HDAC_QUIRK_64BIT },
 	/* Unknown */
 	{ HDA_INTEL_ALL,  "Intel",		0, 0 },
 	{ HDA_NVIDIA_ALL, "NVIDIA",		0, 0 },
@@ -202,6 +216,7 @@ static const struct {
 	{ HDA_AMD_ALL,    "AMD",		0, 0 },
 	{ HDA_CREATIVE_ALL,    "Creative",	0, 0 },
 	{ HDA_VIA_ALL,    "VIA",		0, 0 },
+	{ HDA_VMWARE_ALL, "VMware",		0, 0 },
 	{ HDA_SIS_ALL,    "SiS",		0, 0 },
 	{ HDA_ULI_ALL,    "ULI",		0, 0 },
 };
@@ -530,9 +545,12 @@ hdac_get_capabilities(struct hdac_softc *sc)
 	    HDAC_CORBSIZE_CORBSZCAP_2)
 		sc->corb_size = 2;
 	else {
-		device_printf(sc->dev, "%s: Invalid corb size (%x)\n",
+		device_printf(sc->dev, "%s: Hardware reports invalid corb size "
+		    "(%x), defaulting to 256\n",
 		    __func__, corbsize);
-		return (ENXIO);
+		sc->corb_size = 256;
+		corbsize = HDAC_CORBSIZE_CORBSIZE(HDAC_CORBSIZE_CORBSIZE_256);
+		HDAC_WRITE_1(&sc->mem, HDAC_CORBSIZE, corbsize);
 	}
 
 	rirbsize = HDAC_READ_1(&sc->mem, HDAC_RIRBSIZE);
@@ -546,9 +564,12 @@ hdac_get_capabilities(struct hdac_softc *sc)
 	    HDAC_RIRBSIZE_RIRBSZCAP_2)
 		sc->rirb_size = 2;
 	else {
-		device_printf(sc->dev, "%s: Invalid rirb size (%x)\n",
+		device_printf(sc->dev, "%s: Hardware reports invalid rirb size "
+		    "(%x), defaulting to 256\n",
 		    __func__, rirbsize);
-		return (ENXIO);
+		sc->rirb_size = 256;
+		rirbsize = HDAC_RIRBSIZE_RIRBSIZE(HDAC_RIRBSIZE_RIRBSIZE_256);
+		HDAC_WRITE_1(&sc->mem, HDAC_RIRBSIZE, rirbsize);
 	}
 
 	HDA_BOOTVERBOSE(
@@ -1094,10 +1115,8 @@ hdac_probe(device_t dev)
 		snprintf(desc, sizeof(desc), "Generic (0x%08x)", model);
 		result = BUS_PROBE_GENERIC;
 	}
-	if (result != ENXIO) {
-		strlcat(desc, " HDA Controller", sizeof(desc));
-		device_set_desc_copy(dev, desc);
-	}
+	if (result != ENXIO)
+		device_set_descf(dev, "%s HDA Controller", desc);
 
 	return (result);
 }
@@ -1158,7 +1177,8 @@ hdac_attach(device_t dev)
 		}
 	}
 
-	sc->lock = snd_mtxcreate(device_get_nameunit(dev), "HDA driver mutex");
+	mtx_init(&sc->lock, device_get_nameunit(dev), "HDA driver mutex",
+	    MTX_DEF);
 	sc->dev = dev;
 	TASK_INIT(&sc->unsolq_task, 0, hdac_unsolq_task, sc);
 	callout_init(&sc->poll_callout, 1);
@@ -1265,11 +1285,9 @@ hdac_attach(device_t dev)
 	result = hdac_mem_alloc(sc);
 	if (result != 0)
 		goto hdac_attach_fail;
-	result = hdac_irq_alloc(sc);
-	if (result != 0)
-		goto hdac_attach_fail;
 
 	/* Get Capabilities */
+	hdac_reset(sc, 1);
 	result = hdac_get_capabilities(sc);
 	if (result != 0)
 		goto hdac_attach_fail;
@@ -1340,6 +1358,10 @@ hdac_attach(device_t dev)
 	hdac_corb_init(sc);
 	hdac_rirb_init(sc);
 
+	result = hdac_irq_alloc(sc);
+	if (result != 0)
+		goto hdac_attach_fail;
+
 	/* Defer remaining of initialization until interrupts are enabled */
 	sc->intrhook.ich_func = hdac_attach2;
 	sc->intrhook.ich_arg = (void *)sc;
@@ -1359,7 +1381,7 @@ hdac_attach_fail:
 	hdac_dma_free(sc, &sc->rirb_dma);
 	hdac_dma_free(sc, &sc->corb_dma);
 	hdac_mem_free(sc);
-	snd_mtxfree(sc->lock);
+	mtx_destroy(&sc->lock);
 
 	return (ENXIO);
 }
@@ -1604,7 +1626,7 @@ hdac_attach2(void *arg)
 			    HDA_PARAM_REVISION_ID_REVISION_ID(revisionid);
 			sc->codecs[i].stepping_id =
 			    HDA_PARAM_REVISION_ID_STEPPING_ID(revisionid);
-			child = device_add_child(sc->dev, "hdacc", -1);
+			child = device_add_child(sc->dev, "hdacc", DEVICE_UNIT_ANY);
 			if (child == NULL) {
 				device_printf(sc->dev,
 				    "Failed to add CODEC device\n");
@@ -1614,7 +1636,7 @@ hdac_attach2(void *arg)
 			sc->codecs[i].dev = child;
 		}
 	}
-	bus_generic_attach(sc->dev);
+	bus_attach_children(sc->dev);
 
 	SYSCTL_ADD_PROC(device_get_sysctl_ctx(sc->dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(sc->dev)), OID_AUTO,
@@ -1624,6 +1646,35 @@ hdac_attach2(void *arg)
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(sc->dev)), OID_AUTO,
 	    "polling", CTLTYPE_INT | CTLFLAG_RW, sc->dev,
 	    sizeof(sc->dev), sysctl_hdac_polling, "I", "Enable polling mode");
+}
+
+/****************************************************************************
+ * int hdac_shutdown(device_t)
+ *
+ * Power down HDA bus and codecs.
+ ****************************************************************************/
+static int
+hdac_shutdown(device_t dev)
+{
+	struct hdac_softc *sc = device_get_softc(dev);
+
+	HDA_BOOTHVERBOSE(
+		device_printf(dev, "Shutdown...\n");
+	);
+	callout_drain(&sc->poll_callout);
+	taskqueue_drain(taskqueue_thread, &sc->unsolq_task);
+	bus_generic_shutdown(dev);
+
+	hdac_lock(sc);
+	HDA_BOOTHVERBOSE(
+		device_printf(dev, "Reset controller...\n");
+	);
+	hdac_reset(sc, false);
+	hdac_unlock(sc);
+	HDA_BOOTHVERBOSE(
+		device_printf(dev, "Shutdown done\n");
+	);
+	return (0);
 }
 
 /****************************************************************************
@@ -1729,26 +1780,19 @@ static int
 hdac_detach(device_t dev)
 {
 	struct hdac_softc *sc = device_get_softc(dev);
-	device_t *devlist;
-	int cad, i, devcount, error;
+	int i, error;
 
-	if ((error = device_get_children(dev, &devlist, &devcount)) != 0)
+	callout_drain(&sc->poll_callout);
+	hdac_irq_free(sc);
+	taskqueue_drain(taskqueue_thread, &sc->unsolq_task);
+
+	error = bus_generic_detach(dev);
+	if (error != 0)
 		return (error);
-	for (i = 0; i < devcount; i++) {
-		cad = (intptr_t)device_get_ivars(devlist[i]);
-		if ((error = device_delete_child(dev, devlist[i])) != 0) {
-			free(devlist, M_TEMP);
-			return (error);
-		}
-		sc->codecs[cad].dev = NULL;
-	}
-	free(devlist, M_TEMP);
 
 	hdac_lock(sc);
 	hdac_reset(sc, false);
 	hdac_unlock(sc);
-	taskqueue_drain(taskqueue_thread, &sc->unsolq_task);
-	hdac_irq_free(sc);
 
 	for (i = 0; i < sc->num_ss; i++)
 		hdac_dma_free(sc, &sc->streams[i].bdl);
@@ -1761,7 +1805,7 @@ hdac_detach(device_t dev)
 		sc->chan_dmat = NULL;
 	}
 	hdac_mem_free(sc);
-	snd_mtxfree(sc->lock);
+	mtx_destroy(&sc->lock);
 	return (0);
 }
 
@@ -1851,7 +1895,7 @@ hdac_get_mtx(device_t dev, device_t child)
 {
 	struct hdac_softc *sc = device_get_softc(dev);
 
-	return (sc->lock);
+	return (&sc->lock);
 }
 
 static uint32_t
@@ -2143,6 +2187,7 @@ static device_method_t hdac_methods[] = {
 	DEVMETHOD(device_probe,		hdac_probe),
 	DEVMETHOD(device_attach,	hdac_attach),
 	DEVMETHOD(device_detach,	hdac_detach),
+	DEVMETHOD(device_shutdown,	hdac_shutdown),
 	DEVMETHOD(device_suspend,	hdac_suspend),
 	DEVMETHOD(device_resume,	hdac_resume),
 	/* Bus interface */
@@ -2170,4 +2215,4 @@ static driver_t hdac_driver = {
 	sizeof(struct hdac_softc),
 };
 
-DRIVER_MODULE(snd_hda, pci, hdac_driver, NULL, NULL);
+DRIVER_MODULE_ORDERED(snd_hda, pci, hdac_driver, NULL, NULL, SI_ORDER_ANY);

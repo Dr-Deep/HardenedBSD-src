@@ -32,14 +32,12 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)buf.h	8.9 (Berkeley) 3/30/95
- * $FreeBSD$
  */
 
 #ifndef _SYS_BUF_H_
 #define	_SYS_BUF_H_
 
+#include <sys/_exterr.h>
 #include <sys/bufobj.h>
 #include <sys/queue.h>
 #include <sys/lock.h>
@@ -101,7 +99,6 @@ struct buf {
 	long		b_bcount;
 	void		*b_caller1;
 	caddr_t		b_data;
-	int		b_error;
 	uint16_t	b_iocmd;	/* BIO_* bio_cmd from bio.h */
 	uint16_t	b_ioflags;	/* BIO_* bio_flags from bio.h */
 	off_t		b_iooffset;
@@ -156,10 +153,12 @@ struct buf {
 #elif defined(BUF_TRACKING)
 	const char	*b_io_tracking;
 #endif
+	struct	kexterr b_exterr;
 	struct	vm_page *b_pages[];
 };
 
 #define b_object	b_bufobj->bo_object
+#define	b_error		b_exterr.error
 
 /*
  * These flags are kept in b_flags.
@@ -299,7 +298,7 @@ struct buf {
  * Initialize a lock.
  */
 #define BUF_LOCKINIT(bp, wmesg)						\
-	lockinit(&(bp)->b_lock, PRIBIO + 4, wmesg, 0, LK_NEW)
+	lockinit(&(bp)->b_lock, PVFS, wmesg, 0, LK_NEW)
 /*
  *
  * Get a lock sleeping non-interruptably until it becomes available.
@@ -314,7 +313,7 @@ struct buf {
  */
 #define	BUF_TIMELOCK(bp, locktype, interlock, wmesg, catch, timo)	\
 	_lockmgr_args_rw(&(bp)->b_lock, (locktype) | LK_TIMELOCK,	\
-	    (interlock), (wmesg), (PRIBIO + 4) | (catch), (timo),	\
+	    (interlock), (wmesg), PVFS | (catch), (timo),	\
 	    LOCK_FILE, LOCK_LINE)
 
 /*
@@ -322,7 +321,7 @@ struct buf {
  * it has been handed off to biodone.
  */
 #define	BUF_UNLOCK(bp) do {						\
-	KASSERT(((bp)->b_flags & B_REMFREE) == 0,			\
+	KASSERT(((bp)->b_flags & B_REMFREE) == 0 || BUF_LOCKRECURSED(bp), \
 	    ("BUF_UNLOCK %p while B_REMFREE is still set.", (bp)));	\
 									\
 	BUF_UNLOCK_RAW((bp));						\
@@ -344,6 +343,13 @@ struct buf {
  */
 #define	BUF_ISLOCKED(bp)						\
 	lockstatus(&(bp)->b_lock)
+
+/*
+ * Check if a buffer lock is currently held by LK_KERNPROC.
+ */
+#define	BUF_DISOWNED(bp)						\
+	lockmgr_disowned(&(bp)->b_lock)
+
 /*
  * Free a buffer lock.
  */
@@ -385,6 +391,12 @@ struct buf {
 #define	BUF_KERNPROC(bp)						\
 	_lockmgr_disown(&(bp)->b_lock, LOCK_FILE, LOCK_LINE)
 #endif
+
+#define	BUF_EXTERR_FROM_CURTHR(bp)					\
+	bp->b_exterr = curthread->td_kexterr
+
+#define	BUF_EXTERR_TO_CURTHR(bp)					\
+	curthread->td_kexterr = bp->b_exterr
 
 #endif /* _KERNEL */
 
@@ -515,7 +527,6 @@ extern int	nbuf;			/* The number of buffer headers */
 extern u_long	maxswzone;		/* Max KVA for swap structures */
 extern u_long	maxbcache;		/* Max KVA for buffer cache */
 extern int	maxbcachebuf;		/* Max buffer cache block size */
-extern long	runningbufspace;
 extern long	hibufspace;
 extern int	dirtybufthresh;
 extern int	bdwriteskip;
@@ -532,6 +543,7 @@ buf_mapped(struct buf *bp)
 	return (bp->b_data != unmapped_buf);
 }
 
+long	runningbufclaim(struct buf *, int);
 void	runningbufwakeup(struct buf *);
 void	waitrunningbufspace(void);
 caddr_t	kern_vfs_bio_buffer_alloc(caddr_t v, long physmem_est);
@@ -599,7 +611,7 @@ void	vfs_unbusy_pages(struct buf *);
 int	vmapbuf(struct buf *, void *, size_t, int);
 void	vunmapbuf(struct buf *);
 void	brelvp(struct buf *);
-void	bgetvp(struct vnode *, struct buf *);
+int	bgetvp(struct vnode *, struct buf *) __result_use_check;
 void	pbgetbo(struct bufobj *bo, struct buf *bp);
 void	pbgetvp(struct vnode *, struct buf *);
 void	pbrelbo(struct buf *);

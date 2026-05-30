@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2019 Michal Meloun <mmel@FreeBSD.org>
  *
@@ -24,8 +24,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- *
- * $FreeBSD$
  *
  */
 
@@ -62,6 +60,9 @@
 
 #define	DW_MISC_CONTROL_1		0x8BC
 #define	 DBI_RO_WR_EN				(1 << 0)
+
+#define DW_MISC_VERSION			0x8F8
+#define DW_MISC_VERSION_TYPE		0x8FC
 
 /* Legacy (pre-4.80) iATU mode */
 #define	DW_IATU_VIEWPORT			0x900

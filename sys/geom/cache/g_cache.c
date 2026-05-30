@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2006 Ruslan Ermilov <ru@FreeBSD.org>
  * All rights reserved.
@@ -25,9 +25,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -507,7 +504,7 @@ g_cache_create(struct g_class *mp, struct g_provider *pp,
 		return (NULL);
 	}
 
-	gp = g_new_geomf(mp, "%s", md->md_name);
+	gp = g_new_geom(mp, md->md_name);
 	sc = g_malloc(sizeof(*sc), M_WAITOK | M_ZERO);
 	sc->sc_type = type;
 	sc->sc_bshift = bshift;
@@ -668,7 +665,7 @@ g_cache_taste(struct g_class *mp, struct g_provider *pp, int flags __unused)
 
 	G_CACHE_DEBUG(3, "Tasting %s.", pp->name);
 
-	gp = g_new_geomf(mp, "cache:taste");
+	gp = g_new_geom(mp, "cache:taste");
 	gp->start = g_cache_start;
 	gp->orphan = g_cache_orphan;
 	gp->access = g_cache_access;

@@ -25,9 +25,6 @@
  *
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/bus.h>
 #include <sys/kernel.h>
@@ -66,7 +63,7 @@ smc_acpi_probe(device_t dev)
 static device_method_t smc_acpi_methods[] = {
 	/* Device interface */
 	DEVMETHOD(device_probe,		smc_acpi_probe),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 DEFINE_CLASS_1(smc, smc_acpi_driver, smc_acpi_methods,

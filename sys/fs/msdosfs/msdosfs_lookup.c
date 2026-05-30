@@ -1,4 +1,3 @@
-/* $FreeBSD$ */
 /*	$NetBSD: msdosfs_lookup.c,v 1.37 1997/11/17 15:36:54 ws Exp $	*/
 
 /*-
@@ -199,7 +198,9 @@ msdosfs_lookup_ino(struct vnode *vdp, struct vnode **vpp, struct componentname
 	switch (unix2dosfn((const u_char *)cnp->cn_nameptr, dosfilename,
 	    cnp->cn_namelen, 0, pmp)) {
 	case 0:
-		return (EINVAL);
+		if (nameiop == CREATE || nameiop == RENAME)
+			return (EINVAL);
+		return (ENOENT);
 	case 1:
 		break;
 	case 2:
@@ -335,7 +336,7 @@ msdosfs_lookup_ino(struct vnode *vdp, struct vnode **vpp, struct componentname
 					continue;
 				}
 #ifdef MSDOSFS_DEBUG
-				printf("msdosfs_lookup(): match blkoff %d, diroff %d\n",
+				printf("msdosfs_lookup(): match blkoff %lu, diroff %d\n",
 				    blkoff, diroff);
 #endif
 				/*
@@ -421,13 +422,10 @@ notfound:
 		 * We return ni_vp == NULL to indicate that the entry
 		 * does not currently exist; we leave a pointer to
 		 * the (locked) directory inode in ndp->ni_dvp.
-		 * The pathname buffer is saved so that the name
-		 * can be obtained later.
 		 *
 		 * NB - if the directory is unlocked, then this
 		 * information cannot be used.
 		 */
-		cnp->cn_flags |= SAVENAME;
 		return (EJUSTRETURN);
 	}
 #if 0
@@ -517,7 +515,7 @@ foundroot:
 		 * Save directory inode pointer in ndp->ni_dvp for dirremove().
 		 */
 		if (dp->de_StartCluster == scn && isadir) {	/* "." */
-			VREF(vdp);
+			vref(vdp);
 			*vpp = vdp;
 			return (0);
 		}
@@ -554,7 +552,6 @@ foundroot:
 		if ((error = msdosfs_lookup_checker(pmp, vdp, tdp, vpp))
 		    != 0)
 			return (error);
-		cnp->cn_flags |= SAVENAME;
 		return (0);
 	}
 
@@ -591,7 +588,7 @@ foundroot:
 		}
 		if (FAT32(pmp) && scn == MSDOSFSROOT)
 			scn = pmp->pm_rootdirblk;
-		inode1 = scn * pmp->pm_bpcluster + blkoff;
+		inode1 = DETOI(pmp, scn, blkoff);
 		if (VTODE(*vpp)->de_inode != inode1) {
 			vput(*vpp);
 			goto restart;
@@ -605,7 +602,7 @@ foundroot:
 			msdosfs_integrity_error(pmp);
 			return (EBADF);
 		}
-		VREF(vdp);	/* we want ourself, ie "." */
+		vref(vdp);	/* we want ourself, ie "." */
 		*vpp = vdp;
 	} else {
 		if ((error = deget(pmp, cluster, blkoff, LK_EXCLUSIVE,
@@ -688,6 +685,7 @@ createde(struct denode *dep, struct denode *ddep, struct denode **depp,
 		return error;
 	}
 	ndep = bptoep(pmp, bp, ddep->de_fndoffset);
+	rootde_alloced(ddep);
 
 	DE_EXTERNALIZE(ndep, dep);
 
@@ -725,6 +723,7 @@ createde(struct denode *dep, struct denode *ddep, struct denode **depp,
 				ndep--;
 				ddep->de_fndoffset -= sizeof(struct direntry);
 			}
+			rootde_alloced(ddep);
 			if (!unix2winfn(un, unlen, (struct winentry *)ndep,
 					cnt++, chksum, pmp))
 				break;
@@ -846,7 +845,6 @@ doscheckpath(struct denode *source, struct denode *target, daddr_t *wait_scn)
 	*wait_scn = 0;
 
 	pmp = target->de_pmp;
-	lockmgr_assert(&pmp->pm_checkpath_lock, KA_XLOCKED);
 	KASSERT(pmp == source->de_pmp,
 	    ("doscheckpath: source and target on different filesystems"));
 
@@ -1019,6 +1017,7 @@ removede(struct denode *pdep, struct denode *dep)
 			 */
 			offset -= sizeof(struct direntry);
 			ep--->deName[0] = SLOT_DELETED;
+			rootde_freed(pdep);
 			if ((pmp->pm_flags & MSDOSFSMNT_NOWIN95)
 			    || !(offset & pmp->pm_crbomask)
 			    || ep->deAttributes != ATTR_WIN95)

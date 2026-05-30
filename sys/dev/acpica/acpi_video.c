@@ -27,8 +27,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_evdev.h"
 
 #include <sys/param.h>
@@ -178,7 +176,7 @@ static device_method_t acpi_video_methods[] = {
 	DEVMETHOD(device_detach, acpi_video_detach),
 	DEVMETHOD(device_resume, acpi_video_resume),
 	DEVMETHOD(device_shutdown, acpi_video_shutdown),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t acpi_video_driver = {
@@ -276,8 +274,8 @@ static void
 acpi_video_identify(driver_t *driver, device_t parent)
 {
 
-	if (device_find_child(parent, "acpi_video", -1) == NULL)
-		device_add_child(parent, "acpi_video", -1);
+	if (device_find_child(parent, "acpi_video", DEVICE_UNIT_ANY) == NULL)
+		device_add_child(parent, "acpi_video", DEVICE_UNIT_ANY);
 }
 
 static int

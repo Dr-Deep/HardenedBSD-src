@@ -35,9 +35,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/malloc.h>
@@ -55,10 +52,10 @@ __FBSDID("$FreeBSD$");
 #include <sys/fcntl.h>
 #include <sys/limits.h>
 #include <sys/selinfo.h>
+#include <sys/stdarg.h>
 #include <sys/sysctl.h>
 #include <geom/geom.h>
 #include <geom/geom_int.h>
-#include <machine/stdarg.h>
 
 struct g_dev_softc {
 	struct mtx	 sc_mtx;
@@ -81,10 +78,11 @@ static d_kqfilter_t	g_dev_kqfilter;
 static void		gdev_filter_detach(struct knote *kn);
 static int		gdev_filter_vnode(struct knote *kn, long hint);
 
-static struct filterops gdev_filterops_vnode = {
+static const struct filterops gdev_filterops_vnode = {
 	.f_isfd = 1,
 	.f_detach = gdev_filter_detach,
 	.f_event = gdev_filter_vnode,
+	.f_copy = knote_triv_copy,
 };
 
 static struct cdevsw g_dev_cdevsw = {
@@ -358,7 +356,7 @@ g_dev_taste(struct g_class *mp, struct g_provider *pp, int insist __unused)
 
 	g_trace(G_T_TOPOLOGY, "dev_taste(%s,%s)", mp->name, pp->name);
 	g_topology_assert();
-	gp = g_new_geomf(mp, "%s", pp->name);
+	gp = g_new_geom(mp, pp->name);
 	sc = g_malloc(sizeof(*sc), M_WAITOK | M_ZERO);
 	mtx_init(&sc->sc_mtx, "g_dev", NULL, MTX_DEF);
 	cp = g_new_consumer(gp);
@@ -701,8 +699,7 @@ g_dev_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread
 			error = copyout(new_entries, old_entries, alloc_size);
 		if (old_entries != NULL && rep != NULL)
 			rep->entries = old_entries;
-		if (new_entries != NULL)
-			g_free(new_entries);
+		g_free(new_entries);
 		break;
 	}
 	default:
@@ -737,6 +734,10 @@ g_dev_done(struct bio *bp2)
 		g_trace(G_T_BIO, "g_dev_done(%p) had error %d",
 		    bp2, bp2->bio_error);
 		bp->bio_flags |= BIO_ERROR;
+		if ((bp2->bio_flags & BIO_EXTERR) != 0) {
+			bp->bio_flags |= BIO_EXTERR;
+			bp->bio_exterr = bp2->bio_exterr;
+		}
 	} else {
 		if (bp->bio_cmd == BIO_READ)
 			KNOTE_UNLOCKED(&sc->sc_selinfo.si_note, NOTE_READ);
@@ -856,6 +857,9 @@ g_dev_orphan(struct g_consumer *cp)
 	sc = cp->private;
 	dev = sc->sc_dev;
 	g_trace(G_T_TOPOLOGY, "g_dev_orphan(%p(%s))", cp, cp->geom->name);
+
+	if (dev == NULL)
+		return;
 
 	/* Reset any dump-area set on this device */
 	if (dev->si_flags & SI_DUMPDEV) {

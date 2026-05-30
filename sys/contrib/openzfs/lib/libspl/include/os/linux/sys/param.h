@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -63,5 +64,7 @@
 
 extern size_t spl_pagesize(void);
 #define	PAGESIZE	(spl_pagesize())
+
+#define	ptob(x)		((x) * PAGESIZE)
 
 #endif

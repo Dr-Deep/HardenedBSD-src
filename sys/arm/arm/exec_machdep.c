@@ -39,9 +39,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/exec.h>
 #include <sys/imgact.h>
@@ -100,17 +97,23 @@ get_vfpcontext(struct thread *td, mcontext_vfp_t *vfp)
 {
 	struct pcb *pcb;
 
+	MPASS(td == curthread || TD_IS_SUSPENDED(td) ||
+	    P_SHOULDSTOP(td->td_proc));
+
 	pcb = td->td_pcb;
 	if (td == curthread) {
 		critical_enter();
 		vfp_store(&pcb->pcb_vfpstate, false);
 		critical_exit();
-	} else
-		MPASS(TD_IS_SUSPENDED(td));
+	}
+	KASSERT(pcb->pcb_vfpsaved == &pcb->pcb_vfpstate,
+		("Called get_vfpcontext while the kernel is using the VFP"));
+
 	memset(vfp, 0, sizeof(*vfp));
 	memcpy(vfp->mcv_reg, pcb->pcb_vfpstate.reg,
 	    sizeof(vfp->mcv_reg));
 	vfp->mcv_fpscr = pcb->pcb_vfpstate.fpscr;
+
 }
 
 /*
@@ -126,11 +129,13 @@ set_vfpcontext(struct thread *td, mcontext_vfp_t *vfp)
 		critical_enter();
 		vfp_discard(td);
 		critical_exit();
-	} else
-		MPASS(TD_IS_SUSPENDED(td));
+	}
+	KASSERT(pcb->pcb_vfpsaved == &pcb->pcb_vfpstate,
+		("Called set_vfpcontext while the kernel is using the VFP"));
 	memcpy(pcb->pcb_vfpstate.reg, vfp->mcv_reg,
 	    sizeof(pcb->pcb_vfpstate.reg));
 	pcb->pcb_vfpstate.fpscr = vfp->mcv_fpscr;
+
 }
 #endif
 
@@ -302,10 +307,11 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	fp--;
 
 	/* make the stack aligned */
-	fp = (struct sigframe *)STACKALIGN(fp);
+	fp = STACKALIGN(fp);
 	/* Populate the siginfo frame. */
 	bzero(&frame, sizeof(frame));
 	get_mcontext(td, &frame.sf_uc.uc_mcontext, 0);
+
 #ifdef VFP
 	get_vfpcontext(td, &frame.sf_vfp);
 	frame.sf_uc.uc_mcontext.mc_vfp_size = sizeof(fp->sf_vfp);
@@ -314,6 +320,7 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	frame.sf_uc.uc_mcontext.mc_vfp_size = 0;
 	frame.sf_uc.uc_mcontext.mc_vfp_ptr = NULL;
 #endif
+
 	frame.sf_si = ksi->ksi_info;
 	frame.sf_uc.uc_sigmask = *mask;
 	frame.sf_uc.uc_stack = td->td_sigstk;
@@ -352,12 +359,10 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 		tf->tf_usr_lr = (register_t)(PROC_PS_STRINGS(p) -
 		    *(sysent->sv_szsigcode));
 	/* Set the mode to enter in the signal handler */
-#if __ARM_ARCH >= 7
 	if ((register_t)catcher & 1)
 		tf->tf_spsr |= PSR_T;
 	else
 		tf->tf_spsr &= ~PSR_T;
-#endif
 
 	CTR3(KTR_SIG, "sendsig: return td=%p pc=%#x sp=%#x", td, tf->tf_usr_lr,
 	    tf->tf_usr_sp);

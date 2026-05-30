@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (C) 2005 Daniel M. Eischen <deischen@freebsd.org>
  * Copyright (c) 2005 David Xu <davidxu@freebsd.org>
@@ -27,8 +27,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _THR_PRIVATE_H
@@ -39,10 +37,10 @@
  */
 #include <sys/types.h>
 #include <sys/time.h>
-#include <sys/cdefs.h>
 #include <sys/queue.h>
 #include <sys/param.h>
 #include <sys/cpuset.h>
+#include <sys/exterrvar.h>
 #include <machine/atomic.h>
 #include <errno.h>
 #include <limits.h>
@@ -263,7 +261,6 @@ struct pthread_atfork {
 };
 
 struct pthread_attr {
-#define pthread_attr_start_copy	sched_policy
 	int	sched_policy;
 	int	sched_inherit;
 	int	prio;
@@ -273,7 +270,6 @@ struct pthread_attr {
 	void	*stackaddr_attr;
 	size_t	stacksize_attr;
 	size_t	guardsize_attr;
-#define pthread_attr_end_copy	cpuset
 	cpuset_t	*cpuset;
 	size_t	cpusetsize;
 };
@@ -567,8 +563,12 @@ struct pthread {
 
 	/* Deferred threads from pthread_cond_signal. */
 	unsigned int 		*defer_waiters[MAX_DEFER_WAITERS];
-#define _pthread_endzero	wake_addr
 
+	/* rtld thread-local dlerror message and seen control */
+	char			dlerror_msg[512];
+	int			dlerror_seen;
+
+#define _pthread_endzero	wake_addr
 	struct wake_addr	*wake_addr;
 #define WAKE_ADDR(td)           ((td)->wake_addr)
 
@@ -578,9 +578,7 @@ struct pthread {
 	/* pthread_set/get_name_np */
 	char			*name;
 
-	/* rtld thread-local dlerror message and seen control */
-	char			dlerror_msg[512];
-	int			dlerror_seen;
+	struct uexterror	uexterr;
 };
 
 #define THR_SHOULD_GC(thrd) 						\
@@ -779,6 +777,10 @@ extern int		_suspend_all_waiters __hidden;
 extern int		_suspend_all_cycle __hidden;
 extern struct pthread	*_single_thread __hidden;
 
+extern bool		_thr_after_fork __hidden;
+
+extern int	__thr_new_flags;
+
 /*
  * Function prototype definitions.
  */
@@ -843,6 +845,8 @@ void	_thr_signal_postfork(void) __hidden;
 void	_thr_signal_postfork_child(void) __hidden;
 void	_thr_suspend_all_lock(struct pthread *) __hidden;
 void	_thr_suspend_all_unlock(struct pthread *) __hidden;
+void	_thr_suspend_all_np(void) __hidden;
+void	_thr_resume_all_np(void) __hidden;
 void	_thr_try_gc(struct pthread *, struct pthread *) __hidden;
 int	_rtp_to_schedparam(const struct rtprio *rtp, int *policy,
 		struct sched_param *param) __hidden;
@@ -867,8 +871,8 @@ int	_pthread_mutexattr_setrobust(pthread_mutexattr_t * _Nonnull, int);
 /* #include <fcntl.h> */
 #ifdef  _SYS_FCNTL_H_
 #ifndef _LIBC_PRIVATE_H_
-int     __sys_fcntl(int, int, ...);
-int     __sys_openat(int, const char *, int, ...);
+int     __sys_fcntl(int, int, intptr_t);
+int     __sys_openat(int, const char *, int, int);
 #endif /* _LIBC_PRIVATE_H_ */
 #endif /* _SYS_FCNTL_H_ */
 
@@ -982,8 +986,6 @@ void __pthread_cxa_finalize(struct dl_phdr_info *phdr_info);
 void _thr_tsd_unload(struct dl_phdr_info *phdr_info) __hidden;
 void _thr_sigact_unload(struct dl_phdr_info *phdr_info) __hidden;
 void _thr_stack_fix_protection(struct pthread *thrd);
-void __pthread_distribute_static_tls(size_t offset, void *src, size_t len,
-    size_t total_len);
 
 int *__error_threaded(void) __hidden;
 void __thr_interpose_libc(void) __hidden;
@@ -1015,6 +1017,7 @@ void __thr_pshared_destroy(void *key) __hidden;
 void __thr_pshared_atfork_pre(void) __hidden;
 void __thr_pshared_atfork_post(void) __hidden;
 
+void *__thr_aligned_alloc_offset(size_t align, size_t size, size_t offset);
 void *__thr_calloc(size_t num, size_t size);
 void __thr_free(void *cp);
 void *__thr_malloc(size_t nbytes);
@@ -1073,6 +1076,7 @@ int _thr_cond_wait(pthread_cond_t *, pthread_mutex_t *);
 int _thr_detach(pthread_t);
 int _thr_equal(pthread_t, pthread_t);
 void _Tthr_exit(void *);
+int _thr_getname_np(pthread_t, char *, size_t);
 int _thr_key_create(pthread_key_t *, void (*)(void *));
 int _thr_key_delete(pthread_key_t);
 int _thr_setspecific(pthread_key_t, const void *);
@@ -1102,6 +1106,8 @@ int _thr_mutex_destroy(pthread_mutex_t *);
 int _thr_mutex_unlock(pthread_mutex_t *);
 int __Tthr_mutex_lock(pthread_mutex_t *);
 int __Tthr_mutex_trylock(pthread_mutex_t *);
+int _Tthr_sigqueue(pthread_t pthread, int sig, const union sigval value);
+void _thr_resolve_machdep(void);
 
 __END_DECLS
 __NULLABILITY_PRAGMA_POP

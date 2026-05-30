@@ -78,10 +78,12 @@ class concatExtension<FunctionExtension Base, string NewExts> {
 def NoTypeExt   : TypeExtension<"">;
 def Fp16TypeExt : TypeExtension<"cl_khr_fp16">;
 def Fp64TypeExt : TypeExtension<"cl_khr_fp64">;
+def Atomic64TypeExt : TypeExtension<"cl_khr_int64_base_atomics cl_khr_int64_extended_atomics">;
+def AtomicFp64TypeExt : TypeExtension<"cl_khr_int64_base_atomics cl_khr_int64_extended_atomics cl_khr_fp64">;
 
 // FunctionExtension definitions.
 def FuncExtNone                          : FunctionExtension<"">;
-def FuncExtKhrSubgroups                  : FunctionExtension<"cl_khr_subgroups">;
+def FuncExtKhrSubgroups                  : FunctionExtension<"__opencl_subgroup_builtins">;
 def FuncExtKhrSubgroupExtendedTypes      : FunctionExtension<"cl_khr_subgroup_extended_types">;
 def FuncExtKhrSubgroupNonUniformVote     : FunctionExtension<"cl_khr_subgroup_non_uniform_vote">;
 def FuncExtKhrSubgroupBallot             : FunctionExtension<"cl_khr_subgroup_ballot">;
@@ -97,11 +99,10 @@ def FuncExtKhrLocalInt32ExtendedAtomics  : FunctionExtension<"cl_khr_local_int32
 def FuncExtKhrInt64BaseAtomics           : FunctionExtension<"cl_khr_int64_base_atomics">;
 def FuncExtKhrInt64ExtendedAtomics       : FunctionExtension<"cl_khr_int64_extended_atomics">;
 def FuncExtKhrMipmapImage                : FunctionExtension<"cl_khr_mipmap_image">;
-def FuncExtKhrMipmapImageReadWrite       : FunctionExtension<"cl_khr_mipmap_image __opencl_c_read_write_images">;
 def FuncExtKhrMipmapImageWrites          : FunctionExtension<"cl_khr_mipmap_image_writes">;
 def FuncExtKhrGlMsaaSharing              : FunctionExtension<"cl_khr_gl_msaa_sharing">;
-def FuncExtKhrGlMsaaSharingReadWrite     : FunctionExtension<"cl_khr_gl_msaa_sharing __opencl_c_read_write_images">;
 
+def FuncExtOpenCLCDeviceEnqueue          : FunctionExtension<"__opencl_c_device_enqueue">;
 def FuncExtOpenCLCGenericAddressSpace    : FunctionExtension<"__opencl_c_generic_address_space">;
 def FuncExtOpenCLCNamedAddressSpaceBuiltins : FunctionExtension<"__opencl_c_named_address_space_builtins">;
 def FuncExtOpenCLCPipes                  : FunctionExtension<"__opencl_c_pipes">;
@@ -132,14 +133,15 @@ def FuncExtFloatAtomicsFp64GenericASMinMax    : FunctionExtension<"cl_ext_float_
 // Not a real extension, but a workaround to add C++ for OpenCL specific builtins.
 def FuncExtOpenCLCxx                     : FunctionExtension<"__cplusplus">;
 
-// Multiple extensions
-def FuncExtKhrMipmapWritesAndWrite3d     : FunctionExtension<"cl_khr_mipmap_image_writes cl_khr_3d_image_writes">;
-
 // Arm extensions.
 def ArmIntegerDotProductInt8                   : FunctionExtension<"cl_arm_integer_dot_product_int8">;
 def ArmIntegerDotProductAccumulateInt8         : FunctionExtension<"cl_arm_integer_dot_product_accumulate_int8">;
 def ArmIntegerDotProductAccumulateInt16        : FunctionExtension<"cl_arm_integer_dot_product_accumulate_int16">;
 def ArmIntegerDotProductAccumulateSaturateInt8 : FunctionExtension<"cl_arm_integer_dot_product_accumulate_saturate_int8">;
+
+// AMD extensions.
+def AMDMediaOps : FunctionExtension<"cl_amd_media_ops">;
+def AMDMediaOps2 : FunctionExtension<"cl_amd_media_ops2">;
 
 // Qualified Type.  These map to ASTContext::QualType.
 class QualType<string _TypeExpr, bit _IsAbstract=0> {
@@ -244,7 +246,13 @@ class ImageType<Type _Ty, string _AccessQualifier> :
   let IsConst = _Ty.IsConst;
   let IsVolatile = _Ty.IsVolatile;
   let AddrSpace = _Ty.AddrSpace;
-  let Extension = _Ty.Extension;
+  // Add TypeExtensions for writable "image3d_t" and "read_write" image types.
+  let Extension = !cond(
+      !and(!eq(_Ty.Name, "image3d_t"), !eq(_AccessQualifier, "WO")) : TypeExtension<"cl_khr_3d_image_writes">,
+      !and(!eq(_Ty.Name, "image3d_t"), !eq(_AccessQualifier, "RW")) : TypeExtension<"cl_khr_3d_image_writes __opencl_c_read_write_images">,
+      !or(!eq(_Ty.Name, "image2d_depth_t"), !eq(_Ty.Name, "image2d_array_depth_t")) : TypeExtension<"cl_khr_depth_images">,
+      !eq(_AccessQualifier, "RW") : TypeExtension<"__opencl_c_read_write_images">,
+      true : _Ty.Extension);
 }
 
 // OpenCL enum type (e.g. memory_scope).
@@ -349,9 +357,22 @@ def Float     : Type<"float",     QualType<"Context.FloatTy">>;
 let Extension = Fp64TypeExt in {
   def Double    : Type<"double",    QualType<"Context.DoubleTy">>;
 }
+
+// The half type for builtins that require the cl_khr_fp16 extension.
 let Extension = Fp16TypeExt in {
   def Half      : Type<"half",      QualType<"Context.HalfTy">>;
 }
+
+// Without the cl_khr_fp16 extension, the half type can only be used to declare
+// a pointer.  Define const and non-const pointer types in all address spaces.
+// Use the "__half" alias to allow the TableGen emitter to distinguish the
+// (extensionless) pointee type of these pointer-to-half types from the "half"
+// type defined above that already carries the cl_khr_fp16 extension.
+foreach AS = [PrivateAS, GlobalAS, ConstantAS, LocalAS, GenericAS] in {
+  def "HalfPtr" # AS      : PointerType<Type<"__half", QualType<"Context.HalfTy">>, AS>;
+  def "HalfPtrConst" # AS : PointerType<ConstType<Type<"__half", QualType<"Context.HalfTy">>>, AS>;
+}
+
 def Size      : Type<"size_t",    QualType<"Context.getSizeType()">>;
 def PtrDiff   : Type<"ptrdiff_t", QualType<"Context.getPointerDiffType()">>;
 def IntPtr    : Type<"intptr_t",  QualType<"Context.getIntPtrType()">>;
@@ -389,10 +410,14 @@ def NDRange               : TypedefType<"ndrange_t">;
 // OpenCL v2.0 s6.13.11: Atomic integer and floating-point types.
 def AtomicInt             : Type<"atomic_int", QualType<"Context.getAtomicType(Context.IntTy)">>;
 def AtomicUInt            : Type<"atomic_uint", QualType<"Context.getAtomicType(Context.UnsignedIntTy)">>;
-def AtomicLong            : Type<"atomic_long", QualType<"Context.getAtomicType(Context.LongTy)">>;
-def AtomicULong           : Type<"atomic_ulong", QualType<"Context.getAtomicType(Context.UnsignedLongTy)">>;
+let Extension = Atomic64TypeExt in {
+  def AtomicLong            : Type<"atomic_long", QualType<"Context.getAtomicType(Context.LongTy)">>;
+  def AtomicULong           : Type<"atomic_ulong", QualType<"Context.getAtomicType(Context.UnsignedLongTy)">>;
+}
 def AtomicFloat           : Type<"atomic_float", QualType<"Context.getAtomicType(Context.FloatTy)">>;
-def AtomicDouble          : Type<"atomic_double", QualType<"Context.getAtomicType(Context.DoubleTy)">>;
+let Extension = AtomicFp64TypeExt in {
+  def AtomicDouble          : Type<"atomic_double", QualType<"Context.getAtomicType(Context.DoubleTy)">>;
+}
 def AtomicHalf            : Type<"atomic_half", QualType<"Context.getAtomicType(Context.HalfTy)">>;
 def AtomicIntPtr          : Type<"atomic_intptr_t", QualType<"Context.getAtomicType(Context.getIntPtrType())">>;
 def AtomicUIntPtr         : Type<"atomic_uintptr_t", QualType<"Context.getAtomicType(Context.getUIntPtrType())">>;
@@ -870,22 +895,22 @@ defm : VloadVstore<[ConstantAS], 0>;
 
 multiclass VloadVstoreHalf<list<AddressSpace> addrspaces, bit defStores> {
   foreach AS = addrspaces in {
-    def : Builtin<"vload_half", [Float, Size, PointerType<ConstType<Half>, AS>], Attr.Pure>;
+    def : Builtin<"vload_half", [Float, Size, !cast<Type>("HalfPtrConst" # AS)], Attr.Pure>;
     foreach VSize = [2, 3, 4, 8, 16] in {
       foreach name = ["vload_half" # VSize, "vloada_half" # VSize] in {
-        def : Builtin<name, [VectorType<Float, VSize>, Size, PointerType<ConstType<Half>, AS>], Attr.Pure>;
+        def : Builtin<name, [VectorType<Float, VSize>, Size, !cast<Type>("HalfPtrConst" # AS)], Attr.Pure>;
       }
     }
     if defStores then {
       foreach rnd = ["", "_rte", "_rtz", "_rtp", "_rtn"] in {
         foreach name = ["vstore_half" # rnd] in {
-          def : Builtin<name, [Void, Float, Size, PointerType<Half, AS>]>;
-          def : Builtin<name, [Void, Double, Size, PointerType<Half, AS>]>;
+          def : Builtin<name, [Void, Float, Size, !cast<Type>("HalfPtr" # AS)]>;
+          def : Builtin<name, [Void, Double, Size, !cast<Type>("HalfPtr" # AS)]>;
         }
         foreach VSize = [2, 3, 4, 8, 16] in {
           foreach name = ["vstore_half" # VSize # rnd, "vstorea_half" # VSize # rnd] in {
-            def : Builtin<name, [Void, VectorType<Float, VSize>, Size, PointerType<Half, AS>]>;
-            def : Builtin<name, [Void, VectorType<Double, VSize>, Size, PointerType<Half, AS>]>;
+            def : Builtin<name, [Void, VectorType<Float, VSize>, Size, !cast<Type>("HalfPtr" # AS)]>;
+            def : Builtin<name, [Void, VectorType<Double, VSize>, Size, !cast<Type>("HalfPtr" # AS)]>;
           }
         }
       }
@@ -915,9 +940,9 @@ def : Builtin<"read_mem_fence", [Void, MemFenceFlags]>;
 def : Builtin<"write_mem_fence", [Void, MemFenceFlags]>;
 
 // OpenCL v3.0 s6.15.10 - Address Space Qualifier Functions.
-// to_global, to_local, to_private are declared in Builtins.def.
+// to_global, to_local, to_private are declared in Builtins.td.
 
-let MinVersion = CL20 in {
+let Extension = FuncExtOpenCLCGenericAddressSpace in {
   // The OpenCL 3.0 specification defines these with a "gentype" argument indicating any builtin
   // type or user-defined type, which cannot be represented currently.  Hence we slightly diverge
   // by providing only the following overloads with a void pointer.
@@ -937,11 +962,23 @@ foreach name = ["async_work_group_strided_copy"] in {
   def : Builtin<name, [Event, PointerType<AGenTypeN, LocalAS>, PointerType<ConstType<AGenTypeN>, GlobalAS>, Size, Size, Event]>;
   def : Builtin<name, [Event, PointerType<AGenTypeN, GlobalAS>, PointerType<ConstType<AGenTypeN>, LocalAS>, Size, Size, Event]>;
 }
-foreach name = ["wait_group_events"] in {
-  def : Builtin<name, [Void, Int, PointerType<Event, GenericAS>]>;
-}
 foreach name = ["prefetch"] in {
   def : Builtin<name, [Void, PointerType<ConstType<AGenTypeN>, GlobalAS>, Size]>;
+}
+
+// The wait_group_events is declared with an argument of type event_t*.
+// The address-space of the pointer parameter is different if the generic address space is available.
+multiclass BuiltinWithDefaultPointerArg<AddressSpace AS> {
+  foreach name = ["wait_group_events"] in {
+    def : Builtin<name, [Void, Int, PointerType<Event, AS>]>;
+  }
+}
+
+let Extension = FuncExtOpenCLCNamedAddressSpaceBuiltins in {
+  defm : BuiltinWithDefaultPointerArg<PrivateAS>;
+}
+let Extension = FuncExtOpenCLCGenericAddressSpace in {
+  defm : BuiltinWithDefaultPointerArg<GenericAS>;
 }
 
 //--------------------------------------------------------------------
@@ -1082,8 +1119,10 @@ multiclass OpenCL2Atomics<AddressSpace addrspace, FunctionExtension BaseExt> {
   foreach TypePair = [[AtomicInt, Int], [AtomicUInt, UInt],
                       [AtomicLong, Long], [AtomicULong, ULong],
                       [AtomicFloat, Float], [AtomicDouble, Double]] in {
-    def : Builtin<"atomic_init",
-        [Void, PointerType<VolatileType<TypePair[0]>, addrspace>, TypePair[1]]>;
+    let Extension = BaseExt in {
+      def : Builtin<"atomic_init",
+          [Void, PointerType<VolatileType<TypePair[0]>, addrspace>, TypePair[1]]>;
+    }
     defm : BuiltinAtomicExplicit<"atomic_store",
         [Void, PointerType<VolatileType<TypePair[0]>, addrspace>, TypePair[1]], BaseExt>;
     defm : BuiltinAtomicExplicit<"atomic_load",
@@ -1163,7 +1202,7 @@ let MinVersion = CL20 in {
       defvar extension_fp64 = !cast<FunctionExtension>("FuncExtFloatAtomicsFp64" # addrspace # "Add");
 
       defm : BuiltinAtomicExplicit<"atomic_fetch_" # ModOp,
-          [Half, PointerType<VolatileType<AtomicFloat>, addrspace>, Half], extension_fp16>;
+          [Half, PointerType<VolatileType<AtomicHalf>, addrspace>, Half], extension_fp16>;
       defm : BuiltinAtomicExplicit<"atomic_fetch_" # ModOp,
           [Float, PointerType<VolatileType<AtomicFloat>, addrspace>, Float], extension_fp32>;
       defm : BuiltinAtomicExplicit<"atomic_fetch_" # ModOp,
@@ -1425,28 +1464,28 @@ let Extension = FuncExtOpenCLCWGCollectiveFunctions in {
 //--------------------------------------------------------------------
 // OpenCL2.0 : 6.13.16 : Pipe Functions
 // --- Table 27 ---
-// Defined in Builtins.def
+// Defined in Builtins.td
 
 // --- Table 28 ---
-// Builtins taking pipe arguments are defined in Builtins.def
+// Builtins taking pipe arguments are defined in Builtins.td
 let Extension = FuncExtOpenCLCPipes in {
   def : Builtin<"is_valid_reserve_id", [Bool, ReserveId]>;
 }
 
 // --- Table 29 ---
-// Defined in Builtins.def
+// Defined in Builtins.td
 
 
 //--------------------------------------------------------------------
 // OpenCL2.0 : 6.13.17 : Enqueuing Kernels
 // --- Table 30 ---
-// Defined in Builtins.def
+// Defined in Builtins.td
 
 // --- Table 32 ---
-// Defined in Builtins.def
+// Defined in Builtins.td
 
 // --- Table 33 ---
-let MinVersion = CL20 in {
+let Extension = FuncExtOpenCLCDeviceEnqueue in {
   def : Builtin<"enqueue_marker",
       [Int, Queue, UInt, PointerType<ConstType<ClkEvent>, GenericAS>, PointerType<ClkEvent, GenericAS>]>;
 
@@ -1585,9 +1624,6 @@ multiclass ImageQueryNumMipLevels<string aQual> {
 let Extension = FuncExtKhrMipmapImage in {
   defm : ImageQueryNumMipLevels<"RO">;
   defm : ImageQueryNumMipLevels<"WO">;
-}
-
-let Extension = FuncExtKhrMipmapImageReadWrite in {
   defm : ImageQueryNumMipLevels<"RW">;
 }
 
@@ -1617,12 +1653,10 @@ let Extension = FuncExtKhrMipmapImageWrites in {
       def : Builtin<"write_imageui", [Void, ImageType<imgTy, aQual>, VectorType<Int, 4>, Int, VectorType<UInt, 4>]>;
     }
     def : Builtin<"write_imagef", [Void, ImageType<Image2dArrayDepth, aQual>, VectorType<Int, 4>, Int, Float]>;
-    let Extension = FuncExtKhrMipmapWritesAndWrite3d in {
-      foreach imgTy = [Image3d] in {
-        def : Builtin<"write_imagef", [Void, ImageType<imgTy, aQual>, VectorType<Int, 4>, Int, VectorType<Float, 4>]>;
-        def : Builtin<"write_imagei", [Void, ImageType<imgTy, aQual>, VectorType<Int, 4>, Int, VectorType<Int, 4>]>;
-        def : Builtin<"write_imageui", [Void, ImageType<imgTy, aQual>, VectorType<Int, 4>, Int, VectorType<UInt, 4>]>;
-      }
+    foreach imgTy = [Image3d] in {
+      def : Builtin<"write_imagef", [Void, ImageType<imgTy, aQual>, VectorType<Int, 4>, Int, VectorType<Float, 4>]>;
+      def : Builtin<"write_imagei", [Void, ImageType<imgTy, aQual>, VectorType<Int, 4>, Int, VectorType<Int, 4>]>;
+      def : Builtin<"write_imageui", [Void, ImageType<imgTy, aQual>, VectorType<Int, 4>, Int, VectorType<UInt, 4>]>;
     }
   }
 }
@@ -1666,9 +1700,6 @@ let Extension = FuncExtKhrGlMsaaSharing in {
   defm : ImageReadMsaa<"RO">;
   defm : ImageQueryMsaa<"RO">;
   defm : ImageQueryMsaa<"WO">;
-}
-
-let Extension = FuncExtKhrGlMsaaSharingReadWrite in {
   defm : ImageReadMsaa<"RW">;
   defm : ImageQueryMsaa<"RW">;
 }
@@ -1692,7 +1723,9 @@ let Extension = FuncExtKhrSubgroups in {
 // --- Table 28.2.2 ---
 let Extension = FuncExtKhrSubgroups in {
   def : Builtin<"sub_group_barrier", [Void, MemFenceFlags], Attr.Convergent>;
-  def : Builtin<"sub_group_barrier", [Void, MemFenceFlags, MemoryScope], Attr.Convergent>;
+  let MinVersion = CL20 in {
+    def : Builtin<"sub_group_barrier", [Void, MemFenceFlags, MemoryScope], Attr.Convergent>;
+  }
 }
 
 // --- Table 28.2.4 ---
@@ -1829,6 +1862,26 @@ let Extension = FunctionExtension<"__opencl_c_integer_dot_product_input_4x8bit_p
   def : Builtin<"dot_acc_sat_4x8packed_su_int", [Int, UInt, UInt, Int], Attr.Const>;
 }
 
+// Section 48.3 - cl_khr_subgroup_rotate
+let Extension = FunctionExtension<"cl_khr_subgroup_rotate"> in {
+  def : Builtin<"sub_group_rotate", [AGenType1, AGenType1, Int], Attr.Convergent>;
+  def : Builtin<"sub_group_clustered_rotate", [AGenType1, AGenType1, Int, UInt], Attr.Convergent>;
+}
+
+// cl_khr_kernel_clock
+let Extension = FunctionExtension<"cl_khr_kernel_clock __opencl_c_kernel_clock_scope_device"> in {
+  def : Builtin<"clock_read_device", [ULong]>;
+  def : Builtin<"clock_read_hilo_device", [VectorType<UInt, 2>]>;
+}
+let Extension = FunctionExtension<"cl_khr_kernel_clock __opencl_c_kernel_clock_scope_work_group"> in {
+  def : Builtin<"clock_read_work_group", [ULong]>;
+  def : Builtin<"clock_read_hilo_work_group", [VectorType<UInt, 2>]>;
+}
+let Extension = FunctionExtension<"cl_khr_kernel_clock __opencl_c_kernel_clock_scope_sub_group"> in {
+  def : Builtin<"clock_read_sub_group", [ULong]>;
+  def : Builtin<"clock_read_hilo_sub_group", [VectorType<UInt, 2>]>;
+}
+
 //--------------------------------------------------------------------
 // Arm extensions.
 let Extension = ArmIntegerDotProductInt8 in {
@@ -1854,4 +1907,32 @@ let Extension = ArmIntegerDotProductAccumulateSaturateInt8 in {
     def : Builtin<name, [UInt, VectorType<UChar, 4>, VectorType<UChar, 4>, UInt]>;
     def : Builtin<name, [Int, VectorType<Char, 4>, VectorType<Char, 4>, Int]>;
   }
+}
+
+//--------------------------------------------------------------------
+// AMD extensions.
+let Extension = AMDMediaOps in {
+  foreach name = ["amd_bitalign", "amd_bytealign", "amd_lerp", "amd_sadhi", "amd_sad"] in {
+    def : Builtin<name, [GenTypeUIntVecAndScalar, GenTypeUIntVecAndScalar, GenTypeUIntVecAndScalar, GenTypeUIntVecAndScalar]>;
+  }
+  foreach name = ["amd_unpack0", "amd_unpack1", "amd_unpack2", "amd_unpack3"] in {
+    def : Builtin<name, [GenTypeFloatVecAndScalar, GenTypeUIntVecAndScalar]>;
+  }
+  def : Builtin<"amd_pack", [UInt, VectorType<Float, 4>]>;
+  def : Builtin<"amd_sad4", [UInt, VectorType<UInt, 4>, VectorType<UInt, 4>, UInt]>;
+}
+
+let Extension = AMDMediaOps2 in {
+  def : Builtin<"amd_bfe", [GenTypeIntVecAndScalar, GenTypeIntVecAndScalar, GenTypeUIntVecAndScalar, GenTypeUIntVecAndScalar]>;
+  foreach name = ["amd_bfe", "amd_msad", "amd_sadd", "amd_sadw"] in {
+    def : Builtin<name, [GenTypeUIntVecAndScalar, GenTypeUIntVecAndScalar, GenTypeUIntVecAndScalar, GenTypeUIntVecAndScalar]>;
+  }
+  def : Builtin<"amd_bfm", [GenTypeUIntVecAndScalar, GenTypeUIntVecAndScalar, GenTypeUIntVecAndScalar]>;
+  foreach name = ["amd_max3", "amd_median3", "amd_min3"] in {
+    foreach gentype = [GenTypeFloatVecAndScalar, GenTypeIntVecAndScalar, GenTypeUIntVecAndScalar] in {
+      def : Builtin<name, [gentype, gentype, gentype, gentype]>;
+    }
+  }
+  def : Builtin<"amd_mqsad", [GenTypeULongVecAndScalar, GenTypeULongVecAndScalar, GenTypeUIntVecAndScalar, GenTypeULongVecAndScalar]>;
+  def : Builtin<"amd_qsad", [GenTypeULongVecAndScalar, GenTypeULongVecAndScalar, GenTypeUIntVecAndScalar, GenTypeULongVecAndScalar]>;
 }

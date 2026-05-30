@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2011 Marcel Moolenaar
  * All rights reserved.
@@ -28,9 +28,6 @@
 #if HAVE_NBTOOL_CONFIG_H
 #include "nbtool_config.h"
 #endif
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/queue.h>
@@ -536,13 +533,11 @@ read_mtree_keywords(FILE *fp, fsnode *node)
 					break;
 				}
 				flset = flclr = 0;
-#if HAVE_STRUCT_STAT_ST_FLAGS
 				if (!strtofflags(&value, &flset, &flclr)) {
-					st->st_flags &= ~flclr;
-					st->st_flags |= flset;
+					FSINODE_ST_FLAGS(*node->inode) &= ~flclr;
+					FSINODE_ST_FLAGS(*node->inode) |= flset;
 				} else
 					error = errno;
-#endif
 			} else
 				error = ENOSYS;
 			break;
@@ -636,6 +631,9 @@ read_mtree_keywords(FILE *fp, fsnode *node)
 				}
 				/* Ignore. */
 			} else if (strcmp(keyword, "time") == 0) {
+				/* Ignore if a default timestamp is present. */
+				if (stampst.st_ino != 0)
+					break;
 				if (value == NULL) {
 					error = ENOATTR;
 					break;
@@ -725,7 +723,9 @@ read_mtree_keywords(FILE *fp, fsnode *node)
 		return (error);
 
 	st->st_mode = (st->st_mode & ~S_IFMT) | node->type;
-
+	/* Store default timestamp, if present. */
+	if (stampst.st_ino != 0)
+		set_tstamp(node);
 	/* Nothing more to do for the global defaults. */
 	if (node->name == NULL)
 		return (0);
@@ -742,7 +742,10 @@ read_mtree_keywords(FILE *fp, fsnode *node)
 		type = S_IFREG;
 	} else if (node->type != 0) {
 		type = node->type;
-		if (type == S_IFREG) {
+		if (type == S_IFLNK && node->symlink == NULL) {
+			mtree_error("%s: link type requires link keyword", node->name);
+			return (0);
+		} else if (type == S_IFREG) {
 			/* the named path is the default contents */
 			node->contents = mtree_file_path(node);
 		}
@@ -836,7 +839,7 @@ read_mtree_spec1(FILE *fp, bool def, const char *name)
 	 * not the '.' node of the parent directory, but the directory
 	 * node within the parent to which the child relates. However,
 	 * going up a directory means we need to find the '.' node to
-	 * which the directoy node is linked.  This we can do via the
+	 * which the directory node is linked.  This we can do via the
 	 * first * pointer, because '.' is always the first entry in a
 	 * directory.
 	 */
@@ -894,11 +897,11 @@ read_mtree_spec1(FILE *fp, bool def, const char *name)
 
 		if (strcmp(name, node->name) == 0) {
 			if (def == true) {
-				if (!dupsok)
+				if (dupsok == 0)
 					mtree_error(
 					    "duplicate definition of %s",
 					    name);
-				else
+				else if (dupsok == 1)
 					mtree_warning(
 					    "duplicate definition of %s",
 					    name);
@@ -1016,7 +1019,7 @@ read_mtree_spec(FILE *fp)
 		}
 	}
 
-	/* Ignore absolute specfications that end with a slash. */
+	/* Ignore absolute specifications that end with a slash. */
 	if (!error && pathspec[0] != '\0')
 		error = read_mtree_spec1(fp, true, pathspec);
 
@@ -1053,8 +1056,16 @@ read_mtree(const char *fname, fsnode *node)
 	mtree_global.inode = &mtree_global_inode;
 	mtree_global_inode.nlink = 1;
 	mtree_global_inode.st.st_nlink = 1;
-	mtree_global_inode.st.st_atime = mtree_global_inode.st.st_ctime =
-	    mtree_global_inode.st.st_mtime = time(NULL);
+	if (stampst.st_ino != 0) {
+		set_tstamp(&mtree_global);
+	} else {
+#if HAVE_STRUCT_STAT_BIRTHTIME
+		mtree_global_inode.st.st_birthtime =
+#endif
+		    mtree_global_inode.st.st_atime =
+		    mtree_global_inode.st.st_ctime =
+		    mtree_global_inode.st.st_mtime = time(NULL);
+	}
 	errors = warnings = 0;
 
 	setgroupent(1);

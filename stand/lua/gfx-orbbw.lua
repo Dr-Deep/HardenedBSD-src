@@ -1,5 +1,5 @@
 --
--- SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+-- SPDX-License-Identifier: BSD-2-Clause
 --
 -- Copyright (c) 2018 Kyle Evans <kevans@FreeBSD.org>
 --
@@ -24,28 +24,28 @@
 -- OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 -- SUCH DAMAGE.
 --
--- $FreeBSD$
---
 
 return {
 	logo = {
-		graphic = {
-		    "  ```                        `",
-		    " s` `.....---.......--.```   -/",
-		    " +o   .--`         /y:`      +.",
-		    "  yo`:.            :o      `+-",
-		    "   y/               -/`   -o/",
-		    "  .-                  ::/sy+:.",
-		    "  /                     `--  /",
-		    " `:                          :`",
-		    " `:                          :`",
-		    "  /                          /",
-		    "  .-                        -.",
-		    "   --                      -.",
-		    "    `:`                  `:`",
-		    "      .--             `--.",
-		    "         .---.....----.",
+		ascii = {
+			image = {
+			    "  ```                        `",
+			    " s` `.....---.......--.```   -/",
+			    " +o   .--`         /y:`      +.",
+			    "  yo`:.            :o      `+-",
+			    "   y/               -/`   -o/",
+			    "  .-                  ::/sy+:.",
+			    "  /                     `--  /",
+			    " `:                          :`",
+			    " `:                          :`",
+			    "  /                          /",
+			    "  .-                        -.",
+			    "   --                      -.",
+			    "    `:`                  `:`",
+			    "      .--             `--.",
+			    "         .---.....----.",
+			},
+			shift = {x = 2, y = -1},
 		},
-		shift = {x = 2, y = 4},
 	}
 }

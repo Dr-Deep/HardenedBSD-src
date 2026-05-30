@@ -28,10 +28,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\"     @(#)getopt.3	8.5 (Berkeley) 4/27/95
-.\" $FreeBSD$
-.\"
-.Dd May 2, 2018
+.Dd December 24, 2022
 .Dt GETOPT_LONG 3
 .Os
 .Sh NAME
@@ -220,7 +217,7 @@ an error and return
 Specifying
 .Ql \&:
 in
-.Fa optstr
+.Fa optstring
 will cause the error message to be suppressed and
 .Ql \&:
 to be returned instead.
@@ -232,7 +229,7 @@ a leading
 or
 .Ql \&-
 in
-.Fa optstr
+.Fa optstring
 also has special meaning.
 If either of these are specified, they must appear before
 .Ql \&: .
@@ -546,3 +543,19 @@ is set).
 The implementation can completely replace
 .Xr getopt 3 ,
 but right now we are using separate code.
+.Pp
+.Nm
+makes the assumption that the first argument should always be skipped because
+it's typically the program name.
+As a result, setting
+.Va optind
+to 0 will indicate that
+.Nm
+should reset, and
+.Va optind
+will be set to 1 in the process.
+This behavior differs from
+.Xr getopt 3 ,
+which will handle an
+.Va optind
+value of 0 as expected and process the first element.

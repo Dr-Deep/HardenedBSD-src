@@ -37,8 +37,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 /*
@@ -90,8 +88,6 @@
 #include <security/mac/mac_policy.h>
 #include <security/mac_biba/mac_biba.h>
 
-SYSCTL_DECL(_security_mac);
-
 static SYSCTL_NODE(_security_mac, OID_AUTO, biba,
     CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "TrustedBSD mac_biba policy controls");
@@ -114,7 +110,8 @@ SYSCTL_INT(_security_mac_biba, OID_AUTO, trust_all_interfaces, CTLFLAG_RDTUN,
 
 static char	trusted_interfaces[128];
 SYSCTL_STRING(_security_mac_biba, OID_AUTO, trusted_interfaces, CTLFLAG_RDTUN,
-    trusted_interfaces, 0, "Interfaces considered 'trusted' by MAC/Biba");
+    trusted_interfaces, sizeof(trusted_interfaces),
+    "Interfaces considered 'trusted' by MAC/Biba");
 
 static int	max_compartments = MAC_BIBA_MAX_COMPARTMENTS;
 SYSCTL_INT(_security_mac_biba, OID_AUTO, max_compartments, CTLFLAG_RD,
@@ -915,7 +912,7 @@ biba_cred_create_init(struct ucred *cred)
 }
 
 static void
-biba_cred_create_swapper(struct ucred *cred)
+biba_cred_create_kproc0(struct ucred *cred)
 {
 	struct mac_biba *dest;
 
@@ -1064,7 +1061,7 @@ biba_ifnet_create(struct ifnet *ifp, struct label *ifplabel)
 
 	dest = SLOT(ifplabel);
 
-	if (ifp->if_type == IFT_LOOP || interfaces_equal != 0) {
+	if (if_gettype(ifp) == IFT_LOOP || interfaces_equal != 0) {
 		type = MAC_BIBA_TYPE_EQUAL;
 		goto set;
 	}
@@ -1091,7 +1088,7 @@ biba_ifnet_create(struct ifnet *ifp, struct label *ifplabel)
 			if (len < IFNAMSIZ) {
 				bzero(tifname, sizeof(tifname));
 				bcopy(q, tifname, len);
-				if (strcmp(tifname, ifp->if_xname) == 0) {
+				if (strcmp(tifname, if_name(ifp)) == 0) {
 					type = MAC_BIBA_TYPE_HIGH;
 					break;
 				}
@@ -1926,6 +1923,7 @@ biba_priv_check(struct ucred *cred, int priv)
 	 */
 	case PRIV_SEEOTHERGIDS:
 	case PRIV_SEEOTHERUIDS:
+	case PRIV_SEEJAILPROC:
 		break;
 
 	/*
@@ -3576,7 +3574,7 @@ static struct mac_policy_ops mac_biba_ops =
 	.mpo_cred_check_visible = biba_cred_check_visible,
 	.mpo_cred_copy_label = biba_copy_label,
 	.mpo_cred_create_init = biba_cred_create_init,
-	.mpo_cred_create_swapper = biba_cred_create_swapper,
+	.mpo_cred_create_kproc0 = biba_cred_create_kproc0,
 	.mpo_cred_destroy_label = biba_destroy_label,
 	.mpo_cred_externalize_label = biba_externalize_label,
 	.mpo_cred_init_label = biba_init_label,

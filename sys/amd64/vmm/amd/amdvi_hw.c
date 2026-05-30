@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2016, Anish Gupta (anish@freebsd.org)
  * All rights reserved.
@@ -25,9 +25,6 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -127,7 +124,7 @@ static inline uint32_t
 amdvi_pci_read(struct amdvi_softc *softc, int off)
 {
 
-	return (pci_cfgregread(PCI_RID2BUS(softc->pci_rid),
+	return (pci_cfgregread(softc->pci_seg, PCI_RID2BUS(softc->pci_rid),
 	    PCI_RID2SLOT(softc->pci_rid), PCI_RID2FUNC(softc->pci_rid),
 	    off, 4));
 }
@@ -277,6 +274,7 @@ amdvi_get_cmd_tail(struct amdvi_softc *softc)
 
 	tail = (struct amdvi_cmd *)((uint8_t *)softc->cmd +
 	    ctrl->cmd_tail);
+	memset(tail, 0, sizeof(*tail));
 
 	return (tail);
 }
@@ -319,7 +317,6 @@ amdvi_cmd_cmp(struct amdvi_softc *softc, const uint64_t data)
 	uint64_t pa;
 
 	cmd = amdvi_get_cmd_tail(softc);
-	KASSERT(cmd != NULL, ("Cmd is NULL"));
 
 	pa = vtophys(&softc->cmp_data);
 	cmd->opcode = AMDVI_CMP_WAIT_OPCODE;
@@ -337,7 +334,6 @@ amdvi_cmd_inv_dte(struct amdvi_softc *softc, uint16_t devid)
 	struct amdvi_cmd *cmd;
 
 	cmd = amdvi_get_cmd_tail(softc);
-	KASSERT(cmd != NULL, ("Cmd is NULL"));
 	cmd->opcode = AMDVI_INVD_DTE_OPCODE;
 	cmd->word0 = devid;
 	amdvi_update_cmd_tail(softc);
@@ -355,7 +351,6 @@ amdvi_cmd_inv_iommu_pages(struct amdvi_softc *softc, uint16_t domain_id,
 	struct amdvi_cmd *cmd;
 
 	cmd = amdvi_get_cmd_tail(softc);
-	KASSERT(cmd != NULL, ("Cmd is NULL"));
 
 	cmd->opcode = AMDVI_INVD_PAGE_OPCODE;
 	cmd->word1 = domain_id;
@@ -386,7 +381,6 @@ amdvi_cmd_inv_iotlb(struct amdvi_softc *softc, uint16_t devid)
 		      qlen, RID2PCI_STR(devid));
 	}
 	cmd = amdvi_get_cmd_tail(softc);
-	KASSERT(cmd != NULL, ("Cmd is NULL"));
 
 #ifdef AMDVI_DEBUG_CMD
 	device_printf(softc->dev, "Invalidate IOTLB devID 0x%x"
@@ -409,7 +403,6 @@ amdvi_cmd_inv_intr_map(struct amdvi_softc *softc,
 	struct amdvi_cmd *cmd;
 
 	cmd = amdvi_get_cmd_tail(softc);
-	KASSERT(cmd != NULL, ("Cmd is NULL"));
 	cmd->opcode = AMDVI_INVD_INTR_OPCODE;
 	cmd->word0 = devid;
 	amdvi_update_cmd_tail(softc);
@@ -423,10 +416,6 @@ amdvi_cmd_inv_intr_map(struct amdvi_softc *softc,
 static void
 amdvi_inv_domain(struct amdvi_softc *softc, uint16_t domain_id)
 {
-	struct amdvi_cmd *cmd __diagused;
-
-	cmd = amdvi_get_cmd_tail(softc);
-	KASSERT(cmd != NULL, ("Cmd is NULL"));
 
 	/*
 	 * See section 3.3.3 of IOMMU spec rev 2.0, software note
@@ -660,7 +649,7 @@ amdvi_decode_evt(struct amdvi_event *evt)
 	case AMDVI_EVENT_CMD_HW_ERROR:
 		printf("\t[%s EVT]\n", (evt->opcode == AMDVI_EVENT_ILLEGAL_CMD) ?
 		    "ILLEGAL CMD" : "CMD HW ERR");
-		cmd = (struct amdvi_cmd *)PHYS_TO_DMAP(evt->addr);
+		cmd = PHYS_TO_DMAP(evt->addr);
 		printf("\tCMD opcode= 0x%x 0x%x 0x%x 0x%lx\n",
 		    cmd->opcode, cmd->word0, cmd->word1, cmd->addr);
 		break;
@@ -931,8 +920,8 @@ amdvi_teardown_hw(struct amdvi_softc *softc)
 
 	dev = softc->dev;
 
-	/* 
-	 * Called after disable, h/w is stopped by now, free all the resources. 
+	/*
+	 * Called after disable, h/w is stopped by now, free all the resources.
 	 */
 	amdvi_free_evt_intr_res(dev);
 
@@ -1047,8 +1036,7 @@ amdvi_free_ptp(uint64_t *ptp, int level)
 			continue;
 #endif
 
-		amdvi_free_ptp((uint64_t *)PHYS_TO_DMAP(ptp[i]
-		    & AMDVI_PT_MASK), level - 1);
+		amdvi_free_ptp(PHYS_TO_DMAP(ptp[i] & AMDVI_PT_MASK), level - 1);
 	}
 
 	free(ptp, M_AMDVI);
@@ -1109,7 +1097,7 @@ amdvi_set_pt(uint64_t *pt, int level, vm_paddr_t gpa,
 #endif
 #define PTE2PA(x)	((uint64_t)(x) & AMDVI_PT_MASK)
 		pa = PTE2PA(pt[index]);
-		pt = (uint64_t *)PHYS_TO_DMAP(pa);
+		pt = PHYS_TO_DMAP(pa);
 		shift -= PT_SHIFT;
 		level--;
 	}
@@ -1158,9 +1146,9 @@ amdvi_update_mapping(struct amdvi_domain *domain, vm_paddr_t gpa,
 	return (mapped);
 }
 
-static uint64_t
+static int
 amdvi_create_mapping(void *arg, vm_paddr_t gpa, vm_paddr_t hpa,
-    uint64_t len)
+    uint64_t len, uint64_t *res_len)
 {
 	struct amdvi_domain *domain;
 
@@ -1168,7 +1156,7 @@ amdvi_create_mapping(void *arg, vm_paddr_t gpa, vm_paddr_t hpa,
 
 	if (domain->id && !domain->ptp) {
 		printf("ptp is NULL");
-		return (-1);
+		return (EINVAL);
 	}
 
 	/*
@@ -1176,13 +1164,14 @@ amdvi_create_mapping(void *arg, vm_paddr_t gpa, vm_paddr_t hpa,
 	 * table set-up.
 	 */
 	if (domain->ptp)
-		return (amdvi_update_mapping(domain, gpa, hpa, len, true));
+		*res_len = amdvi_update_mapping(domain, gpa, hpa, len, true);
 	else
-		return (len);
+		*res_len = len;
+	return (0);
 }
 
-static uint64_t
-amdvi_remove_mapping(void *arg, vm_paddr_t gpa, uint64_t len)
+static int
+amdvi_remove_mapping(void *arg, vm_paddr_t gpa, uint64_t len, uint64_t *res_len)
 {
 	struct amdvi_domain *domain;
 
@@ -1192,9 +1181,10 @@ amdvi_remove_mapping(void *arg, vm_paddr_t gpa, uint64_t len)
 	 * table set-up.
 	 */
 	if (domain->ptp)
-		return (amdvi_update_mapping(domain, gpa, 0, len, false));
-	return
-	    (len);
+		*res_len = amdvi_update_mapping(domain, gpa, 0, len, false);
+	else
+		*res_len = len;
+	return (0);
 }
 
 static struct amdvi_softc *
@@ -1271,8 +1261,8 @@ amdvi_inv_device(struct amdvi_softc *softc, uint16_t devid)
 	amdvi_wait(softc);
 }
 
-static void
-amdvi_add_device(void *arg, uint16_t devid)
+static int
+amdvi_add_device(void *arg, device_t dev __unused, uint16_t devid)
 {
 	struct amdvi_domain *domain;
 	struct amdvi_softc *softc;
@@ -1285,13 +1275,14 @@ amdvi_add_device(void *arg, uint16_t devid)
 #endif
 	softc = amdvi_find_iommu(devid);
 	if (softc == NULL)
-		return;
+		return (ENXIO);
 	amdvi_set_dte(domain, softc, devid, true);
 	amdvi_inv_device(softc, devid);
+	return (0);
 }
 
-static void
-amdvi_remove_device(void *arg, uint16_t devid)
+static int
+amdvi_remove_device(void *arg, device_t dev __unused, uint16_t devid)
 {
 	struct amdvi_domain *domain;
 	struct amdvi_softc *softc;
@@ -1303,9 +1294,10 @@ amdvi_remove_device(void *arg, uint16_t devid)
 #endif
 	softc = amdvi_find_iommu(devid);
 	if (softc == NULL)
-		return;
+		return (ENXIO);
 	amdvi_set_dte(domain, softc, devid, false);
 	amdvi_inv_device(softc, devid);
+	return (0);
 }
 
 static void
@@ -1360,7 +1352,7 @@ amdvi_disable(void)
 	}
 }
 
-static void
+static int
 amdvi_invalidate_tlb(void *arg)
 {
 	struct amdvi_domain *domain;
@@ -1368,6 +1360,7 @@ amdvi_invalidate_tlb(void *arg)
 	domain = (struct amdvi_domain *)arg;
 	KASSERT(domain, ("domain is NULL"));
 	amdvi_do_inv_domain(domain->id, false);
+	return (0);
 }
 
 const struct iommu_ops iommu_ops_amd = {
@@ -1381,5 +1374,5 @@ const struct iommu_ops iommu_ops_amd = {
 	.remove_mapping = amdvi_remove_mapping,
 	.add_device = amdvi_add_device,
 	.remove_device = amdvi_remove_device,
-	.invalidate_tlb = amdvi_invalidate_tlb
+	.invalidate_tlb = amdvi_invalidate_tlb,
 };

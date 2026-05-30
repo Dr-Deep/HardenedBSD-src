@@ -32,9 +32,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	from: @(#)vmparam.h	5.9 (Berkeley) 5/12/91
- * $FreeBSD$
  */
 
 #ifndef _MACHINE_VMPARAM_H_
@@ -237,7 +234,8 @@
 #define	SFBUF_PROCESS_PAGE
 
 #define	PMAP_HAS_DMAP	0
-#define	PHYS_TO_DMAP(x)	({ panic("No direct map exists"); 0; })
+#define	PHYS_TO_DMAP_ADDR(x)	({ panic("No direct map exists"); 0; })
+#define	PHYS_TO_DMAP(x)		((void *)PHYS_TO_DMAP_ADDR(x))
 #define	DMAP_TO_PHYS(x)	({ panic("No direct map exists"); 0; })
 
 /*
@@ -249,5 +247,6 @@
  * Need a page dump array for minidump.
  */
 #define MINIDUMP_PAGE_TRACKING	1
+#define MINIDUMP_STARTUP_PAGE_TRACKING 0
 
 #endif /* _MACHINE_VMPARAM_H_ */

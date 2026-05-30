@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2002 Jonathan Mini <mini@freebsd.org>
  * All rights reserved.
@@ -25,9 +25,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <stdarg.h>
 #include <string.h>
@@ -64,7 +61,7 @@ _thread_printf(int fd, const char *fmt, ...)
 void
 _thread_vprintf(int fd, const char *fmt, va_list ap)
 {
-	static const char digits[16] = "0123456789abcdef";
+	static const char digits[16] __nonstring = "0123456789abcdef";
 	char buf[20];
 	char *s;
 	unsigned long r, u;
@@ -150,4 +147,3 @@ pstr(int fd, const char *s)
 
 	__sys_write(fd, s, strlen(s));
 }
-

@@ -24,9 +24,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/linker.h>
 
@@ -41,6 +38,7 @@ __FBSDID("$FreeBSD$");
 #include "bootstrap.h"
 #include "libofw.h"
 #include "openfirm.h"
+#include "modinfo.h"
 
 extern char		end[];
 extern vm_offset_t	reloc;	/* From <arch>/conf.c */
@@ -60,7 +58,7 @@ __elfN(ofw_loadfile)(char *filename, uint64_t dest,
 	 * No need to sync the icache for modules: this will
 	 * be done by the kernel after relocation.
 	 */
-	if (!strcmp((*result)->f_type, "elf kernel"))
+	if (!strcmp((*result)->f_type, md_kerntype))
 		__syncicache((void *) (*result)->f_addr, (*result)->f_size);
 #endif
 	return (0);
@@ -99,8 +97,7 @@ __elfN(ofw_exec)(struct preloaded_file *fp)
 	panic("exec returned");
 }
 
-struct file_format	ofw_elf =
-{
-	__elfN(ofw_loadfile),
-	__elfN(ofw_exec)
+struct file_format	ofw_elf = {
+	.l_load = __elfN(ofw_loadfile),
+	.l_exec = __elfN(ofw_exec)
 };

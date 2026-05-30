@@ -1,7 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * Copyright (c) 2020-2021 The FreeBSD Foundation
+ * Copyright (c) 2020-2025 The FreeBSD Foundation
  *
  * This software was developed by Bj\xc3\xb6rn Zeeb under sponsorship from
  * the FreeBSD Foundation.
@@ -29,8 +29,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <linux/kernel.h>
 #include <linux/device.h>
 #include <linux/slab.h>
@@ -223,4 +221,71 @@ lkpi_devm_kmalloc_release(struct device *dev __unused, void *p __unused)
 {
 
 	/* Nothing to do.  Freed with the devres. */
+}
+
+static int
+lkpi_devm_kmalloc_match(struct device *dev __unused, void *p, void *mp)
+{
+	return (p == mp);
+}
+
+void
+lkpi_devm_kfree(struct device *dev, const void *p)
+{
+	void *mp;
+	int error;
+
+	if (p == NULL)
+		return;
+
+	/* I assume Linux simply casts the const away... */
+	mp = __DECONST(void *, p);
+	error = lkpi_devres_destroy(dev, lkpi_devm_kmalloc_release,
+	    lkpi_devm_kmalloc_match, mp);
+	if (error != 0)
+		dev_warn(dev, "%s: lkpi_devres_destroy failed with %d\n",
+		    __func__, error);
+}
+
+struct devres_action {
+	void *data;
+	void (*action)(void *);
+};
+
+static void
+lkpi_devm_action_release(struct device *dev, void *res)
+{
+	struct devres_action	*devres;
+
+	devres = (struct devres_action *)res;
+	devres->action(devres->data);
+}
+
+int
+lkpi_devm_add_action(struct device *dev, void (*action)(void *), void *data)
+{
+	struct devres_action *devres;
+
+	KASSERT(action != NULL, ("%s: action is NULL\n", __func__));
+	devres = lkpi_devres_alloc(lkpi_devm_action_release,
+		sizeof(struct devres_action), GFP_KERNEL);
+	if (devres == NULL)
+		return (-ENOMEM);
+	devres->data = data;
+	devres->action = action;
+	devres_add(dev, devres);
+
+	return (0);
+}
+
+int
+lkpi_devm_add_action_or_reset(struct device *dev, void (*action)(void *), void *data)
+{
+	int rv;
+
+	rv = lkpi_devm_add_action(dev, action, data);
+	if (rv != 0)
+		action(data);
+
+	return (rv);
 }

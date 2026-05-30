@@ -64,12 +64,10 @@
   $Id: auth_gss.c,v 1.32 2002/01/15 15:43:00 andros Exp $
 */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/hash.h>
+#include <sys/jail.h>
 #include <sys/kernel.h>
 #include <sys/kobj.h>
 #include <sys/lock.h>
@@ -130,7 +128,7 @@ struct rpc_gss_data {
 	rpc_gss_options_req_t	gd_options;	/* GSS context options */
 	enum rpcsec_gss_state	gd_state;	/* connection state */
 	gss_buffer_desc		gd_verf;	/* save GSS_S_COMPLETE
-						 * NULL RPC verfier to
+						 * NULL RPC verifier to
 						 * process at end of
 						 * context negotiation */
 	CLIENT			*gd_clnt;	/* client handle */
@@ -152,26 +150,42 @@ static struct timeval AUTH_TIMEOUT = { 25, 0 };
 
 #define RPC_GSS_HASH_SIZE	11
 #define RPC_GSS_MAX		256
-static struct rpc_gss_data_list rpc_gss_cache[RPC_GSS_HASH_SIZE];
-static struct rpc_gss_data_list rpc_gss_all;
-static struct sx rpc_gss_lock;
-static int rpc_gss_count;
+
+VNET_DEFINE_STATIC(struct rpc_gss_data_list *, rpc_gss_cache);
+VNET_DEFINE_STATIC(struct rpc_gss_data_list, rpc_gss_all);
+VNET_DEFINE_STATIC(struct sx, rpc_gss_lock);
+VNET_DEFINE_STATIC(int, rpc_gss_count);
 
 static AUTH *rpc_gss_seccreate_int(CLIENT *, struct ucred *, const char *,
     const char *, gss_OID, rpc_gss_service_t, u_int, rpc_gss_options_req_t *,
     rpc_gss_options_ret_t *);
 
 static void
-rpc_gss_hashinit(void *dummy)
+rpc_gss_hashinit(void *dummy __unused)
 {
 	int i;
 
+	VNET(rpc_gss_cache) = mem_alloc(sizeof(struct rpc_gss_data_list) *
+	    RPC_GSS_HASH_SIZE);
 	for (i = 0; i < RPC_GSS_HASH_SIZE; i++)
-		TAILQ_INIT(&rpc_gss_cache[i]);
-	TAILQ_INIT(&rpc_gss_all);
-	sx_init(&rpc_gss_lock, "rpc_gss_lock");
+		TAILQ_INIT(&VNET(rpc_gss_cache)[i]);
+	TAILQ_INIT(&VNET(rpc_gss_all));
+	sx_init(&VNET(rpc_gss_lock), "rpc_gss_lock");
 }
-SYSINIT(rpc_gss_hashinit, SI_SUB_KMEM, SI_ORDER_ANY, rpc_gss_hashinit, NULL);
+VNET_SYSINIT(rpc_gss_hashinit, SI_SUB_VNET_DONE, SI_ORDER_ANY,
+    rpc_gss_hashinit, NULL);
+
+static void
+rpc_gss_hashinit_cleanup(void *dummy __unused)
+{
+
+	rpc_gss_secpurge(NULL);
+	mem_free(VNET(rpc_gss_cache), sizeof(struct rpc_gss_data_list) *
+	    RPC_GSS_HASH_SIZE);
+	sx_destroy(&VNET(rpc_gss_lock));
+}
+VNET_SYSUNINIT(rpc_gss_hashinit_cleanup, SI_SUB_VNET_DONE, SI_ORDER_ANY,
+    rpc_gss_hashinit_cleanup, NULL);
 
 static uint32_t
 rpc_gss_hash(const char *principal, gss_OID mech,
@@ -200,15 +214,16 @@ rpc_gss_secfind(CLIENT *clnt, struct ucred *cred, const char *principal,
 	struct rpc_gss_data	*gd, *tgd;
 	rpc_gss_options_ret_t	options;
 
-	if (rpc_gss_count > RPC_GSS_MAX) {
-		while (rpc_gss_count > RPC_GSS_MAX) {
-			sx_xlock(&rpc_gss_lock);
-			tgd = TAILQ_FIRST(&rpc_gss_all);
+	CURVNET_ASSERT_SET();
+	if (VNET(rpc_gss_count) > RPC_GSS_MAX) {
+		while (VNET(rpc_gss_count) > RPC_GSS_MAX) {
+			sx_xlock(&VNET(rpc_gss_lock));
+			tgd = TAILQ_FIRST(&VNET(rpc_gss_all));
 			th = tgd->gd_hash;
-			TAILQ_REMOVE(&rpc_gss_cache[th], tgd, gd_link);
-			TAILQ_REMOVE(&rpc_gss_all, tgd, gd_alllink);
-			rpc_gss_count--;
-			sx_xunlock(&rpc_gss_lock);
+			TAILQ_REMOVE(&VNET(rpc_gss_cache)[th], tgd, gd_link);
+			TAILQ_REMOVE(&VNET(rpc_gss_all), tgd, gd_alllink);
+			VNET(rpc_gss_count)--;
+			sx_xunlock(&VNET(rpc_gss_lock));
 			AUTH_DESTROY(tgd->gd_auth);
 		}
 	}
@@ -219,23 +234,24 @@ rpc_gss_secfind(CLIENT *clnt, struct ucred *cred, const char *principal,
 	h = rpc_gss_hash(principal, mech_oid, cred, service);
 
 again:
-	sx_slock(&rpc_gss_lock);
-	TAILQ_FOREACH(gd, &rpc_gss_cache[h], gd_link) {
+	sx_slock(&VNET(rpc_gss_lock));
+	TAILQ_FOREACH(gd, &VNET(rpc_gss_cache)[h], gd_link) {
 		if (gd->gd_ucred->cr_uid == cred->cr_uid
 		    && !strcmp(gd->gd_principal, principal)
 		    && gd->gd_mech == mech_oid
 		    && gd->gd_cred.gc_svc == service) {
 			refcount_acquire(&gd->gd_refs);
-			if (sx_try_upgrade(&rpc_gss_lock)) {
+			if (sx_try_upgrade(&VNET(rpc_gss_lock))) {
 				/*
 				 * Keep rpc_gss_all LRU sorted.
 				 */
-				TAILQ_REMOVE(&rpc_gss_all, gd, gd_alllink);
-				TAILQ_INSERT_TAIL(&rpc_gss_all, gd,
+				TAILQ_REMOVE(&VNET(rpc_gss_all), gd,
 				    gd_alllink);
-				sx_xunlock(&rpc_gss_lock);
+				TAILQ_INSERT_TAIL(&VNET(rpc_gss_all), gd,
+				    gd_alllink);
+				sx_xunlock(&VNET(rpc_gss_lock));
 			} else {
-				sx_sunlock(&rpc_gss_lock);
+				sx_sunlock(&VNET(rpc_gss_lock));
 			}
 
 			/*
@@ -251,7 +267,7 @@ again:
 			return (gd->gd_auth);
 		}
 	}
-	sx_sunlock(&rpc_gss_lock);
+	sx_sunlock(&VNET(rpc_gss_lock));
 
 	/*
 	 * We missed in the cache - create a new association.
@@ -264,8 +280,8 @@ again:
 	gd = AUTH_PRIVATE(auth);
 	gd->gd_hash = h;
 	
-	sx_xlock(&rpc_gss_lock);
-	TAILQ_FOREACH(tgd, &rpc_gss_cache[h], gd_link) {
+	sx_xlock(&VNET(rpc_gss_lock));
+	TAILQ_FOREACH(tgd, &VNET(rpc_gss_cache)[h], gd_link) {
 		if (tgd->gd_ucred->cr_uid == cred->cr_uid
 		    && !strcmp(tgd->gd_principal, principal)
 		    && tgd->gd_mech == mech_oid
@@ -274,17 +290,17 @@ again:
 			 * We lost a race to create the AUTH that
 			 * matches this cred.
 			 */
-			sx_xunlock(&rpc_gss_lock);
+			sx_xunlock(&VNET(rpc_gss_lock));
 			AUTH_DESTROY(auth);
 			goto again;
 		}
 	}
 
-	rpc_gss_count++;
-	TAILQ_INSERT_TAIL(&rpc_gss_cache[h], gd, gd_link);
-	TAILQ_INSERT_TAIL(&rpc_gss_all, gd, gd_alllink);
+	VNET(rpc_gss_count)++;
+	TAILQ_INSERT_TAIL(&VNET(rpc_gss_cache)[h], gd, gd_link);
+	TAILQ_INSERT_TAIL(&VNET(rpc_gss_all), gd, gd_alllink);
 	refcount_acquire(&gd->gd_refs);	/* one for the cache, one for user */
-	sx_xunlock(&rpc_gss_lock);
+	sx_xunlock(&VNET(rpc_gss_lock));
 
 	return (auth);
 }
@@ -295,14 +311,15 @@ rpc_gss_secpurge(CLIENT *clnt)
 	uint32_t		h;
 	struct rpc_gss_data	*gd, *tgd;
 
-	TAILQ_FOREACH_SAFE(gd, &rpc_gss_all, gd_alllink, tgd) {
-		if (gd->gd_clnt == clnt) {
-			sx_xlock(&rpc_gss_lock);
+	CURVNET_ASSERT_SET();
+	TAILQ_FOREACH_SAFE(gd, &VNET(rpc_gss_all), gd_alllink, tgd) {
+		if (clnt == NULL || gd->gd_clnt == clnt) {
+			sx_xlock(&VNET(rpc_gss_lock));
 			h = gd->gd_hash;
-			TAILQ_REMOVE(&rpc_gss_cache[h], gd, gd_link);
-			TAILQ_REMOVE(&rpc_gss_all, gd, gd_alllink);
-			rpc_gss_count--;
-			sx_xunlock(&rpc_gss_lock);
+			TAILQ_REMOVE(&VNET(rpc_gss_cache)[h], gd, gd_link);
+			TAILQ_REMOVE(&VNET(rpc_gss_all), gd, gd_alllink);
+			VNET(rpc_gss_count)--;
+			sx_xunlock(&VNET(rpc_gss_lock));
 			AUTH_DESTROY(gd->gd_auth);
 		}
 	}
@@ -550,8 +567,7 @@ rpc_gss_marshal(AUTH *auth, uint32_t xid, XDR *xdrs, struct mbuf *args)
 			_rpc_gss_set_error(RPC_GSS_ER_SYSTEMERROR, ENOMEM);
 			return (FALSE);
 		}
-		xdrmbuf_append(xdrs, args);
-		return (TRUE);
+		return (xdr_putmbuf(xdrs, args));
 	} else {
 		/*
 		 * Keep track of this XID + seq pair so that we can do
@@ -599,15 +615,13 @@ rpc_gss_marshal(AUTH *auth, uint32_t xid, XDR *xdrs, struct mbuf *args)
 		}
 		if (gd->gd_state != RPCSEC_GSS_ESTABLISHED ||
 		    gd->gd_cred.gc_svc == rpc_gss_svc_none) {
-			xdrmbuf_append(xdrs, args);
-			return (TRUE);
+			return (xdr_putmbuf(xdrs, args));
 		} else {
 			if (!xdr_rpc_gss_wrap_data(&args,
 				gd->gd_ctx, gd->gd_qop, gd->gd_cred.gc_svc,
 				seq))
 				return (FALSE);
-			xdrmbuf_append(xdrs, args);
-			return (TRUE);
+			return (xdr_putmbuf(xdrs, args));
 		}
 	}
 
@@ -751,7 +765,9 @@ rpc_gss_init(AUTH *auth, rpc_gss_options_ret_t *options_ret)
 	struct rpc_callextra	 ext;
 	gss_OID			mech_oid;
 	gss_OID_set		mechlist;
+	static enum krb_imp	my_krb_imp = KRBIMP_UNKNOWN;
 
+	CURVNET_ASSERT_SET();
 	rpc_gss_log_debug("in rpc_gss_refresh()");
 	
 	gd = AUTH_PRIVATE(auth);
@@ -846,6 +862,14 @@ rpc_gss_init(AUTH *auth, rpc_gss_options_ret_t *options_ret)
 		goto out;
 	}
 
+	if (my_krb_imp == KRBIMP_UNKNOWN) {
+		maj_stat = gss_supports_lucid(&min_stat, NULL);
+		if (maj_stat == GSS_S_COMPLETE)
+			my_krb_imp = KRBIMP_MIT;
+		else
+			my_krb_imp = KRBIMP_HEIMDALV1;
+	}
+
 	/* GSS context establishment loop. */
 	memset(&recv_token, 0, sizeof(recv_token));
 	memset(&gr, 0, sizeof(gr));
@@ -856,19 +880,34 @@ rpc_gss_init(AUTH *auth, rpc_gss_options_ret_t *options_ret)
 	for (;;) {
 		crsave = td->td_ucred;
 		td->td_ucred = gd->gd_ucred;
-		maj_stat = gss_init_sec_context(&min_stat,
-		    gd->gd_options.my_cred,
-		    &gd->gd_ctx,
-		    name,
-		    gd->gd_mech,
-		    gd->gd_options.req_flags,
-		    gd->gd_options.time_req,
-		    gd->gd_options.input_channel_bindings,
-		    recv_tokenp,
-		    &gd->gd_mech,	/* used mech */
-		    &send_token,
-		    &options_ret->ret_flags,
-		    &options_ret->time_req);
+		if (my_krb_imp == KRBIMP_MIT)
+			maj_stat = gss_init_sec_context_lucid_v1(&min_stat,
+			    gd->gd_options.my_cred,
+			    &gd->gd_ctx,
+			    name,
+			    gd->gd_mech,
+			    gd->gd_options.req_flags,
+			    gd->gd_options.time_req,
+			    gd->gd_options.input_channel_bindings,
+			    recv_tokenp,
+			    &gd->gd_mech,	/* used mech */
+			    &send_token,
+			    &options_ret->ret_flags,
+			    &options_ret->time_req);
+		else
+			maj_stat = gss_init_sec_context(&min_stat,
+			    gd->gd_options.my_cred,
+			    &gd->gd_ctx,
+			    name,
+			    gd->gd_mech,
+			    gd->gd_options.req_flags,
+			    gd->gd_options.time_req,
+			    gd->gd_options.input_channel_bindings,
+			    recv_tokenp,
+			    &gd->gd_mech,	/* used mech */
+			    &send_token,
+			    &options_ret->ret_flags,
+			    &options_ret->time_req);
 		td->td_ucred = crsave;
 		
 		/*

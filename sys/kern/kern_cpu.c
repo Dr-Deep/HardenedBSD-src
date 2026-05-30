@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2004-2007 Nate Lawson (SDG)
  * All rights reserved.
@@ -25,9 +25,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -100,6 +97,7 @@ TAILQ_HEAD(cf_setting_lst, cf_setting_array);
 		printf("cpufreq: " msg);	\
 	} while (0)
 
+static int	cpufreq_probe(device_t dev);
 static int	cpufreq_attach(device_t dev);
 static void	cpufreq_startup_task(void *ctx, int pending);
 static int	cpufreq_detach(device_t dev);
@@ -119,7 +117,7 @@ static int	cpufreq_levels_sysctl(SYSCTL_HANDLER_ARGS);
 static int	cpufreq_settings_sysctl(SYSCTL_HANDLER_ARGS);
 
 static device_method_t cpufreq_methods[] = {
-	DEVMETHOD(device_probe,		bus_generic_probe),
+	DEVMETHOD(device_probe,		cpufreq_probe),
 	DEVMETHOD(device_attach,	cpufreq_attach),
 	DEVMETHOD(device_detach,	cpufreq_detach),
 
@@ -143,6 +141,13 @@ SYSCTL_INT(_debug_cpufreq, OID_AUTO, lowest, CTLFLAG_RWTUN, &cf_lowest_freq, 1,
     "Don't provide levels below this frequency.");
 SYSCTL_INT(_debug_cpufreq, OID_AUTO, verbose, CTLFLAG_RWTUN, &cf_verbose, 1,
     "Print verbose debugging messages");
+
+static int
+cpufreq_probe(device_t dev)
+{
+	device_set_desc(dev, "CPU frequency control");
+	return (BUS_PROBE_DEFAULT);
+}
 
 /*
  * This is called as the result of a hardware specific frequency control driver
@@ -997,16 +1002,12 @@ cpufreq_levels_sysctl(SYSCTL_HANDLER_ARGS)
 	struct sbuf sb;
 	int count, error, i;
 
-	sc = oidp->oid_arg1;
 	sbuf_new(&sb, NULL, 128, SBUF_AUTOEXTEND);
 
 	/* Get settings from the device and generate the output string. */
-	count = CF_MAX_LEVELS;
+	sc = oidp->oid_arg1;
 	levels = sc->levels_buf;
-	if (levels == NULL) {
-		sbuf_delete(&sb);
-		return (ENOMEM);
-	}
+	count = CF_MAX_LEVELS;
 	error = CPUFREQ_LEVELS(sc->dev, levels, &count);
 	if (error) {
 		if (error == E2BIG)
@@ -1096,7 +1097,7 @@ cpufreq_register(device_t dev)
 	 * must offer the same levels and be switched at the same time.
 	 */
 	cpu_dev = device_get_parent(dev);
-	if ((cf_dev = device_find_child(cpu_dev, "cpufreq", -1))) {
+	if ((cf_dev = device_find_child(cpu_dev, "cpufreq", DEVICE_UNIT_ANY))) {
 		sc = device_get_softc(cf_dev);
 		sc->max_mhz = CPUFREQ_VAL_UNKNOWN;
 		MPASS(sc->cf_drv_dev != NULL);
@@ -1130,7 +1131,8 @@ cpufreq_unregister(device_t dev)
 	 * device as well.  We identify cpufreq children by calling a method
 	 * they support.
 	 */
-	cf_dev = device_find_child(device_get_parent(dev), "cpufreq", -1);
+	cf_dev = device_find_child(device_get_parent(dev), "cpufreq",
+	    DEVICE_UNIT_ANY);
 	if (cf_dev == NULL) {
 		device_printf(dev,
 	"warning: cpufreq_unregister called with no cpufreq device active\n");

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
  * CDDL HEADER START
  *
@@ -275,6 +276,12 @@ dsl_dataset_phys(dsl_dataset_t *ds)
 	return ((dsl_dataset_phys_t *)ds->ds_dbuf->db_data);
 }
 
+typedef struct dsl_dataset_clone_arg_t {
+	const char *ddca_clone;
+	const char *ddca_origin;
+	cred_t *ddca_cred;
+} dsl_dataset_clone_arg_t;
+
 typedef struct dsl_dataset_promote_arg {
 	const char *ddpa_clonename;
 	dsl_dataset_t *ddpa_clone;
@@ -283,7 +290,6 @@ typedef struct dsl_dataset_promote_arg {
 	uint64_t used, comp, uncomp, unique, cloneusedsnap, originusedsnap;
 	nvlist_t *err_ds;
 	cred_t *cr;
-	proc_t *proc;
 } dsl_dataset_promote_arg_t;
 
 typedef struct dsl_dataset_rollback_arg {
@@ -298,8 +304,15 @@ typedef struct dsl_dataset_snapshot_arg {
 	nvlist_t *ddsa_props;
 	nvlist_t *ddsa_errors;
 	cred_t *ddsa_cr;
-	proc_t *ddsa_proc;
 } dsl_dataset_snapshot_arg_t;
+
+typedef struct dsl_dataset_rename_snapshot_arg {
+	const char *ddrsa_fsname;
+	const char *ddrsa_oldsnapname;
+	const char *ddrsa_newsnapname;
+	boolean_t ddrsa_recursive;
+	dmu_tx_t *ddrsa_tx;
+} dsl_dataset_rename_snapshot_arg_t;
 
 /*
  * The max length of a temporary tag prefix is the number of hex digits
@@ -357,6 +370,9 @@ uint64_t dsl_dataset_create_sync_dd(dsl_dir_t *dd, dsl_dataset_t *origin,
 void dsl_dataset_snapshot_sync(void *arg, dmu_tx_t *tx);
 int dsl_dataset_snapshot_check(void *arg, dmu_tx_t *tx);
 int dsl_dataset_snapshot(nvlist_t *snaps, nvlist_t *props, nvlist_t *errors);
+void dsl_dataset_clone_sync(void *arg, dmu_tx_t *tx);
+int dsl_dataset_clone_check(void *arg, dmu_tx_t *tx);
+int dsl_dataset_clone(const char *clone, const char *origin);
 void dsl_dataset_promote_sync(void *arg, dmu_tx_t *tx);
 int dsl_dataset_promote_check(void *arg, dmu_tx_t *tx);
 int dsl_dataset_promote(const char *name, char *conflsnap);
@@ -375,7 +391,6 @@ boolean_t dsl_dataset_modified_since_snap(dsl_dataset_t *ds,
 void dsl_dataset_sync(dsl_dataset_t *ds, zio_t *zio, dmu_tx_t *tx);
 void dsl_dataset_sync_done(dsl_dataset_t *ds, dmu_tx_t *tx);
 
-void dsl_dataset_feature_set_activation(const blkptr_t *bp, dsl_dataset_t *ds);
 void dsl_dataset_block_born(dsl_dataset_t *ds, const blkptr_t *bp,
     dmu_tx_t *tx);
 int dsl_dataset_block_kill(dsl_dataset_t *ds, const blkptr_t *bp,
@@ -451,7 +466,7 @@ int dsl_dataset_clone_swap_check_impl(dsl_dataset_t *clone,
 void dsl_dataset_clone_swap_sync_impl(dsl_dataset_t *clone,
     dsl_dataset_t *origin_head, dmu_tx_t *tx);
 int dsl_dataset_snapshot_check_impl(dsl_dataset_t *ds, const char *snapname,
-    dmu_tx_t *tx, boolean_t recv, uint64_t cnt, cred_t *cr, proc_t *proc);
+    dmu_tx_t *tx, boolean_t recv, uint64_t cnt, cred_t *cr);
 void dsl_dataset_snapshot_sync_impl(dsl_dataset_t *ds, const char *snapname,
     dmu_tx_t *tx);
 
@@ -473,6 +488,9 @@ int dsl_dataset_rollback_check(void *arg, dmu_tx_t *tx);
 void dsl_dataset_rollback_sync(void *arg, dmu_tx_t *tx);
 int dsl_dataset_rollback(const char *fsname, const char *tosnap, void *owner,
     nvlist_t *result);
+
+int dsl_dataset_rename_snapshot_check(void *arg, dmu_tx_t *tx);
+void dsl_dataset_rename_snapshot_sync(void *arg, dmu_tx_t *tx);
 
 uint64_t dsl_dataset_get_remap_deadlist_object(dsl_dataset_t *ds);
 void dsl_dataset_create_remap_deadlist(dsl_dataset_t *ds, dmu_tx_t *tx);

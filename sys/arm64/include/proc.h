@@ -25,15 +25,17 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *      from: @(#)proc.h        7.1 (Berkeley) 5/15/91
  *	from: FreeBSD: src/sys/i386/include/proc.h,v 1.11 2001/06/29
- * $FreeBSD$
  */
+
+#ifdef __arm__
+#include <arm/proc.h>
+#else /* !__arm__ */
 
 #ifndef	_MACHINE_PROC_H_
 #define	_MACHINE_PROC_H_
 
+#ifndef LOCORE
 struct ptrauth_key {
 	uint64_t pa_key_lo;
 	uint64_t pa_key_hi;
@@ -63,25 +65,29 @@ struct mdthread {
 	struct {
 		struct ptrauth_key apia;
 	} md_ptrauth_kern;
+
+	uint64_t md_efirt_tmp;
+	int md_efirt_dis_pf;
+
+	u_int md_flags;
+#define	MD_FLAG_MTE_ASYNC_FAULT_SHIFT	0
+#define	MD_FLAG_MTE_ASYNC_FAULT		(1u << 0)
+	uint64_t md_sctlr;
+	uint64_t md_gcr;		/* FEAT_MTE: Tag Control Register */
 };
 
 struct mdproc {
-	long	md_dummy;
+	uint64_t md_tcr;		/* TCR_EL1 fields to update */
+	uint64_t md_reserved[2];
 };
+#endif /* !LOCORE */
+
+/* Fields that can be set in md_tcr */
+#define	MD_TCR_FIELDS			TCR_TBI0
 
 #define	KINFO_PROC_SIZE	1088
 #define	KINFO_PROC32_SIZE 816
 
-#ifdef _KERNEL
-
-#include <machine/pcb.h>
-
-#define	GET_STACK_USAGE(total, used) do {				\
-	struct thread *td = curthread;					\
-	(total) = td->td_kstack_pages * PAGE_SIZE - sizeof(struct pcb);	\
-	(used) = td->td_kstack + (total) - (vm_offset_t)&td;		\
-} while (0)
-
-#endif
-
 #endif /* !_MACHINE_PROC_H_ */
+
+#endif /* !__arm__ */

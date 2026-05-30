@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #
-# SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+# SPDX-License-Identifier: BSD-2-Clause
 #
 # Copyright (c) 2012 Peter Holm <pho@FreeBSD.org>
 # Copyright (c) 2019 Dell EMC Isilon
@@ -241,7 +241,7 @@ main(int argc __unused, char **argv)
 	if ((pw = getpwnam("nobody")) == NULL)
 		err(1, "no such user: nobody");
 
-	if (setgroups(1, &pw->pw_gid) ||
+	if (setgroups(0, NULL) ||
 	    setegid(pw->pw_gid) || setgid(pw->pw_gid) ||
 	    seteuid(pw->pw_uid) || setuid(pw->pw_uid))
 		err(1, "Can't drop privileges to \"nobody\"");

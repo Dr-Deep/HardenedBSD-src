@@ -34,14 +34,14 @@
  * OF SUCH DAMAGE.
  *
  * Author: Archie Cobbs <archie@freebsd.org>
- *
- * $FreeBSD$
  */
 
 #ifndef _DEV_ICHSMB_ICHSMB_VAR_H
 #define _DEV_ICHSMB_ICHSMB_VAR_H
 
 #include "smbus_if.h"
+
+#define ICHSMB_FEATURE_BLOCK_BUFFER 0x01	/* supports 32 byte block buffer */
 
 /* Per-device private info */
 struct ichsmb_softc {
@@ -54,14 +54,16 @@ struct ichsmb_softc {
 	struct resource		*irq_res;       /* interrupt resource */
 	int			irq_rid;        /* interrupt bus id */
 	void			*irq_handle;    /* handle for interrupt code */
+	uint32_t		features;	/* supported device features */
 
 	/* Device state */
 	int			ich_cmd;	/* ich command, or -1 */
 	int			smb_error;	/* result of smb command */
 	int			block_count;	/* count for block read/write */
 	int			block_index;	/* index for block read/write */
-	u_char			block_write;	/* 0=read, 1=write */
-	u_char			block_data[32];	/* block read/write data */
+	bool			block_write;	/* block write or block read */
+	uint8_t			block_data[32];	/* block read/write data */
+	bool			killed;		/* killed current transfer */
 	struct mtx		mutex;		/* device mutex */
 };
 typedef struct ichsmb_softc *sc_p;
@@ -85,6 +87,7 @@ extern void	ichsmb_release_resources(sc_p sc);
 extern int	ichsmb_probe(device_t dev);
 extern int	ichsmb_attach(device_t dev);
 extern int	ichsmb_detach(device_t dev);
+extern int	ichsmb_shutdown(device_t dev);
 
 #endif /* _DEV_ICHSMB_ICHSMB_VAR_H */
 

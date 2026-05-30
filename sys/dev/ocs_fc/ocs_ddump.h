@@ -27,8 +27,6 @@
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #if !defined(__OCS_DDUMP_H__)
@@ -48,8 +46,7 @@ extern void ocs_ddump_startfile(ocs_textbuf_t *textbuf);
 extern void ocs_ddump_endfile(ocs_textbuf_t *textbuf);
 extern void ocs_ddump_section(ocs_textbuf_t *textbuf, const char *name, uint32_t instance);
 extern void ocs_ddump_endsection(ocs_textbuf_t *textbuf, const char *name, uint32_t instance);
-__attribute__((format(printf,3,4)))
-extern void ocs_ddump_value(ocs_textbuf_t *textbuf, const char *name, const char *fmt, ...);
+extern void ocs_ddump_value(ocs_textbuf_t *textbuf, const char *name, const char *fmt, ...) __printflike(3, 4);
 extern void ocs_ddump_buffer(ocs_textbuf_t *textbuf, const char *name, uint32_t instance, void *buffer, uint32_t size);
 extern int32_t ocs_save_ddump(ocs_t *ocs, uint32_t flags, uint32_t qentries);
 extern int32_t ocs_get_saved_ddump(ocs_t *ocs, ocs_textbuf_t *textbuf);

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1999 Cameron Grant <cg@freebsd.org>
  *
@@ -35,11 +35,8 @@
 #include <dev/pci/pcivar.h>
 
 #include  <dev/sound/isa/sb.h>
-#include  <dev/sound/chip.h>
 
 #include "mixer_if.h"
-
-SND_DECLARE_FILE("$FreeBSD$");
 
 #define SOLO_DEFAULT_BUFSZ 16384
 #define ABS(x) (((x) < 0)? -(x) : (x))
@@ -100,12 +97,12 @@ struct ess_info {
 	unsigned int bufsz;
 
     	struct ess_chinfo pch, rch;
-	struct mtx *lock;
+	struct mtx lock;
 };
 
-#define ess_lock(_ess) snd_mtxlock((_ess)->lock)
-#define ess_unlock(_ess) snd_mtxunlock((_ess)->lock)
-#define ess_lock_assert(_ess) snd_mtxassert((_ess)->lock)
+#define ess_lock(_ess) mtx_lock(&(_ess)->lock)
+#define ess_unlock(_ess) mtx_unlock(&(_ess)->lock)
+#define ess_lock_assert(_ess) mtx_assert(&(_ess)->lock, MA_OWNED)
 
 static int ess_rd(struct ess_info *sc, int reg);
 static void ess_wr(struct ess_info *sc, int reg, u_int8_t val);
@@ -587,7 +584,8 @@ esschan_trigger(kobj_t obj, void *data, int go)
 	ess_lock(sc);
 	switch (go) {
 	case PCMTRIG_START:
-		ess_dmasetup(sc, ch->hwch, sndbuf_getbufaddr(ch->buffer), sndbuf_getsize(ch->buffer), ch->dir);
+		ess_dmasetup(sc, ch->hwch, ch->buffer->buf_addr,
+		    ch->buffer->bufsize, ch->dir);
 		ess_dmatrigger(sc, ch->hwch, 1);
 		ess_start(ch);
 		break;
@@ -857,10 +855,7 @@ ess_release_resources(struct ess_info *sc, device_t dev)
 		sc->parent_dmat = 0;
     	}
 
-	if (sc->lock) {
-		snd_mtxfree(sc->lock);
-		sc->lock = NULL;
-	}
+	mtx_destroy(&sc->lock);
 
     	free(sc, M_DEVBUF);
 }
@@ -889,10 +884,11 @@ ess_alloc_resources(struct ess_info *sc, device_t dev)
 	sc->irq = bus_alloc_resource_any(dev, SYS_RES_IRQ, &rid,
 		RF_ACTIVE | RF_SHAREABLE);
 
-	sc->lock = snd_mtxcreate(device_get_nameunit(dev), "snd_solo softc");
+	mtx_init(&sc->lock, device_get_nameunit(dev), "snd_solo softc",
+	    MTX_DEF);
 
 	return (sc->irq && sc->io && sc->sb && sc->vc &&
-				sc->mpu && sc->gp && sc->lock)? 0 : ENXIO;
+				sc->mpu && sc->gp)? 0 : ENXIO;
 }
 
 static int
@@ -1024,15 +1020,16 @@ ess_attach(device_t dev)
     	if (mixer_init(dev, &solomixer_class, sc))
 		goto no;
 
-    	snprintf(status, SND_STATUSLEN, "at io 0x%jx,0x%jx,0x%jx irq %jd %s",
+	snprintf(status, SND_STATUSLEN, "port 0x%jx,0x%jx,0x%jx irq %jd on %s",
     	     	rman_get_start(sc->io), rman_get_start(sc->sb), rman_get_start(sc->vc),
-		rman_get_start(sc->irq),PCM_KLDSTRING(snd_solo));
+		rman_get_start(sc->irq),
+		device_get_nameunit(device_get_parent(dev)));
 
-    	if (pcm_register(dev, sc, 1, 1))
-		goto no;
+	pcm_init(dev, sc);
       	pcm_addchan(dev, PCMDIR_REC, &esschan_class, sc);
 	pcm_addchan(dev, PCMDIR_PLAY, &esschan_class, sc);
-	pcm_setstatus(dev, status);
+	if (pcm_register(dev, status))
+		goto no;
 
     	return 0;
 
@@ -1063,7 +1060,7 @@ static device_method_t ess_methods[] = {
 	DEVMETHOD(device_detach,	ess_detach),
 	DEVMETHOD(device_resume,	ess_resume),
 	DEVMETHOD(device_suspend,	ess_suspend),
-	{ 0, 0 }
+	DEVMETHOD_END
 };
 
 static driver_t ess_driver = {

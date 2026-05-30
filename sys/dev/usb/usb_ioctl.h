@@ -1,6 +1,5 @@
-/* $FreeBSD$ */
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008 Hans Petter Selasky. All rights reserved.
  * Copyright (c) 1998 The NetBSD Foundation, Inc. All rights reserved.
@@ -120,7 +119,8 @@ struct usb_device_info {
 	uint8_t	udi_hubport;		/* parent HUB port */
 	uint8_t	udi_power_mode;		/* see "USB_POWER_MODE_XXX" */
 	uint8_t	udi_suspended;		/* set if device is suspended */
-	uint8_t	udi_reserved[16];	/* leave space for the future */
+	uint16_t udi_bustypeNo;
+	uint8_t	udi_reserved[14];	/* leave space for the future */
 	char	udi_product[128];
 	char	udi_vendor[128];
 	char	udi_serial[64];
@@ -239,7 +239,7 @@ struct usb_gen_quirk {
 #define	USB_DEVICESTATS		_IOR ('U', 5, struct usb_device_stats)
 #define	USB_DEVICEENUMERATE	_IOW ('U', 6, int)
 
-/* Generic HID device. Numbers 26 and 30-39 are occupied by hidraw. */
+/* Generic HID device. Numbers 26 and 30-49 are occupied by hidraw. */
 #define	USB_GET_REPORT_DESC	_IOWR('U', 21, struct usb_gen_descriptor)
 #define	USB_SET_IMMED		_IOW ('U', 22, int)
 #define	USB_GET_REPORT		_IOWR('U', 23, struct usb_gen_descriptor)

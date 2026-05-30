@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008, Pyun YongHyeon <yongari@FreeBSD.org>
  * All rights reserved.
@@ -25,8 +25,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef	_IF_ALEVAR_H
@@ -183,7 +181,7 @@ struct ale_hw_stats {
  * Software state per device.
  */
 struct ale_softc {
-	struct ifnet 		*ale_ifp;
+	if_t			ale_ifp;
 	device_t		ale_dev;
 	device_t		ale_miibus;
 	struct resource		*ale_res[1];
@@ -202,7 +200,6 @@ struct ale_softc {
 #define	ALE_FLAG_PCIX		0x0002
 #define	ALE_FLAG_MSI		0x0004
 #define	ALE_FLAG_MSIX		0x0008
-#define	ALE_FLAG_PMCAP		0x0010
 #define	ALE_FLAG_FASTETHER	0x0020
 #define	ALE_FLAG_JUMBO		0x0040
 #define	ALE_FLAG_RXCSUM_BUG	0x0080

@@ -29,15 +29,14 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_inet.h"
 #include "opt_inet6.h"
 #include "opt_sctp.h"
 
 #include <sys/param.h>
+#include <sys/ck.h>
 #include <sys/eventhandler.h>
+#include <sys/hash.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
@@ -51,11 +50,14 @@ __FBSDID("$FreeBSD$");
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/sysctl.h>
-#include <net/vnet.h>
+
+#include <machine/atomic.h>
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_private.h>
 #include <net/netisr.h>
+#include <net/vnet.h>
 
 #include <netinet/in.h>
 #include <netinet/in_pcb.h>
@@ -89,7 +91,7 @@ __FBSDID("$FreeBSD$");
  */
 #define	DIVHASHSIZE	(1 << 3)	/* 8 entries, one cache line. */
 #define	DIVHASH(port)	(port % DIVHASHSIZE)
-#define	DCBHASH(dcb)	((dcb)->dcb_port % DIVHASHSIZE)
+#define	DCBHASH(dcb)	(DIVHASH((dcb)->dcb_port))
 
 /*
  * Divert sockets work in conjunction with ipfw or other packet filters,
@@ -138,7 +140,7 @@ static int div_output_outbound(int family, struct socket *so, struct mbuf *m);
 
 struct divcb {
 	union {
-		SLIST_ENTRY(divcb)	dcb_next;
+		CK_SLIST_ENTRY(divcb)	dcb_next;
 		intptr_t		dcb_bound;
 #define	DCB_UNBOUND	((intptr_t)-1)
 	};
@@ -148,10 +150,22 @@ struct divcb {
 	struct epoch_context	 dcb_epochctx;
 };
 
-SLIST_HEAD(divhashhead, divcb);
+struct divcblbgroup {
+	CK_SLIST_ENTRY(divcblbgroup) dl_next;
+	struct epoch_context	 dl_epochctx;
+	uint16_t	dl_port;
+	int		dl_count;
+#define	DIVCBLBGROUP_SIZE	32
+	struct divcb	*dl_dcb[DIVCBLBGROUP_SIZE];
+};
 
-VNET_DEFINE_STATIC(struct divhashhead, divhash[DIVHASHSIZE]) = {};
+CK_SLIST_HEAD(divhashhead, divcb);
+CK_SLIST_HEAD(divlbgrouphashhead, divcblbgroup);
+
+VNET_DEFINE_STATIC(struct divhashhead, divhash[DIVHASHSIZE]);
 #define	V_divhash	VNET(divhash)
+VNET_DEFINE_STATIC(struct divlbgrouphashhead, divlbhash[DIVHASHSIZE]);
+#define	V_divlbhash	VNET(divlbhash)
 VNET_DEFINE_STATIC(uint64_t, dcb_count) = 0;
 #define	V_dcb_count	VNET(dcb_count)
 VNET_DEFINE_STATIC(uint64_t, dcb_gencnt) = 0;
@@ -164,19 +178,32 @@ MTX_SYSINIT(divert, &divert_mtx, "divert(4) socket pcb lists", MTX_DEF);
 
 /*
  * Divert a packet by passing it up to the divert socket at port 'port'.
+ *
+ * 'id' is an opaque identifier for the flow and is used to load-balance packets
+ * across multiple divert sockets bound to the same port.  Packets with the same
+ * identifier will be delivered to the same socket.
  */
 static void
-divert_packet(struct mbuf *m, bool incoming)
+divert_packet(struct mbuf *m, uint64_t id, bool incoming)
 {
+	struct divcblbgroup *dlb;
 	struct divcb *dcb;
 	u_int16_t nport;
 	struct sockaddr_in divsrc;
 	struct m_tag *mtag;
+	uint16_t cookie;
 
 	NET_EPOCH_ASSERT();
 
 	mtag = m_tag_locate(m, MTAG_IPFW_RULE, 0, NULL);
-	if (mtag == NULL) {
+	if (mtag != NULL) {
+		cookie = ((struct ipfw_rule_ref *)(mtag+1))->rulenum;
+		nport = htons((uint16_t)
+		    (((struct ipfw_rule_ref *)(mtag+1))->info));
+	} else if ((mtag = m_tag_locate(m, MTAG_PF_DIVERT, 0, NULL)) != NULL) {
+		cookie = ((struct pf_divert_mtag *)(mtag+1))->idir;
+		nport = htons(((struct pf_divert_mtag *)(mtag+1))->port);
+	} else {
 		m_freem(m);
 		return;
 	}
@@ -190,7 +217,6 @@ divert_packet(struct mbuf *m, bool incoming)
 		in_delayed_cksum(m);
 		m->m_pkthdr.csum_flags &= ~CSUM_DELAY_DATA;
 	}
-#endif
 #if defined(SCTP) || defined(SCTP_SUPPORT)
 	if (m->m_pkthdr.csum_flags & CSUM_SCTP) {
 		struct ip *ip;
@@ -199,6 +225,7 @@ divert_packet(struct mbuf *m, bool incoming)
 		sctp_delayed_cksum(m, (uint32_t)(ip->ip_hl << 2));
 		m->m_pkthdr.csum_flags &= ~CSUM_SCTP;
 	}
+#endif
 #endif
 #ifdef INET6
 	if (m->m_pkthdr.csum_flags & CSUM_DELAY_DATA_IPV6) {
@@ -217,7 +244,7 @@ divert_packet(struct mbuf *m, bool incoming)
 	divsrc.sin_len = sizeof(divsrc);
 	divsrc.sin_family = AF_INET;
 	/* record matching rule, in host format */
-	divsrc.sin_port = ((struct ipfw_rule_ref *)(mtag+1))->rulenum;
+	divsrc.sin_port = cookie;
 	/*
 	 * Record receive interface address, if any.
 	 * But only for incoming packets.
@@ -265,11 +292,27 @@ divert_packet(struct mbuf *m, bool incoming)
 		    sizeof(divsrc.sin_zero));
 	}
 
-	/* Put packet on socket queue, if any */
-	nport = htons((uint16_t)(((struct ipfw_rule_ref *)(mtag+1))->info));
-	SLIST_FOREACH(dcb, &V_divhash[DIVHASH(nport)], dcb_next)
-		if (dcb->dcb_port == nport)
+	/*
+	 * Look for a matching divert socket or socket group, and enqueue the
+	 * packet.
+	 */
+	CK_SLIST_FOREACH(dlb, &V_divlbhash[DIVHASH(nport)], dl_next) {
+		uint16_t count;
+
+		count = atomic_load_acq_int(&dlb->dl_count);
+		if (dlb->dl_port == nport && count > 0) {
+			uint32_t hash;
+
+			hash = jenkins_hash(&id, sizeof(uint64_t), 0);
+			dcb = dlb->dl_dcb[hash % count];
 			break;
+		}
+	}
+	if (dlb == NULL) {
+		CK_SLIST_FOREACH(dcb, &V_divhash[DIVHASH(nport)], dcb_next)
+			if (dcb->dcb_port == nport)
+				break;
+	}
 
 	if (dcb != NULL) {
 		struct socket *sa = dcb->dcb_socket;
@@ -305,6 +348,7 @@ div_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 	const struct ip *ip;
 	struct m_tag *mtag;
 	struct ipfw_rule_ref *dt;
+	struct pf_divert_mtag *pfdt;
 	int error, family;
 
 	if (control)
@@ -391,13 +435,30 @@ div_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 		return (EAFNOSUPPORT);
 	}
 
+	mtag = m_tag_locate(m, MTAG_PF_DIVERT, 0, NULL);
+	if (mtag == NULL) {
+		/* this should be normal */
+		mtag = m_tag_alloc(MTAG_PF_DIVERT, 0,
+		    sizeof(struct pf_divert_mtag), M_NOWAIT | M_ZERO);
+		if (mtag == NULL) {
+			m_freem(m);
+			return (ENOBUFS);
+		}
+		m_tag_prepend(m, mtag);
+	}
+	pfdt = (struct pf_divert_mtag *)(mtag+1);
+	if (sin)
+		pfdt->idir = sin->sin_port;
+
 	/* Reinject packet into the system as incoming or outgoing */
 	NET_EPOCH_ENTER(et);
 	if (!sin || sin->sin_addr.s_addr == 0) {
 		dt->info |= IPFW_IS_DIVERT | IPFW_INFO_OUT;
+		pfdt->ndir = PF_DIVERT_MTAG_DIR_OUT;
 		error = div_output_outbound(family, so, m);
 	} else {
 		dt->info |= IPFW_IS_DIVERT | IPFW_INFO_IN;
+		pfdt->ndir = PF_DIVERT_MTAG_DIR_IN;
 		error = div_output_inbound(family, so, m, sin);
 	}
 	NET_EPOCH_EXIT(et);
@@ -478,6 +539,9 @@ static int
 div_output_inbound(int family, struct socket *so, struct mbuf *m,
     struct sockaddr_in *sin)
 {
+#if defined(INET) || defined(INET6)
+	struct divcb *dcb = so->so_pcb;
+#endif
 	struct ifaddr *ifa;
 
 	if (m->m_pkthdr.rcvif == NULL) {
@@ -514,16 +578,16 @@ div_output_inbound(int family, struct socket *so, struct mbuf *m,
 		 */
 		if (IN_MULTICAST(ntohl(ip->ip_dst.s_addr)))
 			m->m_flags |= M_MCAST;
-		else if (in_broadcast(ip->ip_dst, m->m_pkthdr.rcvif))
+		else if (in_ifnet_broadcast(ip->ip_dst, m->m_pkthdr.rcvif))
 			m->m_flags |= M_BCAST;
-		netisr_queue_src(NETISR_IP, (uintptr_t)so, m);
+		netisr_queue_src(NETISR_IP, (uintptr_t)dcb->dcb_gencnt, m);
 		DIVSTAT_INC(inbound);
 		break;
 	    }
 #endif
 #ifdef INET6
 	case AF_INET6:
-		netisr_queue_src(NETISR_IPV6, (uintptr_t)so, m);
+		netisr_queue_src(NETISR_IPV6, (uintptr_t)dcb->dcb_gencnt, m);
 		DIVSTAT_INC(inbound);
 		break;
 #endif
@@ -570,14 +634,63 @@ div_free(epoch_context_t ctx)
 }
 
 static void
+divlbgroup_free(epoch_context_t ctx)
+{
+	struct divcblbgroup *dlb = __containerof(ctx, struct divcblbgroup,
+	    dl_epochctx);
+
+	free(dlb, M_PCB);
+}
+
+static void
+div_lbgroup_detach(struct divcb *dcb)
+{
+	struct divcblbgroup *dlb;
+
+	CK_SLIST_FOREACH(dlb, &V_divlbhash[DCBHASH(dcb)], dl_next) {
+		if (dlb->dl_port != dcb->dcb_port)
+			continue;
+
+		/*
+		 * Delicately remove the socket from its group, taking
+		 * care to synchronize with lookups, which do not handle
+		 * NULL slots in the group table.
+		 *
+		 * Note that the hash is not stable across different
+		 * group sizes.
+		 */
+		for (int i = 0; i < dlb->dl_count; i++) {
+			unsigned int count;
+
+			if (dlb->dl_dcb[i] != dcb)
+				continue;
+
+			count = dlb->dl_count;
+			if (i != count - 1)
+				dlb->dl_dcb[i] = dlb->dl_dcb[count - 1];
+			atomic_store_rel_int(&dlb->dl_count, count - 1);
+			if (count == 1) {
+				CK_SLIST_REMOVE(&V_divlbhash[DCBHASH(dcb)], dlb,
+				    divcblbgroup, dl_next);
+				NET_EPOCH_CALL(divlbgroup_free,
+				    &dlb->dl_epochctx);
+			}
+			return;
+		}
+	}
+}
+
+static void
 div_detach(struct socket *so)
 {
 	struct divcb *dcb = so->so_pcb;
 
 	so->so_pcb = NULL;
 	DIVERT_LOCK();
-	if (dcb->dcb_bound != DCB_UNBOUND)
-		SLIST_REMOVE(&V_divhash[DCBHASH(dcb)], dcb, divcb, dcb_next);
+	if (dcb->dcb_bound != DCB_UNBOUND) {
+		CK_SLIST_REMOVE(&V_divhash[DCBHASH(dcb)], dcb, divcb, dcb_next);
+		div_lbgroup_detach(dcb);
+	}
 	V_dcb_count--;
 	V_dcb_gencnt++;
 	DIVERT_UNLOCK();
@@ -587,36 +700,70 @@ div_detach(struct socket *so)
 static int
 div_bind(struct socket *so, struct sockaddr *nam, struct thread *td)
 {
+	struct divcblbgroup *dlb;
 	struct divcb *dcb;
+	int error;
 	uint16_t port;
 
 	if (nam->sa_family != AF_INET)
 		return EAFNOSUPPORT;
 	if (nam->sa_len != sizeof(struct sockaddr_in))
 		return EINVAL;
+
+	error = 0;
+	if ((so->so_options & SO_REUSEPORT_LB) != 0)
+		dlb = malloc(sizeof(*dlb), M_PCB, M_WAITOK | M_ZERO);
+	else
+		dlb = NULL;
+
 	port = ((struct sockaddr_in *)nam)->sin_port;
 	DIVERT_LOCK();
-	SLIST_FOREACH(dcb, &V_divhash[DIVHASH(port)], dcb_next)
-		if (dcb->dcb_port == port) {
-			DIVERT_UNLOCK();
-			return (EADDRINUSE);
+	if (dlb == NULL) {
+		CK_SLIST_FOREACH(dcb, &V_divhash[DIVHASH(port)], dcb_next) {
+			if (dcb->dcb_port == port) {
+				DIVERT_UNLOCK();
+				return (EADDRINUSE);
+			}
 		}
+	}
 	dcb = so->so_pcb;
-	if (dcb->dcb_bound != DCB_UNBOUND)
-		SLIST_REMOVE(&V_divhash[DCBHASH(dcb)], dcb, divcb, dcb_next);
-	dcb->dcb_port = port;
-	SLIST_INSERT_HEAD(&V_divhash[DIVHASH(port)], dcb, dcb_next);
+	if (dlb != NULL) {
+		struct divcblbgroup *tmp;
+
+		CK_SLIST_FOREACH(tmp, &V_divlbhash[DIVHASH(port)], dl_next) {
+			if (tmp->dl_port == port)
+				break;
+		}
+		if (tmp == NULL) {
+			dlb->dl_port = port;
+			dlb->dl_count = 1;
+			dlb->dl_dcb[0] = dcb;
+			CK_SLIST_INSERT_HEAD(&V_divlbhash[DIVHASH(port)], dlb,
+			    dl_next);
+		} else if (tmp->dl_count < DIVCBLBGROUP_SIZE) {
+			KASSERT(tmp->dl_count > 0,
+			    ("div_bind: lbgroup %p has count 0", tmp));
+
+			tmp->dl_dcb[tmp->dl_count] = dcb;
+			atomic_store_rel_int(&tmp->dl_count, tmp->dl_count + 1);
+			free(dlb, M_PCB);
+		} else {
+			error = ENOSPC;
+			free(dlb, M_PCB);
+		}
+	}
+	if (error == 0) {
+		if (dcb->dcb_bound != DCB_UNBOUND) {
+			CK_SLIST_REMOVE(&V_divhash[DCBHASH(dcb)], dcb, divcb,
+			    dcb_next);
+			div_lbgroup_detach(dcb);
+		}
+		dcb->dcb_port = port;
+		CK_SLIST_INSERT_HEAD(&V_divhash[DIVHASH(port)], dcb, dcb_next);
+	}
 	DIVERT_UNLOCK();
 
-	return (0);
-}
-
-static int
-div_shutdown(struct socket *so)
-{
-
-	socantsendmore(so);
-	return 0;
+	return (error);
 }
 
 static int
@@ -652,7 +799,7 @@ div_pcblist(SYSCTL_HANDLER_ARGS)
 
 	DIVERT_LOCK();
 	for (int i = 0; i < DIVHASHSIZE; i++)
-		SLIST_FOREACH(dcb, &V_divhash[i], dcb_next) {
+		CK_SLIST_FOREACH(dcb, &V_divhash[i], dcb_next) {
 			if (dcb->dcb_gencnt <= xig.xig_gen) {
 				struct xinpcb xi;
 
@@ -696,7 +843,6 @@ static struct protosw div_protosw = {
 	.pr_bind =		div_bind,
 	.pr_detach =		div_detach,
 	.pr_send =		div_send,
-	.pr_shutdown =		div_shutdown,
 };
 
 static struct domain divertdomain = {
@@ -763,5 +909,4 @@ static moduledata_t ipdivertmod = {
 };
 
 DECLARE_MODULE(ipdivert, ipdivertmod, SI_SUB_PROTO_FIREWALL, SI_ORDER_ANY);
-MODULE_DEPEND(ipdivert, ipfw, 3, 3, 3);
 MODULE_VERSION(ipdivert, 1);

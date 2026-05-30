@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2015 Landon Fuller <landon@landonf.org>
  * All rights reserved.
@@ -28,7 +28,6 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGES.
  * 
- * $FreeBSD$
  */
 
 #ifndef _BHND_CORES_PCIE2_BHND_PCIE2_VAR_H_
@@ -84,7 +83,6 @@ struct bhnd_pcie2_softc {
 						     accesses. */
 
 	struct bhnd_resource	*mem_res;	/**< device register block. */
-	int			 mem_rid;	/**< register block RID */
 };
 
 #define	BHND_PCIE2_LOCK_INIT(sc) \

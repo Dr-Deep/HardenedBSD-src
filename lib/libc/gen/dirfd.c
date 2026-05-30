@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2011 Gleb Kurtsou <gleb@FreeBSD.org>
  * All rights reserved.
@@ -24,17 +24,12 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "namespace.h"
-#include <sys/param.h>
-
 #include <dirent.h>
+#include <errno.h>
+#include <stddef.h>
 #include "un-namespace.h"
 
 #include "gen-private.h"
@@ -42,6 +37,9 @@ __FBSDID("$FreeBSD$");
 int
 dirfd(DIR *dirp)
 {
-
+	if (dirp == NULL || _dirfd(dirp) < 0) {
+		errno = EINVAL;
+		return (-1);
+	}
 	return (_dirfd(dirp));
 }

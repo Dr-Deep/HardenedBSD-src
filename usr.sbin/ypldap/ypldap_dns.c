@@ -1,5 +1,4 @@
 /*	$OpenBSD: ypldap_dns.c,v 1.8 2015/01/16 06:40:22 deraadt Exp $ */
-/*	$FreeBSD$ */
 
 /*
  * Copyright (c) 2003-2008 Henning Brauer <henning@openbsd.org>
@@ -92,7 +91,7 @@ ypldap_dns(int pipe_ntp[2], struct passwd *pw)
 	setproctitle("dns engine");
 	close(pipe_ntp[0]);
 
-	if (setgroups(1, &pw->pw_gid) ||
+	if (setgroups(0, NULL) ||
 	    setresgid(pw->pw_gid, pw->pw_gid, pw->pw_gid) ||
 	    setresuid(pw->pw_uid, pw->pw_uid, pw->pw_uid))
 		fatal("can't drop privileges");

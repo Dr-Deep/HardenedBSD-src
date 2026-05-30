@@ -1,6 +1,5 @@
 /*	$OpenBSD: if_zyd.c,v 1.52 2007/02/11 00:08:04 jsg Exp $	*/
 /*	$NetBSD: if_zyd.c,v 1.7 2007/06/21 04:04:29 kiyohara Exp $	*/
-/*	$FreeBSD$	*/
 
 /*-
  * Copyright (c) 2006 by Damien Bergamini <damien.bergamini@free.fr>
@@ -18,9 +17,6 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 /*
  * ZyDAS ZD1211/ZD1211B USB WLAN driver.
@@ -388,6 +384,8 @@ zyd_attach(device_t dev)
 	        | IEEE80211_C_WPA		/* 802.11i */
 		;
 
+	ic->ic_flags_ext |= IEEE80211_FEXT_SEQNO_OFFLOAD;
+
 	zyd_getradiocaps(ic, IEEE80211_CHAN_MAX, &ic->ic_nchans,
 	    ic->ic_channels);
 
@@ -440,7 +438,7 @@ zyd_detach(device_t dev)
 {
 	struct zyd_softc *sc = device_get_softc(dev);
 	struct ieee80211com *ic = &sc->sc_ic;
-	unsigned int x;
+	unsigned x;
 
 	/*
 	 * Prevent further allocations from RX/TX data
@@ -829,7 +827,7 @@ zyd_cmd(struct zyd_softc *sc, uint16_t code, const void *idata, int ilen,
 	if (error)
 		device_printf(sc->sc_dev, "command timeout\n");
 	STAILQ_REMOVE(&sc->sc_rqh, &rq, zyd_rq, rq);
-	DPRINTF(sc, ZYD_DEBUG_CMD, "finsihed cmd %p, error = %d \n",
+	DPRINTF(sc, ZYD_DEBUG_CMD, "finished cmd %p, error = %d \n",
 	    &rq, error);
 
 	return (error);
@@ -2222,7 +2220,6 @@ zyd_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 	struct zyd_softc *sc = usbd_xfer_softc(xfer);
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct ieee80211_node *ni;
-	struct epoch_tracker et;
 	struct zyd_rx_desc desc;
 	struct mbuf *m;
 	struct usb_page_cache *pc;
@@ -2278,7 +2275,6 @@ tr_setup:
 		 * "ieee80211_input" here, and not some lines up!
 		 */
 		ZYD_UNLOCK(sc);
-		NET_EPOCH_ENTER(et);
 		for (i = 0; i < sc->sc_rx_count; i++) {
 			rssi = sc->sc_rx_data[i].rssi;
 			m = sc->sc_rx_data[i].m;
@@ -2294,7 +2290,6 @@ tr_setup:
 			} else
 				(void)ieee80211_input_all(ic, m, rssi, nf);
 		}
-		NET_EPOCH_EXIT(et);
 		ZYD_LOCK(sc);
 		zyd_start(sc);
 		break;
@@ -2466,9 +2461,11 @@ zyd_tx_start(struct zyd_softc *sc, struct mbuf *m0, struct ieee80211_node *ni)
 			rate = tp->ucastrate;
 		else {
 			(void) ieee80211_ratectl_rate(ni, NULL, 0);
-			rate = ni->ni_txrate;
+			rate = ieee80211_node_get_txrate_dot11rate(ni);
 		}
 	}
+
+	ieee80211_output_seqno_assign(ni, -1, m0);
 
 	if (wh->i_fc[1] & IEEE80211_FC1_PROTECTED) {
 		k = ieee80211_crypto_encap(ni, m0);
@@ -2511,9 +2508,7 @@ zyd_tx_start(struct zyd_softc *sc, struct mbuf *m0, struct ieee80211_node *ni)
 		}
 	} else
 		desc->flags |= ZYD_TX_FLAG_MULTICAST;
-	if ((wh->i_fc[0] &
-	    (IEEE80211_FC0_TYPE_MASK | IEEE80211_FC0_SUBTYPE_MASK)) ==
-	    (IEEE80211_FC0_TYPE_CTL | IEEE80211_FC0_SUBTYPE_PS_POLL))
+	if (IEEE80211_IS_CTL_PS_POLL(wh))
 		desc->flags |= ZYD_TX_FLAG_TYPE(ZYD_TX_TYPE_PS_POLL);
 
 	/* actual transmit length (XXX why +10?) */

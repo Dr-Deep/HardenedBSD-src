@@ -27,7 +27,6 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 #
 
 #
@@ -106,7 +105,7 @@ if (isatty(fileno(STDOUT))) {
 	}
 }
 print $status, "\n";
-exit $failed ? 1 : 0;
+exit($failed ? 1 : 0);
 
 
 sub process_test($$$$) {

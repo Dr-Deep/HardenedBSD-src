@@ -29,9 +29,11 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
+
+#ifdef __arm__
+#include <arm/pmap.h>
+#else /* !__arm__ */
 
 #ifndef _MACHINE_PMAP_H_
 #define	_MACHINE_PMAP_H_
@@ -41,8 +43,10 @@
 #ifndef LOCORE
 
 #include <sys/queue.h>
+#include <sys/systm.h>
 #include <sys/_lock.h>
 #include <sys/_mutex.h>
+#include <sys/_pv_entry.h>
 
 #include <vm/_vm_radix.h>
 
@@ -60,21 +64,18 @@ void pmap_page_set_memattr(vm_page_t m, vm_memattr_t ma);
  * Pmap stuff
  */
 
+struct rangeset;
+
 struct md_page {
 	TAILQ_HEAD(,pv_entry)	pv_list;
 	int			pv_gen;
 	vm_memattr_t		pv_memattr;
+	uint8_t			pv_flags;
+	uint8_t			pv_reserve[2];
 };
 
-/*
- * This structure is used to hold a virtual<->physical address
- * association and is used mostly by bootstrap code
- */
-struct pv_addr {
-	SLIST_ENTRY(pv_addr) pv_list;
-	vm_offset_t	pv_va;
-	vm_paddr_t	pv_pa;
-};
+/* machine page flags */
+#define PV_MTE_TAGGED	0x01	/* page is tagged with MTE */
 
 enum pmap_stage {
 	PM_INVALID,
@@ -94,44 +95,10 @@ struct pmap {
 	struct asid_set		*pm_asid_set;	/* The ASID/VMID set to use */
 	enum pmap_stage		pm_stage;
 	int			pm_levels;
+	struct rangeset		*pm_bti;
+	uint64_t		pm_reserved[3];
 };
 typedef struct pmap *pmap_t;
-
-typedef struct pv_entry {
-	vm_offset_t		pv_va;	/* virtual address for mapping */
-	TAILQ_ENTRY(pv_entry)	pv_next;
-} *pv_entry_t;
-
-/*
- * pv_entries are allocated in chunks per-process.  This avoids the
- * need to track per-pmap assignments.
- */
-#if PAGE_SIZE == PAGE_SIZE_4K
-#define	_NPCPV	168
-#define	_NPAD	0
-#elif PAGE_SIZE == PAGE_SIZE_16K
-#define	_NPCPV	677
-#define	_NPAD	1
-#else
-#error Unsupported page size
-#endif
-#define	_NPCM	howmany(_NPCPV, 64)
-
-#define	PV_CHUNK_HEADER							\
-	pmap_t			pc_pmap;				\
-	TAILQ_ENTRY(pv_chunk)	pc_list;				\
-	uint64_t		pc_map[_NPCM];	/* bitmap; 1 = free */	\
-	TAILQ_ENTRY(pv_chunk)	pc_lru;
-
-struct pv_chunk_header {
-	PV_CHUNK_HEADER
-};
-
-struct pv_chunk {
-	PV_CHUNK_HEADER
-	struct pv_entry		pc_pventry[_NPCPV];
-	uint64_t		pc_pad[_NPAD];
-};
 
 struct thread;
 
@@ -139,6 +106,8 @@ struct thread;
 extern struct pmap	kernel_pmap_store;
 #define	kernel_pmap	(&kernel_pmap_store)
 #define	pmap_kernel()	kernel_pmap
+
+extern bool		pmap_lpa_enabled;
 
 #define	PMAP_ASSERT_LOCKED(pmap) \
 				mtx_assert(&(pmap)->pm_mtx, MA_OWNED)
@@ -161,8 +130,14 @@ extern struct pmap	kernel_pmap_store;
 	(uint64_t)(asid) << TTBR_ASID_SHIFT;			\
 })
 
+#define	PMAP_WANT_ACTIVE_CPUS_NAIVE
+
 extern vm_offset_t virtual_avail;
 extern vm_offset_t virtual_end;
+
+extern pt_entry_t pmap_sh_attr;
+
+extern __read_mostly uint64_t prot_ns_shared_pa;
 
 /*
  * Macros to test if a mapping is mappable with an L1 Section mapping
@@ -174,9 +149,11 @@ extern vm_offset_t virtual_end;
 #define	pmap_vm_page_alloc_check(m)
 
 void	pmap_activate_vm(pmap_t);
-void	pmap_bootstrap(vm_offset_t, vm_offset_t, vm_paddr_t, vm_size_t);
-int	pmap_change_attr(vm_offset_t va, vm_size_t size, int mode);
-int	pmap_change_prot(vm_offset_t va, vm_size_t size, vm_prot_t prot);
+void	pmap_bootstrap_dmap(vm_size_t);
+void	pmap_bootstrap(void);
+int	pmap_change_attr(void *va, vm_size_t size, int mode);
+int	pmap_change_dmap_attr(int);
+int	pmap_change_prot(void *va, vm_size_t size, vm_prot_t prot);
 void	pmap_kenter(vm_offset_t sva, vm_size_t size, vm_paddr_t pa, int mode);
 void	pmap_kenter_device(vm_offset_t, vm_size_t, vm_paddr_t);
 bool	pmap_klookup(vm_offset_t va, vm_paddr_t *pa);
@@ -187,16 +164,18 @@ void	*pmap_mapdev_attr(vm_paddr_t pa, vm_size_t size, vm_memattr_t ma);
 bool	pmap_page_is_mapped(vm_page_t m);
 int	pmap_pinit_stage(pmap_t, enum pmap_stage, int);
 bool	pmap_ps_enabled(pmap_t pmap);
+bool	pmap_vs_enabled(void);
 uint64_t pmap_to_ttbr0(pmap_t pmap);
 void	pmap_disable_promotion(vm_offset_t sva, vm_size_t size);
+void	pmap_map_delete(pmap_t, vm_offset_t, vm_offset_t);
 
 void	*pmap_mapdev(vm_paddr_t, vm_size_t);
 void	*pmap_mapbios(vm_paddr_t, vm_size_t);
-void	pmap_unmapdev(vm_offset_t, vm_size_t);
-void	pmap_unmapbios(vm_offset_t, vm_size_t);
+void	pmap_unmapdev(void *, vm_size_t);
+void	pmap_unmapbios(void *, vm_size_t);
 
-boolean_t pmap_map_io_transient(vm_page_t *, vm_offset_t *, int, boolean_t);
-void	pmap_unmap_io_transient(vm_page_t *, vm_offset_t *, int, boolean_t);
+bool	pmap_map_io_transient(vm_page_t *, void **, int, bool);
+void	pmap_unmap_io_transient(vm_page_t *, void **, int, bool);
 
 bool	pmap_get_tables(pmap_t, vm_offset_t, pd_entry_t **, pd_entry_t **,
     pd_entry_t **, pt_entry_t **);
@@ -205,18 +184,29 @@ int	pmap_fault(pmap_t, uint64_t, uint64_t);
 
 struct pcb *pmap_switch(struct thread *);
 
+void	pmap_s1_invalidate_all_kernel(void);
+
 extern void (*pmap_clean_stage2_tlbi)(void);
-extern void (*pmap_invalidate_vpipt_icache)(void);
+extern void (*pmap_stage2_invalidate_range)(uint64_t, vm_offset_t, vm_offset_t,
+    bool);
+extern void (*pmap_stage2_invalidate_all)(uint64_t);
 
-static inline int
-pmap_vmspace_copy(pmap_t dst_pmap __unused, pmap_t src_pmap __unused)
-{
+int pmap_vmspace_copy(pmap_t, pmap_t);
 
-	return (0);
-}
+int pmap_bti_set(pmap_t, vm_offset_t, vm_offset_t);
+int pmap_bti_clear(pmap_t, vm_offset_t, vm_offset_t);
+
+#if defined(KASAN) || defined(KMSAN)
+struct arm64_bootparams;
+
+void	pmap_bootstrap_san(void);
+void	pmap_san_enter(vm_offset_t);
+#endif
 
 #endif	/* _KERNEL */
 
 #endif	/* !LOCORE */
 
 #endif	/* !_MACHINE_PMAP_H_ */
+
+#endif /* !__arm__ */

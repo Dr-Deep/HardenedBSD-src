@@ -30,8 +30,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include <sys/param.h>
@@ -81,6 +79,7 @@ static char *make_rsid(const char *, const char *, struct rainfo *);
 
 #define	_ARGS_MANAGED	managedconf_script, ifi->ifname, rasender
 #define	_ARGS_OTHER	otherconf_script, ifi->ifname, rasender
+#define	_ARGS_ALWAYS	alwaysconf_script, ifi->ifname, rasender
 #define	_ARGS_RESADD	resolvconf_script, "-a", rsid
 #define	_ARGS_RESDEL	resolvconf_script, "-d", rsid
 
@@ -327,6 +326,17 @@ rtsol_input(int sock)
 		if (!ifi->managedconfig)
 			CALL_SCRIPT(OTHER, NULL);
 	}
+
+	/*
+	 * "Always" script.
+	 */
+	if (!ifi->alwaysconfig) {
+		const char *rasender = inet_ntop(AF_INET6, &from.sin6_addr,
+		    ntopbuf, sizeof(ntopbuf));
+		ifi->alwaysconfig = 1;
+		CALL_SCRIPT(ALWAYS, NULL);
+	}
+
 	clock_gettime(CLOCK_MONOTONIC_FAST, &now);
 	newent_rai = 0;
 	rai = find_rainfo(ifi, &from);
@@ -766,6 +776,41 @@ call_script(const char *const argv[], struct script_msg_head_t *sm_head)
 		    argv[0], status);
 }
 
+#define	PERIOD 0x2e
+#define	hyphenchar(c) ((c) == 0x2d)
+#define	periodchar(c) ((c) == PERIOD)
+#define	alphachar(c) (((c) >= 0x41 && (c) <= 0x5a) || \
+	    ((c) >= 0x61 && (c) <= 0x7a))
+#define	digitchar(c) ((c) >= 0x30 && (c) <= 0x39)
+
+#define	borderchar(c) (alphachar(c) || digitchar(c))
+#define	middlechar(c) (borderchar(c) || hyphenchar(c))
+
+static int
+res_hnok(const char *dn)
+{
+	int pch = PERIOD, ch = *dn++;
+
+	while (ch != '\0') {
+		int nch = *dn++;
+
+		if (periodchar(ch)) {
+			;
+		} else if (periodchar(pch)) {
+			if (!borderchar(ch))
+				return (0);
+		} else if (periodchar(nch) || nch == '\0') {
+			if (!borderchar(ch))
+				return (0);
+		} else {
+			if (!middlechar(ch))
+				return (0);
+		}
+		pch = ch, ch = nch;
+	}
+	return (1);
+}
+
 /* Decode domain name label encoding in RFC 1035 Section 3.1 */
 static size_t
 dname_labeldec(char *dst, size_t dlen, const char *src)
@@ -794,12 +839,11 @@ dname_labeldec(char *dst, size_t dlen, const char *src)
 	}
 	*dst = '\0';
 
-	/*
-	 * XXX validate that domain name only contains valid characters
-	 * for two reasons: 1) correctness, 2) we do not want to pass
-	 * possible malicious, unescaped characters like `` to a script
-	 * or program that could be exploited that way.
-	 */
+	if (!res_hnok(dst_origin)) {
+		warnmsg(LOG_INFO, __func__,
+		    "invalid domain name '%s' was ignored", dst_origin);
+		return (0);
+	}
 
 	return (src - src_origin);
 }

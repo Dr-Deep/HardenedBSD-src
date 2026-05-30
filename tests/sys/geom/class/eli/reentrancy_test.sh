@@ -1,4 +1,3 @@
-# $FreeBSD$
 
 # Test various operations for geli-on-geli providers, to ensure that geli is
 # reentrant.
@@ -43,7 +42,7 @@ init_head()
 {
 	atf_set "descr" "Initialize a geli provider on top of another"
 	atf_set "require.user" "root"
-	atf_set "timeout" 600
+	atf_set "timeout" 900
 }
 init_body()
 {

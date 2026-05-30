@@ -5,8 +5,6 @@
  *  Copyright (c) 2018, Eitan Adler
  *  Copyright (c) 1984, 1989, William LeFebvre, Rice University
  *  Copyright (c) 1989, 1990, 1992, William LeFebvre, Northwestern University
- *
- * $FreeBSD$
  */
 
 /*
@@ -116,27 +114,6 @@ digits(int val)
 		val /= 10;
     }
     return(cnt);
-}
-
-/*
- * string_index(string, array) - find string in array and return index
- */
-
-int
-string_index(const char *string, const char * const *array)
-{
-    size_t i = 0;
-
-    while (*array != NULL)
-    {
-	if (strcmp(string, *array) == 0)
-	{
-	    return(i);
-	}
-	array++;
-	i++;
-    }
-    return(-1);
 }
 
 /*

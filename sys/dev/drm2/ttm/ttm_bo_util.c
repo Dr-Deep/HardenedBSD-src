@@ -29,8 +29,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <dev/drm2/drmP.h>
 #include <dev/drm2/ttm/ttm_bo_driver.h>
 #include <dev/drm2/ttm/ttm_placement.h>
@@ -224,7 +222,7 @@ void ttm_mem_reg_iounmap(struct ttm_bo_device *bdev, struct ttm_mem_reg *mem,
 	man = &bdev->man[mem->mem_type];
 
 	if (virtual && mem->bus.addr == NULL)
-		pmap_unmapdev((vm_offset_t)virtual, mem->bus.size);
+		pmap_unmapdev(virtual, mem->bus.size);
 	(void) ttm_mem_io_lock(man, false);
 	ttm_mem_io_free(bdev, mem);
 	ttm_mem_io_unlock(man);
@@ -263,7 +261,7 @@ static int ttm_copy_io_ttm_page(struct ttm_tt *ttm, void *src,
 
 	memcpy(dst, src, PAGE_SIZE);
 
-	pmap_unmapdev((vm_offset_t)dst, PAGE_SIZE);
+	pmap_unmapdev(dst, PAGE_SIZE);
 
 	return 0;
 }
@@ -285,7 +283,7 @@ static int ttm_copy_ttm_io_page(struct ttm_tt *ttm, void *dst,
 
 	memcpy(dst, src, PAGE_SIZE);
 
-	pmap_unmapdev((vm_offset_t)src, PAGE_SIZE);
+	pmap_unmapdev(src, PAGE_SIZE);
 
 	return 0;
 }
@@ -502,7 +500,7 @@ static int ttm_bo_kmap_ttm(struct ttm_buffer_object *bo,
 		map->bo_kmap_type = ttm_bo_map_kmap;
 		map->page = ttm->pages[start_page];
 		map->sf = sf_buf_alloc(map->page, 0);
-		map->virtual = (void *)sf_buf_kva(map->sf);
+		map->virtual = sf_buf_kva(map->sf);
 	} else {
 		/*
 		 * We need to use vmap to get the desired page protection
@@ -512,14 +510,14 @@ static int ttm_bo_kmap_ttm(struct ttm_buffer_object *bo,
 			VM_MEMATTR_DEFAULT : ttm_io_prot(mem->placement);
 		map->bo_kmap_type = ttm_bo_map_vmap;
 		map->num_pages = num_pages;
-		map->virtual = (void *)kva_alloc(num_pages * PAGE_SIZE);
+		map->virtual = kva_alloc(num_pages * PAGE_SIZE);
 		if (map->virtual != NULL) {
 			for (i = 0; i < num_pages; i++) {
 				/* XXXKIB hack */
 				pmap_page_set_memattr(ttm->pages[start_page +
 				    i], prot);
 			}
-			pmap_qenter((vm_offset_t)map->virtual,
+			pmap_qenter(map->virtual,
 			    &ttm->pages[start_page], num_pages);
 		}
 	}
@@ -570,12 +568,11 @@ void ttm_bo_kunmap(struct ttm_bo_kmap_obj *map)
 		return;
 	switch (map->bo_kmap_type) {
 	case ttm_bo_map_iomap:
-		pmap_unmapdev((vm_offset_t)map->virtual, map->size);
+		pmap_unmapdev(map->virtual, map->size);
 		break;
 	case ttm_bo_map_vmap:
-		pmap_qremove((vm_offset_t)(map->virtual), map->num_pages);
-		kva_free((vm_offset_t)map->virtual,
-		    map->num_pages * PAGE_SIZE);
+		pmap_qremove(map->virtual, map->num_pages);
+		kva_free(map->virtual, map->num_pages * PAGE_SIZE);
 		break;
 	case ttm_bo_map_kmap:
 		sf_buf_free(map->sf);

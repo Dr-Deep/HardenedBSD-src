@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2008 Isilon Inc http://www.isilon.com/
  * Authors: Doug Rabson <dfr@rabson.org>
@@ -27,22 +27,20 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/stat.h>
 #include <sys/linker.h>
 #include <sys/module.h>
 #include <sys/queue.h>
+#include <sys/socket.h>
+#include <sys/sysctl.h>
 #include <sys/syslog.h>
 #include <ctype.h>
 #include <dirent.h>
 #include <err.h>
 #include <errno.h>
-#ifndef WITHOUT_KERBEROS
 #include <krb5.h>
-#endif
+#include <netdb.h>
 #include <pwd.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -50,7 +48,12 @@ __FBSDID("$FreeBSD$");
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <gssapi/gssapi.h>
+#ifdef MK_MITKRB5
+#include <gssapi/gssapi_krb5.h>
+#endif
 #include <rpc/rpc.h>
 #include <rpc/rpc_com.h>
 
@@ -58,9 +61,6 @@ __FBSDID("$FreeBSD$");
 
 #ifndef _PATH_GSS_MECH
 #define _PATH_GSS_MECH	"/etc/gss/mech"
-#endif
-#ifndef _PATH_GSSDSOCK
-#define _PATH_GSSDSOCK	"/var/run/gssd.sock"
 #endif
 #define GSSD_CREDENTIAL_CACHE_FILE	"/tmp/krb5cc_gssd"
 
@@ -78,7 +78,6 @@ static char ccfile_dirlist[PATH_MAX + 1], ccfile_substring[NAME_MAX + 1];
 static char pref_realm[1024];
 static int verbose;
 static int hostbased_initiator_cred;
-#ifndef WITHOUT_KERBEROS
 /* 1.2.752.43.13.14 */
 static gss_OID_desc gss_krb5_set_allowable_enctypes_x_desc =
 {6, (void *) "\x2a\x85\x70\x2b\x0d\x0e"};
@@ -88,32 +87,28 @@ static gss_OID_desc gss_krb5_mech_oid_x_desc =
 {9, (void *) "\x2a\x86\x48\x86\xf7\x12\x01\x02\x02" };
 static gss_OID GSS_KRB5_MECH_OID_X =
     &gss_krb5_mech_oid_x_desc;
-#endif
 
 static void gssd_load_mech(void);
 static int find_ccache_file(const char *, uid_t, char *);
 static int is_a_valid_tgt_cache(const char *, uid_t, int *, time_t *);
 static void gssd_verbose_out(const char *, ...);
-#ifndef WITHOUT_KERBEROS
 static krb5_error_code gssd_get_cc_from_keytab(const char *);
 static OM_uint32 gssd_get_user_cred(OM_uint32 *, uid_t, gss_cred_id_t *);
-#endif
 void gssd_terminate(int);
 
 extern void gssd_1(struct svc_req *rqstp, SVCXPRT *transp);
-extern int gssd_syscall(char *path);
 
 int
 main(int argc, char **argv)
 {
 	/*
-	 * We provide an RPC service on a local-domain socket. The
-	 * kernel's GSS-API code will pass what it can't handle
-	 * directly to us.
+	 * We provide an RPC service on a Netlink socket. The kernel's GSS API
+	 * code will multicast its calls, we will listen to them, receive them,
+	 * process them and reply.
 	 */
-	struct sockaddr_un sun;
-	int fd, oldmask, ch, debug;
+	int oldmask, ch, debug, jailed;
 	SVCXPRT *xprt;
+	size_t jailed_size;
 
 	/*
 	 * Initialize the credential cache file name substring and the
@@ -130,32 +125,22 @@ main(int argc, char **argv)
 			debug_level++;
 			break;
 		case 'h':
-#ifndef WITHOUT_KERBEROS
 			/*
 			 * Enable use of a host based initiator credential
 			 * in the default keytab file.
 			 */
 			hostbased_initiator_cred = 1;
-#else
-			errx(1, "This option not available when built"
-			    " without MK_KERBEROS\n");
-#endif
 			break;
 		case 'v':
 			verbose = 1;
 			break;
 		case 's':
-#ifndef WITHOUT_KERBEROS
 			/*
 			 * Set the directory search list. This enables use of
 			 * find_ccache_file() to search the directories for a
 			 * suitable credentials cache file.
 			 */
 			strlcpy(ccfile_dirlist, optarg, sizeof(ccfile_dirlist));
-#else
-			errx(1, "This option not available when built"
-			    " without MK_KERBEROS\n");
-#endif
 			break;
 		case 'c':
 			/*
@@ -192,37 +177,7 @@ main(int argc, char **argv)
 	signal(SIGTERM, gssd_terminate);
 	signal(SIGPIPE, gssd_terminate);
 
-	memset(&sun, 0, sizeof sun);
-	sun.sun_family = AF_LOCAL;
-	unlink(_PATH_GSSDSOCK);
-	strcpy(sun.sun_path, _PATH_GSSDSOCK);
-	sun.sun_len = SUN_LEN(&sun);
-	fd = socket(AF_LOCAL, SOCK_STREAM, 0);
-	if (fd < 0) {
-		if (debug_level == 0) {
-			syslog(LOG_ERR, "Can't create local gssd socket");
-			exit(1);
-		}
-		err(1, "Can't create local gssd socket");
-	}
-	oldmask = umask(S_IXUSR|S_IRWXG|S_IRWXO);
-	if (bind(fd, (struct sockaddr *) &sun, sun.sun_len) < 0) {
-		if (debug_level == 0) {
-			syslog(LOG_ERR, "Can't bind local gssd socket");
-			exit(1);
-		}
-		err(1, "Can't bind local gssd socket");
-	}
-	umask(oldmask);
-	if (listen(fd, SOMAXCONN) < 0) {
-		if (debug_level == 0) {
-			syslog(LOG_ERR, "Can't listen on local gssd socket");
-			exit(1);
-		}
-		err(1, "Can't listen on local gssd socket");
-	}
-	xprt = svc_vc_create(fd, RPC_MAXDATASIZE, RPC_MAXDATASIZE);
-	if (!xprt) {
+	if ((xprt = svc_nl_create("kgss")) == NULL) {
 		if (debug_level == 0) {
 			syslog(LOG_ERR,
 			    "Can't create transport for local gssd socket");
@@ -242,10 +197,7 @@ main(int argc, char **argv)
 	LIST_INIT(&gss_resources);
 	gss_next_id = 1;
 	gss_start_time = time(0);
-
-	gssd_syscall(_PATH_GSSDSOCK);
 	svc_run();
-	gssd_syscall("");
 
 	return (0);
 }
@@ -370,6 +322,7 @@ gssd_null_1_svc(void *argp, void *result, struct svc_req *rqstp)
 	return (TRUE);
 }
 
+#ifndef MK_MITKRB5
 bool_t
 gssd_init_sec_context_1_svc(init_sec_context_args *argp, init_sec_context_res *result, struct svc_req *rqstp)
 {
@@ -379,12 +332,10 @@ gssd_init_sec_context_1_svc(init_sec_context_args *argp, init_sec_context_res *r
 	char ccname[PATH_MAX + 5 + 1], *cp, *cp2;
 	int gotone, gotcred;
 	OM_uint32 min_stat;
-#ifndef WITHOUT_KERBEROS
 	gss_buffer_desc principal_desc;
 	char enctype[sizeof(uint32_t)];
 	int key_enctype;
 	OM_uint32 maj_stat;
-#endif
 
 	memset(result, 0, sizeof(*result));
 	if (hostbased_initiator_cred != 0 && argp->cred != 0 &&
@@ -494,6 +445,35 @@ gssd_init_sec_context_1_svc(init_sec_context_args *argp, init_sec_context_res *r
 }
 
 bool_t
+gssd_supports_lucid_1_svc(void *argp, supports_lucid_res *result, struct svc_req *rqstp)
+{
+
+	gssd_verbose_out("gssd_lucid: done\n");
+	result->major_status = GSS_S_UNAVAILABLE;
+	return (TRUE);
+}
+
+bool_t
+gssd_init_sec_context_lucid_v1_1_svc(init_sec_context_lucid_v1_args *argp,
+    init_sec_context_lucid_v1_res *result, struct svc_req *rqstp)
+{
+
+	gssd_verbose_out("gssd_init_sec_context_lucid_v1: Heimdal\n");
+	result->major_status = GSS_S_UNAVAILABLE;
+	return (TRUE);
+}
+
+bool_t
+gssd_accept_sec_context_lucid_v1_1_svc(accept_sec_context_lucid_v1_args *argp,
+    accept_sec_context_lucid_v1_res *result, struct svc_req *rqstp)
+{
+
+	gssd_verbose_out("gssd_accept_sec_context_lucid_v1: Heimdal\n");
+	result->major_status = GSS_S_UNAVAILABLE;
+	return (TRUE);
+}
+
+bool_t
 gssd_accept_sec_context_1_svc(accept_sec_context_args *argp, accept_sec_context_res *result, struct svc_req *rqstp)
 {
 	gss_ctx_id_t ctx = GSS_C_NO_CONTEXT;
@@ -543,6 +523,446 @@ gssd_accept_sec_context_1_svc(accept_sec_context_args *argp, accept_sec_context_
 
 	return (TRUE);
 }
+#else	/* MK_MITKRB5 */
+bool_t
+gssd_supports_lucid_1_svc(void *argp, supports_lucid_res *result, struct svc_req *rqstp)
+{
+
+	gssd_verbose_out("gssd_lucid: done\n");
+	result->vers = 1;
+	result->major_status = GSS_S_COMPLETE;
+	return (TRUE);
+}
+
+bool_t
+gssd_init_sec_context_1_svc(init_sec_context_args *argp,
+    init_sec_context_res *result, struct svc_req *rqstp)
+{
+
+	gssd_verbose_out("gssd_init_sec_context: MIT\n");
+	result->major_status = GSS_S_UNAVAILABLE;
+	return (TRUE);
+}
+
+bool_t
+gssd_accept_sec_context_1_svc(accept_sec_context_args *argp,
+    accept_sec_context_res *result, struct svc_req *rqstp)
+{
+
+	gssd_verbose_out("gssd_accept_sec_context: MIT\n");
+	result->major_status = GSS_S_UNAVAILABLE;
+	return (TRUE);
+}
+
+bool_t
+gssd_init_sec_context_lucid_v1_1_svc(init_sec_context_lucid_v1_args *argp,
+    init_sec_context_lucid_v1_res *result, struct svc_req *rqstp)
+{
+	gss_cred_id_t cred = GSS_C_NO_CREDENTIAL;
+	gss_ctx_id_t ctx = GSS_C_NO_CONTEXT;
+	gss_name_t name = GSS_C_NO_NAME;
+	char ccname[PATH_MAX + 5 + 1], *cp, *cp2;
+	int gotone, gotcred;
+	OM_uint32 min_stat;
+	gss_buffer_desc principal_desc;
+	char enctype[sizeof(uint32_t)];
+	int key_enctype;
+	OM_uint32 maj_stat;
+
+	memset(result, 0, sizeof(*result));
+	if (hostbased_initiator_cred != 0 && argp->cred != 0 &&
+	    argp->uid == 0) {
+		/*
+		 * These credentials are for a host based initiator name
+		 * in a keytab file, which should now have credentials
+		 * in /tmp/krb5cc_gssd, because gss_acquire_cred() did
+		 * the equivalent of "kinit -k".
+		 */
+		snprintf(ccname, sizeof(ccname), "FILE:%s",
+		    GSSD_CREDENTIAL_CACHE_FILE);
+	} else if (ccfile_dirlist[0] != '\0' && argp->cred == 0) {
+		/*
+		 * For the "-s" case and no credentials provided as an
+		 * argument, search the directory list for an appropriate
+		 * credential cache file. If the search fails, return failure.
+		 */
+		gotone = 0;
+		cp = ccfile_dirlist;
+		do {
+			cp2 = strchr(cp, ':');
+			if (cp2 != NULL)
+				*cp2 = '\0';
+			gotone = find_ccache_file(cp, argp->uid, ccname);
+			if (gotone != 0)
+				break;
+			if (cp2 != NULL)
+				*cp2++ = ':';
+			cp = cp2;
+		} while (cp != NULL && *cp != '\0');
+		if (gotone == 0) {
+			result->major_status = GSS_S_CREDENTIALS_EXPIRED;
+			gssd_verbose_out("gssd_init_sec_context_plus: -s no"
+			    " credential cache file found for uid=%d\n",
+			    (int)argp->uid);
+			return (TRUE);
+		}
+	} else {
+		/*
+		 * If there wasn't a "-s" option or the credentials have
+		 * been provided as an argument, do it the old way.
+		 * When credentials are provided, the uid should be root.
+		 */
+		if (argp->cred != 0 && argp->uid != 0) {
+			if (debug_level == 0)
+				syslog(LOG_ERR, "gss_init_sec_context_plus:"
+				    " cred for non-root");
+			else
+				fprintf(stderr, "gss_init_sec_context_plus:"
+				    " cred for non-root\n");
+		}
+		snprintf(ccname, sizeof(ccname), "FILE:/tmp/krb5cc_%d",
+		    (int) argp->uid);
+	}
+	setenv("KRB5CCNAME", ccname, TRUE);
+
+	if (argp->cred) {
+		cred = gssd_find_resource(argp->cred);
+		if (!cred) {
+			result->major_status = GSS_S_CREDENTIALS_EXPIRED;
+			gssd_verbose_out("gssd_init_sec_context_plus: cred"
+			    " resource not found\n");
+			return (TRUE);
+		}
+	}
+	if (argp->ctx) {
+		ctx = gssd_find_resource(argp->ctx);
+		if (!ctx) {
+			result->major_status = GSS_S_CONTEXT_EXPIRED;
+			gssd_verbose_out("gssd_init_sec_context_plus: context"
+			    " resource not found\n");
+			return (TRUE);
+		}
+	}
+	if (argp->name) {
+		name = gssd_find_resource(argp->name);
+		if (!name) {
+			result->major_status = GSS_S_BAD_NAME;
+			gssd_verbose_out("gssd_init_sec_context_plus: name"
+			    " resource not found\n");
+			return (TRUE);
+		}
+	}
+	gotcred = 0;
+
+	result->major_status = gss_init_sec_context(&result->minor_status,
+	    cred, &ctx, name, argp->mech_type,
+	    argp->req_flags, argp->time_req, argp->input_chan_bindings,
+	    &argp->input_token, &result->actual_mech_type,
+	    &result->output_token, &result->ret_flags, &result->time_rec);
+	gssd_verbose_out("gssd_init_sec_context_plus: done major=0x%x minor=%d"
+	    " uid=%d\n", (unsigned int)result->major_status,
+	    (int)result->minor_status, (int)argp->uid);
+	if (gotcred != 0)
+		gss_release_cred(&min_stat, &cred);
+
+	if (result->actual_mech_type) {
+		/*
+		 * Just to keep the bogus "elements" pointer
+		 * from core dumping the daemon when linked to MIT
+		 * libraries.  For some reason, the "elements" pointer
+		 * in actual_mech_type cannot be read.
+		 */
+		result->actual_mech_type = GSS_KRB5_MECH_OID_X;
+	}
+
+	if (result->major_status == GSS_S_COMPLETE
+	    || result->major_status == GSS_S_CONTINUE_NEEDED) {
+		if (argp->ctx)
+			result->ctx = argp->ctx;
+		else
+			result->ctx = gssd_make_resource(ctx);
+	}
+
+	if (result->major_status == GSS_S_COMPLETE) {
+		gss_krb5_lucid_context_v1_t *lctx;
+
+		result->major_status = gss_krb5_export_lucid_sec_context(
+		    &result->minor_status, &ctx, 1, (void *)&lctx);
+		gssd_delete_resource(result->ctx);
+		if (result->major_status == GSS_S_COMPLETE &&
+		    lctx != NULL) {
+			result->lucid.initiate = lctx->initiate;
+			result->lucid.endtime = lctx->endtime;
+			result->lucid.send_seq = lctx->send_seq;
+			result->lucid.recv_seq = lctx->recv_seq;
+			result->lucid.protocol = lctx->protocol;
+			if (lctx->protocol == 0) {
+				result->lucid.rfc_sign =
+				    lctx->rfc1964_kd.sign_alg;
+				result->lucid.rfc_seal =
+				    lctx->rfc1964_kd.seal_alg;
+				result->lucid.ctx_type =
+				    lctx->rfc1964_kd.ctx_key.type;
+				result->lucid.ctx_key.length =
+				    lctx->rfc1964_kd.ctx_key.length;
+				result->lucid.ctx_key.value =
+				    mem_alloc(result->lucid.ctx_key.length);
+				memcpy(result->lucid.ctx_key.value,
+				    lctx->rfc1964_kd.ctx_key.data,
+				    result->lucid.ctx_key.length);
+			} else if (lctx->protocol == 1) {
+				result->lucid.have_subkey =
+				    lctx->cfx_kd.have_acceptor_subkey;
+				result->lucid.ctx_type =
+				    lctx->cfx_kd.ctx_key.type;
+				result->lucid.ctx_key.length =
+				    lctx->cfx_kd.ctx_key.length;
+				result->lucid.ctx_key.value =
+				    mem_alloc(result->lucid.ctx_key.length);
+				memcpy(result->lucid.ctx_key.value,
+				    lctx->cfx_kd.ctx_key.data,
+				    result->lucid.ctx_key.length);
+				if (result->lucid.have_subkey != 0) {
+					result->lucid.subkey_type =
+					    lctx->cfx_kd.acceptor_subkey.type;
+					result->lucid.subkey_key.length =
+					    lctx->cfx_kd.acceptor_subkey.length;
+					result->lucid.subkey_key.value =
+					    mem_alloc(
+					    result->lucid.subkey_key.length);
+					memcpy(result->lucid.subkey_key.value,
+					    lctx->cfx_kd.acceptor_subkey.data,
+					    result->lucid.subkey_key.length);
+				} else {
+					result->lucid.subkey_type = 0;
+					result->lucid.subkey_key.length = 0;
+					result->lucid.subkey_key.value = NULL;
+				}
+			}
+			(void)gss_krb5_free_lucid_sec_context(&min_stat,
+			    (void *)lctx);
+		} else {
+			gssd_verbose_out("gss_krb5_export_lucid_set_context"
+			    " failed: major=0x%x minor=%d lctx=%p\n",
+			    result->major_status, result->minor_status, lctx);
+		}
+	}
+
+	return (TRUE);
+}
+
+/*
+ * Internal function to acquire unix credentials.
+ */
+static OM_uint32
+_gss_get_unix_cred(OM_uint32 *minor_stat, gss_name_t name, gss_OID mech,
+    uid_t *uidp, gid_t *gidp, int *numgroups, gid_t *groups)
+{
+	OM_uint32 major_stat;
+	uid_t uid;
+	char buf[1024], *bufp;
+	struct passwd pwd, *pw;
+	size_t buflen;
+	int error;
+	static size_t buflen_hint = 1024;
+
+	major_stat = gss_pname_to_uid(minor_stat, name, mech, &uid);
+	if (major_stat == GSS_S_COMPLETE) {
+		*uidp = uid;
+		buflen = buflen_hint;
+		for (;;) {
+			pw = NULL;
+			bufp = buf;
+			if (buflen > sizeof(buf))
+				bufp = malloc(buflen);
+			if (bufp == NULL)
+				break;
+			error = getpwuid_r(uid, &pwd, bufp, buflen,
+			    &pw);
+			if (error != ERANGE)
+				break;
+			if (buflen > sizeof(buf))
+				free(bufp);
+			buflen += 1024;
+			if (buflen > buflen_hint)
+				buflen_hint = buflen;
+		}
+		if (pw) {
+			*gidp = pw->pw_gid;
+			getgrouplist(pw->pw_name, pw->pw_gid,
+			    groups, numgroups);
+		} else {
+			major_stat = GSS_S_FAILURE;
+			gssd_verbose_out("get_unix_cred: cannot find"
+			    " passwd entry\n");
+		}
+		if (bufp != NULL && buflen > sizeof(buf))
+			free(bufp);
+	} else if (major_stat != GSS_S_UNAVAILABLE) {
+		gssd_verbose_out("gssd_pname_to_uid: failed major=0x%x"
+		    " minor=%d\n", major_stat, *minor_stat);
+	}
+	return (major_stat);
+}
+
+bool_t
+gssd_accept_sec_context_lucid_v1_1_svc(accept_sec_context_lucid_v1_args *argp,
+    accept_sec_context_lucid_v1_res *result, struct svc_req *rqstp)
+{
+	gss_ctx_id_t ctx = GSS_C_NO_CONTEXT;
+	gss_cred_id_t cred = GSS_C_NO_CREDENTIAL;
+	gss_name_t src_name;
+	gss_cred_id_t delegated_cred_handle;
+	OM_uint32 min_stat;
+
+	memset(result, 0, sizeof(*result));
+	if (argp->ctx) {
+		ctx = gssd_find_resource(argp->ctx);
+		if (!ctx) {
+			result->major_status = GSS_S_CONTEXT_EXPIRED;
+			gssd_verbose_out("gssd_accept_sec_context: ctx"
+			    " resource not found\n");
+			return (TRUE);
+		}
+	}
+	if (argp->cred) {
+		cred = gssd_find_resource(argp->cred);
+		if (!cred) {
+			result->major_status = GSS_S_CREDENTIALS_EXPIRED;
+			gssd_verbose_out("gssd_accept_sec_context: cred"
+			    " resource not found\n");
+			return (TRUE);
+		}
+	}
+
+	memset(result, 0, sizeof(*result));
+	result->major_status = gss_accept_sec_context(&result->minor_status,
+	    &ctx, cred, &argp->input_token, argp->input_chan_bindings,
+	    &src_name, &result->mech_type, &result->output_token,
+	    &result->ret_flags, &result->time_rec,
+	    &delegated_cred_handle);
+	gssd_verbose_out("gssd_accept_sec_context: done major=0x%x minor=%d\n",
+	    (unsigned int)result->major_status, (int)result->minor_status);
+
+	if (result->major_status == GSS_S_COMPLETE
+	    || result->major_status == GSS_S_CONTINUE_NEEDED) {
+		if (argp->ctx)
+			result->ctx = argp->ctx;
+		else
+			result->ctx = gssd_make_resource(ctx);
+		result->src_name = gssd_make_resource(src_name);
+		result->delegated_cred_handle =
+			gssd_make_resource(delegated_cred_handle);
+	}
+
+	if (result->major_status == GSS_S_COMPLETE) {
+		gss_krb5_lucid_context_v1_t *lctx;
+
+		/* Get the lucid context stuff. */
+		result->major_status = gss_krb5_export_lucid_sec_context(
+		    &result->minor_status, &ctx, 1, (void *)&lctx);
+		gssd_delete_resource(result->ctx);
+		if (result->major_status == GSS_S_COMPLETE &&
+		    lctx != NULL) {
+			result->lucid.initiate = lctx->initiate;
+			result->lucid.endtime = lctx->endtime;
+			result->lucid.send_seq = lctx->send_seq;
+			result->lucid.recv_seq = lctx->recv_seq;
+			result->lucid.protocol = lctx->protocol;
+			if (lctx->protocol == 0) {
+				result->lucid.rfc_sign =
+				    lctx->rfc1964_kd.sign_alg;
+				result->lucid.rfc_seal =
+				    lctx->rfc1964_kd.seal_alg;
+				result->lucid.ctx_type =
+				    lctx->rfc1964_kd.ctx_key.type;
+				result->lucid.ctx_key.length =
+				    lctx->rfc1964_kd.ctx_key.length;
+				result->lucid.ctx_key.value =
+				    mem_alloc(result->lucid.ctx_key.length);
+				memcpy(result->lucid.ctx_key.value,
+				    lctx->rfc1964_kd.ctx_key.data,
+				    result->lucid.ctx_key.length);
+			} else if (lctx->protocol == 1) {
+				result->lucid.have_subkey =
+				    lctx->cfx_kd.have_acceptor_subkey;
+				result->lucid.ctx_type =
+				    lctx->cfx_kd.ctx_key.type;
+				result->lucid.ctx_key.length =
+				    lctx->cfx_kd.ctx_key.length;
+				result->lucid.ctx_key.value =
+				    mem_alloc(result->lucid.ctx_key.length);
+				memcpy(result->lucid.ctx_key.value,
+				    lctx->cfx_kd.ctx_key.data,
+				    result->lucid.ctx_key.length);
+				if (result->lucid.have_subkey != 0) {
+					result->lucid.subkey_type =
+					    lctx->cfx_kd.acceptor_subkey.type;
+					result->lucid.subkey_key.length =
+					    lctx->cfx_kd.acceptor_subkey.length;
+					result->lucid.subkey_key.value =
+					    mem_alloc(
+					    result->lucid.subkey_key.length);
+					memcpy(result->lucid.subkey_key.value,
+					    lctx->cfx_kd.acceptor_subkey.data,
+					    result->lucid.subkey_key.length);
+				} else {
+					result->lucid.subkey_type = 0;
+					result->lucid.subkey_key.length = 0;
+					result->lucid.subkey_key.value = NULL;
+				}
+			}
+			(void)gss_krb5_free_lucid_sec_context(&min_stat,
+			    (void *)lctx);
+		} else {
+			gssd_verbose_out("gss_krb5_export_lucid_set_context"
+			    " failed: major=0x%x minor=%d lctx=%p\n",
+			    result->major_status, result->minor_status, lctx);
+		}
+
+		/* Now, get the exported name. */
+		if (result->major_status == GSS_S_COMPLETE) {
+			result->major_status = gss_export_name(
+			    &result->minor_status, src_name,
+			    &result->exported_name);
+			gssd_verbose_out("gssd_accept_sec_context (name):"
+			    " done major=0x%x minor=%d\n",
+			    result->major_status, result->minor_status);
+		}
+
+		/* Finally, get the unix credentials. */
+		if (result->major_status == GSS_S_COMPLETE) {
+			gid_t groups[NGROUPS];
+			int i, len = NGROUPS;
+			OM_uint32 major_stat, minor_stat;
+
+			major_stat = _gss_get_unix_cred(&minor_stat,
+			    src_name, result->mech_type,
+			    &result->uid, &result->gid, &len, groups);
+			if (major_stat == GSS_S_COMPLETE) {
+				result->gidlist.gidlist_len = len;
+				result->gidlist.gidlist_val =
+				    mem_alloc(len * sizeof(uint32_t));
+				/*
+				 * Just in case
+				 * sizeof(gid_t) != sizeof(uint32_t).
+				 */
+				for (i = 0; i < len; i++)
+					result->gidlist.gidlist_val[i] =
+					    groups[i];
+			} else {
+				result->gid = 65534;
+				result->gidlist.gidlist_len = 0;
+				result->gidlist.gidlist_val = NULL;
+				gssd_verbose_out("gssd_pname_to_uid: mapped"
+				    " to uid=%d, but no groups\n",
+				    (int)result->uid);
+			}
+		}
+	}
+	return (TRUE);
+}
+#endif	/* !MK_MITKRB5 */
 
 bool_t
 gssd_delete_sec_context_1_svc(delete_sec_context_args *argp, delete_sec_context_res *result, struct svc_req *rqstp)
@@ -602,6 +1022,51 @@ gssd_import_name_1_svc(import_name_args *argp, import_name_res *result, struct s
 		result->output_name = 0;
 
 	return (TRUE);
+}
+
+/*
+ * If the name is a numeric IP host address, do a DNS lookup on it and
+ * return the DNS name in a malloc'd string.
+ */
+static char *
+gssd_conv_ip_to_dns(int len, char *name)
+{
+	struct sockaddr_in sin;
+	struct sockaddr_in6 sin6;
+	char *retcp;
+
+	retcp = NULL;
+	if (len > 0) {
+		retcp = mem_alloc(NI_MAXHOST);
+		memcpy(retcp, name, len);
+		retcp[len] = '\0';
+		if (inet_pton(AF_INET, retcp, &sin.sin_addr) != 0) {
+			sin.sin_family = AF_INET;
+			sin.sin_len = sizeof(sin);
+			sin.sin_port = 0;
+			if (getnameinfo((struct sockaddr *)&sin,
+			    sizeof(sin), retcp, NI_MAXHOST,
+			    NULL, 0, NI_NAMEREQD) != 0) {
+				mem_free(retcp, NI_MAXHOST);
+				return (NULL);
+			}
+		} else if (inet_pton(AF_INET6, retcp, &sin6.sin6_addr) != 0) {
+			sin6.sin6_family = AF_INET6;
+			sin6.sin6_len = sizeof(sin6);
+			sin6.sin6_port = 0;
+			if (getnameinfo((struct sockaddr *)&sin6,
+			    sizeof(sin6), retcp, NI_MAXHOST,
+			    NULL, 0, NI_NAMEREQD) != 0) {
+				mem_free(retcp, NI_MAXHOST);
+				return (NULL);
+			}
+		} else {
+			mem_free(retcp, NI_MAXHOST);
+			return (NULL);
+		}
+		gssd_verbose_out("gssd_conv_ip_to_dns: %s\n", retcp);
+	}
+	return (retcp);
 }
 
 bool_t
@@ -748,11 +1213,9 @@ gssd_acquire_cred_1_svc(acquire_cred_args *argp, acquire_cred_res *result, struc
 	gss_cred_id_t cred;
 	char ccname[PATH_MAX + 5 + 1], *cp, *cp2;
 	int gotone;
-#ifndef WITHOUT_KERBEROS
 	gss_buffer_desc namebuf;
 	uint32_t minstat;
 	krb5_error_code kret;
-#endif
 
 	memset(result, 0, sizeof(*result));
 	if (argp->desired_name) {
@@ -765,7 +1228,6 @@ gssd_acquire_cred_1_svc(acquire_cred_args *argp, acquire_cred_res *result, struc
 		}
 	}
 
-#ifndef WITHOUT_KERBEROS
 	if (hostbased_initiator_cred != 0 && argp->desired_name != 0 &&
 	    argp->uid == 0 && argp->cred_usage == GSS_C_INITIATE) {
 		/* This is a host based initiator name in the keytab file. */
@@ -798,9 +1260,7 @@ gssd_acquire_cred_1_svc(acquire_cred_args *argp, acquire_cred_res *result, struc
 			result->major_status = GSS_S_FAILURE;
 			return (TRUE);
 		}
-	} else
-#endif /* !WITHOUT_KERBEROS */
-	if (ccfile_dirlist[0] != '\0' && argp->desired_name == 0) {
+	} else if (ccfile_dirlist[0] != '\0' && argp->desired_name == 0) {
 		/*
 		 * For the "-s" case and no name provided as an
 		 * argument, search the directory list for an appropriate
@@ -910,6 +1370,25 @@ gssd_display_status_1_svc(display_status_args *argp, display_status_res *result,
 	gssd_verbose_out("gssd_display_status: done major=0x%x minor=%d\n",
 	    (unsigned int)result->major_status, (int)result->minor_status);
 
+	return (TRUE);
+}
+
+bool_t
+gssd_ip_to_dns_1_svc(ip_to_dns_args *argp, ip_to_dns_res *result, struct svc_req *rqstp)
+{
+	char *host;
+
+	memset(result, 0, sizeof(*result));
+	/* Check to see if the name is actually an IP address. */
+	host = gssd_conv_ip_to_dns(argp->ip_addr.ip_addr_len,
+	    argp->ip_addr.ip_addr_val);
+	if (host != NULL) {
+		result->major_status = GSS_S_COMPLETE;
+		result->dns_name.dns_name_len = strlen(host);
+		result->dns_name.dns_name_val = host;
+		return (TRUE);
+	}
+	result->major_status = GSS_S_FAILURE;
 	return (TRUE);
 }
 
@@ -1025,7 +1504,6 @@ static int
 is_a_valid_tgt_cache(const char *filepath, uid_t uid, int *retrating,
     time_t *retexptime)
 {
-#ifndef WITHOUT_KERBEROS
 	krb5_context context;
 	krb5_principal princ;
 	krb5_ccache ccache;
@@ -1125,12 +1603,8 @@ is_a_valid_tgt_cache(const char *filepath, uid_t uid, int *retrating,
 		*retexptime = exptime;
 	}
 	return (ret);
-#else /* WITHOUT_KERBEROS */
-	return (0);
-#endif /* !WITHOUT_KERBEROS */
 }
 
-#ifndef WITHOUT_KERBEROS
 /*
  * This function attempts to do essentially a "kinit -k" for the principal
  * name provided as the argument, so that there will be a TGT in the
@@ -1160,8 +1634,11 @@ gssd_get_cc_from_keytab(const char *name)
 	if (ret == 0)
 		ret = krb5_cc_initialize(context, ccache, principal);
 	if (ret == 0) {
+#ifndef MK_MITKRB5
+		/* For Heimdal only */
 		krb5_get_init_creds_opt_set_default_flags(context, "gssd",
 		    krb5_principal_get_realm(context, principal), opt);
+#endif
 		kt_ret = ret = krb5_kt_default(context, &kt);
 	}
 	if (ret == 0)
@@ -1230,16 +1707,12 @@ gssd_get_user_cred(OM_uint32 *min_statp, uid_t uid, gss_cred_id_t *credp)
 	gss_release_oid_set(&min_stat, &mechlist);
 	return (maj_stat);
 }
-#endif /* !WITHOUT_KERBEROS */
 
 void gssd_terminate(int sig __unused)
 {
 
-#ifndef WITHOUT_KERBEROS
 	if (hostbased_initiator_cred != 0)
 		unlink(GSSD_CREDENTIAL_CACHE_FILE);
-#endif
-	gssd_syscall("");
 	exit(0);
 }
 

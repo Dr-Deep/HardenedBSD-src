@@ -20,8 +20,6 @@
  *
  * Portions Copyright 2006-2008 John Birrell jb@freebsd.org
  *
- * $FreeBSD$
- *
  */
 
 /*
@@ -29,7 +27,6 @@
  * Use is subject to license terms.
  */
 
-#include <sys/cdefs.h>
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/conf.h>
@@ -51,14 +48,16 @@
 #include <sys/proc.h>
 #include <sys/selinfo.h>
 #include <sys/smp.h>
+#include <sys/stdarg.h>
 #include <sys/sysctl.h>
 #include <sys/uio.h>
 #include <sys/unistd.h>
 #include <machine/cpu.h>
-#include <machine/stdarg.h>
 
 #include <sys/dtrace.h>
 #include <sys/dtrace_bsd.h>
+
+#include <cddl/dev/dtrace/dtrace_cddl.h>
 
 #define	PROF_NAMELEN		15
 
@@ -97,26 +96,14 @@
 #endif
 #endif
 
-#ifdef __mips
-/*
- * This value is bogus just to make module compilable on mips
- */
-#define	PROF_ARTIFICIAL_FRAMES	3
-#endif
-
 #ifdef __powerpc__
 /*
  * This value is bogus just to make module compilable on powerpc
  */
-#define	PROF_ARTIFICIAL_FRAMES	3
+#define	PROF_ARTIFICIAL_FRAMES	8
 #endif
 
 struct profile_probe_percpu;
-
-#ifdef __mips
-/* bogus */
-#define	PROF_ARTIFICIAL_FRAMES	3
-#endif
 
 #ifdef __arm__
 #define	PROF_ARTIFICIAL_FRAMES	3
@@ -127,12 +114,10 @@ struct profile_probe_percpu;
 #endif
 
 #ifdef __riscv
-/* TODO: verify */
-#define	PROF_ARTIFICIAL_FRAMES	10
+#define	PROF_ARTIFICIAL_FRAMES	12
 #endif
 
 typedef struct profile_probe {
-	char		prof_name[PROF_NAMELEN];
 	dtrace_id_t	prof_id;
 	int		prof_kind;
 #ifdef illumos
@@ -261,12 +246,15 @@ profile_probe(profile_probe_t *prof, hrtime_t late)
 	if (frame != NULL) {
 		if (TRAPF_USERMODE(frame))
 			upc = TRAPF_PC(frame);
-		else
+		else {
 			pc = TRAPF_PC(frame);
+			td->t_dtrace_trapframe = frame;
+		}
 	} else if (TD_IS_IDLETHREAD(td))
 		pc = (uintfptr_t)&cpu_idle;
 
 	dtrace_probe(prof->prof_id, pc, upc, late, 0, 0);
+	td->t_dtrace_trapframe = NULL;
 }
 
 static void
@@ -313,7 +301,6 @@ profile_create(hrtime_t interval, char *name, int kind)
 	}
 
 	prof = kmem_zalloc(sizeof (profile_probe_t), KM_SLEEP);
-	(void) strcpy(prof->prof_name, name);
 #ifdef illumos
 	prof->prof_interval = interval;
 	prof->prof_cyclic = CYCLIC_NONE;

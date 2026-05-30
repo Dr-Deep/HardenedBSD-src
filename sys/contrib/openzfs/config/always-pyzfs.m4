@@ -1,3 +1,4 @@
+dnl # SPDX-License-Identifier: CDDL-1.0
 dnl #
 dnl # ZFS_AC_PYTHON_MODULE(module_name, [action-if-true], [action-if-false])
 dnl #
@@ -47,6 +48,16 @@ AC_DEFUN([ZFS_AC_CONFIG_ALWAYS_PYZFS], [
 	AC_SUBST(DEFINE_PYZFS)
 
 	dnl #
+	dnl # Autodetection disables pyzfs if kernel or srpm config
+	dnl #
+	AS_IF([test "x$enable_pyzfs" = xcheck], [
+		AS_IF([test "x$ZFS_CONFIG" = xkernel -o "x$ZFS_CONFIG" = xsrpm ], [
+				enable_pyzfs=no
+				AC_MSG_NOTICE([Disabling pyzfs for kernel/srpm config])
+		])
+	])
+
+	dnl #
 	dnl # Python "packaging" (or, failing that, "distlib") module is required to build and install pyzfs
 	dnl #
 	AS_IF([test "x$enable_pyzfs" = xcheck -o "x$enable_pyzfs" = xyes], [
@@ -70,10 +81,11 @@ AC_DEFUN([ZFS_AC_CONFIG_ALWAYS_PYZFS], [
 			[AC_MSG_ERROR("Python $PYTHON_VERSION unknown")]
 		)
 
-		AX_PYTHON_DEVEL([$PYTHON_REQUIRED_VERSION], [
-			AS_IF([test "x$enable_pyzfs" = xyes], [
-				AC_MSG_ERROR("Python $PYTHON_REQUIRED_VERSION development library is not installed")
-			], [test "x$enable_pyzfs" != xno], [
+		AS_IF([test "x$enable_pyzfs" = xyes], [
+			AX_PYTHON_DEVEL([$PYTHON_REQUIRED_VERSION])
+		], [
+			AX_PYTHON_DEVEL([$PYTHON_REQUIRED_VERSION], [true])
+			AS_IF([test "x$ax_python_devel_found" = xno], [
 				enable_pyzfs=no
 			])
 		])

@@ -1,6 +1,5 @@
 #!/bin/sh
 #
-# $FreeBSD$
 #
 
 uidrange="60000:100000"
@@ -13,9 +12,6 @@ gidoutrange="daemon" # We expect $uidinrange in this group
 
 check_ko()
 {
-	if ! sysctl -N security.mac.bsdextended >/dev/null 2>&1; then
-		atf_skip "mac_bsdextended(4) support isn't available"
-	fi
 	if [ $(sysctl -n security.mac.bsdextended.enabled) = "0" ]; then
 		# The kernel module is loaded but disabled.  Enable it for the
 		# duration of the test.
@@ -28,6 +24,7 @@ setup()
 {
 	check_ko
 	mkdir mnt
+	[ -c /dev/mdctl ] || atf_skip "no /dev/mdctl to create md devices"
 	mdmfs -s 25m md mnt \
 		|| atf_fail "failed to mount md device"
 	chmod a+rwx mnt

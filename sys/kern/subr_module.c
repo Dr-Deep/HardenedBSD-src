@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1998 Michael Smith
  * All rights reserved.
@@ -29,7 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
+#include "opt_ddb.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -42,12 +42,29 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm.h>
 #include <vm/vm_extern.h>
 
+#ifdef DDB
+#include <ddb/ddb.h>
+#endif
+
 /*
  * Preloaded module support
  */
 
 vm_offset_t preload_addr_relocate = 0;
-caddr_t preload_metadata;
+caddr_t preload_metadata, preload_kmdp;
+
+const char preload_modtype[] = MODTYPE;
+const char preload_kerntype[] = KERNTYPE;
+const char preload_modtype_obj[] = MODTYPE_OBJ;
+
+void
+preload_initkmdp(bool fatal)
+{
+	preload_kmdp = preload_search_by_type(preload_kerntype);
+
+	if (preload_kmdp == NULL && fatal)
+		panic("unable to find kernel metadata");
+}
 
 /*
  * Search for the preloaded module (name)
@@ -296,6 +313,8 @@ preload_bootstrap_relocate(vm_offset_t offset)
 	    switch (hdr[0]) {
 	    case MODINFO_ADDR:
 	    case MODINFO_METADATA|MODINFOMD_FONT:
+	    case MODINFO_METADATA|MODINFOMD_SPLASH:
+	    case MODINFO_METADATA|MODINFOMD_SHTDWNSPLASH:
 	    case MODINFO_METADATA|MODINFOMD_SSYM:
 	    case MODINFO_METADATA|MODINFOMD_ESYM:
 		ptr = (vm_offset_t *)(curp + (sizeof(uint32_t) * 2));
@@ -422,9 +441,23 @@ preload_modinfo_type(struct sbuf *sbp, int type)
 		sbuf_cat(sbp, "MODINFOMD_VBE_FB");
 		break;
 #endif
-#ifdef MODINFOMD_FONT
 	case MODINFOMD_FONT:
 		sbuf_cat(sbp, "MODINFOMD_FONT");
+		break;
+	case MODINFOMD_SPLASH:
+		sbuf_cat(sbp, "MODINFOMD_SPLASH");
+		break;
+	case MODINFOMD_SHTDWNSPLASH:
+		sbuf_cat(sbp, "MODINFOMD_SHTDWNSPLASH");
+		break;
+#ifdef MODINFOMD_BOOT_HARTID
+	case MODINFOMD_BOOT_HARTID:
+		sbuf_cat(sbp, "MODINFOMD_BOOT_HARTID");
+		break;
+#endif
+#ifdef MODINFOMD_EFI_ARCH
+	case MODINFOMD_EFI_ARCH:
+		sbuf_cat(sbp, "MODINFOMD_EFI_ARCH");
 		break;
 #endif
 	default:
@@ -448,6 +481,9 @@ preload_modinfo_value(struct sbuf *sbp, uint32_t *bptr, int type, int len)
 	case MODINFO_NAME:
 	case MODINFO_TYPE:
 	case MODINFO_ARGS:
+#ifdef MODINFOMD_EFI_ARCH
+	case MODINFO_METADATA | MODINFOMD_EFI_ARCH:
+#endif
 		sbuf_printf(sbp, "%s", (char *)bptr);
 		break;
 	case MODINFO_SIZE:
@@ -476,14 +512,19 @@ preload_modinfo_value(struct sbuf *sbp, uint32_t *bptr, int type, int len)
 #ifdef MODINFOMD_VBE_FB
 	case MODINFO_METADATA | MODINFOMD_VBE_FB:
 #endif
-#ifdef MODINFOMD_FONT
 	case MODINFO_METADATA | MODINFOMD_FONT:
-#endif
+	case MODINFO_METADATA | MODINFOMD_SPLASH:
+	case MODINFO_METADATA | MODINFOMD_SHTDWNSPLASH:
 		sbuf_print_vmoffset(sbp, *(vm_offset_t *)bptr);
 		break;
 	case MODINFO_METADATA | MODINFOMD_HOWTO:
 		sbuf_printf(sbp, "0x%08x", *bptr);
 		break;
+#ifdef MODINFOMD_BOOT_HARTID
+	case MODINFO_METADATA | MODINFOMD_BOOT_HARTID:
+		sbuf_printf(sbp, "0x%lu", *(uint64_t *)bptr);
+		break;
+#endif
 	case MODINFO_METADATA | MODINFOMD_SHDR:
 	case MODINFO_METADATA | MODINFOMD_ELFHDR:
 	case MODINFO_METADATA | MODINFOMD_FW_HANDLE:
@@ -573,3 +614,16 @@ SYSCTL_PROC(_debug, OID_AUTO, dump_modinfo,
     CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE | CTLFLAG_ROOTONLY,
     NULL, 0, sysctl_preload_dump, "A",
     "pretty-print the bootloader metadata");
+
+#ifdef DDB
+DB_SHOW_COMMAND_FLAGS(preload, db_show_preload, DB_CMD_MEMSAFE)
+{
+	struct sbuf sb;
+	char buffer[128];
+
+	sbuf_new(&sb, buffer, sizeof(buffer), SBUF_FIXEDLEN);
+	sbuf_set_drain(&sb, sbuf_db_printf_drain, NULL);
+	preload_dump_internal(&sb);
+	sbuf_finish(&sb);
+}
+#endif

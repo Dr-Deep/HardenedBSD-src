@@ -25,10 +25,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\"	@(#)netstat.1	8.8 (Berkeley) 4/18/94
-.\" $FreeBSD$
-.\"
-.Dd May 27, 2022
+.Dd May 18, 2026
 .Dt NETSTAT 1
 .Os
 .Sh NAME
@@ -38,18 +35,19 @@
 .Bk -words
 .Bl -tag -width "netstat"
 .It Nm
+.Op Fl j Ar jail
 .Op Fl -libxo
 .Op Fl 46AaCLnPRSTWx
 .Op Fl f Ar protocol_family | Fl p Ar protocol
-.Op Fl M Ar core
-.Op Fl N Ar system
 .It Nm Fl i | I Ar interface
+.Op Fl j Ar jail
 .Op Fl -libxo
 .Op Fl 46abdhnW
 .Op Fl f Ar address_family
 .Op Fl M Ar core
 .Op Fl N Ar system
 .It Nm Fl w Ar wait
+.Op Fl j Ar jail
 .Op Fl -libxo
 .Op Fl I Ar interface
 .Op Fl 46d
@@ -57,64 +55,77 @@
 .Op Fl N Ar system
 .Op Fl q Ar howmany
 .It Nm Fl s
+.Op Fl j Ar jail
 .Op Fl -libxo
 .Op Fl 46sz
 .Op Fl f Ar protocol_family | Fl p Ar protocol
 .Op Fl M Ar core
 .Op Fl N Ar system
 .It Nm Fl i | I Ar interface Fl s
+.Op Fl j Ar jail
 .Op Fl -libxo
 .Op Fl 46s
 .Op Fl f Ar protocol_family | Fl p Ar protocol
 .Op Fl M Ar core
 .Op Fl N Ar system
 .It Nm Fl m
+.Op Fl j Ar jail
 .Op Fl -libxo
 .Op Fl M Ar core
 .Op Fl N Ar system
 .It Nm Fl B
+.Op Fl j Ar jail
 .Op Fl -libxo
 .Op Fl z
 .Op Fl I Ar interface
 .It Nm Fl r
+.Op Fl j Ar jail
 .Op Fl -libxo
 .Op Fl 46nW
 .Op Fl F Ar fibnum
 .Op Fl f Ar address_family
 .It Nm Fl rs
+.Op Fl j Ar jail
 .Op Fl -libxo
 .Op Fl s
 .Op Fl M Ar core
 .Op Fl N Ar system
 .It Nm Fl g
+.Op Fl j Ar jail
 .Op Fl -libxo
 .Op Fl 46W
+.Op Fl F Ar fibnum
 .Op Fl f Ar address_family
 .It Nm Fl gs
+.Op Fl j Ar jail
 .Op Fl -libxo
 .Op Fl 46s
 .Op Fl f Ar address_family
 .Op Fl M Ar core
 .Op Fl N Ar system
 .It Nm Fl Q
+.Op Fl j Ar jail
 .Op Fl -libxo
+.It Nm Fl o
+.Fl 4 | Fl 6
+.It Nm Fl O
+.Fl 4 | Fl 6
 .El
 .Ek
 .Sh DESCRIPTION
 The
 .Nm
-command symbolically displays the contents of various network-related
+command shows the contents of various network-related
 data structures.
-There are a number of output formats,
-depending on the options for the information presented.
+The arguments passed determine which of the below output formats the
+command uses.
 .Bl -tag -width indent
 .It Xo
 .Bk -words
 .Nm
 .Op Fl 46AaCLnRSTWx
 .Op Fl f Ar protocol_family | Fl p Ar protocol
-.Op Fl M Ar core
-.Op Fl N Ar system
+.Op Fl j Ar jail
 .Ek
 .Xc
 Display a list of active sockets
@@ -156,7 +167,7 @@ Generate output via
 .Xr libxo 3
 in a selection of different human and machine readable formats.
 See
-.Xr xo_parse_args 3
+.Xr xo_options 7
 for details on command line arguments.
 .It Fl 4
 Show IPv4 only.
@@ -242,12 +253,8 @@ Filter by
 .Ar protocol .
 See
 .Sx GENERAL OPTIONS .
-.It Fl M
-Use an alternative core.
-See
-.Sx GENERAL OPTIONS .
-.It Fl N
-Use an alternative kernel image.
+.It Fl j Ar jail
+Run inside a jail.
 See
 .Sx GENERAL OPTIONS .
 .El
@@ -259,6 +266,7 @@ See
 .Op Fl f Ar address_family
 .Op Fl M Ar core
 .Op Fl N Ar system
+.Op Fl j Ar jail
 .Ek
 .Xc
 Show the state of all network interfaces or a single
@@ -284,6 +292,14 @@ The network addresses of the interface
 and the maximum transmission unit
 .Pq Dq mtu
 are also displayed.
+If both
+.Fl i
+and
+.Fl I
+are specified,
+.Fl I
+overrides any instances of
+.Fl i .
 .Bl -tag -width indent
 .It Fl 4
 Show IPv4 only.
@@ -301,7 +317,7 @@ address with which they are associated.
 .It Fl b
 Show the number of bytes in and out.
 .It Fl d
-Show the number of dropped packets.
+Show the number of dropped output packets.
 .It Fl h
 Print all counters in human readable form.
 .It Fl n
@@ -312,9 +328,16 @@ See
 Avoid truncating addresses even if this causes some fields to overflow.
 See
 .Sx GENERAL OPTIONS .
+However, in most cases field widths are determined automatically with the
+.Fl i
+option, and this option has little effect.
 .It Fl f Ar protocol_family
 Filter by
 .Ar protocol_family .
+See
+.Sx GENERAL OPTIONS .
+.It Fl j Ar jail
+Run inside a jail.
 See
 .Sx GENERAL OPTIONS .
 .El
@@ -327,28 +350,20 @@ See
 .Op Fl M Ar core
 .Op Fl N Ar system
 .Op Fl q Ar howmany
+.Op Fl j Ar jail
 .Ek
 .Xc
 At intervals of
 .Ar wait
 seconds, display the information regarding packet traffic on all
-configured network interfaces or a single
-.Ar interface .
+configured network interfaces, or a single
+.Ar interface
+if
+.Fl I
+is specified.
 .Pp
-When
-.Nm
-is invoked with the
-.Fl w
-option and a
-.Ar wait
-interval argument, it displays a running count of statistics related to
-network interfaces.
 An obsolescent version of this option used a numeric parameter
 with no option, and is currently supported for backward compatibility.
-By default, this display summarizes information for all interfaces.
-Information for a specific interface may be displayed with the
-.Fl I Ar interface
-option.
 .Bl -tag -width indent
 .It Fl I Ar interface
 Only show information regarding
@@ -362,7 +377,7 @@ Show IPv6 only.
 See
 .Sx GENERAL OPTIONS .
 .It Fl d
-Show the number of dropped packets.
+Show the number of dropped output packets.
 .It Fl M
 Use an alternative core.
 See
@@ -375,7 +390,42 @@ See
 Exit after
 .Ar howmany
 outputs.
+A value of zero indicates no limit, and is the default.
+.It Fl j Ar jail
+Run inside a jail.
+See
+.Sx GENERAL OPTIONS .
 .El
+.It Xo
+.Bk -words
+.Nm netstat
+.Fl o
+.Fl 4 | Fl 6
+.Ek
+.Xc
+Print nexthop (nhops) information associated with routing entries.
+When used with
+.Fl 4
+or
+.Fl 6 ,
+limit the output to IPv4 or IPv6 routes respectively.
+This option provides details about individual nexthop addresses
+used in routing decisions.
+.It Xo
+.Bk -words
+.Nm netstat
+.Fl O
+.Fl 4 | Fl 6
+.Ek
+.Xc
+Print nexthop groups (nhgrp) information associated with routing entries.
+When used with
+.Fl 4
+or
+.Fl 6 ,
+restrict the output to IPv4 or IPv6 nexthop groups respectively.
+This option shows grouped nexthop entries for multipath or
+load-balanced routing setups.
 .It Xo
 .Bk -words
 .Nm
@@ -384,6 +434,7 @@ outputs.
 .Op Fl f Ar protocol_family | Fl p Ar protocol
 .Op Fl M Ar core
 .Op Fl N Ar system
+.Op Fl j Ar jail
 .Ek
 .Xc
 Display system-wide statistics for each network protocol.
@@ -420,6 +471,10 @@ See
 Use an alternative kernel image
 See
 .Sx GENERAL OPTIONS .
+.It Fl j Ar jail
+Run inside a jail.
+See
+.Sx GENERAL OPTIONS .
 .El
 .It Xo
 .Bk -words
@@ -429,9 +484,18 @@ See
 .Op Fl f Ar protocol_family | Fl p Ar protocol
 .Op Fl M Ar core
 .Op Fl N Ar system
+.Op Fl j Ar jail
 .Ek
 .Xc
 Display per-interface statistics for each network protocol.
+If both
+.Fl i
+and
+.Fl I
+are specified,
+.Fl I
+overrides any instances of
+.Fl i .
 .Bl -tag -width indent
 .It Fl 4
 Show IPv4 only
@@ -463,6 +527,10 @@ See
 Use an alternative kernel image
 See
 .Sx GENERAL OPTIONS .
+.It Fl j Ar jail
+Run inside a jail.
+See
+.Sx GENERAL OPTIONS .
 .El
 .It Xo
 .Bk -words
@@ -470,6 +538,7 @@ See
 .Fl m
 .Op Fl M Ar core
 .Op Fl N Ar system
+.Op Fl j Ar jail
 .Ek
 .Xc
 Show statistics recorded by the memory management routines
@@ -484,6 +553,10 @@ See
 Use an alternative kernel image
 See
 .Sx GENERAL OPTIONS .
+.It Fl j Ar jail
+Run inside a jail.
+See
+.Sx GENERAL OPTIONS .
 .El
 .It Xo
 .Bk -words
@@ -491,6 +564,7 @@ See
 .Fl B
 .Op Fl z
 .Op Fl I Ar interface
+.Op Fl j Ar jail
 .Ek
 .Xc
 Show statistics about
@@ -527,6 +601,10 @@ For more information about these flags, please refer to
 .Bl -tag -width indent
 .It Fl z
 Reset statistic counters after displaying them.
+.It Fl j Ar jail
+Run inside a jail.
+See
+.Sx GENERAL OPTIONS .
 .El
 .It Xo
 .Bk -words
@@ -537,6 +615,7 @@ Reset statistic counters after displaying them.
 .Op Fl f Ar address_family
 .Op Fl M Ar core
 .Op Fl N Ar system
+.Op Fl j Ar jail
 .Ek
 .Xc
 Display the contents of routing tables.
@@ -599,7 +678,7 @@ Do not resolve numeric addresses and port numbers to names.
 See
 .Sx GENERAL OPTIONS .
 .It Fl W
-Show the path MTU for each route, and print interface names with a
+Show the metric and path MTU for each route, and print interface names with a
 wider field size.
 .It Fl F
 Display the routing table with the number
@@ -621,6 +700,10 @@ See
 Use an alternative kernel image
 See
 .Sx GENERAL OPTIONS .
+.It Fl j Ar jail
+Run inside a jail.
+See
+.Sx GENERAL OPTIONS .
 .El
 .It Xo
 .Bk -words
@@ -629,6 +712,7 @@ See
 .Op Fl s
 .Op Fl M Ar core
 .Op Fl N Ar system
+.Op Fl j Ar jail
 .Ek
 .Xc
 Display routing statistics.
@@ -645,15 +729,21 @@ See
 Use an alternative kernel image
 See
 .Sx GENERAL OPTIONS .
+.It Fl j Ar jail
+Run inside a jail.
+See
+.Sx GENERAL OPTIONS .
 .El
 .It Xo
 .Bk -words
 .Nm
 .Fl g
 .Op Fl 46W
+.Op Fl F Ar fibnum
 .Op Fl f Ar address_family
 .Op Fl M Ar core
 .Op Fl N Ar system
+.Op Fl j Ar jail
 .Ek
 .Xc
 Display the contents of the multicast virtual interface tables,
@@ -676,6 +766,15 @@ See
 .Sx GENERAL OPTIONS .
 .It Fl W
 Avoid truncating addresses even if this causes some fields to overflow.
+.It Fl F
+Display the routing table with the number
+.Ar fibnum .
+If the specified
+.Ar fibnum
+is -1 or
+.Fl F
+is not specified,
+the default routing table is displayed.
 .It Fl f Ar protocol_family
 Filter by
 .Ar protocol_family .
@@ -689,6 +788,10 @@ See
 Use an alternative kernel image
 See
 .Sx GENERAL OPTIONS .
+.It Fl j Ar jail
+Run inside a jail.
+See
+.Sx GENERAL OPTIONS .
 .El
 .It Xo
 .Bk -words
@@ -698,6 +801,7 @@ See
 .Op Fl f Ar address_family
 .Op Fl M Ar core
 .Op Fl N Ar system
+.Op Fl j Ar jail
 .Ek
 .Xc
 Show multicast routing statistics.
@@ -727,11 +831,16 @@ See
 Use an alternative kernel image
 See
 .Sx GENERAL OPTIONS .
+.It Fl j Ar jail
+Run inside a jail.
+See
+.Sx GENERAL OPTIONS .
 .El
 .It Xo
 .Bk -words
 .Nm
 .Fl Q
+.Op Fl j Ar jail
 .Ek
 .Xc
 Show
@@ -742,6 +851,10 @@ The flags field shows available ISR handlers:
 .It Li C Ta Dv NETISR_SNP_FLAGS_M2CPUID Ta "Able to map mbuf to cpu id"
 .It Li D Ta Dv NETISR_SNP_FLAGS_DRAINEDCPU  Ta "Has queue drain handler"
 .It Li F Ta Dv NETISR_SNP_FLAGS_M2FLOW Ta "Able to map mbuf to flow id"
+.It Fl j Ar jail
+Run inside a jail.
+See
+.Sx GENERAL OPTIONS .
 .El
 .El
 .Ss GENERAL OPTIONS
@@ -796,34 +909,47 @@ Normally
 .Nm
 attempts to resolve addresses and ports,
 and display them symbolically.
+Specifying
+.Fl n
+twice will also disable printing the keyword
+.Qq Dv default
+for the default IPv4 and IPv6 routes when displaying contents of routing
+tables.
 .It Fl W
 Wider output; expand address fields, etc, to avoid truncation.
 Non-numeric values such as domain names may still be truncated; use the
 .Fl n
 option if necessary to avoid ambiguity.
+.It Fl j Ar jail
+Perform the actions inside the
+.Ar jail .
+This allows network state to be accessed even if the
+.Cm netstat
+binary is not available in the
+.Ar jail .
 .El
 .Sh EXAMPLES
 Show packet traffic information (packets, bytes, errors, packet drops, etc) for
 interface re0 updated every 2 seconds and exit after 5 outputs:
-.Bd -literal -offset indent
-$ netstat -w 2 -q 5 -I re0
-.Ed
+.Pp
+.Dl netstat -w 2 -q 5 -I re0
 .Pp
 Show statistics for ICMP on any interface:
-.Bd -literal -offset indent
-$ netstat -s -p icmp
-.Ed
+.Pp
+.Dl netstat -s -p icmp
 .Pp
 Show routing tables:
-.Bd -literal -offset indent
-$ netstat -r
-.Ed
+.Pp
+.Dl netstat -r
 .Pp
 Same as above, but without resolving numeric addresses and port numbers to
 names:
-.Bd -literal -offset indent
-$ netstat -rn
-.Ed
+.Pp
+.Dl netstat -rn
+.Pp
+Show IPv4 listening sockets:
+.Pp
+.Dl netstat -4l
 .Sh SEE ALSO
 .Xr fstat 1 ,
 .Xr nfsstat 1 ,
@@ -831,7 +957,7 @@ $ netstat -rn
 .Xr ps 1 ,
 .Xr sockstat 1 ,
 .Xr libxo 3 ,
-.Xr xo_parse_args 3 ,
+.Xr xo_options 7 ,
 .Xr bpf 4 ,
 .Xr inet 4 ,
 .Xr route 4 ,
@@ -842,7 +968,6 @@ $ netstat -rn
 .Xr services 5 ,
 .Xr iostat 8 ,
 .Xr route 8 ,
-.Xr trpt 8 ,
 .Xr vmstat 8 ,
 .Xr mbuf 9
 .Sh HISTORY

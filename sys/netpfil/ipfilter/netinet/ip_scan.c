@@ -48,10 +48,6 @@
 #include "netinet/ip_scan.h"
 /* END OF INCLUDES */
 
-#if !defined(lint)
-static const char sccsid[] = "@(#)ip_state.c	1.8 6/5/96 (C) 1993-2000 Darren Reed";
-static const char rcsid[] = "@(#)$Id$";
-#endif
 
 #ifdef	IPFILTER_SCAN	/* endif at bottom of file */
 
@@ -110,7 +106,7 @@ ipf_scan_add(caddr_t data)
 		return (ENOMEM);
 	}
 
-	err = copyinptr(data, isc, sizeof(*isc));
+	err = ipf_copyin_indirect(data, isc, sizeof(*isc));
 	if (err) {
 		KFREE(isc);
 		return (err);
@@ -154,7 +150,7 @@ ipf_scan_remove(caddr_t data)
 	ipscan_t isc, *i;
 	int err;
 
-	err = copyinptr(data, &isc, sizeof(isc));
+	err = ipf_copyin_indirect(data, &isc, sizeof(isc));
 	if (err)
 		return (err);
 

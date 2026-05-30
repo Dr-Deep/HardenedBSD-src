@@ -26,9 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 
 #include <machine/armreg.h>
@@ -42,16 +39,16 @@ void _ctx_start(void);
 
 void
 ctx_done(ucontext_t *ucp)
-{       
-	        
+{
+
 	if (ucp->uc_link == NULL) {
 		exit(0);
-	} else {  
+	} else {
 		setcontext((const ucontext_t *)ucp->uc_link);
 		abort();
-	}                                                      
+	}
 }
-   
+
 __weak_reference(__makecontext, makecontext);
 
 void
@@ -77,7 +74,8 @@ __makecontext(ucontext_t *ucp, void (*func)(void), int argc, ...)
 	va_end(ap);
 
 	/* Set the stack */
-	gp->gp_sp = STACKALIGN(ucp->uc_stack.ss_sp + ucp->uc_stack.ss_size);
+	gp->gp_sp = STACKALIGN((uintptr_t)ucp->uc_stack.ss_sp +
+	    ucp->uc_stack.ss_size);
 	/* Arrange for return via the trampoline code. */
 	gp->gp_elr = (__register_t)_ctx_start;
 	gp->gp_x[19] = (__register_t)func;

@@ -1,6 +1,6 @@
 /*-
  * Copyright (c) 2001-2003 Networks Associates Technology, Inc.
- * Copyright (c) 2004-2017 Dag-Erling Smørgrav
+ * Copyright (c) 2004-2025 Dag-Erling Smørgrav
  * All rights reserved.
  *
  * This software was developed for the FreeBSD Project by ThinkSec AS and
@@ -31,8 +31,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $OpenPAM: openpam_constants.c 938 2017-04-30 21:34:42Z des $
  */
 
 #ifdef HAVE_CONFIG_H
@@ -169,20 +167,28 @@ const char *pam_sm_func_name[PAM_NUM_PRIMITIVES] = {
 const char *openpam_policy_path[] = {
 	"/etc/pam.d/",
 	"/etc/pam.conf",
-	"/usr/local/etc/pam.d/",
-	"/usr/local/etc/pam.conf",
+#ifdef LOCALBASE
+	LOCALBASE "/etc/pam.d/",
+	LOCALBASE "/etc/pam.conf",
+#endif
 	NULL
 };
 
 const char *openpam_module_path[] = {
 #ifdef OPENPAM_MODULES_DIRECTORY
 	OPENPAM_MODULES_DIRECTORY,
-#elif COMPAT_32BIT
-	"/usr/lib32",
-	"/usr/local/lib32",
+#elif defined(COMPAT_libcompat)
+	"/usr/lib" COMPAT_libcompat,
+#ifdef LOCALBASE
+	LOCALBASE "/lib" COMPAT_libcompat,
+	LOCALBASE "/lib" COMPAT_libcompat "/security",
+#endif
 #else
 	"/usr/lib",
-	"/usr/local/lib",
+#ifdef LOCALBASE
+	LOCALBASE "/lib",
+	LOCALBASE "/lib/security",
+#endif
 #endif
 	NULL
 };

@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2006 IronPort Systems
  * All rights reserved.
@@ -25,9 +25,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -56,15 +53,7 @@ __FBSDID("$FreeBSD$");
 #define MFI_LINUX_IOCTL_MIN  0x4d00
 #define MFI_LINUX_IOCTL_MAX  0x4d04
 
-static linux_ioctl_function_t mfi_linux_ioctl;
-static struct linux_ioctl_handler mfi_linux_handler = {mfi_linux_ioctl,
-						       MFI_LINUX_IOCTL_MIN,
-						       MFI_LINUX_IOCTL_MAX};
-
-SYSINIT  (mfi_register,   SI_SUB_KLD, SI_ORDER_MIDDLE,
-	  linux_ioctl_register_handler, &mfi_linux_handler);
-SYSUNINIT(mfi_unregister, SI_SUB_KLD, SI_ORDER_MIDDLE,
-	  linux_ioctl_unregister_handler, &mfi_linux_handler);
+LINUX_IOCTL_SET(mfi, MFI_LINUX_IOCTL_MIN, MFI_LINUX_IOCTL_MAX);
 
 static struct linux_device_handler mfi_device_handler =
 	{ "mfi", "megaraid_sas", "mfi0", "megaraid_sas_ioctl_node", -1, 0, 1};

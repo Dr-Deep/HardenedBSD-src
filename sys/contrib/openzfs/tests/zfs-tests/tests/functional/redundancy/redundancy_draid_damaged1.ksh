@@ -1,4 +1,5 @@
 #!/bin/ksh -p
+# SPDX-License-Identifier: CDDL-1.0
 #
 # CDDL HEADER START
 #
@@ -88,12 +89,7 @@ function test_sequential_resilver # <pool> <parity> <dir>
 		log_must zpool replace -fsw $pool $dir/dev-$i $spare
 	done
 
-	log_must zpool scrub -w $pool
-	log_must zpool status $pool
-
-	log_mustnot check_pool_status $pool "scan" "repaired 0B"
-	log_must check_pool_status $pool "errors" "No known data errors"
-	log_must check_pool_status $pool "scan" "with 0 errors"
+	log_must verify_draid_pool $pool "damaged"
 }
 
 log_onexit cleanup
@@ -119,13 +115,13 @@ for nparity in 1 2 3; do
 	log_must zfs set primarycache=metadata $TESTPOOL
 
 	log_must zfs create $TESTPOOL/fs
-	log_must fill_fs /$TESTPOOL/fs 1 512 100 1024 R
+	log_must fill_fs /$TESTPOOL/fs 1 512 102400 1 R
 
 	log_must zfs create -o compress=on $TESTPOOL/fs2
-	log_must fill_fs /$TESTPOOL/fs2 1 512 100 1024 R
+	log_must fill_fs /$TESTPOOL/fs2 1 512 102400 1 R
 
 	log_must zfs create -o compress=on -o recordsize=8k $TESTPOOL/fs3
-	log_must fill_fs /$TESTPOOL/fs3 1 512 100 1024 R
+	log_must fill_fs /$TESTPOOL/fs3 1 512 102400 1 R
 
 	log_must zpool export $TESTPOOL
 	log_must zpool import -o cachefile=none -d $dir $TESTPOOL

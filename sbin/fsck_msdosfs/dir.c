@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2019 Google LLC
  * Copyright (C) 1995, 1996, 1997 Wolfgang Solfrank
@@ -32,8 +32,6 @@
 #include <sys/cdefs.h>
 #ifndef lint
 __RCSID("$NetBSD: dir.c,v 1.20 2006/06/05 16:51:18 christos Exp $");
-static const char rcsid[] =
-  "$FreeBSD$";
 #endif /* not lint */
 
 #include <assert.h>
@@ -465,8 +463,8 @@ checksize(struct fat_descriptor *fat, u_char *p, struct dosDirEntry *dir)
 	return FSOK;
 }
 
-static const u_char dot_name[11]    = ".          ";
-static const u_char dotdot_name[11] = "..         ";
+static const u_char dot_name[11] __nonstring    = ".          ";
+static const u_char dotdot_name[11] __nonstring = "..         ";
 
 /*
  * Basic sanity check if the subdirectory have good '.' and '..' entries,
@@ -771,7 +769,7 @@ readDosDirSection(struct fat_descriptor *fat, struct dosDirEntry *dir)
 				if (vallfn || invlfn) {
 					mod |= removede(fat,
 							invlfn ? invlfn : vallfn, p,
-							invlfn ? invcl : valcl, -1, 0,
+							invlfn ? invcl : valcl, cl, cl,
 							fullpath(dir), 2);
 					vallfn = NULL;
 					invlfn = NULL;
@@ -997,7 +995,7 @@ readDosDirSection(struct fat_descriptor *fat, struct dosDirEntry *dir)
 				n->next = pendingDirectories;
 				n->dir = d;
 				pendingDirectories = n;
-			} else {
+			} else if (!(mod & FSERROR)) {
 				mod |= k = checksize(fat, p, &dirent);
 				if (k & FSDIRMOD)
 					mod |= THISMOD;

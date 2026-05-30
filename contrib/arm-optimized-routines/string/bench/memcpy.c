@@ -1,8 +1,8 @@
 /*
  * memcpy benchmark.
  *
- * Copyright (c) 2020, Arm Limited.
- * SPDX-License-Identifier: MIT
+ * Copyright (c) 2020-2023, Arm Limited.
+ * SPDX-License-Identifier: MIT OR Apache-2.0 WITH LLVM-exception
  */
 
 #define _GNU_SOURCE
@@ -13,35 +13,25 @@
 #include "stringlib.h"
 #include "benchlib.h"
 
-#define ITERS 5000
+#define ITERS  5000
 #define ITERS2 20000000
-#define ITERS3 500000
-#define MAX_COPIES 8192
-#define SIZE (256*1024)
+#define ITERS3 200000
+#define NUM_TESTS 16384
+#define MIN_SIZE 32768
+#define MAX_SIZE (1024 * 1024)
 
-static uint8_t a[SIZE + 4096] __attribute__((__aligned__(64)));
-static uint8_t b[SIZE + 4096] __attribute__((__aligned__(64)));
+static uint8_t a[MAX_SIZE + 4096 + 64] __attribute__((__aligned__(4096)));
+static uint8_t b[MAX_SIZE + 4096 + 64] __attribute__((__aligned__(4096)));
 
-#define F(x) {#x, x},
-
-static const struct fun
-{
-  const char *name;
-  void *(*fun)(void *, const void *, size_t);
-} funtab[] =
-{
-  F(memcpy)
-#if __aarch64__
-  F(__memcpy_aarch64)
-# if __ARM_NEON
-  F(__memcpy_aarch64_simd)
-# endif
-#elif __arm__
-  F(__memcpy_arm)
-#endif
-#undef F
-  {0, 0}
-};
+#define DOTEST(STR,TESTFN)			\
+  printf (STR);					\
+  RUN (TESTFN, memcpy);				\
+  RUNA64 (TESTFN, __memcpy_aarch64);		\
+  RUNA64 (TESTFN, __memcpy_aarch64_simd);	\
+  RUNSVE (TESTFN, __memcpy_aarch64_sve);	\
+  RUNMOPS (TESTFN, __memcpy_aarch64_mops);	\
+  RUNA32 (TESTFN, __memcpy_arm);		\
+  printf ("\n");
 
 typedef struct { uint16_t size; uint16_t freq; } freq_data_t;
 typedef struct { uint8_t align; uint16_t freq; } align_data_t;
@@ -109,7 +99,7 @@ typedef struct
   uint64_t len : 16;
 } copy_t;
 
-static copy_t copy[MAX_COPIES];
+static copy_t test_arr[NUM_TESTS];
 
 typedef char *(*proto_t) (char *, const char *, size_t);
 
@@ -140,17 +130,123 @@ init_copies (size_t max_size)
   size_t total = 0;
   /* Create a random set of copies with the given size and alignment
      distributions.  */
-  for (int i = 0; i < MAX_COPIES; i++)
+  for (int i = 0; i < NUM_TESTS; i++)
     {
-      copy[i].dst = (rand32 (0) & (max_size - 1));
-      copy[i].dst &= ~dst_align_arr[rand32 (0) & ALIGN_MASK];
-      copy[i].src = (rand32 (0) & (max_size - 1));
-      copy[i].src &= ~src_align_arr[rand32 (0) & ALIGN_MASK];
-      copy[i].len = size_arr[rand32 (0) & SIZE_MASK];
-      total += copy[i].len;
+      test_arr[i].dst = (rand32 (0) & (max_size - 1));
+      test_arr[i].dst &= ~dst_align_arr[rand32 (0) & ALIGN_MASK];
+      test_arr[i].src = (rand32 (0) & (max_size - 1));
+      test_arr[i].src &= ~src_align_arr[rand32 (0) & ALIGN_MASK];
+      test_arr[i].len = size_arr[rand32 (0) & SIZE_MASK];
+      total += test_arr[i].len;
     }
 
   return total;
+}
+
+static void inline __attribute ((always_inline))
+memcpy_random (const char *name, void *(*fn)(void *, const void *, size_t))
+{
+  printf ("%22s ", name);
+  uint64_t total = 0, tsum = 0;
+  for (int size = MIN_SIZE; size <= MAX_SIZE; size *= 2)
+    {
+      uint64_t copy_size = init_copies (size) * ITERS;
+
+      for (int c = 0; c < NUM_TESTS; c++)
+	fn (b + test_arr[c].dst, a + test_arr[c].src, test_arr[c].len);
+
+      uint64_t t = clock_get_ns ();
+      for (int i = 0; i < ITERS; i++)
+	for (int c = 0; c < NUM_TESTS; c++)
+	  fn (b + test_arr[c].dst, a + test_arr[c].src, test_arr[c].len);
+      t = clock_get_ns () - t;
+      total += copy_size;
+      tsum += t;
+      printf ("%dK: %5.2f ", size / 1024, (double)copy_size / t);
+    }
+  printf( "avg %5.2f\n", (double)total / tsum);
+}
+
+static void inline __attribute ((always_inline))
+memcpy_medium_aligned (const char *name, void *(*fn)(void *, const void *, size_t))
+{
+  printf ("%22s ", name);
+
+  for (int size = 8; size <= 512; size *= 2)
+    {
+      uint64_t t = clock_get_ns ();
+      for (int i = 0; i < ITERS2; i++)
+	fn (b, a, size);
+      t = clock_get_ns () - t;
+      printf ("%dB: %5.2f ", size, (double)size * ITERS2 / t);
+    }
+  printf ("\n");
+}
+
+static void inline __attribute ((always_inline))
+memcpy_medium_unaligned (const char *name, void *(*fn)(void *, const void *, size_t))
+{
+  printf ("%22s ", name);
+
+  for (int size = 8; size <= 512; size *= 2)
+    {
+      uint64_t t = clock_get_ns ();
+      for (int i = 0; i < ITERS2; i++)
+	fn (b + 3, a + 1, size);
+      t = clock_get_ns () - t;
+      printf ("%dB: %5.2f ", size, (double)size * ITERS2 / t);
+    }
+  printf ("\n");
+}
+
+static void inline __attribute ((always_inline))
+memcpy_large (const char *name, void *(*fn)(void *, const void *, size_t))
+{
+  printf ("%22s ", name);
+
+  for (int size = 1024; size <= 65536; size *= 2)
+    {
+      uint64_t t = clock_get_ns ();
+      for (int i = 0; i < ITERS3; i++)
+	fn (b, a, size);
+      t = clock_get_ns () - t;
+      printf ("%dK: %5.2f ", size / 1024, (double)size * ITERS3 / t);
+    }
+  printf ("\n");
+}
+
+static void inline __attribute ((always_inline))
+memmove_forward_unaligned (const char *name, void *(*fn)(void *, const void *, size_t))
+{
+  printf ("%22s ", name);
+
+  for (int size = 1024; size <= 65536; size *= 2)
+    {
+      uint64_t t = clock_get_ns ();
+      for (int i = 0; i < ITERS3; i++)
+        fn (a, a + 256 + (i & 31), size);
+      t = clock_get_ns () - t;
+      printf ("%dK: %5.2f ", size / 1024, (double)size * ITERS3 / t);
+    }
+
+  printf ("\n");
+}
+
+static void inline __attribute ((always_inline))
+memmove_backward_unaligned (const char *name, void *(*fn)(void *, const void *, size_t))
+{
+  printf ("%22s ", name);
+
+  for (int size = 1024; size <= 65536; size *= 2)
+    {
+      uint64_t t = clock_get_ns ();
+      for (int i = 0; i < ITERS3; i++)
+	fn (a + 256 + (i & 31), a, size);
+      t = clock_get_ns () - t;
+      printf ("%dK: %5.2f ", size / 1024, (double)size * ITERS3 / t);
+    }
+
+  printf ("\n");
 }
 
 int main (void)
@@ -160,101 +256,12 @@ int main (void)
   memset (a, 1, sizeof (a));
   memset (b, 2, sizeof (b));
 
-  printf("Random memcpy:\n");
-  for (int f = 0; funtab[f].name != 0; f++)
-    {
-      size_t total = 0;
-      uint64_t tsum = 0;
-      printf ("%22s (B/ns) ", funtab[f].name);
-      rand32 (0x12345678);
-
-      for (int size = 16384; size <= SIZE; size *= 2)
-	{
-	  size_t copy_size = init_copies (size) * ITERS;
-
-	  for (int c = 0; c < MAX_COPIES; c++)
-	    funtab[f].fun (b + copy[c].dst, a + copy[c].src, copy[c].len);
-
-	  uint64_t t = clock_get_ns ();
-	  for (int i = 0; i < ITERS; i++)
-	    for (int c = 0; c < MAX_COPIES; c++)
-	      funtab[f].fun (b + copy[c].dst, a + copy[c].src, copy[c].len);
-	  t = clock_get_ns () - t;
-	  total += copy_size;
-	  tsum += t;
-	  printf ("%dK: %.2f ", size / 1024, (double)copy_size / t);
-	}
-      printf( "avg %.2f\n", (double)total / tsum);
-    }
-
-  printf ("\nMedium memcpy:\n");
-  for (int f = 0; funtab[f].name != 0; f++)
-    {
-      printf ("%22s (B/ns) ", funtab[f].name);
-
-      for (int size = 16; size <= 512; size *= 2)
-	{
-	  uint64_t t = clock_get_ns ();
-	  for (int i = 0; i < ITERS2; i++)
-	    funtab[f].fun (b, a, size);
-	  t = clock_get_ns () - t;
-	  printf ("%d%c: %.2f ", size < 1024 ? size : size / 1024,
-		  size < 1024 ? 'B' : 'K', (double)size * ITERS2 / t);
-	}
-      printf ("\n");
-    }
-
-  printf ("\nLarge memcpy:\n");
-  for (int f = 0; funtab[f].name != 0; f++)
-    {
-      printf ("%22s (B/ns) ", funtab[f].name);
-
-      for (int size = 1024; size <= 32768; size *= 2)
-	{
-	  uint64_t t = clock_get_ns ();
-	  for (int i = 0; i < ITERS3; i++)
-	    funtab[f].fun (b, a, size);
-	  t = clock_get_ns () - t;
-	  printf ("%d%c: %.2f ", size < 1024 ? size : size / 1024,
-		  size < 1024 ? 'B' : 'K', (double)size * ITERS3 / t);
-	}
-      printf ("\n");
-    }
-
-  printf ("\nUnaligned forwards memmove:\n");
-  for (int f = 0; funtab[f].name != 0; f++)
-    {
-      printf ("%22s (B/ns) ", funtab[f].name);
-
-      for (int size = 1024; size <= 32768; size *= 2)
-	{
-	  uint64_t t = clock_get_ns ();
-	  for (int i = 0; i < ITERS3; i++)
-	    funtab[f].fun (a, a + 256 + (i & 31), size);
-	  t = clock_get_ns () - t;
-	  printf ("%d%c: %.2f ", size < 1024 ? size : size / 1024,
-		  size < 1024 ? 'B' : 'K', (double)size * ITERS3 / t);
-	}
-      printf ("\n");
-    }
-
-
-  printf ("\nUnaligned backwards memmove:\n");
-  for (int f = 0; funtab[f].name != 0; f++)
-    {
-      printf ("%22s (B/ns) ", funtab[f].name);
-
-      for (int size = 1024; size <= 32768; size *= 2)
-	{
-	  uint64_t t = clock_get_ns ();
-	  for (int i = 0; i < ITERS3; i++)
-	    funtab[f].fun (a + 256 + (i & 31), a, size);
-	  t = clock_get_ns () - t;
-	  printf ("%d%c: %.2f ", size < 1024 ? size : size / 1024,
-		  size < 1024 ? 'B' : 'K', (double)size * ITERS3 / t);
-	}
-      printf ("\n");
-    }
+  DOTEST ("Random memcpy (bytes/ns):\n", memcpy_random);
+  DOTEST ("Medium memcpy aligned (bytes/ns):\n", memcpy_medium_aligned);
+  DOTEST ("Medium memcpy unaligned (bytes/ns):\n", memcpy_medium_unaligned);
+  DOTEST ("Large memcpy (bytes/ns):\n", memcpy_large);
+  DOTEST ("Forwards memmove unaligned (bytes/ns):\n", memmove_forward_unaligned);
+  DOTEST ("Backwards memmove unaligned (bytes/ns):\n", memmove_backward_unaligned);
 
   return 0;
 }

@@ -1,4 +1,6 @@
-zdb_CPPFLAGS = $(AM_CPPFLAGS) $(FORCEDEBUG_CPPFLAGS)
+# SPDX-License-Identifier: CDDL-1.0
+zdb_CPPFLAGS = $(AM_CPPFLAGS) $(LIBZPOOL_CPPFLAGS)
+zdb_CFLAGS   = $(AM_CFLAGS) $(LIBCRYPTO_CFLAGS)
 
 sbin_PROGRAMS   += zdb
 CPPCHECKTARGETS += zdb
@@ -9,6 +11,11 @@ zdb_SOURCES = \
 	%D%/zdb_il.c
 
 zdb_LDADD = \
+	libzdb.la \
 	libzpool.la \
 	libzfs_core.la \
-	libnvpair.la
+	libnvpair.la \
+	libbtree.la \
+	librange_tree.la
+
+zdb_LDADD += $(LIBCRYPTO_LIBS)

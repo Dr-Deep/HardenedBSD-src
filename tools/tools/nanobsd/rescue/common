@@ -1,17 +1,15 @@
-#
-# $FreeBSD$
-#
-NANO_SRC=$(pwd)
-NANO_SRC=${NANO_SRC%/tools/tools/nanobsd/rescue}
-NANO_OBJ=${NANO_SRC}/../nanobsd-builds/${NANO_NAME}/obj
+#!/bin/sh
+
+#NANO_SRC=$(pwd)
+#NANO_SRC=${NANO_SRC%/tools/tools/nanobsd/rescue}
+#NANO_OBJ=${NANO_SRC}/../nanobsd-builds/${NANO_NAME}/obj
 NANO_TOOLS=`pwd`
 NANO_PACKAGE_DIR=`pwd`/Pkg
 NANO_RAM_TMPVARSIZE=40960
 NANO_PMAKE="make -j 8"
 NANO_LABEL="rescue"
 NANO_RAM_TMPVARSIZE=40960
-#NANO_MEDIASIZE="3932160"
-NANO_MEDIASIZE="16384000"
+NANO_MEDIASIZE="6000000"
 NANO_SECTS="63"
 NANO_HEADS="16"
 NANO_IMAGES="2"
@@ -26,15 +24,19 @@ NANO_MD_BACKING=file
 # Options to put in make.conf during buildworld only
 CONF_BUILD='
 '
-# Options to put in make.conf during installworld only                          
+# Options to put in make.conf during installworld only
 CONF_INSTALL='
 '
-# Options to put in make.conf during both build- & installworld.                
-CONF_WORLD='                                                                    
-#TARGET_ARCH=i386
-CFLAGS=-O -pipe                                                                
-WITHOUT_TESTS=YES
-ALL_MODULES=YES
+# Options to put in make.conf during both build- & installworld.
+CONF_WORLD='
+CFLAGS=-O -pipe
+# We do not need these for rescue
+WITHOUT_TESTS=true
+WITHOUT_DEBUG_FILES=true
+WITHOUT_KERNEL_SYMBOLS=true
+WITHOUT_CLANG_FULL=true
+WITH_CLANG_EXTRAS=true
+WITHOUT_LIB32=true
 '
 
 # Functions
@@ -50,14 +52,14 @@ toUpper() {
 customize_cmd cust_allow_ssh_root
 customize_cmd cust_install_files
 
-cust_ld32_cfg () (
-	cd ${NANO_WORLDDIR}/libexec
-	if [ \! -f ld-elf32.so.1 ]; then
-	ln -s ld-elf.so.1 ld-elf32.so.1
-	fi
-)
-customize_cmd cust_ld32_cfg
-
+#cust_ld32_cfg () (
+#	cd ${NANO_WORLDDIR}/libexec
+#	if [ \! -f ld-elf32.so.1 ]; then
+#	ln -s ld-elf.so.1 ld-elf32.so.1
+#	fi
+#)
+#customize_cmd cust_ld32_cfg
+#
 #cust_boot_cfg () (
 #	cd ${NANO_WORLDDIR}
 #	echo "-S115200 -h" > boot.config
@@ -67,11 +69,11 @@ customize_cmd cust_ld32_cfg
 #)
 #customize_cmd cust_boot_cfg
 
-customize_cmd cust_pkgng
+#customize_cmd cust_pkgng
 
-cust_etc_cfg () (
-  cd ${NANO_WORLDDIR}
-#  mkdir -pv scratch
+cust_etc_cfg() {
+	cd ${NANO_WORLDDIR}
+	# mkdir -pv scratch
 	echo "hostname=\"rescue\"" > etc/rc.conf
 	echo "font8x14=\"iso15-8x14\"" >> etc/rc.conf
 	echo "font8x16=\"iso15-8x16\"" >> etc/rc.conf
@@ -83,12 +85,12 @@ cust_etc_cfg () (
 	echo "/dev/${NANO_DRIVE}s3 /cfg ufs rw,noauto 2 2" >> etc/fstab
 	echo "tmpfs /boot/zfs tmpfs rw,size=1048576,mode=777 0 0" >> etc/fstab
 	echo "ports:/usr/ports /usr/ports nfs rw,noauto,noatime,bg,soft,intr,nfsv3 0 0" >> etc/fstab
-#	echo "/dev/ad1s1a /scratch ufs rw,noauto,noatime 0 0" >> etc/fstab
+	# echo "/dev/ad1s1a /scratch ufs rw,noauto,noatime 0 0" >> etc/fstab
 	/usr/sbin/pwd_mkdb -d etc etc/master.passwd
-)
+}
 customize_cmd cust_etc_cfg
 
-setup_nanobsd_etc ( ) (
+setup_nanobsd_etc() {
 	pprint 2 "configure nanobsd /etc"
 	(
 	cd ${NANO_WORLDDIR}
@@ -100,8 +102,8 @@ setup_nanobsd_etc ( ) (
 	echo "NANO_DRIVE=${NANO_DRIVE}" > etc/nanobsd.conf
 	mkdir -p cfg
 	)
-)
-last_orders () (
+}
+last_orders() {
 	pprint 2 "last orders"
 	(
 	cd ${NANO_WORLDDIR}
@@ -110,7 +112,7 @@ last_orders () (
 	echo "/dev/iso9660/${BIGLABEL} / cd9660 ro,noatime 0 0" > etc/fstab
 	echo "tmpfs /boot/zfs tmpfs rw,size=1048576,mode=777 0 0" >> etc/fstab
 	echo "ports:/usr/ports /usr/ports nfs rw,noauto,noatime,bg,soft,intr,nfsv3 0 0" >> etc/fstab
-#	echo "/dev/ad1s1a /scratch ufs rw,noauto,noatime 0 0" >> etc/fstab
+	# echo "/dev/ad1s1a /scratch ufs rw,noauto,noatime 0 0" >> etc/fstab
 	rm -f conf/default/etc/remount
 	touch conf/default/etc/.keepme
 	touch conf/default/var/.keepme
@@ -123,4 +125,4 @@ last_orders () (
 	-o label="${BIGLABEL}" -o publisher="RMX" \
 	-o bootimage="i386;_.w/boot/cdboot" -o no-emul-boot _.disk.iso _.w/
 	)
-)
+}

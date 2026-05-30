@@ -32,8 +32,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #pragma once
 /* musl libc does not provide a sys/cdefs.h header */
@@ -102,6 +100,14 @@
 	__attribute__((__format__(__printf0__, fmtarg, firstvararg)))
 #endif
 
+#ifndef __nonstring
+#if __has_attribute(__nonstring__)
+#define	__nonstring	__attribute__((__nonstring__))
+#else
+#define	__nonstring
+#endif
+#endif
+
 #ifndef __predict_true
 #define __predict_true(exp) __builtin_expect((exp), 1)
 #endif
@@ -120,6 +126,12 @@
 #else
 #define __weak_reference(sym, alias) \
 	static int alias() __attribute__((weakref(#sym)));
+#endif
+#endif
+
+#ifndef __WEAK
+#ifdef __ELF__
+#define	__WEAK(sym)	__asm__(".weak " __XSTRING(sym))
 #endif
 #endif
 
@@ -251,6 +263,13 @@
 #define __DEQUALIFY(type, var) ((type)(__uintptr_t)(const volatile void *)(var))
 #endif
 
+#ifndef __nosanitizeaddress
+#if __has_attribute(no_sanitize) && defined(__clang__)
+#define __nosanitizeaddress	__attribute__((no_sanitize("address")))
+#else
+#define __nosanitizeaddress
+#endif
+#endif
 
 /* Expose all declarations when using FreeBSD headers */
 #define	__POSIX_VISIBLE		200809
@@ -258,6 +277,16 @@
 #define	__BSD_VISIBLE		1
 #define	__ISO_C_VISIBLE		2011
 #define	__EXT1_VISIBLE		1
+
+/*
+ * Macro to test if we're using a specific version of gcc or later.
+ */
+#if defined(__GNUC__)
+#define	__GNUC_PREREQ__(ma, mi)	\
+	(__GNUC__ > (ma) || __GNUC__ == (ma) && __GNUC_MINOR__ >= (mi))
+#else
+#define	__GNUC_PREREQ__(ma, mi)	0
+#endif
 
 /* Alignment builtins for better type checking and improved code generation. */
 /* Provide fallback versions for other compilers (GCC/Clang < 10): */

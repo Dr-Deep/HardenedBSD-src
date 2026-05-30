@@ -18,9 +18,12 @@
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/DependenceGraphBuilder.h"
 #include "llvm/Analysis/LoopAnalysisManager.h"
-#include "llvm/IR/Instructions.h"
+#include "llvm/Support/Compiler.h"
 
 namespace llvm {
+class Function;
+class Loop;
+class LoopInfo;
 class DDGNode;
 class DDGEdge;
 using DDGNodeBase = DGNode<DDGNode, DDGEdge>;
@@ -39,7 +42,7 @@ class LPMUpdater;
 ///    nodes. The root node cannot be part of a pi-block.
 /// 4. Root node is a special node that connects to all components such that
 ///    there is always a path from it to any node in the graph.
-class DDGNode : public DDGNodeBase {
+class LLVM_ABI DDGNode : public DDGNodeBase {
 public:
   using InstructionListType = SmallVectorImpl<Instruction *>;
 
@@ -103,7 +106,7 @@ public:
 };
 
 /// Subclass of DDGNode representing single or multi-instruction nodes.
-class SimpleDDGNode : public DDGNode {
+class LLVM_ABI SimpleDDGNode : public DDGNode {
   friend class DDGBuilder;
 
 public:
@@ -165,7 +168,7 @@ private:
 /// {a -> b}, {b -> c, d}, {c -> a}
 /// the cycle a -> b -> c -> a is abstracted into a pi-block "p" as follows:
 /// {p -> d} with "p" containing: {a -> b}, {b -> c}, {c -> a}
-class PiBlockDDGNode : public DDGNode {
+class LLVM_ABI PiBlockDDGNode : public DDGNode {
 public:
   using PiNodeList = SmallVector<DDGNode *, 4>;
 
@@ -301,7 +304,7 @@ protected:
 using DDGInfo = DependenceGraphInfo<DDGNode>;
 
 /// Data Dependency Graph
-class DataDependenceGraph : public DDGBase, public DDGInfo {
+class LLVM_ABI DataDependenceGraph : public DDGBase, public DDGInfo {
   friend AbstractDependenceGraphBuilder<DataDependenceGraph>;
   friend class DDGBuilder;
 
@@ -341,42 +344,43 @@ private:
 ///
 /// For information about time complexity of the build algorithm see the
 /// comments near the declaration of AbstractDependenceGraphBuilder.
-class DDGBuilder : public AbstractDependenceGraphBuilder<DataDependenceGraph> {
+class LLVM_ABI DDGBuilder
+    : public AbstractDependenceGraphBuilder<DataDependenceGraph> {
 public:
   DDGBuilder(DataDependenceGraph &G, DependenceInfo &D,
              const BasicBlockListType &BBs)
       : AbstractDependenceGraphBuilder(G, D, BBs) {}
-  DDGNode &createRootNode() final override {
+  DDGNode &createRootNode() final {
     auto *RN = new RootDDGNode();
     assert(RN && "Failed to allocate memory for DDG root node.");
     Graph.addNode(*RN);
     return *RN;
   }
-  DDGNode &createFineGrainedNode(Instruction &I) final override {
+  DDGNode &createFineGrainedNode(Instruction &I) final {
     auto *SN = new SimpleDDGNode(I);
     assert(SN && "Failed to allocate memory for simple DDG node.");
     Graph.addNode(*SN);
     return *SN;
   }
-  DDGNode &createPiBlock(const NodeListType &L) final override {
+  DDGNode &createPiBlock(const NodeListType &L) final {
     auto *Pi = new PiBlockDDGNode(L);
     assert(Pi && "Failed to allocate memory for pi-block node.");
     Graph.addNode(*Pi);
     return *Pi;
   }
-  DDGEdge &createDefUseEdge(DDGNode &Src, DDGNode &Tgt) final override {
+  DDGEdge &createDefUseEdge(DDGNode &Src, DDGNode &Tgt) final {
     auto *E = new DDGEdge(Tgt, DDGEdge::EdgeKind::RegisterDefUse);
     assert(E && "Failed to allocate memory for edge");
     Graph.connect(Src, Tgt, *E);
     return *E;
   }
-  DDGEdge &createMemoryEdge(DDGNode &Src, DDGNode &Tgt) final override {
+  DDGEdge &createMemoryEdge(DDGNode &Src, DDGNode &Tgt) final {
     auto *E = new DDGEdge(Tgt, DDGEdge::EdgeKind::MemoryDependence);
     assert(E && "Failed to allocate memory for edge");
     Graph.connect(Src, Tgt, *E);
     return *E;
   }
-  DDGEdge &createRootedEdge(DDGNode &Src, DDGNode &Tgt) final override {
+  DDGEdge &createRootedEdge(DDGNode &Src, DDGNode &Tgt) final {
     auto *E = new DDGEdge(Tgt, DDGEdge::EdgeKind::Rooted);
     assert(E && "Failed to allocate memory for edge");
     assert(isa<RootDDGNode>(Src) && "Expected root node");
@@ -384,7 +388,7 @@ public:
     return *E;
   }
 
-  const NodeListType &getNodesInPiBlock(const DDGNode &N) final override {
+  const NodeListType &getNodesInPiBlock(const DDGNode &N) final {
     auto *PiNode = dyn_cast<const PiBlockDDGNode>(&N);
     assert(PiNode && "Expected a pi-block node.");
     return PiNode->getNodes();
@@ -392,18 +396,17 @@ public:
 
   /// Return true if the two nodes \pSrc and \pTgt are both simple nodes and
   /// the consecutive instructions after merging belong to the same basic block.
-  bool areNodesMergeable(const DDGNode &Src,
-                         const DDGNode &Tgt) const final override;
-  void mergeNodes(DDGNode &Src, DDGNode &Tgt) final override;
-  bool shouldSimplify() const final override;
-  bool shouldCreatePiBlocks() const final override;
+  bool areNodesMergeable(const DDGNode &Src, const DDGNode &Tgt) const final;
+  void mergeNodes(DDGNode &Src, DDGNode &Tgt) final;
+  bool shouldSimplify() const final;
+  bool shouldCreatePiBlocks() const final;
 };
 
-raw_ostream &operator<<(raw_ostream &OS, const DDGNode &N);
-raw_ostream &operator<<(raw_ostream &OS, const DDGNode::NodeKind K);
-raw_ostream &operator<<(raw_ostream &OS, const DDGEdge &E);
-raw_ostream &operator<<(raw_ostream &OS, const DDGEdge::EdgeKind K);
-raw_ostream &operator<<(raw_ostream &OS, const DataDependenceGraph &G);
+LLVM_ABI raw_ostream &operator<<(raw_ostream &OS, const DDGNode &N);
+LLVM_ABI raw_ostream &operator<<(raw_ostream &OS, const DDGNode::NodeKind K);
+LLVM_ABI raw_ostream &operator<<(raw_ostream &OS, const DDGEdge &E);
+LLVM_ABI raw_ostream &operator<<(raw_ostream &OS, const DDGEdge::EdgeKind K);
+LLVM_ABI raw_ostream &operator<<(raw_ostream &OS, const DataDependenceGraph &G);
 
 //===--------------------------------------------------------------------===//
 // DDG Analysis Passes
@@ -413,19 +416,22 @@ raw_ostream &operator<<(raw_ostream &OS, const DataDependenceGraph &G);
 class DDGAnalysis : public AnalysisInfoMixin<DDGAnalysis> {
 public:
   using Result = std::unique_ptr<DataDependenceGraph>;
-  Result run(Loop &L, LoopAnalysisManager &AM, LoopStandardAnalysisResults &AR);
+  LLVM_ABI Result run(Loop &L, LoopAnalysisManager &AM,
+                      LoopStandardAnalysisResults &AR);
 
 private:
   friend AnalysisInfoMixin<DDGAnalysis>;
-  static AnalysisKey Key;
+  LLVM_ABI static AnalysisKey Key;
 };
 
 /// Textual printer pass for the DDG of a loop.
 class DDGAnalysisPrinterPass : public PassInfoMixin<DDGAnalysisPrinterPass> {
 public:
   explicit DDGAnalysisPrinterPass(raw_ostream &OS) : OS(OS) {}
-  PreservedAnalyses run(Loop &L, LoopAnalysisManager &AM,
-                        LoopStandardAnalysisResults &AR, LPMUpdater &U);
+  LLVM_ABI PreservedAnalyses run(Loop &L, LoopAnalysisManager &AM,
+                                 LoopStandardAnalysisResults &AR,
+                                 LPMUpdater &U);
+  static bool isRequired() { return true; }
 
 private:
   raw_ostream &OS;
@@ -451,7 +457,7 @@ bool DependenceGraphInfo<NodeType>::getDependencies(
   for (auto *SrcI : SrcIList)
     for (auto *DstI : DstIList)
       if (auto Dep =
-              const_cast<DependenceInfo *>(&DI)->depends(SrcI, DstI, true))
+              const_cast<DependenceInfo *>(&DI)->depends(SrcI, DstI))
         Deps.push_back(std::move(Dep));
 
   return !Deps.empty();
@@ -465,16 +471,16 @@ DependenceGraphInfo<NodeType>::getDependenceString(const NodeType &Src,
   raw_string_ostream OS(Str);
   DependenceList Deps;
   if (!getDependencies(Src, Dst, Deps))
-    return OS.str();
+    return Str;
   interleaveComma(Deps, OS, [&](const std::unique_ptr<Dependence> &D) {
     D->dump(OS);
     // Remove the extra new-line character printed by the dump
     // method
-    if (OS.str().back() == '\n')
-      OS.str().pop_back();
+    if (Str.back() == '\n')
+      Str.pop_back();
   });
 
-  return OS.str();
+  return Str;
 }
 
 //===--------------------------------------------------------------------===//

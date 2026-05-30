@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 1999 Cameron Grant <cg@freebsd.org>
  * All rights reserved.
@@ -32,15 +32,14 @@
 
 #include <dev/sound/pcm/sound.h>
 #include <dev/sound/pcm/ac97.h>
-#include <dev/sound/pcm/ac97_patch.h>
 
 #include <dev/pci/pcivar.h>
 
 #include "mixer_if.h"
 
-SND_DECLARE_FILE("$FreeBSD$");
-
 static MALLOC_DEFINE(M_AC97, "ac97", "ac97 codec");
+
+typedef void (*ac97_patch)(struct ac97_info *);
 
 struct ac97mixtable_entry {
 	int reg;		/* register index		*/
@@ -66,7 +65,7 @@ struct ac97_info {
 	u_int32_t flags;
 	struct ac97mixtable_entry mix[AC97_MIXER_SIZE];
 	char name[16];
-	struct mtx *lock;
+	struct mtx lock;
 };
 
 struct ac97_vendorid {
@@ -126,14 +125,15 @@ static const struct ac97_vendorid ac97vendorid[] = {
 	{ 0x57454300, "Winbond" },
 	{ 0x574d4c00, "Wolfson" },
 	{ 0x594d4800, "Yamaha" },
-	/* 
-	 * XXX This is a fluke, really! The real vendor
-	 * should be SigmaTel, not this! This should be
-	 * removed someday!
-	 */
-	{ 0x01408300, "Creative" },
+	{ 0x01408300, "SigmaTel" },
 	{ 0x00000000, NULL }
 };
+
+static void ad1886_patch(struct ac97_info *);
+static void ad198x_patch(struct ac97_info *);
+static void ad1981b_patch(struct ac97_info *);
+static void cmi9739_patch(struct ac97_info *);
+static void alc655_patch(struct ac97_info *);
 
 static struct ac97_codecid ac97codecid[] = {
 	{ 0x41445303, 0x00, 0, "AD1819",	0 },
@@ -233,12 +233,7 @@ static struct ac97_codecid ac97codecid[] = {
 	{ 0x594d4800, 0x00, 0, "YMF743",	0 },
 	{ 0x594d4802, 0x00, 0, "YMF752",	0 },
 	{ 0x594d4803, 0x00, 0, "YMF753",	0 },
-	/* 
-	 * XXX This is a fluke, really! The real codec
-	 * should be STAC9704, not this! This should be
-	 * removed someday!
-	 */
-	{ 0x01408384, 0x00, 0, "EV1938",	0 },
+	{ 0x01408384, 0x00, 0, "STAC9704",	0 },
 	{ 0, 0, 0, NULL, 0 }
 };
 
@@ -317,12 +312,6 @@ ac97_rdcd(struct ac97_info *codec, int reg)
 		i[1] = AC97_READ(codec->methods, codec->devinfo, reg);
 		while (i[0] != i[1] && j)
 			i[j-- & 1] = AC97_READ(codec->methods, codec->devinfo, reg);
-#if 0
-		if (j < 100) {
-			device_printf(codec->dev, "%s(): Inconsistent register value at"
-					" 0x%08x (retry: %d)\n", __func__, reg, 100 - j);
-		}
-#endif
 		return i[!(j & 1)];
 	}
 	return AC97_READ(codec->methods, codec->devinfo, reg);
@@ -365,7 +354,7 @@ ac97_setrate(struct ac97_info *codec, int which, int rate)
 		return -1;
 	}
 
-	snd_mtxlock(codec->lock);
+	mtx_lock(&codec->lock);
 	if (rate != 0) {
 		v = rate;
 		if (codec->extstat & AC97_EXTCAP_DRA)
@@ -375,7 +364,7 @@ ac97_setrate(struct ac97_info *codec, int which, int rate)
 	v = ac97_rdcd(codec, which);
 	if (codec->extstat & AC97_EXTCAP_DRA)
 		v <<= 1;
-	snd_mtxunlock(codec->lock);
+	mtx_unlock(&codec->lock);
 	return v;
 }
 
@@ -388,10 +377,10 @@ ac97_setextmode(struct ac97_info *codec, u_int16_t mode)
 			      mode);
 		return -1;
 	}
-	snd_mtxlock(codec->lock);
+	mtx_lock(&codec->lock);
 	ac97_wrcd(codec, AC97_REGEXT_STAT, mode);
 	codec->extstat = ac97_rdcd(codec, AC97_REGEXT_STAT) & AC97_EXTCAPS;
-	snd_mtxunlock(codec->lock);
+	mtx_unlock(&codec->lock);
 	return (mode == codec->extstat)? 0 : -1;
 }
 
@@ -427,9 +416,9 @@ ac97_setrecsrc(struct ac97_info *codec, int channel)
 	if (e->recidx > 0) {
 		int val = e->recidx - 1;
 		val |= val << 8;
-		snd_mtxlock(codec->lock);
+		mtx_lock(&codec->lock);
 		ac97_wrcd(codec, AC97_REG_RECSEL, val);
-		snd_mtxunlock(codec->lock);
+		mtx_unlock(&codec->lock);
 		return 0;
 	} else
 		return -1;
@@ -498,18 +487,15 @@ ac97_setmixer(struct ac97_info *codec, unsigned channel, unsigned left, unsigned
 		/*
 		 * If the mask bit is set, do not alter the other bits.
 		 */
-		snd_mtxlock(codec->lock);
+		mtx_lock(&codec->lock);
 		if (e->mask) {
 			int cur = ac97_rdcd(codec, reg);
 			val |= cur & ~(mask);
 		}
 		ac97_wrcd(codec, reg, val);
-		snd_mtxunlock(codec->lock);
+		mtx_unlock(&codec->lock);
 		return left | (right << 8);
 	} else {
-#if 0
-		printf("ac97_setmixer: reg=%d, bits=%d, enable=%d\n", e->reg, e->bits, e->enable);
-#endif
 		return -1;
 	}
 }
@@ -607,11 +593,11 @@ ac97_initmixer(struct ac97_info *codec)
 	u_int32_t id;
 	int reg;
 
-	snd_mtxlock(codec->lock);
+	mtx_lock(&codec->lock);
 	codec->count = AC97_INIT(codec->methods, codec->devinfo);
 	if (codec->count == 0) {
 		device_printf(codec->dev, "ac97 codec init failed\n");
-		snd_mtxunlock(codec->lock);
+		mtx_unlock(&codec->lock);
 		return ENODEV;
 	}
 
@@ -637,12 +623,12 @@ ac97_initmixer(struct ac97_info *codec)
 	id = (ac97_rdcd(codec, AC97_REG_ID1) << 16) | ac97_rdcd(codec, AC97_REG_ID2);
 	if (id == 0 || id == 0xffffffff) {
 		device_printf(codec->dev, "ac97 codec invalid or not present (id == %x)\n", id);
-		snd_mtxunlock(codec->lock);
+		mtx_unlock(&codec->lock);
 		return ENODEV;
 	}
 
 	pdev = codec->dev;
-	while (strcmp(device_get_name(device_get_parent(pdev)), "pci") != 0) {
+	while (!is_pci_device(pdev)) {
 		/* find the top-level PCI device handler */
 		pdev = device_get_parent(pdev);
 	}
@@ -732,10 +718,6 @@ ac97_initmixer(struct ac97_info *codec)
 				for (j = 0; k >> j; j++)
 					;
 				if (j != 0) {
-#if 0
-					device_printf(codec->dev, "%2d: [ac97_rdcd() = %d] [Testbit = %d] %d -> %d\n",
-						i, k, bit, codec->mix[i].bits, j);
-#endif
 					codec->mix[i].enable = 1;
 					codec->mix[i].bits = j;
 				} else if (reg == AC97_MIX_BEEP) {
@@ -751,9 +733,6 @@ ac97_initmixer(struct ac97_info *codec)
 				codec->mix[i].enable = 0;
 			ac97_wrcd(codec, reg, old);
 		}
-#if 0
-		printf("mixch %d, en=%d, b=%d\n", i, codec->mix[i].enable, codec->mix[i].bits);
-#endif
 	}
 
 	device_printf(codec->dev, "<%s>\n",
@@ -791,18 +770,18 @@ ac97_initmixer(struct ac97_info *codec)
 	}
 	if (bootverbose)
 		device_printf(codec->dev, "ac97 codec dac ready count: %d\n", i);
-	snd_mtxunlock(codec->lock);
+	mtx_unlock(&codec->lock);
 	return 0;
 }
 
 static unsigned
 ac97_reinitmixer(struct ac97_info *codec)
 {
-	snd_mtxlock(codec->lock);
+	mtx_lock(&codec->lock);
 	codec->count = AC97_INIT(codec->methods, codec->devinfo);
 	if (codec->count == 0) {
 		device_printf(codec->dev, "ac97 codec init failed\n");
-		snd_mtxunlock(codec->lock);
+		mtx_unlock(&codec->lock);
 		return ENODEV;
 	}
 
@@ -822,7 +801,7 @@ ac97_reinitmixer(struct ac97_info *codec)
 
 	if ((ac97_rdcd(codec, AC97_REG_POWER) & 2) == 0)
 		device_printf(codec->dev, "ac97 codec reports dac not ready\n");
-	snd_mtxunlock(codec->lock);
+	mtx_unlock(&codec->lock);
 	return 0;
 }
 
@@ -835,7 +814,7 @@ ac97_create(device_t dev, void *devinfo, kobj_class_t cls)
 	codec = malloc(sizeof(*codec), M_AC97, M_WAITOK | M_ZERO);
 	snprintf(codec->name, sizeof(codec->name), "%s:ac97",
 	    device_get_nameunit(dev));
-	codec->lock = snd_mtxcreate(codec->name, "ac97 codec");
+	mtx_init(&codec->lock, codec->name, "ac97 codec", MTX_DEF);
 	codec->methods = kobj_create(cls, M_AC97, M_WAITOK | M_ZERO);
 	codec->dev = dev;
 	codec->devinfo = devinfo;
@@ -855,10 +834,9 @@ ac97_create(device_t dev, void *devinfo, kobj_class_t cls)
 void
 ac97_destroy(struct ac97_info *codec)
 {
-	snd_mtxlock(codec->lock);
-	if (codec->methods != NULL)
-		kobj_delete(codec->methods, M_AC97);
-	snd_mtxfree(codec->lock);
+	mtx_lock(&codec->lock);
+	kobj_delete(codec->methods, M_AC97);
+	mtx_destroy(&codec->lock);
 	free(codec, M_AC97);
 }
 
@@ -874,6 +852,93 @@ ac97_getflags(struct ac97_info *codec)
 	return codec->flags;
 }
 
+static void
+ad1886_patch(struct ac97_info *codec)
+{
+#define AC97_AD_JACK_SPDIF 0x72
+	/*
+	 *    Presario700 workaround
+	 *     for Jack Sense/SPDIF Register misetting causing
+	 *    no audible output
+	 *    by Santiago Nullo 04/05/2002
+	 */
+	ac97_wrcd(codec, AC97_AD_JACK_SPDIF, 0x0010);
+}
+
+static void
+ad198x_patch(struct ac97_info *codec)
+{
+	switch (ac97_getsubvendor(codec)) {
+	case 0x11931043:	/* Not for ASUS A9T (probably else too). */
+		break;
+	default:
+		ac97_wrcd(codec, 0x76, ac97_rdcd(codec, 0x76) | 0x0420);
+		break;
+	}
+}
+
+static void
+ad1981b_patch(struct ac97_info *codec)
+{
+	/*
+	 * Enable headphone jack sensing.
+	 */
+	switch (ac97_getsubvendor(codec)) {
+	case 0x02d91014:	/* IBM Thinkcentre */
+	case 0x099c103c:	/* HP nx6110 */
+		ac97_wrcd(codec, AC97_AD_JACK_SPDIF,
+		    ac97_rdcd(codec, AC97_AD_JACK_SPDIF) | 0x0800);
+		break;
+	default:
+		break;
+	}
+}
+
+static void
+cmi9739_patch(struct ac97_info *codec)
+{
+	/*
+	 * Few laptops need extra register initialization
+	 * to power up the internal speakers.
+	 */
+	switch (ac97_getsubvendor(codec)) {
+	case 0x18431043:	/* ASUS W1000N */
+		ac97_wrcd(codec, AC97_REG_POWER, 0x000f);
+		ac97_wrcd(codec, AC97_MIXEXT_CLFE, 0x0000);
+		ac97_wrcd(codec, 0x64, 0x7110);
+		break;
+	default:
+		break;
+	}
+}
+
+static void
+alc655_patch(struct ac97_info *codec)
+{
+	/*
+	 * MSI (Micro-Star International) specific EAPD quirk.
+	 */
+	switch (ac97_getsubvendor(codec)) {
+	case 0x00611462:	/* MSI S250 */
+	case 0x01311462:	/* MSI S270 */
+	case 0x01611462:	/* LG K1 Express */
+	case 0x03511462:	/* MSI L725 */
+		ac97_wrcd(codec, 0x7a, ac97_rdcd(codec, 0x7a) & 0xfffd);
+		break;
+	case 0x10ca1734:
+		/*
+		 * Amilo Pro V2055 with ALC655 has phone out by default
+		 * disabled (surround on), leaving us only with internal
+		 * speakers. This should really go to mixer. We write the
+		 * Data Flow Control reg.
+		 */
+		ac97_wrcd(codec, 0x6a, ac97_rdcd(codec, 0x6a) | 0x0001);
+		break;
+	default:
+		break;
+	}
+}
+
 /* -------------------------------------------------------------------- */
 
 static int
@@ -884,21 +949,21 @@ sysctl_hw_snd_ac97_eapd(SYSCTL_HANDLER_ARGS)
 	u_int16_t val;
 
 	codec = oidp->oid_arg1;
-	if (codec == NULL || codec->id == 0 || codec->lock == NULL)
+	if (codec == NULL || codec->id == 0)
 		return EINVAL;
-	snd_mtxlock(codec->lock);
+	mtx_lock(&codec->lock);
 	val = ac97_rdcd(codec, AC97_REG_POWER);
 	inv = (codec->flags & AC97_F_EAPD_INV) ? 0 : 1;
 	ea = (val >> 15) ^ inv;
-	snd_mtxunlock(codec->lock);
+	mtx_unlock(&codec->lock);
 	err = sysctl_handle_int(oidp, &ea, 0, req);
 	if (err == 0 && req->newptr != NULL) {
 		if (ea != 0 && ea != 1)
 			return EINVAL;
 		if (ea != ((val >> 15) ^ inv)) {
-			snd_mtxlock(codec->lock);
+			mtx_lock(&codec->lock);
 			ac97_wrcd(codec, AC97_REG_POWER, val ^ 0x8000);
-			snd_mtxunlock(codec->lock);
+			mtx_unlock(&codec->lock);
 		}
 	}
 	return err;
@@ -911,12 +976,12 @@ ac97_init_sysctl(struct ac97_info *codec)
 
 	if (codec == NULL || codec->dev == NULL)
 		return;
-	snd_mtxlock(codec->lock);
+	mtx_lock(&codec->lock);
 	orig = ac97_rdcd(codec, AC97_REG_POWER);
 	ac97_wrcd(codec, AC97_REG_POWER, orig ^ 0x8000);
 	val = ac97_rdcd(codec, AC97_REG_POWER);
 	ac97_wrcd(codec, AC97_REG_POWER, orig);
-	snd_mtxunlock(codec->lock);
+	mtx_unlock(&codec->lock);
 	if ((val & 0x8000) == (orig & 0x8000))
 		return;
 	SYSCTL_ADD_PROC(device_get_sysctl_ctx(codec->dev),
@@ -1005,13 +1070,6 @@ ac97mix_init(struct snd_mixer *m)
 
 	if (pcm_getflags(codec->dev) & SD_F_SOFTPCMVOL)
 		ac97_wrcd(codec, AC97_MIX_PCM, 0);
-#if 0
-	/* XXX For the sake of debugging purposes */
-	mix_setparentchild(m, SOUND_MIXER_VOLUME,
-	    SOUND_MASK_PCM | SOUND_MASK_CD);
-	mix_setrealdev(m, SOUND_MIXER_VOLUME, SOUND_MIXER_NONE);
-	ac97_wrcd(codec, AC97_MIX_MASTER, 0);
-#endif
 
 	mask = 0;
 	for (i = 0; i < AC97_MIXER_SIZE; i++)
@@ -1035,10 +1093,6 @@ ac97mix_uninit(struct snd_mixer *m)
 
 	if (codec == NULL)
 		return -1;
-	/*
-	if (ac97_uninitmixer(codec))
-		return -1;
-	*/
 	ac97_destroy(codec);
 	return 0;
 }

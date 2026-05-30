@@ -32,9 +32,6 @@
  * "ja_JP.eucJP". Other encodings are not tested.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <errno.h>
 #include <limits.h>
 #include <locale.h>
@@ -43,6 +40,18 @@ __FBSDID("$FreeBSD$");
 #include <string.h>
 
 #include <atf-c.h>
+
+ATF_TC_WITHOUT_HEAD(euccs1_test);
+ATF_TC_BODY(euccs1_test, tc)
+{
+	wchar_t wc = 0x8e000000;
+	char buf[MB_LEN_MAX];
+
+	ATF_REQUIRE(strcmp(setlocale(LC_CTYPE, "zh_CN.eucCN"),
+	    "zh_CN.eucCN") == 0);
+
+	ATF_REQUIRE(wctomb(&buf[0], wc) == 4);
+}
 
 ATF_TC_WITHOUT_HEAD(wctomb_test);
 ATF_TC_BODY(wctomb_test, tc)
@@ -107,6 +116,7 @@ ATF_TC_BODY(wctomb_test, tc)
 ATF_TP_ADD_TCS(tp)
 {
 
+	ATF_TP_ADD_TC(tp, euccs1_test);
 	ATF_TP_ADD_TC(tp, wctomb_test);
 
 	return (atf_no_error());

@@ -1,7 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * Copyright (c) 2015-2021 Amazon.com, Inc. or its affiliates.
+ * Copyright (c) 2015-2024 Amazon.com, Inc. or its affiliates.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,8 +27,6 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * $FreeBSD$
- *
  */
 
 #ifndef ENA_RSS_H
@@ -37,12 +35,9 @@
 #include "opt_rss.h"
 
 #include <sys/types.h>
-
-#ifdef RSS
-#include <net/rss_config.h>
-#endif
-
 #include "ena.h"
+
+#include <net/rss_config.h>
 
 #define ENA_RX_RSS_MSG_RECORD_SZ 8
 

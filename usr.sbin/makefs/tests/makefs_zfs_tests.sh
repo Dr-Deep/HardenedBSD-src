@@ -1,7 +1,7 @@
 #-
-# SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+# SPDX-License-Identifier: BSD-2-Clause
 #
-# Copyright (c) 2022 The FreeBSD Foundation
+# Copyright (c) 2022-2023 The FreeBSD Foundation
 #
 # This software was developed by Mark Johnston under sponsorship from
 # the FreeBSD Foundation.
@@ -28,7 +28,7 @@
 # SUCH DAMAGE.
 #
 
-MAKEFS="makefs -t zfs -o nowarn=true"
+MAKEFS="makefs -t zfs -o verify-txgs=true -o poolguid=$$"
 ZFS_POOL_NAME="makefstest$$"
 TEST_ZFS_POOL_NAME="$TMPDIR/poolname"
 
@@ -41,21 +41,26 @@ common_cleanup()
 	# Try to force a TXG, this can help catch bugs by triggering a panic.
 	sync
 
-	pool=$(cat $TEST_ZFS_POOL_NAME)
-	if zpool list "$pool" >/dev/null; then
-		zpool destroy "$pool"
+	if [ -f "$TEST_ZFS_POOL_NAME" ]; then
+		pool=$(cat $TEST_ZFS_POOL_NAME)
+		if zpool list "$pool" >/dev/null; then
+			zpool destroy "$pool"
+		fi
 	fi
 
-	md=$(cat $TEST_MD_DEVICE_FILE)
-	if [ -c /dev/"$md" ]; then
-		mdconfig -d -u "$md"
+	if [ -f "$TEST_MD_DEVICE_FILE" ]; then
+		md=$(cat $TEST_MD_DEVICE_FILE)
+		if [ -c /dev/"$md" ]; then
+			mdconfig -o force -d -u "$md"
+		fi
 	fi
 }
 
 import_image()
 {
-	atf_check -e empty -o save:$TEST_MD_DEVICE_FILE -s exit:0 \
-	    mdconfig -a -f $TEST_IMAGE
+	atf_check -o save:$TEST_MD_DEVICE_FILE mdconfig -a -f $TEST_IMAGE
+	atf_check -o ignore \
+	    zdb -e -p /dev/$(cat $TEST_MD_DEVICE_FILE) -mmm -ddddd $ZFS_POOL_NAME
 	atf_check zpool import -R $TEST_MOUNT_DIR $ZFS_POOL_NAME
 	echo "$ZFS_POOL_NAME" > $TEST_ZFS_POOL_NAME
 }
@@ -122,6 +127,101 @@ basic_cleanup()
 	common_cleanup
 }
 
+#
+# Try configuring various compression algorithms.
+#
+atf_test_case compression cleanup
+compression_head()
+{
+	# Double the default timeout to make it pass on emulated architectures
+	# on ci.freebsd.org
+	atf_set "timeout" 600
+}
+compression_body()
+{
+	create_test_inputs
+
+	cd $TEST_INPUTS_DIR
+	mkdir dir
+	mkdir dir2
+	cd -
+
+	for alg in off on lzjb gzip gzip-1 gzip-2 gzip-3 gzip-4 \
+	    gzip-5 gzip-6 gzip-7 gzip-8 gzip-9 zle lz4 zstd; do
+		atf_check $MAKEFS -s 1g -o rootpath=/ \
+		    -o poolname=$ZFS_POOL_NAME \
+		    -o fs=${ZFS_POOL_NAME}\;compression=$alg \
+		    -o fs=${ZFS_POOL_NAME}/dir \
+		    -o fs=${ZFS_POOL_NAME}/dir2\;compression=off \
+		    $TEST_IMAGE $TEST_INPUTS_DIR
+
+		import_image
+
+		check_image_contents
+
+		if [ $alg = gzip-6 ]; then
+			# ZFS reports gzip-6 as just gzip since it uses
+			# a default compression level of 6.
+			alg=gzip
+		fi
+		# The "dir" dataset's compression algorithm should be
+		# inherited from the root dataset.
+		atf_check -o inline:$alg\\n \
+		    zfs get -H -o value compression ${ZFS_POOL_NAME}
+		atf_check -o inline:$alg\\n \
+		    zfs get -H -o value compression ${ZFS_POOL_NAME}/dir
+		atf_check -o inline:off\\n \
+		    zfs get -H -o value compression ${ZFS_POOL_NAME}/dir2
+
+		atf_check -e ignore dd if=/dev/random \
+		    of=${TEST_MOUNT_DIR}/dir/random bs=1M count=10
+		atf_check -e ignore dd if=/dev/zero \
+		    of=${TEST_MOUNT_DIR}/dir/zero bs=1M count=10
+		atf_check -e ignore dd if=/dev/zero \
+		    of=${TEST_MOUNT_DIR}/dir2/zero bs=1M count=10
+
+		# Export and reimport to ensure that everything is
+		# flushed to disk.
+		atf_check zpool export ${ZFS_POOL_NAME}
+		atf_check -o ignore \
+		    zdb -e -p /dev/$(cat $TEST_MD_DEVICE_FILE) -mmm -ddddd \
+		    $ZFS_POOL_NAME
+		atf_check zpool import -R $TEST_MOUNT_DIR $ZFS_POOL_NAME
+
+		if [ $alg = off ]; then
+			# If compression is off, the files should be the
+			# same size as the input.
+			atf_check -o match:"^11[[:space:]]+${TEST_MOUNT_DIR}/dir/random" \
+			    du -m ${TEST_MOUNT_DIR}/dir/random
+			atf_check -o match:"^11[[:space:]]+${TEST_MOUNT_DIR}/dir/zero" \
+			    du -m ${TEST_MOUNT_DIR}/dir/zero
+			atf_check -o match:"^11[[:space:]]+${TEST_MOUNT_DIR}/dir2/zero" \
+			    du -m ${TEST_MOUNT_DIR}/dir2/zero
+		else
+			# If compression is on, the dir/zero file ought
+			# to be smaller.
+			atf_check -o match:"^1[[:space:]]+${TEST_MOUNT_DIR}/dir/zero" \
+			    du -m ${TEST_MOUNT_DIR}/dir/zero
+			atf_check -o match:"^11[[:space:]]+${TEST_MOUNT_DIR}/dir/random" \
+			    du -m ${TEST_MOUNT_DIR}/dir/random
+			atf_check -o match:"^11[[:space:]]+${TEST_MOUNT_DIR}/dir2/zero" \
+			    du -m ${TEST_MOUNT_DIR}/dir2/zero
+		fi
+
+		atf_check zpool destroy ${ZFS_POOL_NAME}
+		atf_check rm -f ${TEST_ZFS_POOL_NAME}
+		atf_check mdconfig -o force -d -u $(cat ${TEST_MD_DEVICE_FILE})
+		atf_check rm -f ${TEST_MD_DEVICE_FILE}
+	done
+}
+compression_cleanup()
+{
+	common_cleanup
+}
+
+#
+# Try destroying a dataset that was created by makefs.
+#
 atf_test_case dataset_removal cleanup
 dataset_removal_body()
 {
@@ -144,6 +244,27 @@ dataset_removal_body()
 dataset_removal_cleanup()
 {
 	common_cleanup
+}
+
+#
+# Make sure that we can handle some special file types.  Anything other than
+# regular files, symlinks and directories are ignored.
+#
+atf_test_case devfs cleanup
+devfs_body()
+{
+	atf_check mkdir dev
+	atf_check mount -t devfs none ./dev
+
+	atf_check -e match:"skipping unhandled" $MAKEFS -s 1g -o rootpath=/ \
+	    -o poolname=$ZFS_POOL_NAME $TEST_IMAGE ./dev
+
+	import_image
+}
+devfs_cleanup()
+{
+	common_cleanup
+	umount -f ./dev
 }
 
 #
@@ -185,6 +306,46 @@ empty_fs_body()
 	check_image_contents
 }
 empty_fs_cleanup()
+{
+	common_cleanup
+}
+
+atf_test_case file_extend cleanup
+file_extend_head()
+{
+	# Double the default timeout to make it pass on emulated architectures
+	# on ci.freebsd.org
+	atf_set "timeout" 600
+}
+file_extend_body()
+{
+	local i start
+
+	create_test_dirs
+
+	# Create a file slightly longer than the maximum block size.
+	start=132
+	dd if=/dev/random of=${TEST_INPUTS_DIR}/foo bs=1k count=$start
+	md5 -q ${TEST_INPUTS_DIR}/foo > foo.md5
+
+	atf_check $MAKEFS -s 10g -o rootpath=/ -o poolname=$ZFS_POOL_NAME \
+	    $TEST_IMAGE $TEST_INPUTS_DIR
+
+	import_image
+
+	check_image_contents
+
+	i=0
+	while [ $i -lt 1000 ]; do
+		dd if=/dev/random of=${TEST_MOUNT_DIR}/foo bs=1k count=1 \
+		    seek=$(($i + $start)) conv=notrunc
+		# Make sure that the first $start blocks are unmodified.
+		dd if=${TEST_MOUNT_DIR}/foo bs=1k count=$start of=foo.copy
+		atf_check -o file:foo.md5 md5 -q foo.copy
+		i=$(($i + 1))
+	done
+}
+file_extend_cleanup()
 {
 	common_cleanup
 }
@@ -251,20 +412,16 @@ hard_links_body()
 	stat -f '%i' ${TEST_MOUNT_DIR}/1 > ./ino
 	stat -f '%l' ${TEST_MOUNT_DIR}/1 > ./nlink
 	for f in 1 2 dir/1; do
-		atf_check -o file:./nlink -e empty -s exit:0 \
-		    stat -f '%l' ${TEST_MOUNT_DIR}/${f}
-		atf_check -o file:./ino -e empty -s exit:0 \
-		    stat -f '%i' ${TEST_MOUNT_DIR}/${f}
+		atf_check -o file:./nlink stat -f '%l' ${TEST_MOUNT_DIR}/${f}
+		atf_check -o file:./ino stat -f '%i' ${TEST_MOUNT_DIR}/${f}
 		atf_check cmp -s ${TEST_INPUTS_DIR}/1 ${TEST_MOUNT_DIR}/${f}
 	done
 
 	stat -f '%i' ${TEST_MOUNT_DIR}/dir/a > ./ino
 	stat -f '%l' ${TEST_MOUNT_DIR}/dir/a > ./nlink
 	for f in dir/a dir/b a; do
-		atf_check -o file:./nlink -e empty -s exit:0 \
-		    stat -f '%l' ${TEST_MOUNT_DIR}/${f}
-		atf_check -o file:./ino -e empty -s exit:0 \
-		    stat -f '%i' ${TEST_MOUNT_DIR}/${f}
+		atf_check -o file:./nlink stat -f '%l' ${TEST_MOUNT_DIR}/${f}
+		atf_check -o file:./ino stat -f '%i' ${TEST_MOUNT_DIR}/${f}
 		atf_check cmp -s ${TEST_INPUTS_DIR}/dir/a ${TEST_MOUNT_DIR}/${f}
 	done
 }
@@ -373,19 +530,19 @@ multi_dataset_1_body()
 	check_image_contents
 
 	# Make sure that we have three datasets with the expected mount points.
-	atf_check -o inline:${ZFS_POOL_NAME}\\n -e empty -s exit:0 \
+	atf_check -o inline:${ZFS_POOL_NAME}\\n \
 	    zfs list -H -o name ${ZFS_POOL_NAME}
-	atf_check -o inline:${TEST_MOUNT_DIR}\\n -e empty -s exit:0 \
+	atf_check -o inline:${TEST_MOUNT_DIR}\\n \
 	    zfs list -H -o mountpoint ${ZFS_POOL_NAME}
 
-	atf_check -o inline:${ZFS_POOL_NAME}/dir1\\n -e empty -s exit:0 \
+	atf_check -o inline:${ZFS_POOL_NAME}/dir1\\n \
 	    zfs list -H -o name ${ZFS_POOL_NAME}/dir1
-	atf_check -o inline:${TEST_MOUNT_DIR}/dir1\\n -e empty -s exit:0 \
+	atf_check -o inline:${TEST_MOUNT_DIR}/dir1\\n \
 	    zfs list -H -o mountpoint ${ZFS_POOL_NAME}/dir1
 
-	atf_check -o inline:${ZFS_POOL_NAME}/dir2\\n -e empty -s exit:0 \
+	atf_check -o inline:${ZFS_POOL_NAME}/dir2\\n \
 	    zfs list -H -o name ${ZFS_POOL_NAME}/dir2
-	atf_check -o inline:${TEST_MOUNT_DIR}/dir2\\n -e empty -s exit:0 \
+	atf_check -o inline:${TEST_MOUNT_DIR}/dir2\\n \
 	    zfs list -H -o mountpoint ${ZFS_POOL_NAME}/dir2
 }
 multi_dataset_1_cleanup()
@@ -445,7 +602,7 @@ multi_dataset_3_body()
 
 	import_image
 
-	atf_check -o inline:${TEST_MOUNT_DIR}/dir2\\n -e empty -s exit:0 \
+	atf_check -o inline:${TEST_MOUNT_DIR}/dir2\\n \
 	    zfs list -H -o mountpoint ${ZFS_POOL_NAME}/dir2
 
 	# Mounting dir2 should have created a directory called dir2.  Go
@@ -479,14 +636,14 @@ multi_dataset_4_body()
 
 	import_image
 
-	atf_check -o inline:none\\n -e empty -s exit:0 \
+	atf_check -o inline:none\\n \
 	    zfs list -H -o mountpoint ${ZFS_POOL_NAME}/dir1
 
 	check_image_contents
 
 	atf_check zfs set mountpoint=/dir1 ${ZFS_POOL_NAME}/dir1
 	atf_check zfs mount ${ZFS_POOL_NAME}/dir1
-	atf_check -o inline:${TEST_MOUNT_DIR}/dir1\\n -e empty -s exit:0 \
+	atf_check -o inline:${TEST_MOUNT_DIR}/dir1\\n \
 	    zfs list -H -o mountpoint ${ZFS_POOL_NAME}/dir1
 
 	# dir1/a should be part of the root dataset, not dir1.
@@ -676,16 +833,194 @@ root_props_body()
 
 	check_image_contents
 
-	atf_check -o inline:off\\n -e empty -s exit:0 \
-	    zfs get -H -o value atime $ZFS_POOL_NAME
-	atf_check -o inline:local\\n -e empty -s exit:0 \
-	    zfs get -H -o source atime $ZFS_POOL_NAME
-	atf_check -o inline:off\\n -e empty -s exit:0 \
-	    zfs get -H -o value setuid $ZFS_POOL_NAME
-	atf_check -o inline:local\\n -e empty -s exit:0 \
-	    zfs get -H -o source setuid $ZFS_POOL_NAME
+	atf_check -o inline:off\\n zfs get -H -o value atime $ZFS_POOL_NAME
+	atf_check -o inline:local\\n zfs get -H -o source atime $ZFS_POOL_NAME
+	atf_check -o inline:off\\n zfs get -H -o value setuid $ZFS_POOL_NAME
+	atf_check -o inline:local\\n zfs get -H -o source setuid $ZFS_POOL_NAME
 }
 root_props_cleanup()
+{
+	common_cleanup
+}
+
+#
+# Verify that usedds and usedchild props are set properly.
+#
+atf_test_case used_space_props cleanup
+used_space_props_body()
+{
+	local used usedds usedchild
+	local rootmb childmb totalmb fudge
+	local status
+
+	create_test_dirs
+	cd $TEST_INPUTS_DIR
+	mkdir dir
+
+	rootmb=17
+	childmb=39
+	totalmb=$(($rootmb + $childmb))
+	fudge=$((2 * 1024 * 1024))
+
+	atf_check -e ignore dd if=/dev/random of=foo bs=1M count=$rootmb
+	atf_check -e ignore dd if=/dev/random of=dir/bar bs=1M count=$childmb
+
+	cd -
+
+	atf_check $MAKEFS -s 1g -o rootpath=/ -o poolname=$ZFS_POOL_NAME \
+	    -o fs=${ZFS_POOL_NAME}/dir \
+	    $TEST_IMAGE $TEST_INPUTS_DIR
+
+	import_image
+
+	# Make sure that each dataset's space usage is no more than 2MB larger
+	# than their files.  This number is magic and might need to change
+	# someday.
+	usedds=$(zfs list -o usedds -Hp ${ZFS_POOL_NAME})
+	atf_check test $usedds -gt $(($rootmb * 1024 * 1024)) -a \
+	    $usedds -le $(($rootmb * 1024 * 1024 + $fudge))
+	usedds=$(zfs list -o usedds -Hp ${ZFS_POOL_NAME}/dir)
+	atf_check test $usedds -gt $(($childmb * 1024 * 1024)) -a \
+	    $usedds -le $(($childmb * 1024 * 1024 + $fudge))
+
+	# Make sure that the usedchild property value makes sense: the parent's
+	# value corresponds to the size of the child, and the child has no
+	# children.
+	usedchild=$(zfs list -o usedchild -Hp ${ZFS_POOL_NAME})
+	atf_check test $usedchild -gt $(($childmb * 1024 * 1024)) -a \
+	    $usedchild -le $(($childmb * 1024 * 1024 + $fudge))
+	atf_check -o inline:'0\n' zfs list -Hp -o usedchild ${ZFS_POOL_NAME}/dir
+
+	# Make sure that the used property value makes sense: the parent's
+	# value is the sum of the two sizes, and the child's value is the
+	# same as its usedds value, which has already been checked.
+	used=$(zfs list -o used -Hp ${ZFS_POOL_NAME})
+	atf_check test $used -gt $(($totalmb * 1024 * 1024)) -a \
+	    $used -le $(($totalmb * 1024 * 1024 + 2 * $fudge))
+	used=$(zfs list -o used -Hp ${ZFS_POOL_NAME}/dir)
+	atf_check -o inline:$used'\n' zfs list -Hp -o usedds ${ZFS_POOL_NAME}/dir
+
+	# Both datasets do not have snapshots.
+	atf_check -o inline:'0\n' zfs list -Hp -o usedsnap ${ZFS_POOL_NAME}
+	atf_check -o inline:'0\n' zfs list -Hp -o usedsnap ${ZFS_POOL_NAME}/dir
+}
+used_space_props_cleanup()
+{
+	common_cleanup
+}
+
+# Verify that file permissions are set properly.  Make sure that non-executable
+# files can't be executed.
+atf_test_case perms cleanup
+perms_body()
+{
+	local mode
+
+	create_test_dirs
+	cd $TEST_INPUTS_DIR
+
+	for mode in $(seq 0 511); do
+		mode=$(printf "%04o\n" $mode)
+		echo 'echo a' > $mode
+		atf_check chmod $mode $mode
+	done
+
+	cd -
+
+	atf_check $MAKEFS -s 1g -o rootpath=/ -o poolname=$ZFS_POOL_NAME \
+	    $TEST_IMAGE $TEST_INPUTS_DIR
+
+	import_image
+
+	check_image_contents
+
+	for mode in $(seq 0 511); do
+		mode=$(printf "%04o\n" $mode)
+		if [ $(($mode & 0111)) -eq 0 ]; then
+			atf_check -s not-exit:0 -e match:"Permission denied" \
+			    ${TEST_INPUTS_DIR}/$mode
+		fi
+		if [ $(($mode & 0001)) -eq 0 ]; then
+			atf_check -s not-exit:0 -e match:"Permission denied" \
+			    su -m tests -c ${TEST_INPUTS_DIR}/$mode
+		fi
+	done
+}
+perms_cleanup()
+{
+	common_cleanup
+}
+
+#
+# Verify that -T timestamps are honored.
+#
+atf_test_case T_flag_dir cleanup
+T_flag_dir_body()
+{
+	timestamp=1742574909
+	create_test_dirs
+	mkdir -p $TEST_INPUTS_DIR/dir1
+
+	atf_check $MAKEFS -T $timestamp -s 10g -o rootpath=/ -o poolname=$ZFS_POOL_NAME \
+	    $TEST_IMAGE $TEST_INPUTS_DIR
+
+	import_image
+	eval $(stat -s  $TEST_MOUNT_DIR/dir1)
+	atf_check_equal $st_atime $timestamp
+	atf_check_equal $st_mtime $timestamp
+	atf_check_equal $st_ctime $timestamp
+}
+
+T_flag_dir_cleanup()
+{
+	common_cleanup
+}
+
+atf_test_case T_flag_F_flag cleanup
+T_flag_F_flag_body()
+{
+	timestamp_F=1742574909
+	timestamp_T=1742574910
+	create_test_dirs
+	mkdir -p $TEST_INPUTS_DIR/dir1
+
+	atf_check -o save:$TEST_SPEC_FILE $MTREE -c -p $TEST_INPUTS_DIR
+	change_mtree_timestamp $TEST_SPEC_FILE $timestamp_F
+	atf_check \
+	    $MAKEFS -F $TEST_SPEC_FILE -T $timestamp_T -s 10g -o rootpath=/ \
+	    -o poolname=$ZFS_POOL_NAME $TEST_IMAGE $TEST_INPUTS_DIR
+
+	import_image
+	eval $(stat -s  $TEST_MOUNT_DIR/dir1)
+	atf_check_equal $st_atime $timestamp_F
+	atf_check_equal $st_mtime $timestamp_F
+	# atf_check_equal $st_ctime $timestamp_F
+}
+
+T_flag_F_flag_cleanup()
+{
+	common_cleanup
+}
+
+atf_test_case T_flag_mtree cleanup
+T_flag_mtree_body()
+{
+	timestamp=1742574909
+	create_test_dirs
+	mkdir -p $TEST_INPUTS_DIR/dir1
+
+	atf_check -o save:$TEST_SPEC_FILE $MTREE -c -p $TEST_INPUTS_DIR
+	atf_check $MAKEFS -T $timestamp -s 10g -o rootpath=/ -o poolname=$ZFS_POOL_NAME \
+	    $TEST_IMAGE $TEST_SPEC_FILE
+
+	import_image
+	eval $(stat -s  $TEST_MOUNT_DIR/dir1)
+	atf_check_equal $st_atime $timestamp
+	atf_check_equal $st_mtime $timestamp
+	atf_check_equal $st_ctime $timestamp
+}
+
+T_flag_mtree_cleanup()
 {
 	common_cleanup
 }
@@ -694,9 +1029,12 @@ atf_init_test_cases()
 {
 	atf_add_test_case autoexpand
 	atf_add_test_case basic
+	atf_add_test_case compression
 	atf_add_test_case dataset_removal
+	atf_add_test_case devfs
 	atf_add_test_case empty_dir
 	atf_add_test_case empty_fs
+	atf_add_test_case file_extend
 	atf_add_test_case file_sizes
 	atf_add_test_case hard_links
 	atf_add_test_case indirect_dnode_array
@@ -711,6 +1049,11 @@ atf_init_test_cases()
 	atf_add_test_case snapshot
 	atf_add_test_case soft_links
 	atf_add_test_case root_props
+	atf_add_test_case used_space_props
+	atf_add_test_case perms
+	atf_add_test_case T_flag_dir
+	atf_add_test_case T_flag_F_flag
+	atf_add_test_case T_flag_mtree
 
 	# XXXMJ tests:
 	# - test with different ashifts (at least, 9 and 12), different image sizes

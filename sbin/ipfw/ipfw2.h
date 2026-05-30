@@ -16,8 +16,6 @@
  * This software is provided ``AS IS'' without any warranties of any kind.
  *
  * NEW command line interface for IP firewall facility
- *
- * $FreeBSD$
  */
 
 enum cmdline_prog {
@@ -48,6 +46,7 @@ struct cmdline_opts {
 	int	test_only;	/* only check syntax */
 	int	comment_only;	/* only print action and comment */
 	int	verbose;	/* be verbose on some commands */
+	int	debug_only;	/* output ioctl i/o on stdout */
 
 	/* The options below can have multiple values. */
 
@@ -276,6 +275,7 @@ enum tokens {
 	TOK_UNLOCK,
 	TOK_VLIST,
 	TOK_OLIST,
+	TOK_MONITOR,
 	TOK_MISSING,
 	TOK_ORFLUSH,
 
@@ -306,6 +306,8 @@ enum tokens {
 	TOK_LOGOFF,
 	TOK_PRIVATE,
 	TOK_PRIVATEOFF,
+	TOK_SWAPCONF,
+	TOK_SWAPCONFOFF,
 
 	/* NAT64 CLAT tokens */
 	TOK_NAT64CLAT,
@@ -321,7 +323,11 @@ enum tokens {
 
 	TOK_TCPSETMSS,
 
+	TOK_MARK,
+	TOK_SETMARK,
+
 	TOK_SKIPACTION,
+	TOK_UDP_EIM,
 };
 
 /*
@@ -342,7 +348,7 @@ struct buf_pr {
 int pr_u64(struct buf_pr *bp, void *pd, int width);
 int bp_alloc(struct buf_pr *b, size_t size);
 void bp_free(struct buf_pr *b);
-int bprintf(struct buf_pr *b, const char *format, ...);
+int bprintf(struct buf_pr *b, const char *format, ...) __printflike(2, 3);
 
 
 /* memory allocation support */
@@ -444,7 +450,7 @@ struct _ipfw_insn *add_dstip6(struct _ipfw_insn *cmd, char *av, int cblen,
     struct tidx *tstate);
 
 void fill_flow6(struct _ipfw_insn_u32 *cmd, char *av, int cblen);
-void fill_unreach6_code(u_short *codep, char *str);
+uint16_t get_unreach6_code(const char *str);
 void fill_icmp6types(struct _ipfw_insn_icmp6 *cmd, char *av, int cblen);
 int fill_ext6hdr(struct _ipfw_insn *cmd, char *av);
 
@@ -460,5 +466,5 @@ int table_check_name(const char *tablename);
 void ipfw_list_ta(int ac, char *av[]);
 void ipfw_list_values(int ac, char *av[]);
 void table_fill_ntlv(struct _ipfw_obj_ntlv *ntlv, const char *name,
-    uint8_t set, uint16_t uidx);
+    uint8_t set, uint32_t uidx);
 

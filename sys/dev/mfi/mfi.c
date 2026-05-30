@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD AND BSD-2-Clause
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2006 IronPort Systems
  * All rights reserved.
@@ -52,13 +52,10 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_mfi.h"
 
-#include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/abi_compat.h>
 #include <sys/sysctl.h>
 #include <sys/malloc.h>
 #include <sys/kernel.h>
@@ -373,9 +370,6 @@ mfi_attach(struct mfi_softc *sc)
 
 	if (sc == NULL)
 		return EINVAL;
-
-	device_printf(sc->mfi_dev, "Megaraid SAS driver Ver %s \n",
-	    MEGASAS_VERSION);
 
 	mtx_init(&sc->mfi_io_lock, "MFI I/O lock", NULL, MTX_DEF);
 	sx_init(&sc->mfi_config_lock, "MFI config");
@@ -767,6 +761,10 @@ mfi_attach(struct mfi_softc *sc)
 		    sc->mfi_cdev, "%s", "megaraid_sas_ioctl_node");
 	if (sc->mfi_cdev != NULL)
 		sc->mfi_cdev->si_drv1 = sc;
+	SYSCTL_ADD_STRING(device_get_sysctl_ctx(sc->mfi_dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(sc->mfi_dev)),
+	    OID_AUTO, "driver_version", CTLFLAG_RD, MEGASAS_VERSION,
+	    strlen(MEGASAS_VERSION), "driver version");
 	SYSCTL_ADD_INT(device_get_sysctl_ctx(sc->mfi_dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(sc->mfi_dev)),
 	    OID_AUTO, "delete_busy_volumes", CTLFLAG_RW,
@@ -777,8 +775,8 @@ mfi_attach(struct mfi_softc *sc)
 	    &sc->mfi_keep_deleted_volumes, 0,
 	    "Don't detach the mfid device for a busy volume that is deleted");
 
-	device_add_child(sc->mfi_dev, "mfip", -1);
-	bus_generic_attach(sc->mfi_dev);
+	device_add_child(sc->mfi_dev, "mfip", DEVICE_UNIT_ANY);
+	bus_attach_children(sc->mfi_dev);
 
 	/* Start the timeout watchdog */
 	callout_init(&sc->mfi_watchdog_callout, 1);
@@ -1924,7 +1922,8 @@ mfi_add_ld_complete(struct mfi_command *cm)
 
 	mtx_unlock(&sc->mfi_io_lock);
 	bus_topo_lock();
-	if ((child = device_add_child(sc->mfi_dev, "mfid", -1)) == NULL) {
+	if ((child = device_add_child(sc->mfi_dev, "mfid",
+	    DEVICE_UNIT_ANY)) == NULL) {
 		device_printf(sc->mfi_dev, "Failed to add logical disk\n");
 		free(ld_info, M_MFIBUF);
 		bus_topo_unlock();
@@ -1934,7 +1933,7 @@ mfi_add_ld_complete(struct mfi_command *cm)
 
 	device_set_ivars(child, ld_info);
 	device_set_desc(child, "MFI Logical Disk");
-	bus_generic_attach(sc->mfi_dev);
+	bus_attach_children(sc->mfi_dev);
 	bus_topo_unlock();
 	mtx_lock(&sc->mfi_io_lock);
 }
@@ -2012,7 +2011,8 @@ mfi_add_sys_pd_complete(struct mfi_command *cm)
 
 	mtx_unlock(&sc->mfi_io_lock);
 	bus_topo_lock();
-	if ((child = device_add_child(sc->mfi_dev, "mfisyspd", -1)) == NULL) {
+	if ((child = device_add_child(sc->mfi_dev, "mfisyspd",
+	    DEVICE_UNIT_ANY)) == NULL) {
 		device_printf(sc->mfi_dev, "Failed to add system pd\n");
 		free(pd_info, M_MFIBUF);
 		bus_topo_unlock();
@@ -2022,7 +2022,7 @@ mfi_add_sys_pd_complete(struct mfi_command *cm)
 
 	device_set_ivars(child, pd_info);
 	device_set_desc(child, "MFI System PD");
-	bus_generic_attach(sc->mfi_dev);
+	bus_attach_children(sc->mfi_dev);
 	bus_topo_unlock();
 	mtx_lock(&sc->mfi_io_lock);
 }
@@ -2829,7 +2829,7 @@ mfi_check_command_post(struct mfi_softc *sc, struct mfi_command *cm)
 			if (ld->ld_id == cm->cm_frame->dcmd.mbox[0])
 				break;
 		}
-		KASSERT(ld != NULL, ("volume dissappeared"));
+		KASSERT(ld != NULL, ("volume disappeared"));
 		if (cm->cm_frame->header.cmd_status == MFI_STAT_OK) {
 			mtx_unlock(&sc->mfi_io_lock);
 			bus_topo_lock();
@@ -3083,8 +3083,6 @@ out:
 		free(ioc_buf, M_MFIBUF);
 	return (error);
 }
-
-#define	PTRIN(p)		((void *)(uintptr_t)(p))
 
 static int
 mfi_ioctl(struct cdev *dev, u_long cmd, caddr_t arg, int flag, struct thread *td)
@@ -3635,11 +3633,8 @@ out:
 		mfi_aen_entry = malloc(sizeof(struct mfi_aen), M_MFIBUF,
 		    M_WAITOK);
 		mtx_lock(&sc->mfi_io_lock);
-		if (mfi_aen_entry != NULL) {
-			mfi_aen_entry->p = curproc;
-			TAILQ_INSERT_TAIL(&sc->mfi_aen_pids, mfi_aen_entry,
-			    aen_link);
-		}
+		mfi_aen_entry->p = curproc;
+		TAILQ_INSERT_TAIL(&sc->mfi_aen_pids, mfi_aen_entry, aen_link);
 		error = mfi_aen_register(sc, l_aen.laen_seq_num,
 		    l_aen.laen_class_locale);
 

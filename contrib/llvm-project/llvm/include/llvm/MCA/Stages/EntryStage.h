@@ -19,18 +19,19 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/MCA/SourceMgr.h"
 #include "llvm/MCA/Stages/Stage.h"
+#include "llvm/Support/Compiler.h"
 
 namespace llvm {
 namespace mca {
 
-class EntryStage final : public Stage {
+class LLVM_ABI EntryStage final : public Stage {
   InstRef CurrentInstruction;
   SmallVector<std::unique_ptr<Instruction>, 16> Instructions;
   SourceMgr &SM;
   unsigned NumRetired;
 
   // Updates the program counter, and sets 'CurrentInstruction'.
-  void getNextInstruction();
+  Error getNextInstruction();
 
   EntryStage(const EntryStage &Other) = delete;
   EntryStage &operator=(const EntryStage &Other) = delete;
@@ -42,6 +43,7 @@ public:
   bool hasWorkToComplete() const override;
   Error execute(InstRef &IR) override;
   Error cycleStart() override;
+  Error cycleResume() override;
   Error cycleEnd() override;
 };
 

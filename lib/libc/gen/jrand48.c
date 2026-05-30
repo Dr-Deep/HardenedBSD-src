@@ -11,17 +11,13 @@
  * to anyone/anything when using this software.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
-#include <stdint.h>
-
 #include "rand48.h"
 
 long
 jrand48(unsigned short xseed[3])
 {
+	uint48 tmp;
 
-	_dorand48(xseed);
-	return ((int32_t)(((uint32_t)xseed[2] << 16) | (uint32_t)xseed[1]));
+	DORAND48(tmp, xseed);
+	return ((int)((tmp >> 16) & 0xffffffff));
 }

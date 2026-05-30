@@ -1,6 +1,3 @@
-#
-# $FreeBSD$
-#
 # This Makefile provides an easy way to generate the configuration
 # file and database maps for the sendmail(8) daemon.
 #
@@ -101,7 +98,7 @@ SENDMAIL_CF_DIR?=	/usr/src/contrib/sendmail/cf
 #
 # The sendmail startup script
 #
-SENDMAIL_START_SCRIPT?=	/etc/rc.sendmail
+SENDMAIL_START_SCRIPT?=	/etc/rc.d/sendmail
 
 #
 # Some useful programs we need.
@@ -244,5 +241,7 @@ restart restart-mta restart-mspq:
 .include "Makefile.local"
 .endif
 
-# For the definition of $SHAREMODE
+# For the definition of $SHAREMODE.  Define _WITHOUT_SRCCONF to prevent this
+# including <bsd.compiler.mk>, which requires clang.
+_WITHOUT_SRCCONF=yes
 .include <bsd.own.mk>

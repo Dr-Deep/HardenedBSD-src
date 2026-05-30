@@ -21,8 +21,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include "opt_kern_tls.h"
@@ -31,6 +29,7 @@
 
 #include <dev/mlx5/mlx5_en/en.h>
 
+#include <dev/mlx5/crypto.h>
 #include <dev/mlx5/tls.h>
 
 #include <dev/mlx5/fs.h>
@@ -43,11 +42,28 @@
 
 static if_snd_tag_free_t mlx5e_tls_rx_snd_tag_free;
 static if_snd_tag_modify_t mlx5e_tls_rx_snd_tag_modify;
+static if_snd_tag_status_str_t mlx5e_tls_rx_snd_tag_status_str;
 
 static const struct if_snd_tag_sw mlx5e_tls_rx_snd_tag_sw = {
 	.snd_tag_modify = mlx5e_tls_rx_snd_tag_modify,
 	.snd_tag_free = mlx5e_tls_rx_snd_tag_free,
+	.snd_tag_status_str = mlx5e_tls_rx_snd_tag_status_str,
 	.type = IF_SND_TAG_TYPE_TLS_RX
+};
+
+static const char *mlx5e_tls_rx_progress_params_auth_state_str[] = {
+	[MLX5E_TLS_RX_PROGRESS_PARAMS_AUTH_STATE_NO_OFFLOAD] = "no_offload",
+	[MLX5E_TLS_RX_PROGRESS_PARAMS_AUTH_STATE_OFFLOAD] = "offload",
+	[MLX5E_TLS_RX_PROGRESS_PARAMS_AUTH_STATE_AUTHENTICATION] =
+	    "authentication",
+};
+
+static const char *mlx5e_tls_rx_progress_params_record_tracker_state_str[] = {
+	[MLX5E_TLS_RX_PROGRESS_PARAMS_RECORD_TRACKER_STATE_START] = "start",
+	[MLX5E_TLS_RX_PROGRESS_PARAMS_RECORD_TRACKER_STATE_TRACKING] =
+	    "tracking",
+	[MLX5E_TLS_RX_PROGRESS_PARAMS_RECORD_TRACKER_STATE_SEARCHING] =
+	    "searching",
 };
 
 MALLOC_DEFINE(M_MLX5E_TLS_RX, "MLX5E_TLS_RX", "MLX5 ethernet HW TLS RX");
@@ -251,7 +267,8 @@ mlx5e_tls_rx_send_progress_parameters_sync(struct mlx5e_iq *iq,
 	mtx_unlock(&iq->lock);
 
 	while (1) {
-		if (wait_for_completion_timeout(&ptag->progress_complete, hz) != 0)
+		if (wait_for_completion_timeout(&ptag->progress_complete,
+		    msecs_to_jiffies(1000)) != 0)
 			break;
 		priv = container_of(iq, struct mlx5e_channel, iq)->priv;
 		if (priv->mdev->state == MLX5_DEVICE_STATE_INTERNAL_ERROR ||
@@ -332,7 +349,8 @@ done:
  * Zero is returned upon success, else some error happened.
  */
 static int
-mlx5e_tls_rx_receive_progress_parameters(struct mlx5e_iq *iq, struct mlx5e_tls_rx_tag *ptag)
+mlx5e_tls_rx_receive_progress_parameters(struct mlx5e_iq *iq,
+    struct mlx5e_tls_rx_tag *ptag, mlx5e_iq_callback_t *cb)
 {
 	struct mlx5e_get_tls_progress_params_wqe *wqe;
 	const u32 ds_cnt = DIV_ROUND_UP(sizeof(*wqe), MLX5_SEND_WQE_DS);
@@ -368,7 +386,7 @@ mlx5e_tls_rx_receive_progress_parameters(struct mlx5e_iq *iq, struct mlx5e_tls_r
 	memcpy(iq->doorbell.d32, &wqe->ctrl, sizeof(iq->doorbell.d32));
 
 	iq->data[pi].num_wqebbs = DIV_ROUND_UP(ds_cnt, MLX5_SEND_WQEBB_NUM_DS);
-	iq->data[pi].callback = &mlx5e_tls_rx_receive_progress_parameters_cb;
+	iq->data[pi].callback = cb;
 	iq->data[pi].arg = ptag;
 
 	m_snd_tag_ref(&ptag->tag);
@@ -389,11 +407,12 @@ static int
 mlx5e_tls_rx_tag_import(void *arg, void **store, int cnt, int domain, int flags)
 {
 	struct mlx5e_tls_rx_tag *ptag;
+	struct mlx5_core_dev *mdev = arg;
 	int i;
 
 	for (i = 0; i != cnt; i++) {
 		ptag = malloc_domainset(sizeof(*ptag), M_MLX5E_TLS_RX,
-		    mlx5_dev_domainset(arg), flags | M_ZERO);
+		    mlx5_dev_domainset(mdev), flags | M_ZERO);
 		mtx_init(&ptag->mtx, "mlx5-tls-rx-tag-mtx", NULL, MTX_DEF);
 		INIT_WORK(&ptag->work, mlx5e_tls_rx_work);
 		store[i] = ptag;
@@ -553,6 +572,7 @@ mlx5e_tls_rx_work(struct work_struct *work)
 
 		/* try to allocate a DEK context ID */
 		err = mlx5_encryption_key_create(priv->mdev, priv->pdn,
+		    MLX5_GENERAL_OBJECT_TYPE_ENCRYPTION_KEY_TYPE_TLS,
 		    MLX5_ADDR_OF(sw_tls_rx_cntx, ptag->crypto_params, key.key_data),
 		    MLX5_GET(sw_tls_rx_cntx, ptag->crypto_params, key.key_len),
 		    &ptag->dek_index);
@@ -576,13 +596,20 @@ mlx5e_tls_rx_work(struct work_struct *work)
 		if (ptag->flow_rule != NULL)
 			mlx5e_accel_fs_del_inpcb(ptag->flow_rule);
 
+		/*
+		 * Destroy TIR before DEK.  DESTROY_TIR for a TLS-
+		 * enabled TIR issues a TRA RX fence that drains all
+		 * in-flight packets from the crypto pipeline.  If the
+		 * DEK were destroyed first, packets still in flight
+		 * would hit a TPT encryption error (vendor syndrome
+		 * 0x55) because the key they reference is already gone.
+		 */
+		if (ptag->tirn != 0)
+			mlx5_tls_close_tir(priv->mdev, ptag->tirn);
+
 		/* try to destroy DEK context by ID */
 		if (ptag->dek_index_ok)
 			mlx5_encryption_key_destroy(priv->mdev, ptag->dek_index);
-
-		/* try to destroy TIR context by ID */
-		if (ptag->tirn != 0)
-			mlx5_tls_close_tir(priv->mdev, ptag->tirn);
 
 		/* free tag */
 		mlx5e_tls_rx_tag_zfree(ptag);
@@ -639,7 +666,8 @@ mlx5e_tls_rx_set_params(void *ctx, struct inpcb *inp, const struct tls_session_p
 		return (EINVAL);
 
 	MLX5_SET64(sw_tls_rx_cntx, ctx, param.initial_record_number, tls_sn_he);
-	MLX5_SET(sw_tls_rx_cntx, ctx, param.resync_tcp_sn, tcp_sn_he);
+	MLX5_SET(sw_tls_rx_cntx, ctx, param.resync_tcp_sn, 0);
+	MLX5_SET(sw_tls_rx_cntx, ctx, progress.next_record_tcp_sn, tcp_sn_he);
 
 	return (0);
 }
@@ -654,19 +682,19 @@ CTASSERT(MLX5E_TLS_RX_ST_INIT == 0);
  * Returns zero on success else an error happened.
  */
 int
-mlx5e_tls_rx_snd_tag_alloc(struct ifnet *ifp,
+mlx5e_tls_rx_snd_tag_alloc(if_t ifp,
     union if_snd_tag_alloc_params *params,
     struct m_snd_tag **ppmt)
 {
 	struct mlx5e_iq *iq;
 	struct mlx5e_priv *priv;
 	struct mlx5e_tls_rx_tag *ptag;
-	struct mlx5_flow_rule *flow_rule;
+	struct mlx5_flow_handle *flow_rule;
 	const struct tls_session_params *en;
 	uint32_t value;
 	int error;
 
-	priv = ifp->if_softc;
+	priv = if_getsoftc(ifp);
 
 	if (unlikely(priv->gone != 0 || priv->tls_rx.init == 0 ||
 	    params->hdr.flowtype == M_HASHTYPE_NONE))
@@ -801,7 +829,7 @@ mlx5e_tls_rx_snd_tag_alloc(struct ifnet *ifp,
 		goto cleanup;
 	}
 
-	if (ifp->if_pcp != IFNET_PCP_NONE || params->tls_rx.vlan_id != 0) {
+	if (if_getpcp(ifp) != IFNET_PCP_NONE || params->tls_rx.vlan_id != 0) {
 		/* create flow rule for TLS RX traffic (tagged) */
 		flow_rule = mlx5e_accel_fs_add_inpcb(priv, params->tls_rx.inp,
 		    ptag->tirn, MLX5_FS_DEFAULT_FLOW_TAG, params->tls_rx.vlan_id);
@@ -818,6 +846,7 @@ mlx5e_tls_rx_snd_tag_alloc(struct ifnet *ifp,
 	}
 
 	ptag->flow_rule = flow_rule;
+	init_completion(&ptag->progress_complete);
 
 	return (0);
 
@@ -967,7 +996,8 @@ mlx5e_tls_rx_snd_tag_modify(struct m_snd_tag *pmt, union if_snd_tag_modify_param
 	    params->tls_rx.tls_rec_length,
 	    params->tls_rx.tls_seq_number) &&
 	    ptag->tcp_resync_pending == 0) {
-		err = mlx5e_tls_rx_receive_progress_parameters(iq, ptag);
+		err = mlx5e_tls_rx_receive_progress_parameters(iq, ptag,
+		    &mlx5e_tls_rx_receive_progress_parameters_cb);
 		if (err != 0) {
 			MLX5E_TLS_RX_STAT_INC(ptag, rx_resync_err, 1);
 		} else {
@@ -996,8 +1026,76 @@ mlx5e_tls_rx_snd_tag_free(struct m_snd_tag *pmt)
 	ptag->state = MLX5E_TLS_RX_ST_RELEASE;
 	MLX5E_TLS_RX_TAG_UNLOCK(ptag);
 
-	priv = ptag->tag.ifp->if_softc;
+	priv = if_getsoftc(ptag->tag.ifp);
 	queue_work(priv->tls_rx.wq, &ptag->work);
+}
+
+static void
+mlx5e_tls_rx_str_status_cb(void *arg)
+{
+	struct mlx5e_tls_rx_tag *ptag;
+
+	ptag = (struct mlx5e_tls_rx_tag *)arg;
+	complete_all(&ptag->progress_complete);
+	m_snd_tag_rele(&ptag->tag);
+}
+
+static int
+mlx5e_tls_rx_snd_tag_status_str(struct m_snd_tag *pmt, char *buf, size_t *sz)
+{
+	int err, out_size;
+	struct mlx5e_iq *iq;
+	void *buffer;
+	uint32_t tracker_state_val;
+	uint32_t auth_state_val;
+	struct mlx5e_priv *priv;
+	struct mlx5e_tls_rx_tag *ptag = 
+	    container_of(pmt, struct mlx5e_tls_rx_tag, tag);
+
+	if (buf == NULL)
+		return (0);
+
+	MLX5E_TLS_RX_TAG_LOCK(ptag);
+	priv = container_of(ptag->tls_rx, struct mlx5e_priv, tls_rx);
+	iq = mlx5e_tls_rx_get_iq(priv, ptag->flowid, ptag->flowtype);
+	reinit_completion(&ptag->progress_complete);
+	err = mlx5e_tls_rx_receive_progress_parameters(iq, ptag,
+	    &mlx5e_tls_rx_str_status_cb);
+	MLX5E_TLS_RX_TAG_UNLOCK(ptag);
+	if (err != 0)
+		return (err);
+
+	for (;;) {
+		if (wait_for_completion_timeout(&ptag->progress_complete,
+		    msecs_to_jiffies(1000)) != 0)
+			break;
+		if (priv->mdev->state == MLX5_DEVICE_STATE_INTERNAL_ERROR ||
+		    pci_channel_offline(priv->mdev->pdev) != 0)
+			return (ENXIO);
+	}
+	buffer = mlx5e_tls_rx_get_progress_buffer(ptag);
+	tracker_state_val = MLX5_GET(tls_progress_params, buffer,
+	    record_tracker_state);
+	auth_state_val = MLX5_GET(tls_progress_params, buffer, auth_state);
+
+	/* Validate tracker state value is in range */
+	if (tracker_state_val >
+	    MLX5E_TLS_RX_PROGRESS_PARAMS_RECORD_TRACKER_STATE_SEARCHING)
+		return (EINVAL);
+
+	/* Validate auth state value is in range */
+	if (auth_state_val >
+	    MLX5E_TLS_RX_PROGRESS_PARAMS_AUTH_STATE_AUTHENTICATION)
+		return (EINVAL);
+
+	out_size = snprintf(buf, *sz, "tracker_state: %s, auth_state: %s",
+	    mlx5e_tls_rx_progress_params_record_tracker_state_str[
+		tracker_state_val],
+	    mlx5e_tls_rx_progress_params_auth_state_str[auth_state_val]);
+
+	if (out_size <= *sz)
+		*sz = out_size;
+	return (0);
 }
 
 #else

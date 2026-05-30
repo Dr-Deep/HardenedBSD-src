@@ -35,8 +35,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_ddb.h"
 
 #include <sys/param.h>
@@ -44,9 +42,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/cons.h>
 #include <sys/kdb.h>
 #include <sys/kernel.h>
+#include <sys/stdarg.h>
 #include <sys/sysctl.h>
-
-#include <machine/stdarg.h>
 
 #include <ddb/ddb.h>
 #include <ddb/db_output.h>

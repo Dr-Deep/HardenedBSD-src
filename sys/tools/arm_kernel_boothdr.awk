@@ -1,6 +1,6 @@
 #!/usr/bin/awk -f
 #-
-# SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+# SPDX-License-Identifier: BSD-2-Clause
 #
 # Copyright 2019 Ian Lepore <ian@freebsd.org>
 #
@@ -25,7 +25,6 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 
 BEGIN {
 	# Init global vars.
@@ -39,6 +38,7 @@ BEGIN {
 	# The type of header we're writing is set using -v hdrtype= on
 	# the command line, ensure we got a valid value for it.
 	if (hdrtype != "v7jump" &&
+	    hdrtype != "v7bootz" &&
 	    hdrtype != "v8jump" &&
 	    hdrtype != "v8booti") {
 		print "arm_kernel_boothdr.awk: " \
@@ -48,6 +48,10 @@ BEGIN {
 	}
 
 	gHdrType = hdrtype
+	for (i = 0; i < 16; i++) {
+		hex[sprintf("%x", i)] = i;
+		hex[sprintf("%X", i)] = i;
+	}
 }
 
 function addr_to_offset(addr) {
@@ -57,11 +61,13 @@ function addr_to_offset(addr) {
 
 function hexstr_to_num(str) {
 
-	# Prepend a 0x onto the string, then coerce it to a number by doing
-	# arithmetic with it, which makes awk run it through strtod(),
-	# which handles hex numbers that have a 0x prefix.
+	sum = 0;
+	len = length(str);
+	for (i = 1; i <= len; i++) {
+		sum = sum * 16 + hex[substr(str, i, 1)];
+	}
 
-	return 0 + ("0x" str)
+	return sum;
 }
 
 function write_le32(num) {
@@ -100,6 +106,35 @@ function write_v7jump() {
 	#   is in the first 2mb, so it'll fit in 24 bits.
 
 	write_le32(hexstr_to_num("ea000000") + (gStartOff / 4) - 2)
+}
+
+function write_v7bootz() {
+
+	# We are writing this struct...
+	#
+	# struct BootZ_header {
+	#	uint32_t	code0;		/* Executable code */
+	#	uint32_t	dummy[8];	/* dummy */
+	#	uint32_t	magic;		/* Magic number 0x016f2818*/
+	#	uint32_t	load_offset;	/* Image load offset, LE */
+	#	uint32_t	image_size;	/* Effective Image size, LE */
+	# };
+	#
+	# We write 'b _start' into code0.  The image size is everything from
+	# the start of the loaded image to the offset given by the _end symbol.
+
+	write_v7jump()                        # code0
+	write_le32(0)                         # dummy[0]
+	write_le32(0)                         # dummy[1]
+	write_le32(0)                         # dummy[2]
+	write_le32(0)                         # dummy[3]
+	write_le32(0)                         # dummy[4]
+	write_le32(0)                         # dummy[5]
+	write_le32(0)                         # dummy[6]
+	write_le32(0)                         # dummy[7]
+	write_le32(hexstr_to_num("016f2818")) # magic marker
+	write_le32(0)                         # load_offset (0 -> auto)
+	write_le32(gEndOff)                   # image_size
 }
 
 function write_v8jump() {
@@ -181,6 +216,8 @@ END {
 
 	if (gHdrType == "v7jump") {
 		write_v7jump()
+	} else if (gHdrType == "v7bootz") {
+		write_v7bootz()
 	} else if (gHdrType == "v8jump") {
 		write_v8jump()
 	} else if (gHdrType == "v8booti") {

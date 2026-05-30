@@ -23,7 +23,6 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $FreeBSD$
 #
 
 #include <sys/bus.h>
@@ -60,6 +59,22 @@ CODE {
 		*pin = gpios[0];
 		if (gcells == 2 || gcells == 3)
 			*flags = gpios[gcells - 1];
+
+		return (0);
+	}
+
+	static int
+	gpio_default_get_pin_list(device_t dev, uint32_t *pin_list)
+	{
+		uint32_t maxpin;
+		int err;
+
+		err = GPIO_PIN_MAX(dev, &maxpin);
+		if (err != 0)
+			return (ENXIO);
+
+		for (int i = 0; i <= maxpin; i++)
+			pin_list[i] = i;
 
 		return (0);
 	}
@@ -186,3 +201,13 @@ METHOD int pin_config_32 {
 	uint32_t num_pins;
 	uint32_t *pin_flags;
 } DEFAULT gpio_default_nosupport;
+
+#
+# Get the controller's pin numbers. pin_list is expected to be an array with at
+# least GPIO_PIN_MAX() elements. Populates pin_list from 0 to GPIO_PIN_MAX() by
+# default.
+#
+METHOD int get_pin_list {
+	device_t dev;
+	uint32_t *pin_list;
+} DEFAULT gpio_default_get_pin_list;

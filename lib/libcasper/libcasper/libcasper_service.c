@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2012 The FreeBSD Foundation
  * Copyright (c) 2015 Mariusz Zaborski <oshogbo@FreeBSD.org>
@@ -34,9 +34,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
 #include <sys/queue.h>
@@ -225,10 +222,6 @@ service_register_core(int fd)
 void
 casper_main_loop(int fd)
 {
-	fd_set fds;
-	struct casper_service *casserv;
-	struct service_connection *sconn, *sconntmp;
-	int sock, maxfd, ret;
 
 	if (zygote_init() < 0)
 		_exit(1);
@@ -238,55 +231,10 @@ casper_main_loop(int fd)
 	 */
 	service_register_core(fd);
 
-	for (;;) {
-		FD_ZERO(&fds);
-		FD_SET(fd, &fds);
-		maxfd = -1;
-		TAILQ_FOREACH(casserv, &casper_services, cs_next) {
-			/* We handle only core services. */
-			if (!CSERVICE_IS_CORE(casserv))
-				continue;
-			for (sconn = service_connection_first(casserv->cs_service);
-			    sconn != NULL;
-			    sconn = service_connection_next(sconn)) {
-				sock = service_connection_get_sock(sconn);
-				FD_SET(sock, &fds);
-				maxfd = sock > maxfd ? sock : maxfd;
-			}
-		}
-		if (maxfd == -1) {
-			/* Nothing to do. */
-			_exit(0);
-		}
-		maxfd++;
-
-
-		assert(maxfd <= (int)FD_SETSIZE);
-		ret = select(maxfd, &fds, NULL, NULL, NULL);
-		assert(ret == -1 || ret > 0);	/* select() cannot timeout */
-		if (ret == -1) {
-			if (errno == EINTR)
-				continue;
+	while (service_have_connections()) {
+		if (!service_poll_dispatch())
 			_exit(1);
-		}
-
-		TAILQ_FOREACH(casserv, &casper_services, cs_next) {
-			/* We handle only core services. */
-			if (!CSERVICE_IS_CORE(casserv))
-				continue;
-			for (sconn = service_connection_first(casserv->cs_service);
-			    sconn != NULL; sconn = sconntmp) {
-				/*
-				 * Prepare for connection to be removed from
-				 * the list on failure.
-				 */
-				sconntmp = service_connection_next(sconn);
-				sock = service_connection_get_sock(sconn);
-				if (FD_ISSET(sock, &fds)) {
-					service_message(casserv->cs_service,
-					    sconn);
-				}
-			}
-		}
 	}
+
+	_exit(0);
 }

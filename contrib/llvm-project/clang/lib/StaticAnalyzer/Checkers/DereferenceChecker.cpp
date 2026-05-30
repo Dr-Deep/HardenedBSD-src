@@ -11,15 +11,14 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "clang/AST/ExprObjC.h"
-#include "clang/AST/ExprOpenMP.h"
+#include "clang/Basic/TargetInfo.h"
+#include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
 #include "clang/StaticAnalyzer/Core/CheckerManager.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerHelpers.h"
-#include "llvm/ADT/SmallString.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace clang;
@@ -30,14 +29,17 @@ class DereferenceChecker
     : public Checker< check::Location,
                       check::Bind,
                       EventDispatcher<ImplicitNullDerefEvent> > {
-  enum DerefKind { NullPointer, UndefinedPointerValue };
-
-  BugType BT_Null{this, "Dereference of null pointer", categories::LogicError};
-  BugType BT_Undef{this, "Dereference of undefined pointer value",
-                   categories::LogicError};
+  enum DerefKind {
+    NullPointer,
+    UndefinedPointerValue,
+    AddressOfLabel,
+    FixedAddress,
+  };
 
   void reportBug(DerefKind K, ProgramStateRef State, const Stmt *S,
                  CheckerContext &C) const;
+
+  bool suppressReport(CheckerContext &C, const Expr *E) const;
 
 public:
   void checkLocation(SVal location, bool isLoad, const Stmt* S,
@@ -49,6 +51,14 @@ public:
                              const Expr *Ex, const ProgramState *state,
                              const LocationContext *LCtx,
                              bool loadedFrom = false);
+
+  bool CheckNullDereference = false;
+  bool CheckFixedDereference = false;
+
+  std::unique_ptr<BugType> BT_Null;
+  std::unique_ptr<BugType> BT_Undef;
+  std::unique_ptr<BugType> BT_Label;
+  std::unique_ptr<BugType> BT_FixedAddress;
 };
 } // end anonymous namespace
 
@@ -109,9 +119,37 @@ static const Expr *getDereferenceExpr(const Stmt *S, bool IsBind=false){
   return E;
 }
 
-static bool suppressReport(const Expr *E) {
-  // Do not report dereferences on memory in non-default address spaces.
-  return E->getType().hasAddressSpace();
+bool DereferenceChecker::suppressReport(CheckerContext &C,
+                                        const Expr *E) const {
+  // Do not report dereferences on memory that use address space #256, #257,
+  // and #258. Those address spaces are used when dereferencing address spaces
+  // relative to the GS, FS, and SS segments on x86/x86-64 targets.
+  // Dereferencing a null pointer in these address spaces is not defined
+  // as an error. All other null dereferences in other address spaces
+  // are defined as an error unless explicitly defined.
+  // See https://clang.llvm.org/docs/LanguageExtensions.html, the section
+  // "X86/X86-64 Language Extensions"
+
+  QualType Ty = E->getType();
+  if (!Ty.hasAddressSpace())
+    return false;
+  if (C.getAnalysisManager()
+          .getAnalyzerOptions()
+          .ShouldSuppressAddressSpaceDereferences)
+    return true;
+
+  const llvm::Triple::ArchType Arch =
+      C.getASTContext().getTargetInfo().getTriple().getArch();
+
+  if ((Arch == llvm::Triple::x86) || (Arch == llvm::Triple::x86_64)) {
+    switch (toTargetAddressSpace(E->getType().getAddressSpace())) {
+    case 256:
+    case 257:
+    case 258:
+      return true;
+    }
+  }
+  return false;
 }
 
 static bool isDeclRefExprToReference(const Expr *E) {
@@ -127,14 +165,41 @@ void DereferenceChecker::reportBug(DerefKind K, ProgramStateRef State,
   llvm::StringRef DerefStr2;
   switch (K) {
   case DerefKind::NullPointer:
-    BT = &BT_Null;
+    if (!CheckNullDereference) {
+      C.addSink();
+      return;
+    }
+    BT = BT_Null.get();
     DerefStr1 = " results in a null pointer dereference";
     DerefStr2 = " results in a dereference of a null pointer";
     break;
   case DerefKind::UndefinedPointerValue:
-    BT = &BT_Undef;
+    if (!CheckNullDereference) {
+      C.addSink();
+      return;
+    }
+    BT = BT_Undef.get();
     DerefStr1 = " results in an undefined pointer dereference";
     DerefStr2 = " results in a dereference of an undefined pointer value";
+    break;
+  case DerefKind::AddressOfLabel:
+    if (!CheckNullDereference) {
+      C.addSink();
+      return;
+    }
+    BT = BT_Label.get();
+    DerefStr1 = " results in an undefined pointer dereference";
+    DerefStr2 = " results in a dereference of an address of a label";
+    break;
+  case DerefKind::FixedAddress:
+    // Deliberately don't add a sink node if check is disabled.
+    // This situation may be valid in special cases.
+    if (!CheckFixedDereference)
+      return;
+
+    BT = BT_FixedAddress.get();
+    DerefStr1 = " results in a dereference of a fixed address";
+    DerefStr2 = " results in a dereference of a fixed address";
     break;
   };
 
@@ -157,9 +222,9 @@ void DereferenceChecker::reportBug(DerefKind K, ProgramStateRef State,
     os << DerefStr1;
     break;
   }
-  case Stmt::OMPArraySectionExprClass: {
+  case Stmt::ArraySectionExprClass: {
     os << "Array access";
-    const OMPArraySectionExpr *AE = cast<OMPArraySectionExpr>(S);
+    const ArraySectionExpr *AE = cast<ArraySectionExpr>(S);
     AddDerefSource(os, Ranges, AE->getBase()->IgnoreParenCasts(),
                    State.get(), N->getLocationContext());
     os << DerefStr1;
@@ -209,7 +274,7 @@ void DereferenceChecker::checkLocation(SVal l, bool isLoad, const Stmt* S,
   // Check for dereference of an undefined value.
   if (l.isUndef()) {
     const Expr *DerefExpr = getDereferenceExpr(S);
-    if (!suppressReport(DerefExpr))
+    if (!suppressReport(C, DerefExpr))
       reportBug(DerefKind::UndefinedPointerValue, C.getState(), DerefExpr, C);
     return;
   }
@@ -217,7 +282,7 @@ void DereferenceChecker::checkLocation(SVal l, bool isLoad, const Stmt* S,
   DefinedOrUnknownSVal location = l.castAs<DefinedOrUnknownSVal>();
 
   // Check for null dereferences.
-  if (!location.getAs<Loc>())
+  if (!isa<Loc>(location))
     return;
 
   ProgramStateRef state = C.getState();
@@ -230,7 +295,7 @@ void DereferenceChecker::checkLocation(SVal l, bool isLoad, const Stmt* S,
       // We know that 'location' can only be null.  This is what
       // we call an "explicit" null dereference.
       const Expr *expr = getDereferenceExpr(S);
-      if (!suppressReport(expr)) {
+      if (!suppressReport(C, expr)) {
         reportBug(DerefKind::NullPointer, nullState, expr, C);
         return;
       }
@@ -246,6 +311,13 @@ void DereferenceChecker::checkLocation(SVal l, bool isLoad, const Stmt* S,
     }
   }
 
+  if (location.isConstant()) {
+    const Expr *DerefExpr = getDereferenceExpr(S, isLoad);
+    if (!suppressReport(C, DerefExpr))
+      reportBug(DerefKind::FixedAddress, notNullState, DerefExpr, C);
+    return;
+  }
+
   // From this point forward, we know that the location is not null.
   C.addTransition(notNullState);
 }
@@ -255,6 +327,12 @@ void DereferenceChecker::checkBind(SVal L, SVal V, const Stmt *S,
   // If we're binding to a reference, check if the value is known to be null.
   if (V.isUndef())
     return;
+
+  // One should never write to label addresses.
+  if (auto Label = L.getAs<loc::GotoLabel>()) {
+    reportBug(DerefKind::AddressOfLabel, C.getState(), S, C);
+    return;
+  }
 
   const MemRegion *MR = L.getAsRegion();
   const TypedValueRegion *TVR = dyn_cast_or_null<TypedValueRegion>(MR);
@@ -272,7 +350,7 @@ void DereferenceChecker::checkBind(SVal L, SVal V, const Stmt *S,
   if (StNull) {
     if (!StNonNull) {
       const Expr *expr = getDereferenceExpr(S, /*IsBind=*/true);
-      if (!suppressReport(expr)) {
+      if (!suppressReport(C, expr)) {
         reportBug(DerefKind::NullPointer, StNull, expr, C);
         return;
       }
@@ -286,6 +364,13 @@ void DereferenceChecker::checkBind(SVal L, SVal V, const Stmt *S,
                                       /*IsDirectDereference=*/true};
       dispatchEvent(event);
     }
+  }
+
+  if (V.isConstant()) {
+    const Expr *DerefExpr = getDereferenceExpr(S, true);
+    if (!suppressReport(C, DerefExpr))
+      reportBug(DerefKind::FixedAddress, State, DerefExpr, C);
+    return;
   }
 
   // Unlike a regular null dereference, initializing a reference with a
@@ -307,10 +392,41 @@ void DereferenceChecker::checkBind(SVal L, SVal V, const Stmt *S,
   C.addTransition(State, this);
 }
 
-void ento::registerDereferenceChecker(CheckerManager &mgr) {
-  mgr.registerChecker<DereferenceChecker>();
+void ento::registerDereferenceModeling(CheckerManager &Mgr) {
+  Mgr.registerChecker<DereferenceChecker>();
 }
 
-bool ento::shouldRegisterDereferenceChecker(const CheckerManager &mgr) {
+bool ento::shouldRegisterDereferenceModeling(const CheckerManager &) {
+  return true;
+}
+
+void ento::registerNullDereferenceChecker(CheckerManager &Mgr) {
+  auto *Chk = Mgr.getChecker<DereferenceChecker>();
+  Chk->CheckNullDereference = true;
+  Chk->BT_Null.reset(new BugType(Mgr.getCurrentCheckerName(),
+                                 "Dereference of null pointer",
+                                 categories::LogicError));
+  Chk->BT_Undef.reset(new BugType(Mgr.getCurrentCheckerName(),
+                                  "Dereference of undefined pointer value",
+                                  categories::LogicError));
+  Chk->BT_Label.reset(new BugType(Mgr.getCurrentCheckerName(),
+                                  "Dereference of the address of a label",
+                                  categories::LogicError));
+}
+
+bool ento::shouldRegisterNullDereferenceChecker(const CheckerManager &) {
+  return true;
+}
+
+void ento::registerFixedAddressDereferenceChecker(CheckerManager &Mgr) {
+  auto *Chk = Mgr.getChecker<DereferenceChecker>();
+  Chk->CheckFixedDereference = true;
+  Chk->BT_FixedAddress.reset(new BugType(Mgr.getCurrentCheckerName(),
+                                         "Dereference of a fixed address",
+                                         categories::LogicError));
+}
+
+bool ento::shouldRegisterFixedAddressDereferenceChecker(
+    const CheckerManager &) {
   return true;
 }

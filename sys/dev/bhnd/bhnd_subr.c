@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2015-2016 Landon Fuller <landon@landonf.org>
  * Copyright (c) 2017 The FreeBSD Foundation
@@ -32,9 +32,6 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGES.
  */
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -1018,7 +1015,7 @@ bhnd_alloc_resources(device_t dev, struct resource_spec *rs,
 		res[i] = NULL;
 
 	for (u_int i = 0; rs[i].type != -1; i++) {
-		res[i] = bhnd_alloc_resource_any(dev, rs[i].type, &rs[i].rid,
+		res[i] = bhnd_alloc_resource_any(dev, rs[i].type, rs[i].rid,
 		    rs[i].flags);
 
 		/* Clean up all allocations on failure */
@@ -1047,7 +1044,7 @@ bhnd_release_resources(device_t dev, const struct resource_spec *rs,
 		if (res[i] == NULL)
 			continue;
 
-		bhnd_release_resource(dev, rs[i].type, rs[i].rid, res[i]);
+		bhnd_release_resource(dev, res[i]);
 		res[i] = NULL;
 	}
 }
@@ -1768,18 +1765,10 @@ void
 bhnd_set_custom_core_desc(device_t dev, const char *dev_name)
 {
 	const char *vendor_name;
-	char *desc;
 
 	vendor_name = bhnd_get_vendor_name(dev);
-	asprintf(&desc, M_BHND, "%s %s, rev %hhu", vendor_name, dev_name,
+	device_set_descf(dev, "%s %s, rev %hhu", vendor_name, dev_name,
 	    bhnd_get_hwrev(dev));
-
-	if (desc != NULL) {
-		device_set_desc_copy(dev, desc);
-		free(desc, M_BHND);
-	} else {
-		device_set_desc(dev, dev_name);
-	}
 }
 
 /**
@@ -1805,7 +1794,6 @@ void
 bhnd_set_default_bus_desc(device_t dev, const struct bhnd_chipid *chip_id)
 {
 	const char	*bus_name;
-	char		*desc;
 	char		 chip_name[BHND_CHIPID_MAX_NAMELEN];
 
 	/* Determine chip type's bus name */
@@ -1830,14 +1818,7 @@ bhnd_set_default_bus_desc(device_t dev, const struct bhnd_chipid *chip_id)
 	     chip_id->chip_id);
 
 	/* Format and set device description */
-	asprintf(&desc, M_BHND, "%s %s", chip_name, bus_name);
-	if (desc != NULL) {
-		device_set_desc_copy(dev, desc);
-		free(desc, M_BHND);
-	} else {
-		device_set_desc(dev, bus_name);
-	}
-
+	device_set_descf(dev, "%s %s", chip_name, bus_name);
 }
 
 /**
@@ -2189,7 +2170,7 @@ bhnd_bus_generic_get_nvram_var(device_t dev, device_t child, const char *name,
 	bus_topo_assert();
 
 	/* Look for a directly-attached NVRAM child */
-	if ((nvram = device_find_child(dev, "bhnd_nvram", -1)) != NULL)
+	if ((nvram = device_find_child(dev, "bhnd_nvram", DEVICE_UNIT_ANY)) != NULL)
 		return BHND_NVRAM_GETVAR(nvram, name, buf, size, type);
 
 	/* Try to delegate to parent */
@@ -2209,7 +2190,7 @@ bhnd_bus_generic_get_nvram_var(device_t dev, device_t child, const char *name,
  */
 struct bhnd_resource *
 bhnd_bus_generic_alloc_resource(device_t dev, device_t child, int type,
-	int *rid, rman_res_t start, rman_res_t end, rman_res_t count,
+	int rid, rman_res_t start, rman_res_t end, rman_res_t count,
 	u_int flags)
 {
 	struct bhnd_resource	*br;
@@ -2235,7 +2216,7 @@ bhnd_bus_generic_alloc_resource(device_t dev, device_t child, int type,
 
 	/* Attempt activation */
 	if (flags & RF_ACTIVE) {
-		error = BHND_BUS_ACTIVATE_RESOURCE(dev, child, type, *rid, br);
+		error = BHND_BUS_ACTIVATE_RESOURCE(dev, child, br);
 		if (error)
 			goto failed;
 	}
@@ -2244,7 +2225,7 @@ bhnd_bus_generic_alloc_resource(device_t dev, device_t child, int type,
 
 failed:
 	if (res != NULL)
-		BUS_RELEASE_RESOURCE(dev, child, type, *rid, res);
+		BUS_RELEASE_RESOURCE(dev, child, res);
 
 	free(br, M_BHND);
 	return (NULL);
@@ -2257,12 +2238,12 @@ failed:
  * the backing resource to BUS_RELEASE_RESOURCE().
  */
 int
-bhnd_bus_generic_release_resource(device_t dev, device_t child, int type,
-    int rid, struct bhnd_resource *r)
+bhnd_bus_generic_release_resource(device_t dev, device_t child,
+    struct bhnd_resource *r)
 {
 	int error;
 
-	if ((error = BUS_RELEASE_RESOURCE(dev, child, type, rid, r->res)))
+	if ((error = BUS_RELEASE_RESOURCE(dev, child, r->res)))
 		return (error);
 
 	free(r, M_BHND);
@@ -2281,8 +2262,8 @@ bhnd_bus_generic_release_resource(device_t dev, device_t child, int type,
  * to a parent bhnd bus or bridge.
  */
 int
-bhnd_bus_generic_activate_resource(device_t dev, device_t child, int type,
-    int rid, struct bhnd_resource *r)
+bhnd_bus_generic_activate_resource(device_t dev, device_t child,
+    struct bhnd_resource *r)
 {
 	int	error;
 	bool	passthrough;
@@ -2292,7 +2273,7 @@ bhnd_bus_generic_activate_resource(device_t dev, device_t child, int type,
 	/* Try to delegate to the parent */
 	if (device_get_parent(dev) != NULL) {
 		error = BHND_BUS_ACTIVATE_RESOURCE(device_get_parent(dev),
-		    child, type, rid, r);
+		    child, r);
 	} else {
 		error = ENODEV;
 	}
@@ -2301,7 +2282,7 @@ bhnd_bus_generic_activate_resource(device_t dev, device_t child, int type,
 	 * parent, try falling back on standard resource activation.
 	 */
 	if (error && !passthrough) {
-		error = bus_activate_resource(child, type, rid, r->res);
+		error = bus_activate_resource(child, r->res);
 		if (!error)
 			r->direct = true;
 	}
@@ -2317,11 +2298,11 @@ bhnd_bus_generic_activate_resource(device_t dev, device_t child, int type,
  */
 int
 bhnd_bus_generic_deactivate_resource(device_t dev, device_t child,
-    int type, int rid, struct bhnd_resource *r)
+    struct bhnd_resource *r)
 {
 	if (device_get_parent(dev) != NULL)
 		return (BHND_BUS_DEACTIVATE_RESOURCE(device_get_parent(dev),
-		    child, type, rid, r));
+		    child, r));
 
 	return (EINVAL);
 }
