@@ -582,6 +582,7 @@ sysdecode_pledge_flags(FILE *fp, u_long flags, u_long *rem)
 	return (print_mask_0ul(fp, pledgeflags, flags, rem));
 }
 
+bool
 sysdecode_pollfd_events(FILE *fp, int flags, int *rem)
 {
 
