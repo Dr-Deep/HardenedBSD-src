@@ -1,9 +1,8 @@
 .include <bsd.init.mk>
 .include "../lldb.pre.mk"
 
+.if ${MK_LLVM_LINK_STATIC_LIBRARIES} == "yes"
 LIB=		lldb
-<<<<<<< HEAD
-=======
 INTERNALLIB=
 .else
 PACKAGE=	lldb
@@ -14,7 +13,6 @@ PRIVATELIB=
 
 SHARED_CXXFLAGS+=	-UPIC # To avoid compile errors
 
->>>>>>> upstream/stable/15
 SRCDIR=		lldb/source
 
 CFLAGS+=	-I${LLDB_SRCS}/include

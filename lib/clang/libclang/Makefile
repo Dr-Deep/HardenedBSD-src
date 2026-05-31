@@ -1,9 +1,8 @@
 .include <bsd.init.mk>
 .include "../clang.pre.mk"
 
+.if ${MK_LLVM_LINK_STATIC_LIBRARIES} == "yes"
 LIB=		clang
-<<<<<<< HEAD
-=======
 INTERNALLIB=
 .else
 PACKAGE=	clang
@@ -17,7 +16,6 @@ PICFLAG=	-fPIC
 .endif
 
 SHARED_CXXFLAGS+=	-UPIC # To avoid compile errors
->>>>>>> upstream/stable/15
 
 CFLAGS+=	-I${.OBJDIR}
 CFLAGS+=	-I${OBJTOP}/lib/clang/libllvm
@@ -159,11 +157,8 @@ SRCS_MIN+=	ASTMatchers/ASTMatchFinder.cpp
 SRCS_MIN+=	ASTMatchers/ASTMatchersInternal.cpp
 SRCS_MIN+=	ASTMatchers/Dynamic/Diagnostics.cpp
 SRCS_MIN+=	ASTMatchers/Dynamic/Registry.cpp
-<<<<<<< HEAD
-=======
 SRCS_MIN+=	ASTMatchers/Dynamic/VariantValue.cpp
 SRCS_MIN+=	ASTMatchers/LowLevelHelpers.cpp
->>>>>>> upstream/stable/15
 SRCS_MIN+=	Analysis/AnalysisDeclContext.cpp
 SRCS_MIN+=	Analysis/BodyFarm.cpp
 SRCS_MIN+=	Analysis/CFG.cpp
