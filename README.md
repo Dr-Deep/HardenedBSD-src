@@ -31,7 +31,7 @@ HardenedBSD exists today as a fork of FreeBSD that closely follow's
 FreeBSD's source code. HardenedBSD syncs with FreeBSD every six hours.
 Some of the branches, but not all, are listed below:
 
-1. HEAD -> hardened/current/master
+1. main -> hardened/current/master
 1. stable/15 -> hardened/15-stable/main
 
 # Features
@@ -133,6 +133,14 @@ writes to a process's registers. This behavior is controlled by the
 users. Attempting to list kernel modules using `modfind(2)`,
 `kldfind(2)`, and other KLD-related system calls will result in
 permission denied if used by a non-root or jailed user.
+
+The `hardening.pax.kmod_load_disable` sysctl tunable changes whether loading new
+kernel modules is permitted. It supports the following values:
+
+1. `0`: Permit loading of kernel modules
+1. `1`: Prohibit loading of kernel modules
+1. `2`: Prohibit loading of kernel modules, reboot required to re-enable kernel
+   module loading.
 
 When the `hardening.pax.kmod_load_disable` sysctl tunable is set to a value
 greater than 0, loading kernel modules is prohibited. A reboot is required to
