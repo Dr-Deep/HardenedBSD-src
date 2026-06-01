@@ -901,17 +901,64 @@ archives of the repos meant to be unarchived into Radicle's storage location
 (default: `${HOME}/.radicle/storage`). The archives can be found
 [here](https://hardenedbsd.org/~shawn/radicle/archives/).
 
-These steps will bootstrap our larger repos for use with Radicle.
+These steps will bootstrap our larger repos for use with Radicle. Please note
+that the use of `#` constitutes a comment, not a command to run as root.
 
 ```
 $ cd ${HOME}
+# Create your radicle identity and node config if you haven't already with this
+# next single command:
+$ rad auth
+
+# If you have already started the Radicle node, we're going to be manipulating
+# Radicle's local storage directory (a directory only Radicle should touch).
+# So let's stop the Radicle node if it is running to try to prevent problems.
+$ rad node stop
+
+# Make sure that Radicle connects to HardenedBSD's primary Radicle seed node.
+# Only do this once.
+$ rad config set node.connect \
+    z6MknwwMpmZET1PcvQjPYhA6hGY7wkYzxb9YtSRh5j2qSQdG@rad.hardenedbsd.org:8776
+
+# Bootstrap src
 $ fetch -o src.tar.xz \
     https://hardenedbsd.org/~shawn/radicle/archives/src.z2HLHXgL1xevBNQsf8BmQW7MpJmtm.2026-05-19.tar.xz
 $ tar -xf src.tar.xz -C ${HOME}/.radicle/storage
+
+# Start the Radicle node temporarily so we can bootstrap issues and patches.
+$ rad node start
+
+# Clone the src repo to its final destination (assuming /usr/src). Then instruct
+# Radicle to bootstrap the list of issues and patches.
 $ rad clone rad:z2HLHXgL1xevBNQsf8BmQW7MpJmtm /usr/src
 $ cd /usr/src
 $ rad issue cache
 $ rad patch cache
+
+# Stop the Radicle node again if we want to bootstrap ports. Otherwise, you're
+# done! Skip down to the comment starting with "Congratulations!" for
+# conclusions.
+$ rad node stop
+
+# Bootstrap ports
+$ fetch -o ports.tar.xz \
+   https://hardenedbsd.org/~shawn/radicle/archives/ports.z2XrdvALg77ycnuZRXgScb27yb3wM.2026-05-19.tar.xz
+$ tar -xf ports.tar.xz - C ${HOME}/.radicle/storage
+
+# Start the Radicle node temporarily so we can bootstrap issues and patches.
+$ rad node start
+
+# Clone the ports repo to its final destination (assuming /usr/ports). Then
+# instruct Radicle to bootstrap the list of issues and patches.
+$ rad clone rad:z2XrdvALg77ycnuZRXgScb27yb3wM /usr/ports
+$ cd /usr/ports
+$ rad issue cache
+$ rad patch cache
+
+# Congratulations! You should be able to use your src and ports trees. Note that
+# Radicle uses `rad/` as the default remote name, rather than `origin`. So users
+# accustomed to origin/hardened/current/master, for example, would now need to
+# reference rad/hardened/current/master.
 ```
 
 Users do not need to run a full Radicle node to fetch the repos. The repos can
