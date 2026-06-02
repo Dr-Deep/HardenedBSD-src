@@ -32,24 +32,19 @@
 
 #include "fpmath.h"
 
-#ifdef USE_BUILTIN_FMAXIMUM_NUMF
-float
-fmaximum_numf(float x, float y)
+long double
+fminimum_mag_numl(long double x, long double y)
 {
-	return (__builtin_fmaximum_numf(x, y));
-}
-#else
-float
-fmaximum_numf(float x, float y)
-{
-	union IEEEf2bits u[2];
+	union IEEEl2bits u[2];
 	bool nan_x, nan_y;
 
-	u[0].f = x;
-	u[1].f = y;
+	u[0].e = x;
+	mask_nbit_l(u[0]);
+	u[1].e = y;
+	mask_nbit_l(u[1]);
 
-	nan_x = u[0].bits.exp == 255 && u[0].bits.man != 0;
-	nan_y = u[1].bits.exp == 255 && u[1].bits.man != 0;
+	nan_x = isnan(x);
+	nan_y = isnan(y);
 
 	if (nan_x || nan_y) {
 		/* If both are NaN, adding returns qNaN */
@@ -57,7 +52,7 @@ fmaximum_numf(float x, float y)
 		    return (x + y);
 
 		/* force_except makes sure sNaN's raise exceptions */
-		volatile float force_except = x + y;
+		volatile long double force_except = x + y;
 		force_except;
 
 		if (nan_x)
@@ -66,11 +61,19 @@ fmaximum_numf(float x, float y)
 			return (x);
 	}
 
-	/* Handle comparisons of signed zeroes. */
-	if (u[0].bits.sign != u[1].bits.sign)
-		return (u[u[0].bits.sign].f);
+	long double ax = fabsl(x);
+	long double ay = fabsl(y);
 
-	return (x > y ? x : y);
+	if (ay < ax)
+		return (y);
+	if (ax < ay)
+		return (x);
+
+	/* If magnitudes are equal, we break the tie with the sign */
+	if (u[0].bits.sign != u[1].bits.sign)
+		return (u[1].bits.sign ? y : x);
+
+	return (x);
 }
-#endif
+
 

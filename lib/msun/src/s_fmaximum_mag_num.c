@@ -27,29 +27,30 @@
  * SUCH DAMAGE.
  */
 
+#include <float.h>
 #include <math.h>
 #include <stdbool.h>
 
 #include "fpmath.h"
 
-#ifdef USE_BUILTIN_FMAXIMUM_NUMF
-float
-fmaximum_numf(float x, float y)
+#ifdef USE_BUILTIN_FMAXIMUM_MAG_NUM
+double
+fmaximum_mag_num(double x, double y)
 {
-	return (__builtin_fmaximum_numf(x, y));
+	return (__builtin_fmaximum_mag_num(x, y));
 }
 #else
-float
-fmaximum_numf(float x, float y)
+double
+fmaximum_mag_num(double x, double y)
 {
-	union IEEEf2bits u[2];
+	union IEEEd2bits u[2];
 	bool nan_x, nan_y;
 
-	u[0].f = x;
-	u[1].f = y;
+	u[0].d = x;
+	u[1].d = y;
 
-	nan_x = u[0].bits.exp == 255 && u[0].bits.man != 0;
-	nan_y = u[1].bits.exp == 255 && u[1].bits.man != 0;
+	nan_x = isnan(x);
+	nan_y = isnan(y);
 
 	if (nan_x || nan_y) {
 		/* If both are NaN, adding returns qNaN */
@@ -57,7 +58,7 @@ fmaximum_numf(float x, float y)
 		    return (x + y);
 
 		/* force_except makes sure sNaN's raise exceptions */
-		volatile float force_except = x + y;
+		volatile double force_except = x + y;
 		force_except;
 
 		if (nan_x)
@@ -66,11 +67,22 @@ fmaximum_numf(float x, float y)
 			return (x);
 	}
 
-	/* Handle comparisons of signed zeroes. */
-	if (u[0].bits.sign != u[1].bits.sign)
-		return (u[u[0].bits.sign].f);
+	double ax = fabs(x);
+	double ay = fabs(y);
 
-	return (x > y ? x : y);
+	if (ay > ax)
+		return (y);
+	if (ax > ay)
+		return (x);
+
+	/* If magnitudes are equal, we break the tie with the sign */
+	if (u[0].bits.sign != u[1].bits.sign)
+		return (u[u[0].bits.sign].d);
+
+	return (x);
 }
 #endif
 
+#if (LDBL_MANT_DIG == 53)
+__weak_reference(fmaximum_mag_num, fmaximum_mag_numl);
+#endif

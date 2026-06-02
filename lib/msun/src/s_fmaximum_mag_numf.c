@@ -32,15 +32,15 @@
 
 #include "fpmath.h"
 
-#ifdef USE_BUILTIN_FMAXIMUM_NUMF
+#ifdef USE_BUILTIN_FMAXIMUM_MAG_NUMF
 float
-fmaximum_numf(float x, float y)
+fmaximum_mag_numf(float x, float y)
 {
-	return (__builtin_fmaximum_numf(x, y));
+	return (__builtin_fmaximum_mag_numf(x, y));
 }
 #else
 float
-fmaximum_numf(float x, float y)
+fmaximum_mag_numf(float x, float y)
 {
 	union IEEEf2bits u[2];
 	bool nan_x, nan_y;
@@ -48,8 +48,8 @@ fmaximum_numf(float x, float y)
 	u[0].f = x;
 	u[1].f = y;
 
-	nan_x = u[0].bits.exp == 255 && u[0].bits.man != 0;
-	nan_y = u[1].bits.exp == 255 && u[1].bits.man != 0;
+	nan_x = isnan(x);
+	nan_y = isnan(y);
 
 	if (nan_x || nan_y) {
 		/* If both are NaN, adding returns qNaN */
@@ -65,12 +65,20 @@ fmaximum_numf(float x, float y)
 		else
 			return (x);
 	}
+	
+	float ax = fabsf(x);
+	float ay = fabsf(y);
 
-	/* Handle comparisons of signed zeroes. */
+	if (ay > ax)
+		return (y);
+	if (ax > ay)
+		return (x);
+
+	/* If magnitudes are equal, we break the tie with the sign */
 	if (u[0].bits.sign != u[1].bits.sign)
 		return (u[u[0].bits.sign].f);
 
-	return (x > y ? x : y);
+	return (x);
 }
 #endif
 
