@@ -40,7 +40,7 @@ case `uname -r` in
 	_hbsd_dist_dir="pub/15-stable/amd64/amd64/installer/LATEST"
 	;;
 *)
-	_hbsd_dist_dir="pub/current/`uname -m`/`uname -p`/LATEST"
+	_hbsd_dist_dir="pub/current/`uname -m`/`uname -p`/installer/LATEST"
 	;;
 esac
 
