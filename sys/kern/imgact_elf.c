@@ -106,12 +106,7 @@ static int __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp);
 static bool __elfN(freebsd_trans_osrel)(const Elf_Note *note,
     int32_t *osrel);
 static bool kfreebsd_trans_osrel(const Elf_Note *note, int32_t *osrel);
-<<<<<<< HEAD
-static bool can_exec_nonpie(struct proc *p);
-static bool __elfN(check_note)(struct image_params *imgp,
-=======
 static bool __elfN(check_note)(struct image_params *imgp, const Elf_Phdr *phdr,
->>>>>>> upstream/stable/15
     const Elf_Brandnote *checknote, int32_t *osrel, bool *has_fctl0,
     uint32_t *fctl0);
 static vm_prot_t __elfN(trans_prot)(Elf_Word);
@@ -157,19 +152,11 @@ SYSCTL_INT(ELF_NODE_OID, OID_AUTO, sigfastblock,
     CTLFLAG_RWTUN, &__elfN(sigfastblock), 0,
     "enable sigfastblock for new processes");
 
-<<<<<<< HEAD
-=======
-static bool __elfN(allow_wx) = true;
-SYSCTL_BOOL(ELF_NODE_OID, OID_AUTO, allow_wx,
-    CTLFLAG_RWTUN, &__elfN(allow_wx), 0,
-    "Allow pages to be mapped simultaneously writable and executable");
-
 static u_int __elfN(phnums) = 128;
 SYSCTL_UINT(ELF_NODE_OID, OID_AUTO, phnums,
     CTLFLAG_RWTUN, &__elfN(phnums), 0,
     "Max number of program headers to accept");
 
->>>>>>> upstream/stable/15
 static const Elf_Brandinfo *elf_brand_list[MAX_BRANDS];
 
 #define	aligned(a, t)	(rounddown2((u_long)(a), sizeof(t)) == (u_long)(a))
@@ -1222,8 +1209,7 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	imgp->proc->p_sysent = sv;
 	imgp->proc->p_elf_brandinfo = brand_info;
 
-<<<<<<< HEAD
-	maxv = vm_map_max(map) - lim_max(td, RLIMIT_STACK);
+	maxv = vm_map_max(map) - lim_max(imgp->td, RLIMIT_STACK);
 
 #ifdef PAX_ASLR
 	if (hdr->e_type == ET_DYN && baddr == 0) {
@@ -1232,30 +1218,10 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 #endif
 
 	if (mapsz >= maxv - vm_map_min(map)) {
-=======
-	vmspace = imgp->proc->p_vmspace;
-	map = &vmspace->vm_map;
-	maxv = sv->sv_usrstack;
-	if ((imgp->map_flags & MAP_ASLR_STACK) == 0)
-		maxv -= lim_max(imgp->td, RLIMIT_STACK);
-	if (error == 0 && mapsz >= maxv - vm_map_min(map)) {
->>>>>>> upstream/stable/15
 		uprintf("Excessive mapping size\n");
 		error = ENOEXEC;
 	}
 
-<<<<<<< HEAD
-=======
-	if (error == 0 && imgp->et_dyn_addr == ET_DYN_ADDR_RAND) {
-		KASSERT((map->flags & MAP_ASLR) != 0,
-		    ("ET_DYN_ADDR_RAND but !MAP_ASLR"));
-		error = __CONCAT(rnd_, __elfN(base))(map,
-		    vm_map_min(map) + mapsz + lim_max(imgp->td, RLIMIT_DATA),
-		    /* reserve half of the address space to interpreter */
-		    maxv / 2, maxalign, &imgp->et_dyn_addr);
-	}
-
->>>>>>> upstream/stable/15
 	vn_lock(imgp->vp, LK_SHARED | LK_RETRY);
 	if (error != 0)
 		goto ret;
@@ -1283,13 +1249,9 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	 * calculation is that it leaves room for the heap to grow to
 	 * its maximum allowed size.
 	 */
-<<<<<<< HEAD
 	PROC_LOCK(imgp->proc);
 	vmspace = imgp->proc->p_vmspace;
-	addr = round_page((vm_offset_t)vmspace->vm_daddr + lim_max(td,
-=======
 	addr = round_page((vm_offset_t)vmspace->vm_daddr + lim_max(imgp->td,
->>>>>>> upstream/stable/15
 	    RLIMIT_DATA));
 	map->anon_loc = addr;
 	PROC_UNLOCK(imgp->proc);
