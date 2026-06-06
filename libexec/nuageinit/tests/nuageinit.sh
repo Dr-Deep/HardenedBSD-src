@@ -38,8 +38,16 @@ atf_test_case config2_userdata_mounts
 atf_test_case config2_userdata_resolv_conf
 atf_test_case config2_userdata_keyboard
 atf_test_case config2_userdata_ssh_authkey_fingerprints
+atf_test_case config2_userdata_ntp
+atf_test_case config2_userdata_ca_certs
+atf_test_case config2_userdata_multipart
+atf_test_case config2_userdata_power_state
+atf_test_case config2_userdata_locale
 atf_test_case config2_userdata_fqdn_and_hostname
 atf_test_case config2_userdata_write_files
+atf_test_case config2_userdata_encode_base64
+atf_test_case config2_userdata_final_message
+atf_test_case config2_userdata_phone_home
 
 setup_test_adduser()
 {
@@ -1218,6 +1226,145 @@ EOF
 	true
 }
 
+config2_userdata_ntp_head()
+{
+	atf_set "require.user" root
+}
+config2_userdata_ntp_body()
+{
+	mkdir -p media/nuageinit
+	setup_test_adduser
+	printf "{}" > media/nuageinit/meta_data.json
+	cat > media/nuageinit/user_data <<EOF
+#cloud-config
+ntp:
+  servers:
+    - 192.168.1.1
+    - 10.0.0.1
+  pools:
+    - 0.pool.ntp.org
+EOF
+	atf_check -o empty /usr/libexec/nuageinit "${PWD}"/media/nuageinit postnet
+	atf_check -o match:"server 192.168.1.1 iburst" cat etc/ntp.conf
+	atf_check -o match:"server 10.0.0.1 iburst" cat etc/ntp.conf
+	atf_check -o match:"pool 0.pool.ntp.org iburst" cat etc/ntp.conf
+	atf_check -o match:"leapfile /var/db/ntpd.leap-seconds.list" cat etc/ntp.conf
+	true
+}
+
+config2_userdata_ca_certs_head()
+{
+	atf_set "require.user" root
+}
+config2_userdata_ca_certs_body()
+{
+	mkdir -p media/nuageinit
+	setup_test_adduser
+	printf "{}" > media/nuageinit/meta_data.json
+	cat > media/nuageinit/user_data <<'EOF'
+#cloud-config
+ca_certs:
+  trusted:
+    - |
+      -----BEGIN CERTIFICATE-----
+      dGVzdGNlcnQx
+      -----END CERTIFICATE-----
+    - |
+      -----BEGIN CERTIFICATE-----
+      dGVzdGNlcnQy
+      -----END CERTIFICATE-----
+EOF
+	atf_check -o empty /usr/libexec/nuageinit "${PWD}"/media/nuageinit config-2
+	atf_check -o match:"dGVzdGNlcnQx" cat etc/ssl/certs/nuageinit-1.pem
+	atf_check -o match:"dGVzdGNlcnQy" cat etc/ssl/certs/nuageinit-2.pem
+	true
+}
+
+config2_userdata_multipart_head()
+{
+	atf_set "require.user" root
+}
+config2_userdata_multipart_body()
+{
+	mkdir -p media/nuageinit
+	setup_test_adduser
+	printf "{}" > media/nuageinit/meta_data.json
+	cat > media/nuageinit/user_data <<'EOF'
+Content-Type: multipart/mixed; boundary="==BOUNDARY=="
+
+--==BOUNDARY==
+Content-Type: text/cloud-config; charset="us-ascii"
+
+#cloud-config
+hostname: multipart-host
+
+--==BOUNDARY==
+Content-Type: text/x-shellscript
+
+#!/bin/sh
+echo "multipart script executed"
+
+--==BOUNDARY==--
+EOF
+	atf_check -o empty /usr/libexec/nuageinit "${PWD}"/media/nuageinit config-2
+	atf_check -o inline:"hostname=\"multipart-host\"\n" cat etc/rc.conf.d/hostname
+	atf_check -o inline:"#!/bin/sh\necho \"multipart script executed\"\n" cat var/cache/nuageinit/multipart_script
+	test -x var/cache/nuageinit/multipart_script || atf_fail "multipart_script not executable"
+	true
+}
+
+config2_userdata_power_state_head()
+{
+	atf_set "require.user" root
+}
+config2_userdata_power_state_body()
+{
+	mkdir -p media/nuageinit
+	setup_test_adduser
+	export NUAGE_RUN_TESTS=1
+	printf "{}" > media/nuageinit/meta_data.json
+	cat > media/nuageinit/user_data <<EOF
+#cloud-config
+power_state:
+  delay: "+5"
+  mode: reboot
+  message: "Rebooting after configuration is complete"
+  timeout: 30
+  condition: true
+EOF
+	atf_check -o inline:"shutdown -r +5 'Rebooting after configuration is complete'\n" \
+	    /usr/libexec/nuageinit "${PWD}"/media/nuageinit postnet
+	true
+}
+
+config2_userdata_locale_head()
+{
+	atf_set "require.user" root
+}
+config2_userdata_locale_body()
+{
+	mkdir -p media/nuageinit
+	setup_test_adduser
+	printf "{}" > media/nuageinit/meta_data.json
+	cat > media/nuageinit/user_data <<EOF
+#cloud-config
+locale: fr_FR.UTF-8
+EOF
+	atf_check -o empty /usr/libexec/nuageinit "${PWD}"/media/nuageinit config-2
+	atf_check -o inline:"export LANG=fr_FR.UTF-8\n" cat etc/profile
+
+	cat > media/nuageinit/user_data <<EOF
+#cloud-config
+locale:
+  LANG: de_DE.UTF-8
+  LC_ALL: de_DE.UTF-8
+EOF
+	atf_check -o empty /usr/libexec/nuageinit "${PWD}"/media/nuageinit config-2
+	atf_check -o match:"export LANG=de_DE.UTF-8" cat etc/profile
+	atf_check -o match:"export LC_ALL=de_DE.UTF-8" cat etc/profile
+	true
+}
+
 config2_userdata_fqdn_and_hostname_body()
 {
 	mkdir -p media/nuageinit
@@ -1236,6 +1383,69 @@ hostname: host
 EOF
 	atf_check -o empty /usr/libexec/nuageinit "${PWD}"/media/nuageinit config-2
 	atf_check -o inline:"hostname=\"host\"\n" cat ${PWD}/etc/rc.conf.d/hostname
+}
+
+config2_userdata_encode_base64_body()
+{
+	mkdir -p media/nuageinit
+	setup_test_adduser
+	atf_check -o inline:"dGVzdA==\n" \
+	    /usr/libexec/flua -e "print(require('nuage').encode_base64('test'))"
+	atf_check -o inline:"dA==\n" \
+	    /usr/libexec/flua -e "print(require('nuage').encode_base64('t'))"
+	atf_check -o inline:"dGU=\n" \
+	    /usr/libexec/flua -e "print(require('nuage').encode_base64('te'))"
+	# Roundtrip test
+	atf_check -o inline:"hello world\n" \
+	    /usr/libexec/flua -e "print(require('nuage').decode_base64(require('nuage').encode_base64('hello world')))"
+	# Empty input
+	atf_check -o inline:"\n" \
+	    /usr/libexec/flua -e "print(require('nuage').encode_base64(''))"
+}
+
+config2_userdata_final_message_body()
+{
+	mkdir -p media/nuageinit
+	setup_test_adduser
+	export NUAGE_RUN_TESTS=1
+	printf "{}" > media/nuageinit/meta_data.json
+	cat > media/nuageinit/user_data << 'EOF'
+#cloud-config
+final_message: "System ready after $UPTIME seconds"
+EOF
+	atf_check -e match:"System ready after [0-9]+ seconds" \
+	    /usr/libexec/nuageinit "${PWD}"/media/nuageinit postnet
+}
+
+config2_userdata_phone_home_body()
+{
+	mkdir -p media/nuageinit
+	setup_test_adduser
+	export NUAGE_RUN_TESTS=1
+	printf '{"hostname": "myhost", "uuid": "abc-123", "public_keys": ["ssh-rsa AAAAB...", "ssh-ed25519 AAAAC..."]}' > media/nuageinit/meta_data.json
+	cat > media/nuageinit/user_data << 'EOF'
+#cloud-config
+phone_home:
+  url: "http://example.com/endpoint"
+  post:
+    - hostname
+    - instance_id
+  tries: 1
+EOF
+	atf_check -o match:"fetch -q -o /dev/null --post-data 'hostname=myhost&instance_id=abc-123' 'http://example.com/endpoint'" \
+	    /usr/libexec/nuageinit "${PWD}"/media/nuageinit postnet
+
+	# Test "all" post
+	printf '{"hostname": "myhost"}' > media/nuageinit/meta_data.json
+	cat > media/nuageinit/user_data << 'EOF'
+#cloud-config
+phone_home:
+  url: "http://example.com/endpoint"
+  post: all
+  tries: 1
+EOF
+	atf_check -o match:"fetch -q -o /dev/null --post-data 'hostname=myhost&fqdn=myhost' 'http://example.com/endpoint'" \
+	    /usr/libexec/nuageinit "${PWD}"/media/nuageinit postnet
 }
 
 atf_init_test_cases()
@@ -1271,6 +1481,14 @@ atf_init_test_cases()
 	atf_add_test_case config2_userdata_resolv_conf
 	atf_add_test_case config2_userdata_keyboard
 	atf_add_test_case config2_userdata_ssh_authkey_fingerprints
+	atf_add_test_case config2_userdata_ntp
+	atf_add_test_case config2_userdata_ca_certs
+	atf_add_test_case config2_userdata_multipart
+	atf_add_test_case config2_userdata_power_state
+	atf_add_test_case config2_userdata_locale
 	atf_add_test_case config2_userdata_fqdn_and_hostname
 	atf_add_test_case config2_userdata_write_files
+	atf_add_test_case config2_userdata_encode_base64
+	atf_add_test_case config2_userdata_final_message
+	atf_add_test_case config2_userdata_phone_home
 }

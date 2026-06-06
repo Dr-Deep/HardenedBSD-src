@@ -55,6 +55,35 @@ local function decode_base64(input)
 	return table.concat(result)
 end
 
+local function encode_base64(input)
+	if input == nil or #input == 0 then
+		return ""
+	end
+	local b = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+	local result = {}
+	local pos = 1
+	local padding = ""
+	while pos <= #input do
+		local a = string.byte(input, pos)
+		local bb = pos + 1 <= #input and string.byte(input, pos + 1) or 0
+		local c = pos + 2 <= #input and string.byte(input, pos + 2) or 0
+		table.insert(result, string.sub(b, math.floor(a / 4) + 1, math.floor(a / 4) + 1))
+		table.insert(result, string.sub(b, math.floor(a % 4 * 16 + bb / 16) + 1, math.floor(a % 4 * 16 + bb / 16) + 1))
+		if pos + 1 <= #input then
+			table.insert(result, string.sub(b, math.floor(bb % 16 * 4 + c / 64) + 1, math.floor(bb % 16 * 4 + c / 64) + 1))
+		else
+			table.insert(result, "=")
+		end
+		if pos + 2 <= #input then
+			table.insert(result, string.sub(b, math.floor(c % 64) + 1, math.floor(c % 64) + 1))
+		else
+			table.insert(result, "=")
+		end
+		pos = pos + 3
+	end
+	return table.concat(result)
+end
+
 local function shell_escape(s)
 	return "'" .. string.gsub(s, "'", "'\\''") .. "'"
 end
@@ -896,6 +925,50 @@ local function remove_fstab_entry(root, mount_point)
 	nf:close()
 end
 
+local function parse_mime_multipart(data)
+	local boundary = data:match("boundary=\"([^\"]+)\"")
+	if not boundary then
+		boundary = data:match("boundary=([^%s;]+)")
+	end
+	if not boundary then
+		return nil
+	end
+	local parts = {}
+	local pos = data:find("\n") or 1
+	local first = data:find("--" .. boundary, pos, true)
+	if not first then
+		return nil
+	end
+	pos = data:find("\n", first)
+	if not pos then return nil end
+	pos = pos + 1
+	while true do
+		local nextb = data:find("--" .. boundary, pos, true)
+		if not nextb then break end
+		local part = data:sub(pos, nextb - 1)
+		part = part:gsub("^\r?\n", ""):gsub("\r?\n$", "")
+		local header_end = part:find("\r?\n\r?\n")
+		local headers_str, body
+		if header_end then
+			headers_str = part:sub(1, header_end - 1)
+			body = part:sub(header_end + 2):gsub("^\r?\n", ""):gsub("\r?\n$", "")
+		else
+			body = part
+		end
+		local ct = "text/plain"
+		if headers_str then
+			local m = headers_str:match("[Cc]ontent%-[Tt]ype:%s*([^%s;]+)")
+			if m then ct = m:lower() end
+		end
+		table.insert(parts, {content_type = ct, body = body})
+		local after = data:sub(nextb + 2 + #boundary, nextb + 3 + #boundary)
+		if after == "--" then break end
+		pos = data:find("\n", nextb) or nextb
+		if pos then pos = pos + 1 end
+	end
+	return parts
+end
+
 local n = {
 	shell_escape = shell_escape,
 	warn = warnmsg,
@@ -920,9 +993,12 @@ local n = {
 	addsudo = addsudo,
 	adddoas = adddoas,
 	addfile = addfile,
+	decode_base64 = decode_base64,
+	encode_base64 = encode_base64,
 	add_fstab_entry = add_fstab_entry,
 	remove_fstab_entry = remove_fstab_entry,
 	write_resolv_conf = write_resolv_conf,
+	parse_mime_multipart = parse_mime_multipart,
 }
 
 return n

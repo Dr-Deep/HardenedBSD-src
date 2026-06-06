@@ -3,7 +3,7 @@
 .\" Copyright (c) 2025 Baptiste Daroussin <bapt@FreeBSD.org>
 .\" Copyright (c) 2025 Jesús Daniel Colmenares Oviedo <dtxdf@FreeBSD.org>
 .\"
-.Dd February 26, 2026
+.Dd June 6, 2026
 .Dt NUAGEINIT 7
 .Os
 .Sh NAME
@@ -212,6 +212,16 @@ A list of IP/netmask sortlist entries.
 .It options
 A dictionary of resolver options.
 .El
+.It Ic locale
+Set the system locale by appending
+.Qq Cm export
+statements to
+.Pa /etc/profile .
+.Pp
+If the value is a string, it is used as the
+.Dq Cm LANG
+value.
+If the value is an object mapping, each key-value pair is exported.
 .It Ic keyboard
 An object configuring the keyboard layout.
 .Pp
@@ -237,6 +247,44 @@ Boolean which determines whether fingerprints of SSH host keys
 should be logged to the console.
 Defaults to
 .Ar false .
+.It Ic ntp
+An object configuring the NTP daemon by writing
+.Pa /etc/ntp.conf .
+.Pp
+The following keys are recognized:
+.Bl -tag -width "enabled"
+.It servers
+A list of NTP server addresses.
+.It pools
+A list of NTP pool addresses.
+.It enabled
+Boolean, defaults to
+.Ar true .
+Set to
+.Ar false
+to skip NTP configuration.
+.El
+.Pp
+Alternatively,
+.Ic ntp
+can be a list of server addresses (legacy format).
+.It Ic ca_certs
+An object managing CA certificates.
+.Pp
+The following keys are recognized:
+.Bl -tag -width "remove_defaults"
+.It trusted
+A list of PEM-encoded CA certificates to add to the system trust store.
+Certificates are written to
+.Pa /etc/ssl/certs/
+and
+.Xr certctl 8
+rehash is executed.
+.It remove_defaults
+Boolean, if
+.Ar true ,
+remove the default CA certificates.
+.El
 .It Ic timezone
 Sets the system timezone based on the value provided.
 .Pp
@@ -404,6 +452,76 @@ List of packages to be installed.
 Update the remote package metadata.
 .It Ic package_upgrade
 Upgrade the packages installed to their latest version.
+.It Ic power_state
+An object controlling the power state of the instance after configuration.
+The following keys are recognized:
+.Bl -tag -width "condition"
+.It Ic delay
+Time to wait before the action.
+Can be
+.Qq now
+or a time accepted by
+.Xr shutdown 8
+(e.g.,
+.Qq +5
+for five minutes).
+Defaults to
+.Qq now .
+.It Ic mode
+The action to take:
+.Qq poweroff ,
+.Qq reboot ,
+or
+.Qq halt .
+Defaults to
+.Qq poweroff .
+.It Ic message
+Optional message to display to users.
+.It Ic timeout
+Not supported on
+.Fx ,
+silently ignored.
+.It Ic condition
+Boolean or command string.
+If
+.Qq false ,
+the action is skipped.
+If a string, it is run as a command; the action is only taken if the command
+succeeds.
+Defaults to
+.Qq true .
+.El
+.It Ic phone_home
+An object configuring the posting of instance data to a URL.
+.Pp
+The following keys are recognized:
+.Bl -tag -width "tries"
+.It Ic url
+The target URL to which the data will be posted.
+.It Ic post
+A list of data items to send, or the string
+.Qq all
+to send all supported items.
+Supported items are:
+.Qq hostname ,
+.Qq fqdn ,
+.Qq instance_id ,
+.Qq pub_key_rsa ,
+.Qq pub_key_ecdsa ,
+and
+.Qq pub_key_ed25519 .
+.It Ic tries
+Number of retry attempts.
+Defaults to 1.
+.El
+.Pp
+The data is posted using
+.Xr fetch 1 .
+.It Ic final_message
+A string message to be displayed at the end of the boot process.
+The placeholder
+.Qq $UPTIME
+is replaced with the system uptime in seconds.
 .It Ic users
 Specify a list of users to be created:
 .Bl -tag -width "ssh_authorized_keys"
@@ -512,6 +630,20 @@ exists.
 A boolean to specify that the files should be created after the packages are
 installed and the users are created.
 .El
+.El
+.Pp
+Additionally, user-data can be provided as a MIME multipart message
+with content type
+.Qq multipart/mixed .
+Each part is handled according to its
+.Qq Content-Type
+header.
+Supported part types:
+.Bl -tag -width "text/x-shellscript"
+.It text/cloud-config
+Processed as a cloud-config YAML document.
+.It text/x-shellscript
+Saved as an executable script for later execution.
 .El
 .Sh EXAMPLES
 Here is an example of a YAML configuration for
