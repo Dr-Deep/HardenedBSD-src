@@ -916,11 +916,8 @@ wxmap_status(struct thread *td, struct proc *p, void *data)
 		vmspace_free(vm);
 	}
 	*(int *)data = d;
-<<<<<<< HEAD
 #endif
-=======
 	PROC_LOCK(p);
->>>>>>> upstream/main
 	return (0);
 }
 
