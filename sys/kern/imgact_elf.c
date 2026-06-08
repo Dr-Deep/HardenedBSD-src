@@ -87,8 +87,6 @@
 #define ELF_NOTE_ROUNDSIZE	4
 #define OLD_EI_BRAND	8
 
-#define	ELF_OFFPAGE_PHNUM	128
-
 /*
  * ELF_ABI_NAME is a string name of the ELF ABI.  ELF_ABI_ID is used
  * to build variable names.
@@ -153,6 +151,11 @@ static int __elfN(sigfastblock) = 1;
 SYSCTL_INT(ELF_NODE_OID, OID_AUTO, sigfastblock,
     CTLFLAG_RWTUN, &__elfN(sigfastblock), 0,
     "enable sigfastblock for new processes");
+
+static u_int __elfN(phnums) = 128;
+SYSCTL_UINT(ELF_NODE_OID, OID_AUTO, phnums,
+    CTLFLAG_RWTUN, &__elfN(phnums), 0,
+    "Max number of program headers to accept");
 
 static const Elf_Brandinfo *elf_brand_list[MAX_BRANDS];
 
@@ -801,17 +804,14 @@ __elfN(load_file)(struct thread *td, const char *file, u_long *addr,
 		goto fail;
 	}
 
-	if (!aligned(imgp->image_header + hdr->e_phoff, Elf_Addr)) {
+	if (!aligned(imgp->image_header + hdr->e_phoff, Elf_Addr) ||
+	    hdr->e_phnum > __elfN(phnums)) {
 		error = ENOEXEC;
 		goto fail;
 	}
 	if (__elfN(phdr_in_zero_page)(hdr)) {
 		phdr = (const Elf_Phdr *)(imgp->image_header + hdr->e_phoff);
 	} else {
-		if (hdr->e_phnum > ELF_OFFPAGE_PHNUM) {
-			error = ENOEXEC;
-			goto fail;
-		}
 		VOP_UNLOCK(imgp->vp);
 		phdr = m_phdrs = malloc(hdr->e_phnum * sizeof(Elf_Phdr),
 		    M_TEMP, M_WAITOK | M_ZERO);
@@ -1066,11 +1066,13 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 		uprintf("PHDRS wrap\n");
 		return (ENOEXEC);
 	}
+	if (hdr->e_phnum > __elfN(phnums)) {
+		uprintf("Too many program headers (%u, %u max)\n",
+		    hdr->e_phnum, __elfN(phnums));
+		return (ENOEXEC);
+	}
 	if (__elfN(phdr_in_zero_page)(hdr)) {
 		phdr = (const Elf_Phdr *)(imgp->image_header + hdr->e_phoff);
-	} else if (hdr->e_phnum > ELF_OFFPAGE_PHNUM) {
-		uprintf("Too many program headers\n");
-		return (ENOEXEC);
 	} else {
 		VOP_UNLOCK(imgp->vp);
 		phdr = m_phdrs = malloc(hdr->e_phnum * sizeof(Elf_Phdr),
