@@ -1213,7 +1213,6 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 			imgp->et_dyn_addr = ET_DYN_LOAD_ADDR;
 		}
 	}
-<<<<<<< HEAD
 
 	/*
 	 * Avoid a possible deadlock if the current address space is destroyed
@@ -1227,36 +1226,6 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	 * the vnode is unlocked.
 	 */
 	VOP_UNLOCK(imgp->vp);
-=======
-	if ((sv->sv_flags & SV_ASLR) == 0 ||
-	    (imgp->proc->p_flag2 & P2_ASLR_DISABLE) != 0 ||
-	    (fctl0 & NT_FREEBSD_FCTL_ASLR_DISABLE) != 0) {
-		KASSERT(imgp->et_dyn_addr != ET_DYN_ADDR_RAND,
-		    ("imgp->et_dyn_addr == RAND and !ASLR"));
-	} else if ((imgp->proc->p_flag2 & P2_ASLR_ENABLE) != 0 ||
-	    (__elfN(aslr_enabled) && hdr->e_type == ET_EXEC) ||
-	    imgp->et_dyn_addr == ET_DYN_ADDR_RAND) {
-		imgp->map_flags |= MAP_ASLR;
-		/*
-		 * If user does not care about sbrk, utilize the bss
-		 * grow region for mappings as well.  We can select
-		 * the base for the image anywere and still not suffer
-		 * from the fragmentation.
-		 */
-		if (!__elfN(aslr_honor_sbrk) ||
-		    (imgp->proc->p_flag2 & P2_ASLR_IGNSTART) != 0)
-			imgp->map_flags |= MAP_ASLR_IGNSTART;
-		if (__elfN(aslr_stack))
-			imgp->map_flags |= MAP_ASLR_STACK;
-		if (__elfN(aslr_shared_page))
-			imgp->imgp_flags |= IMGP_ASLR_SHARED_PAGE;
-	}
-
-	if ((!__elfN(allow_wx) && (fctl0 & NT_FREEBSD_FCTL_WXNEEDED) == 0 &&
-	    (imgp->proc->p_flag2 & P2_WXORX_DISABLE) == 0) ||
-	    (imgp->proc->p_flag2 & P2_WXORX_ENABLE_EXEC) != 0)
-		imgp->map_flags |= MAP_WXORX;
->>>>>>> upstream/main
 
 	error = exec_new_vmspace(imgp, sv);
 	vmspace = imgp->proc->p_vmspace;
