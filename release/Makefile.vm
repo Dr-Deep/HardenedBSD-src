@@ -102,6 +102,18 @@ QEMUTGT=emulator-portinstall
 .endif
 QEMUTGT?=
 
+<<<<<<< HEAD
+=======
+.if (defined(WITH_CLOUDWARE) && !empty(WITH_CLOUDWARE)) || \
+    (defined(WITH_VMIMAGES) && !empty(WITH_VMIMAGES))
+.if (defined(WITHOUT_QEMU) && !defined(NO_ROOT))
+.error WITHOUT_QEMU requires NO_ROOT
+.elif (!defined(WITHOUT_QEMU) && defined(NO_ROOT))
+.error NO_ROOT requires WITHOUT_QEMU
+.endif
+.endif
+
+>>>>>>> upstream/stable/15
 .if defined(WITH_CLOUDWARE) && !empty(WITH_CLOUDWARE) && !empty(CLOUDWARE)
 . for _CW in ${CLOUDWARE}
 .  if exists(${.CURDIR}/tools/${_CW:tl}.conf) && !defined(${_CW:tu}CONF)
