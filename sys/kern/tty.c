@@ -103,7 +103,11 @@ static int  tty_drainwait = 5 * 60;
 SYSCTL_INT(_kern, OID_AUTO, tty_drainwait, CTLFLAG_RWTUN,
     &tty_drainwait, 0, "Default output drain timeout in seconds");
 
+#ifdef PAX_HARDENING
+static bool tty_tiocsti = false;
+#else
 static bool tty_tiocsti = true;
+#endif
 SYSCTL_BOOL(_security_bsd, OID_AUTO, allow_tiocsti, CTLFLAG_RWTUN,
     &tty_tiocsti, 0, "Allow TIOCSTI ioctl");
 
