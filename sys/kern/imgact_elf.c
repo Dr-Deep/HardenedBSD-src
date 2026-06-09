@@ -1172,19 +1172,6 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	}
 
 	/*
-	 * Avoid a possible deadlock if the current address space is destroyed
-	 * and that address space maps the locked vnode.  In the common case,
-	 * the locked vnode's v_usecount is decremented but remains greater
-	 * than zero.  Consequently, the vnode lock is not needed by vrele().
-	 * However, in cases where the vnode lock is external, such as nullfs,
-	 * v_usecount may become zero.
-	 *
-	 * The VV_TEXT flag prevents modifications to the executable while
-	 * the vnode is unlocked.
-	 */
-	VOP_UNLOCK(imgp->vp);
-
-	/*
 	 * Decide whether to enable randomization of user mappings.  First,
 	 * reset user preferences for the setid binaries.  Then, account for the
 	 * support of randomization by the ABI, by user preferences, and make
