@@ -1,5 +1,6 @@
+# Copyright (c) 2026 The FreeBSD Foundation
 #
-# Copyright (c) 2026, The FreeBSD Foundation
+# SPDX-License-Identifier: BSD-2-Clause
 #
 # This software was developed by Olivier Certner <olce@FreeBSD.org> at
 # Kumacom SARL under sponsorship from the FreeBSD Foundation.
@@ -67,6 +68,8 @@ sysctl_set_and_check_fails_rules()
     value=$1
     sysctl_set_and_check_rules_common sysctl_set_and_check_fails "$value"
 }
+
+atf_require_prog sysctl
 
 # Do not pollute kernel logs with parse errors
 sysctl $PPE_KNOB=0 >/dev/null 2>&1
