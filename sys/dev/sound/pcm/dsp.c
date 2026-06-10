@@ -1975,20 +1975,12 @@ dsp_mmap_single(struct cdev *cdev, vm_ooffset_t *offset,
 	struct snddev_info *d;
 	struct pcm_channel *wrch, *rdch, *c;
 	int err;
+	vm_ooffset_t offset_test;
 
-<<<<<<< HEAD
 	if (nprot & PROT_EXEC)
-=======
-	if (*offset >= *offset + size)
 		return (EINVAL);
-
-	/*
-	 * https://lists.freebsd.org/pipermail/freebsd-emulation/2007-June/003698.html
-	 */
-	if ((nprot & PROT_EXEC) && (dsp_mmap_allow_prot_exec < 0 ||
-	    (dsp_mmap_allow_prot_exec == 0 &&
-	    SV_CURPROC_ABI() != SV_ABI_LINUX)))
->>>>>>> upstream/stable/15
+	offset_test = *offset;
+	if (offset_test >= offset_test + size)
 		return (EINVAL);
 
 	/*
