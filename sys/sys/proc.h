@@ -505,6 +505,7 @@ enum {
 	TDA_MOD3,		/* .. and after */
 	TDA_MOD4,
 	TDA_SCHED_PRIV,
+	TDA_ASYNC_EXIT,
 	TDA_MAX,
 };
 #define	TDAI(tda)		(1U << (tda))
@@ -785,6 +786,8 @@ struct proc {
 
 	TAILQ_HEAD(, kq_timer_cb_data)	p_kqtim_stop;	/* (c) */
 	LIST_ENTRY(proc) p_jaillist;	/* (d) Jail process linkage. */
+	u_int		p_asig;		/* (c) ASYNCEXIT pending signal. */
+	u_int		p_tree_refcnt;	/* (e) proctree refcount */
 };
 
 #define	p_session	p_pgrp->pg_session
@@ -809,6 +812,12 @@ struct proc {
 #define	PROC_PROFLOCK(p)	mtx_lock_spin(&(p)->p_profmtx)
 #define	PROC_PROFUNLOCK(p)	mtx_unlock_spin(&(p)->p_profmtx)
 #define	PROC_PROFLOCK_ASSERT(p, type)	mtx_assert(&(p)->p_profmtx, (type))
+
+#define	PROC_TREE_REF(p)	refcount_acquire(&(p)->p_tree_refcnt)
+#define	PROC_TREE_UNREF(p)	do {					\
+	if (refcount_release(&(p)->p_tree_refcnt))			\
+		uma_zfree(proc_zone, p);				\
+} while (0)
 
 /* These flags are kept in p_flag. */
 #define	P_ADVLOCK	0x00000001	/* Process may hold a POSIX advisory
@@ -850,7 +859,7 @@ struct proc {
 #define	P_INEXEC	0x04000000	/* Process is in execve(). */
 #define	P_STATCHILD	0x08000000	/* Child process stopped or exited. */
 #define	P_INMEM		0x10000000	/* Loaded into memory, always set. */
-#define	P_UNUSED1	0x20000000	/* --available-- */
+#define	P_ASYNC_EXIT	0x20000000	/* XXX */
 #define	P_UNUSED2	0x40000000	/* --available-- */
 #define	P_PPTRACE	0x80000000	/* PT_TRACEME by vforked child. */
 

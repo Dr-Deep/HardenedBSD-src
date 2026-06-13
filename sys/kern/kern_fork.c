@@ -68,6 +68,7 @@
 #include <sys/signalvar.h>
 #include <sys/sx.h>
 #include <sys/syscall.h>
+#include <sys/syscallsubr.h>
 #include <sys/sysent.h>
 #include <sys/sysproto.h>
 #include <sys/vmmeter.h>
@@ -1076,6 +1077,7 @@ fork1(struct thread *td, struct fork_req *fr)
 		pages = kstack_pages;
 	/* Allocate new proc. */
 	newproc = uma_zalloc(proc_zone, M_WAITOK);
+	PROC_TREE_REF(newproc);
 	td2 = FIRST_THREAD_IN_PROC(newproc);
 	if (td2 == NULL) {
 		td2 = thread_alloc(pages);
@@ -1156,7 +1158,8 @@ fail1:
 fail2:
 	if (vm2 != NULL)
 		vmspace_free(vm2);
-	uma_zfree(proc_zone, newproc);
+	if (newproc != NULL)
+		PROC_TREE_UNREF(newproc);
 	if ((flags & RFPROCDESC) != 0 && fp_procdesc != NULL) {
 		fdclose(td, fp_procdesc, *fr->fr_pd_fd);
 		fdrop(fp_procdesc, td);
@@ -1284,7 +1287,7 @@ fork_return(struct thread *td, struct trapframe *frame)
 	 * If the prison was killed mid-fork, die along with it.
 	 */
 	if (!prison_isalive(td->td_ucred->cr_prison))
-		exit1(td, 0, SIGKILL);
+		kern_exit(td, 0, SIGKILL);
 
 #ifdef KTRACE
 	if (KTRPOINT(td, KTR_SYSRET))

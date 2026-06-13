@@ -804,12 +804,12 @@ __elfN(load_file)(struct thread *td, const char *file, u_long *addr,
 		goto fail;
 	}
 
-	if (!aligned(imgp->image_header + hdr->e_phoff, Elf_Addr) ||
-	    hdr->e_phnum > __elfN(phnums)) {
+	if (hdr->e_phnum > __elfN(phnums)) {
 		error = ENOEXEC;
 		goto fail;
 	}
-	if (__elfN(phdr_in_zero_page)(hdr)) {
+	if (__elfN(phdr_in_zero_page)(hdr) &&
+	    aligned(imgp->image_header + hdr->e_phoff, Elf_Addr)) {
 		phdr = (const Elf_Phdr *)(imgp->image_header + hdr->e_phoff);
 	} else {
 		VOP_UNLOCK(imgp->vp);
@@ -1058,10 +1058,6 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	free_interp = false;
 	m_phdrs = NULL;
 
-	if (!aligned(imgp->image_header + hdr->e_phoff, Elf_Addr)) {
-		uprintf("Unaligned program headers\n");
-		return (ENOEXEC);
-	}
 	if (hdr->e_phoff + hdr->e_phnum * hdr->e_phentsize < hdr->e_phoff) {
 		uprintf("PHDRS wrap\n");
 		return (ENOEXEC);
@@ -1071,7 +1067,8 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 		    hdr->e_phnum, __elfN(phnums));
 		return (ENOEXEC);
 	}
-	if (__elfN(phdr_in_zero_page)(hdr)) {
+	if (__elfN(phdr_in_zero_page)(hdr) &&
+	    aligned(imgp->image_header + hdr->e_phoff, Elf_Addr)) {
 		phdr = (const Elf_Phdr *)(imgp->image_header + hdr->e_phoff);
 	} else {
 		VOP_UNLOCK(imgp->vp);
