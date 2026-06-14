@@ -46,13 +46,20 @@ static const char *const CONTAINER_PLEDGECTL_VERSION = "1";
 
 
 /* Forward function declarations for utility functions within this file: */
-static inline int
-print_learning_entry(const pledge_splay_t *const entry,
-    const char *const path, const char *const entname);
-
+static void usage(void);
+static inline int print_learning_entry(const pledge_splay_t *const,
+    const char *const, const char *const);
+static int pledgectl_erase_learning(void);
+static int pledgectl_list_extattr(const char *);
+static int pledgectl_set_extattr(const char *, uint64_t);
+static const pledge_splay_t *tree_lookup_learning_entry(const dev_t,
+    const ino_t);
+static void tree_free(void);
+static int tree_build(const size_t, const pledge_learning_entry_t *const);
+static int pledgectl_dump_all(void);
 
 static void
-usage()
+usage(void)
 {
 	xo_warnx("usage: erase:      pledgectl [--libxo] [-v] -E\n"
 	    "       list-all:   pledgectl [--libxo] [-v] -L\n"
@@ -80,10 +87,10 @@ usage()
 
 
 static int
-pledgectl_erase_learning()
+pledgectl_erase_learning(void)
 {
 	size_t freed_bytes = 0 ;
-	pledge_learning_entry_t unused_entry;
+	pledge_learning_entry_t unused_entry = {};
 	int err = sysctlbyname("security.pledge.learning_data",
 	    NULL, &freed_bytes, &unused_entry, 0);
 
@@ -323,7 +330,7 @@ print_learning_entry(const pledge_splay_t *const entry,
 }
 
 static int
-pledgectl_dump_all()
+pledgectl_dump_all(void)
 {
 	/* Learn how many learning data entries the kernel has for us: */
 	size_t requested_bytes = 0 ;
