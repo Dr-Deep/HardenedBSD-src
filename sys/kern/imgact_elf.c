@@ -804,12 +804,12 @@ __elfN(load_file)(struct thread *td, const char *file, u_long *addr,
 		goto fail;
 	}
 
-	if (!aligned(imgp->image_header + hdr->e_phoff, Elf_Addr) ||
-	    hdr->e_phnum > __elfN(phnums)) {
+	if (hdr->e_phnum > __elfN(phnums)) {
 		error = ENOEXEC;
 		goto fail;
 	}
-	if (__elfN(phdr_in_zero_page)(hdr)) {
+	if (__elfN(phdr_in_zero_page)(hdr) &&
+	    aligned(imgp->image_header + hdr->e_phoff, Elf_Addr)) {
 		phdr = (const Elf_Phdr *)(imgp->image_header + hdr->e_phoff);
 	} else {
 		VOP_UNLOCK(imgp->vp);
@@ -1058,10 +1058,6 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	free_interp = false;
 	m_phdrs = NULL;
 
-	if (!aligned(imgp->image_header + hdr->e_phoff, Elf_Addr)) {
-		uprintf("Unaligned program headers\n");
-		return (ENOEXEC);
-	}
 	if (hdr->e_phoff + hdr->e_phnum * hdr->e_phentsize < hdr->e_phoff) {
 		uprintf("PHDRS wrap\n");
 		return (ENOEXEC);
@@ -1071,7 +1067,8 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 		    hdr->e_phnum, __elfN(phnums));
 		return (ENOEXEC);
 	}
-	if (__elfN(phdr_in_zero_page)(hdr)) {
+	if (__elfN(phdr_in_zero_page)(hdr) &&
+	    aligned(imgp->image_header + hdr->e_phoff, Elf_Addr)) {
 		phdr = (const Elf_Phdr *)(imgp->image_header + hdr->e_phoff);
 	} else {
 		VOP_UNLOCK(imgp->vp);
@@ -1173,11 +1170,26 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 		error = ENOEXEC;
 		goto ret;
 	}
+
+	/*
+	 * Decide whether to enable randomization of user mappings.  First,
+	 * reset user preferences for the setid binaries.  Then, account for the
+	 * support of randomization by the ABI, by user preferences, and make
+	 * special treatment for PIE binaries.
+	 */
+	if (imgp->credential_setid) {
+		PROC_LOCK(imgp->proc);
+		imgp->proc->p_flag2 &= ~(P2_ASLR_ENABLE | P2_ASLR_DISABLE |
+		    P2_WXORX_DISABLE | P2_WXORX_ENABLE_EXEC);
+		PROC_UNLOCK(imgp->proc);
+	}
+
 	sv = brand_info->sysvec;
 	if (hdr->e_type == ET_DYN) {
 		if ((brand_info->flags & BI_CAN_EXEC_DYN) == 0) {
 			uprintf("Cannot execute shared object\n");
 			error = ENOEXEC;
+			(void)vn_lock(imgp->vp, LK_SHARED | LK_RETRY);
 			goto ret;
 		}
 		/*
