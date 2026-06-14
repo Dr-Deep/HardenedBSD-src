@@ -1170,11 +1170,26 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 		error = ENOEXEC;
 		goto ret;
 	}
+
+	/*
+	 * Decide whether to enable randomization of user mappings.  First,
+	 * reset user preferences for the setid binaries.  Then, account for the
+	 * support of randomization by the ABI, by user preferences, and make
+	 * special treatment for PIE binaries.
+	 */
+	if (imgp->credential_setid) {
+		PROC_LOCK(imgp->proc);
+		imgp->proc->p_flag2 &= ~(P2_ASLR_ENABLE | P2_ASLR_DISABLE |
+		    P2_WXORX_DISABLE | P2_WXORX_ENABLE_EXEC);
+		PROC_UNLOCK(imgp->proc);
+	}
+
 	sv = brand_info->sysvec;
 	if (hdr->e_type == ET_DYN) {
 		if ((brand_info->flags & BI_CAN_EXEC_DYN) == 0) {
 			uprintf("Cannot execute shared object\n");
 			error = ENOEXEC;
+			(void)vn_lock(imgp->vp, LK_SHARED | LK_RETRY);
 			goto ret;
 		}
 		/*

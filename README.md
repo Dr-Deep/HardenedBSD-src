@@ -271,6 +271,7 @@ when `PAX_HARDENING` is enabled in the kernel:
 | net.inet6.ip6.use_deprecated          | Allow the use of addresses whose preferred lifetimes have expired              | Integer | 1              | 0                                       |
 | net.inet6.ip6.use_tempaddr            | Use IPv6 temporary addresses with SLAAC                                        | Integer | 0              | 1                                       |
 | net.inet6.ip6.prefer_tempaddr         | Prefer IPv6 temporary address generated last                                   | Integer | 0              | 1                                       |
+| security.bsd.allow_tiocsti            | Allow TIOCSTI ioctl                                                            | Boolean | True           | False                                   |
 | security.bsd.see_other_gids           | Unprivileged processes may see subjects/objects with different real gid        | Integer | 1              | 0                                       |
 | security.bsd.see_other_uids           | Unprivileged processes may see subjects/objects with different real uid        | Integer | 1              | 0                                       |
 | security.bsd.hardlink_check_gid       | Unprivileged processes cannot create hard links to files owned by other groups | Integer | 0              | 1                                       |
