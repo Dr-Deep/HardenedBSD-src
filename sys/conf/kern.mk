@@ -239,8 +239,12 @@ CFLAGS+=	-fwrapv
 # Stack Smashing Protection (SSP) support
 #
 .if ${MK_SSP} != "no"
+<<<<<<< HEAD
 KERN_SSP_CFLAG?=	-fstack-protector-strong
 CFLAGS+=		${KERN_SSP_CFLAG}
+=======
+CFLAGS+=	-fstack-protector-strong
+>>>>>>> rad/freebsd/15-stable/main
 .endif
 
 .if defined(MK_RETPOLINE) && ${MK_RETPOLINE} != "no"
