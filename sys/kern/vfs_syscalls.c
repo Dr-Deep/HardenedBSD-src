@@ -37,6 +37,7 @@
 #include "opt_capsicum.h"
 #include "opt_ktrace.h"
 #include "opt_pax.h"
+#include "opt_pledge.h"
 
 #define	EXTERR_CATEGORY		EXTERR_CAT_VFSSYSCALL
 #include <sys/systm.h>
@@ -54,6 +55,9 @@
 #include <sys/filedesc.h>
 #include <sys/filio.h>
 #include <sys/jail.h>
+#include <sys/syscallsubr.h>
+#include <sys/sysctl.h>
+#include <sys/pledge.h>
 #include <sys/kernel.h>
 #ifdef KTRACE
 #include <sys/ktrace.h>
@@ -1242,6 +1246,12 @@ openatfp(struct thread *td, int dirfd, const char *path,
 	p = td->td_proc;
 	fdp = p->p_fd;
 	pdp = p->p_pd;
+
+#ifdef HBSD_PLEDGE
+	error = pledge_openat(td, dirfd, path, flags, mode);
+	if (error != 0)
+		return (error);
+#endif
 
 	AUDIT_ARG_FFLAGS(flags);
 	AUDIT_ARG_MODE(mode);
@@ -3177,6 +3187,16 @@ kern_fchownat(struct thread *td, int fd, const char *path,
 	if ((flag & ~(AT_SYMLINK_NOFOLLOW | AT_RESOLVE_BENEATH |
 	    AT_EMPTY_PATH)) != 0)
 		return (EINVAL);
+
+#ifdef HBSD_PLEDGE
+	/* consult pledge syscall filtering mechanism.
+	 * While the normal chown syscalls are handled by pledge_syscall(),
+	 * validates access from other ABIs too:*/
+	error = pledge_check_bitmap(td, PLEDGE_CHOWN);
+	if (error) {
+		return (error);
+	}
+#endif
 
 	AUDIT_ARG_OWNER(uid, gid);
 	NDINIT_ATRIGHTS(&nd, LOOKUP, at2cnpflags(flag, AT_SYMLINK_NOFOLLOW |

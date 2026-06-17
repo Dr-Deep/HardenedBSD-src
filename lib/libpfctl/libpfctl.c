@@ -3572,4 +3572,3 @@ pfctl_clear_addrs(struct pfctl_handle *h, const struct pfr_table *filter,
 
 	return (e.error);
 }
-

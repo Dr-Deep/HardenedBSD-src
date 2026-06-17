@@ -32,6 +32,7 @@
 #include "opt_hwt_hooks.h"
 #include "opt_ktrace.h"
 #include "opt_pax.h"
+#include "opt_pledge.h"
 #include "opt_vm.h"
 
 #include <sys/param.h>
@@ -95,6 +96,10 @@
 #include <sys/pmckern.h>
 #endif
 
+#ifdef HBSD_PLEDGE
+#include <sys/pledge.h>
+#endif
+
 #ifdef HWT_HOOKS
 #include <dev/hwt/hwt_hook.h>
 #endif
@@ -145,7 +150,7 @@ SYSCTL_PROC(_kern, OID_AUTO, stackprot, CTLTYPE_INT|CTLFLAG_RD|CTLFLAG_MPSAFE,
     "Stack memory permissions");
 
 u_long ps_arg_cache_limit = PAGE_SIZE / 16;
-SYSCTL_ULONG(_kern, OID_AUTO, ps_arg_cache_limit, CTLFLAG_RW, 
+SYSCTL_ULONG(_kern, OID_AUTO, ps_arg_cache_limit, CTLFLAG_RW,
     &ps_arg_cache_limit, 0,
     "Process' command line characters cache limit");
 
@@ -563,6 +568,12 @@ interpret:
 	error = exec_check_permissions(imgp);
 	if (error)
 		goto exec_fail_dealloc;
+
+#ifdef HBSD_PLEDGE
+	error = pledge_apply_extattr(td, imgp->vp);
+	if (error)
+		goto exec_fail_dealloc;
+#endif
 
 #ifdef PAX_CONTROL_EXTATTR
 	error = pax_control_extattr_parse_flags(td, imgp);

@@ -205,6 +205,7 @@ _LIBRARIES=	\
 		pcap \
 		pcsclite \
 		pjdlog \
+		pledge \
 		pmc \
 		proc \
 		procstat \

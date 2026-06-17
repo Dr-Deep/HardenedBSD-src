@@ -34,6 +34,7 @@
 #include <sys/linker.h>
 #include <sys/mman.h>
 #include <sys/mount.h>
+#include <sys/pledge.h>
 #include <sys/poll.h>
 #include <sys/procctl.h>
 #include <sys/ptrace.h>
@@ -575,6 +576,13 @@ sysdecode_pipe2_flags(FILE *fp, int flags, int *rem)
 }
 
 bool
+sysdecode_pledge_flags(FILE *fp, u_long flags, u_long *rem)
+{
+
+	return (print_mask_0ul(fp, pledgeflags, flags, rem));
+}
+
+bool
 sysdecode_pollfd_events(FILE *fp, int flags, int *rem)
 {
 
@@ -976,7 +984,7 @@ sysdecode_sigcode(int sig, int si_code)
 	str = lookup_value(sigcode, si_code);
 	if (str != NULL)
 		return (str);
-	
+
 	switch (sig) {
 	case SIGILL:
 		return (sysdecode_sigill_code(si_code));

@@ -2840,6 +2840,8 @@ options 	HBSD_DEBUG
 # kernel dumps, GEOM_UZIP images, and tarfs, and is required by zfs.
 options 	ZSTDIO
 
+options		HBSD_PLEDGE	# Enable pledge(2) syscall whitelisting mechanism
+
 # BHND(4) drivers
 options 	BHND_LOGLEVEL	# Logging threshold level
 

@@ -40,6 +40,7 @@
 
 #include "opt_capsicum.h"
 #include "opt_ktrace.h"
+#include "opt_pledge.h"
 #include "opt_pax.h"
 #include <sys/capsicum.h>
 #include <sys/ktr.h>
@@ -49,6 +50,7 @@
 #include <sys/ktrace.h>
 #endif
 #include <security/audit/audit.h>
+#include <sys/pledge.h>
 
 #include <sys/pax.h>
 
@@ -130,6 +132,15 @@ syscallenter(struct thread *td)
 			td->td_errno = error = ECAPMODE;
 			goto retval;
 		}
+	}
+#endif
+
+#ifdef HBSD_PLEDGE
+	/* when pledge is active*/
+	error = pledge_syscall(td, sa->code);
+	if (error != 0) {
+		td->td_errno = error; // TODO should we override the error value here?
+		goto retval;
 	}
 #endif
 

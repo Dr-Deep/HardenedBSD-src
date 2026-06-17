@@ -1,0 +1,9 @@
+caopt="-CApath"
+# TODO quoting capath here changes semantics; before it was unset
+# the -f would return 0, so we would call:
+# openssl verify -CAfile ${tmpdir}/pubkey.pem
+# with this change we call (when capath is empty):
+# openssl verify -CApath ${tmpdir}/pubkey.pem
+if [ -f "${capath}" ]; then
+    caopt="-CAfile"
+fi

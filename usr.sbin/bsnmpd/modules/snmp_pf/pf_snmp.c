@@ -1381,7 +1381,7 @@ pfa_table_addrs(u_int sidx, struct pfr_table *pt)
 
 		if (ioctl(pfctl_fd(pfh), DIOCRGETASTATS, &io)) {
 			syslog(LOG_ERR, "pfa_table_addrs(): ioctl() on %s: %s",
-			    pt->pfrt_name, strerror(errno));
+			    pt->pfrt_name, strerror(error));
 			numaddrs = -1;
 			break;
 		}
