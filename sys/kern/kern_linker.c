@@ -33,10 +33,12 @@
 #include "opt_hwt_hooks.h"
 #include "opt_pax.h"
 
+#define EXTERR_CATEGORY EXTERR_CAT_LINKER
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/boottrace.h>
 #include <sys/eventhandler.h>
+#include <sys/exterrvar.h>
 #include <sys/fcntl.h>
 #include <sys/jail.h>
 #include <sys/kernel.h>
