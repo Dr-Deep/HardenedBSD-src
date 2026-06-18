@@ -90,6 +90,9 @@ typedef struct pledge_jail_data {
 /* check if a thread has a given set of flags TODO document properly */
 int pledge_check_bitmap(struct thread *thread, const uint64_t flags);
 
+/* check if a thread can make a certain sysctl(9) system call */
+int pledge_sysctl_check(struct thread*, struct sysctl_oid*);
+
 /* kernel-land function to restrict pledge permission mask for thread: */
 int kern_pledge(struct thread *thread, const uint64_t mask);
 

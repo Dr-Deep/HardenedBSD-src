@@ -161,13 +161,19 @@ SYSCTL_BOOL(_security_pledge, OID_AUTO, learning,
 #ifdef CTLFLAG_ROOTONLY
     CTLFLAG_ROOTONLY | /* HardenedBSD-specific */
 #endif
+#ifdef CTLFLAG_PLEDGE
+		CTLFLAG_PLEDGE   | /* HardenedBSD-specific */
+#endif
     CTLFLAG_RW | CTLFLAG_SECURE | CTLFLAG_RWTUN,
     &pledge_learning, 0,
     "record pledge violations (0: off, 1: learning)");
 
 SYSCTL_PROC(_security_pledge, OID_AUTO, learning_data,
 #ifdef CTLFLAG_ROOTONLY
-    CTLFLAG_ROOTONLY |
+    CTLFLAG_ROOTONLY | /* HardenedBSD-specific */
+#endif
+#ifdef CTLFLAG_PLEDGE
+		CTLFLAG_PLEDGE   | /* HardenedBSD-specific */
 #endif
     CTLTYPE_STRUCT | CTLFLAG_RW | CTLFLAG_MPSAFE,
     NULL, 0, /* TODO args ??? */
@@ -177,7 +183,10 @@ SYSCTL_PROC(_security_pledge, OID_AUTO, learning_data,
 static counter_u64_t learning_count = NULL;
 SYSCTL_COUNTER_U64(_security_pledge, OID_AUTO, learning_count,
 #ifdef CTLFLAG_ROOTONLY
-    CTLFLAG_ROOTONLY |
+    CTLFLAG_ROOTONLY | /* HardenedBSD-specific */
+#endif
+#ifdef CTLFLAG_PLEDGE
+		CTLFLAG_PLEDGE   | /* HardenedBSD-specific */
 #endif
     CTLFLAG_RD | CTLFLAG_STATS,
     &learning_count, "Amount of recorded learning entries (for all CPUs)");
@@ -185,7 +194,10 @@ SYSCTL_COUNTER_U64(_security_pledge, OID_AUTO, learning_count,
 static counter_u64_t violation_count = NULL;
 SYSCTL_COUNTER_U64(_security_pledge, OID_AUTO, violations,
 #ifdef CTLFLAG_ROOTONLY
-    CTLFLAG_ROOTONLY |
+    CTLFLAG_ROOTONLY | /* HardenedBSD-specific */
+#endif
+#ifdef CTLFLAG_PLEDGE
+		CTLFLAG_PLEDGE   | /* HardenedBSD-specific */
 #endif
     CTLFLAG_RW | CTLFLAG_SECURE | CTLFLAG_STATS,
     &violation_count, "# of policy violations (enforced+learning)");
@@ -193,7 +205,10 @@ SYSCTL_COUNTER_U64(_security_pledge, OID_AUTO, violations,
 static counter_u64_t kill_count = NULL;
 SYSCTL_COUNTER_U64(_security_pledge, OID_AUTO, kills,
 #ifdef CTLFLAG_ROOTONLY
-    CTLFLAG_ROOTONLY |
+    CTLFLAG_ROOTONLY | /* HardenedBSD-specific */
+#endif
+#ifdef CTLFLAG_PLEDGE
+		CTLFLAG_PLEDGE   | /* HardenedBSD-specific */
 #endif
     CTLFLAG_RW | CTLFLAG_SECURE | CTLFLAG_STATS,
     &kill_count, "# of policy violations resulting in process kill");
@@ -201,7 +216,10 @@ SYSCTL_COUNTER_U64(_security_pledge, OID_AUTO, kills,
 static counter_u64_t softfail_count = NULL;
 SYSCTL_COUNTER_U64(_security_pledge, OID_AUTO, softfails,
 #ifdef CTLFLAG_ROOTONLY
-    CTLFLAG_ROOTONLY |
+    CTLFLAG_ROOTONLY | /* HardenedBSD-specific */
+#endif
+#ifdef CTLFLAG_PLEDGE
+		CTLFLAG_PLEDGE   | /* HardenedBSD-specific */
 #endif
     CTLFLAG_RW | CTLFLAG_SECURE | CTLFLAG_STATS,
     &softfail_count, "# of policy violations resulting in soft-fail");
@@ -210,13 +228,19 @@ SYSCTL_COUNTER_U64(_security_pledge, OID_AUTO, softfails,
  * all users in the system? */
 SYSCTL_BOOL(_security_pledge, OID_AUTO, enforcing,
 #ifdef CTLFLAG_ROOTONLY
-    CTLFLAG_ROOTONLY |
+  CTLFLAG_ROOTONLY | /* HardenedBSD-specific */
+#endif
+#ifdef CTLFLAG_PLEDGE
+	CTLFLAG_PLEDGE   | /* HardenedBSD-specific */
 #endif
     CTLFLAG_RW | CTLFLAG_SECURE | CTLFLAG_RWTUN,
     &pledge_enforcing, 0,
     "enforce pledge violations (0: off, 1: enforcing)");
 
 SYSCTL_PROC(_security_pledge, OID_AUTO, flags,
+#ifdef CTLFLAG_PLEDGE
+		CTLFLAG_PLEDGE   | /* HardenedBSD-specific */
+#endif
     CTLTYPE_U64 | CTLFLAG_RW | CTLFLAG_ANYBODY
     | CTLFLAG_PRISON | CTLFLAG_CAPWR | CTLFLAG_CAPRD | CTLFLAG_MPSAFE,
     NULL, 0, /* arg1, arg2 */
@@ -765,6 +789,30 @@ pledge_check_bitmap(struct thread * const thread, const uint64_t flags)
 	return 0;
 }
 
+int
+pledge_sysctl_check(struct thread *thread, struct sysctl_oid *oid) {
+	/* allow: thread carries a wildcard */
+	if (thread->td_pledge == PLEDGE_WILDCARD) {
+		return (0);
+	}
+
+	/* allow: thread carries PLEDGE_SYSCTL */
+	if (thread->td_pledge & PLEDGE_SYSCTL) {
+		return (0);
+	}
+
+	/* allow: oid carries CTLFLAG_PLEDGE */
+	if (oid->oid_kind & CTLFLAG_PLEDGE) {
+		return (0);
+	}
+
+	/* deny: if we get here, let pledge_check_bitmap
+	         handle failure. It might crash the program,
+					 or softfail by setting errno to ENOTCAPABLE.
+	*/
+	return (pledge_check_bitmap(thread, PLEDGE_SYSCTL));
+}
+
 /*
  * Apply intersection of new permission mask and the current mask.
  * Always succeeds.
@@ -1082,7 +1130,13 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_setrlimit] = PLEDGE_STDIO,
 	[SYS_freebsd11_getdirentries] = PLEDGE_STDIO,
 	[SYS___syscall] = PLEDGE_STDIO, // TODO does this allow bypass?
-	[SYS___sysctl]	= PLEDGE_SYSCTL, // TODO
+
+	/* We treat this system call as a special case.
+	 * It is managed by kern_sysctl.c in the sysctl_root function.
+	 * Covered by PLEDGE_SYSCTL. The kernel adds specific oids
+	 * to an auto-allow list as well.*/
+	[SYS___sysctl]	= PLEDGE_WILDCARD,
+
 	[SYS_mlock]	= PLEDGE_STDIO,
 	[SYS_munlock]	= PLEDGE_STDIO,
 	[SYS_undelete]	= PLEDGE_CPATH, // TODO
@@ -1456,7 +1510,11 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 #endif
 /* 570: */
 #ifdef SYS___sysctlbyname
-	[SYS___sysctlbyname] = PLEDGE_SYSCTL, /*  */
+	/* We treat this system call as a special case.
+	 * It is managed by kern_sysctl.c in the sysctl_root function.
+	 * Covered by PLEDGE_SYSCTL. The kernel adds specific oids
+	 * to an auto-allow list as well. */
+	[SYS___sysctlbyname] = PLEDGE_WILDCARD,
 #endif
 #ifdef SYS_shm_open2
 	[SYS_shm_open2] = PLEDGE_STDIO, /*  */

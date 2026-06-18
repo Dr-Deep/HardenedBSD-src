@@ -108,6 +108,7 @@
 #define	CTLFLAG_NEEDGIANT 0x00000800	/* Handler require Giant */
 
 #define	CTLFLAG_ROOTONLY	0x00000010	/* Only available to root */
+#define	CTLFLAG_PLEDGE		0x00000100	/* pledge(3) escape-hatch */
 
 /*
  * Secure level.   Note that CTLFLAG_SECURE == CTLFLAG_SECURE1.
