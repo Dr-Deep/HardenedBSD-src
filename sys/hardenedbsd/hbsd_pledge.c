@@ -22,7 +22,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/libkern.h>
 #include <sys/namei.h>
 #include <sys/param.h>
-#include <sys/pledge.h>
 #include <sys/proc.h>
 #include <sys/queue.h>
 #include <sys/sdt.h>

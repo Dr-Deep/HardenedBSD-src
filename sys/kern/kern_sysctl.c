@@ -42,7 +42,6 @@
 #include "opt_pax.h"
 #include "opt_sysctl.h"
 
-#include <sys/pledge.h>
 #include <sys/param.h>
 #include <sys/fail.h>
 #include <sys/systm.h>
@@ -62,6 +61,11 @@
 #include <sys/sx.h>
 #include <sys/sysproto.h>
 #include <sys/uio.h>
+
+#ifdef HBSD_PLEDGE
+#include <sys/pledge.h>
+#endif
+
 #ifdef KTRACE
 #include <sys/ktrace.h>
 #endif
