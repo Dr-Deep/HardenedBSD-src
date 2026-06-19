@@ -158,90 +158,45 @@ SYSCTL_NODE(_security_pledge, OID_AUTO, jail, 0, 0,
     "jail-specific pledge policy controls");
 
 SYSCTL_BOOL(_security_pledge, OID_AUTO, learning,
-#ifdef CTLFLAG_ROOTONLY
-    CTLFLAG_ROOTONLY | /* HardenedBSD-specific */
-#endif
-#ifdef CTLFLAG_PLEDGE
-		CTLFLAG_PLEDGE   | /* HardenedBSD-specific */
-#endif
-    CTLFLAG_RW | CTLFLAG_SECURE | CTLFLAG_RWTUN,
+    CTLFLAG_ROOTONLY | CTLFLAG_RW | CTLFLAG_SECURE | CTLFLAG_RWTUN,
     &pledge_learning, 0,
     "record pledge violations (0: off, 1: learning)");
 
 SYSCTL_PROC(_security_pledge, OID_AUTO, learning_data,
-#ifdef CTLFLAG_ROOTONLY
-    CTLFLAG_ROOTONLY | /* HardenedBSD-specific */
-#endif
-#ifdef CTLFLAG_PLEDGE
-		CTLFLAG_PLEDGE   | /* HardenedBSD-specific */
-#endif
-    CTLTYPE_STRUCT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+    CTLFLAG_ROOTONLY | CTLTYPE_STRUCT | CTLFLAG_RW | CTLFLAG_MPSAFE,
     NULL, 0, /* TODO args ??? */
     sysctl_pledge_learning_data, "S,pledge_learning_entry_t",
     "Retrieve the learning data entries");
 
 static counter_u64_t learning_count = NULL;
 SYSCTL_COUNTER_U64(_security_pledge, OID_AUTO, learning_count,
-#ifdef CTLFLAG_ROOTONLY
-    CTLFLAG_ROOTONLY | /* HardenedBSD-specific */
-#endif
-#ifdef CTLFLAG_PLEDGE
-		CTLFLAG_PLEDGE   | /* HardenedBSD-specific */
-#endif
-    CTLFLAG_RD | CTLFLAG_STATS,
+    CTLFLAG_ROOTONLY | CTLFLAG_RD | CTLFLAG_STATS,
     &learning_count, "Amount of recorded learning entries (for all CPUs)");
 
 static counter_u64_t violation_count = NULL;
 SYSCTL_COUNTER_U64(_security_pledge, OID_AUTO, violations,
-#ifdef CTLFLAG_ROOTONLY
-    CTLFLAG_ROOTONLY | /* HardenedBSD-specific */
-#endif
-#ifdef CTLFLAG_PLEDGE
-		CTLFLAG_PLEDGE   | /* HardenedBSD-specific */
-#endif
-    CTLFLAG_RW | CTLFLAG_SECURE | CTLFLAG_STATS,
+    CTLFLAG_ROOTONLY | CTLFLAG_RW | CTLFLAG_SECURE | CTLFLAG_STATS,
     &violation_count, "# of policy violations (enforced+learning)");
 
 static counter_u64_t kill_count = NULL;
 SYSCTL_COUNTER_U64(_security_pledge, OID_AUTO, kills,
-#ifdef CTLFLAG_ROOTONLY
-    CTLFLAG_ROOTONLY | /* HardenedBSD-specific */
-#endif
-#ifdef CTLFLAG_PLEDGE
-		CTLFLAG_PLEDGE   | /* HardenedBSD-specific */
-#endif
-    CTLFLAG_RW | CTLFLAG_SECURE | CTLFLAG_STATS,
+    CTLFLAG_ROOTONLY | CTLFLAG_RW | CTLFLAG_SECURE | CTLFLAG_STATS,
     &kill_count, "# of policy violations resulting in process kill");
 
 static counter_u64_t softfail_count = NULL;
 SYSCTL_COUNTER_U64(_security_pledge, OID_AUTO, softfails,
-#ifdef CTLFLAG_ROOTONLY
-    CTLFLAG_ROOTONLY | /* HardenedBSD-specific */
-#endif
-#ifdef CTLFLAG_PLEDGE
-		CTLFLAG_PLEDGE   | /* HardenedBSD-specific */
-#endif
-    CTLFLAG_RW | CTLFLAG_SECURE | CTLFLAG_STATS,
+    CTLFLAG_ROOTONLY | CTLFLAG_RW | CTLFLAG_SECURE | CTLFLAG_STATS,
     &softfail_count, "# of policy violations resulting in soft-fail");
 
 /* TODO are proc nodes with CTLFLAG_SECURE generally accessible to
  * all users in the system? */
 SYSCTL_BOOL(_security_pledge, OID_AUTO, enforcing,
-#ifdef CTLFLAG_ROOTONLY
-  CTLFLAG_ROOTONLY | /* HardenedBSD-specific */
-#endif
-#ifdef CTLFLAG_PLEDGE
-	CTLFLAG_PLEDGE   | /* HardenedBSD-specific */
-#endif
-    CTLFLAG_RW | CTLFLAG_SECURE | CTLFLAG_RWTUN,
+  CTLFLAG_ROOTONLY | CTLFLAG_RW | CTLFLAG_SECURE | CTLFLAG_RWTUN,
     &pledge_enforcing, 0,
     "enforce pledge violations (0: off, 1: enforcing)");
 
 SYSCTL_PROC(_security_pledge, OID_AUTO, flags,
-#ifdef CTLFLAG_PLEDGE
-		CTLFLAG_PLEDGE   | /* HardenedBSD-specific */
-#endif
-    CTLTYPE_U64 | CTLFLAG_RW | CTLFLAG_ANYBODY
+		CTLFLAG_PLEDGE | CTLTYPE_U64 | CTLFLAG_RW | CTLFLAG_ANYBODY
     | CTLFLAG_PRISON | CTLFLAG_CAPWR | CTLFLAG_CAPRD | CTLFLAG_MPSAFE,
     NULL, 0, /* arg1, arg2 */
     sysctl_pledge_flags, "S,uint64_t", /* function, format*/
