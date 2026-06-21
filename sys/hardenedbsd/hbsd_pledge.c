@@ -92,6 +92,7 @@ bool pledge_enforcing = 0; /* TODO: = HBSD_PLEDGE; */
  */
 
 static int sysctl_pledge_flags(SYSCTL_HANDLER_ARGS);
+static int sysctl_pledge_exec_flags(SYSCTL_HANDLER_ARGS);
 static int sysctl_pledge_learning_data(SYSCTL_HANDLER_ARGS);
 
 static unsigned int pledge_jail_osd_slot;
@@ -963,7 +964,7 @@ pledge_openat(struct thread *thread, const int fd, const char *path,
 static
 uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	/* 0: */
-	[SYS_syscall]	= PLEDGE_NONE, // TODO
+	[SYS_syscall]	= PLEDGE_AND | PLEDGE_WILDCARD, /* requires unpledged process */
 	[SYS_exit]	= PLEDGE_NONE,
 	[SYS_fork]	= PLEDGE_PROC,
 	[SYS_read]	= PLEDGE_NONE,
@@ -974,15 +975,15 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_link]	= PLEDGE_CPATH,
 	/* 10: */
 	[SYS_unlink]	= PLEDGE_CPATH,
-	[SYS_chdir]	= PLEDGE_AND | PLEDGE_STDIO | PLEDGE_RPATH,
-	[SYS_fchdir]	= PLEDGE_AND | PLEDGE_STDIO | PLEDGE_RPATH,
+	[SYS_chdir]	= PLEDGE_STDIO,
+	[SYS_fchdir]	= PLEDGE_STDIO,
 #ifdef SYS_freebsd11_mknod
 	[SYS_freebsd11_mknod]	= PLEDGE_AND | PLEDGE_CPATH | PLEDGE_DEVICE,
 #else
 	[SYS_mknod]	= PLEDGE_AND | PLEDGE_CPATH | PLEDGE_DEVICE,
 #endif
 	[SYS_chmod]	= PLEDGE_FATTR,
-	[SYS_chown]	= PLEDGE_AND | PLEDGE_CHOWN | PLEDGE_CPATH, // chown
+	[SYS_chown]	= PLEDGE_CHOWN,
 	[SYS_break]	= PLEDGE_STDIO,
 	/* 20: */
 	[SYS_getpid]	= PLEDGE_NONE,
@@ -1021,10 +1022,10 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_revoke]	= PLEDGE_AND | PLEDGE_PROC | PLEDGE_RPATH,
 	[SYS_symlink]	= PLEDGE_CPATH,
 	[SYS_readlink]	= PLEDGE_RPATH,
-	[SYS_execve]	= PLEDGE_AND | PLEDGE_EXEC | PLEDGE_PROC,
+	[SYS_execve]	= PLEDGE_EXEC,
 	/* 60: */
 	[SYS_umask]	= PLEDGE_STDIO,
-	[SYS_chroot]	= PLEDGE_STDIO,
+	[SYS_chroot]	= PLEDGE_DEVICE,
 	[SYS_msync]	= PLEDGE_STDIO,
 	[SYS_vfork]	= PLEDGE_PROC,
 #ifdef SYS_sbrk
@@ -1048,7 +1049,7 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_setitimer]	= PLEDGE_STDIO,
 	[SYS_swapon]		= PLEDGE_DEVICE,
 	[SYS_getitimer]	= PLEDGE_STDIO,
-	[SYS_getdtablesize]	= PLEDGE_DEVICE, // TODO
+	[SYS_getdtablesize]	= PLEDGE_STDIO,
 	/* 90: */
 	[SYS_dup2]	= PLEDGE_STDIO,
 	[SYS_fcntl]	= PLEDGE_STDIO,
@@ -1064,7 +1065,7 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_listen]	= PLEDGE_INET | PLEDGE_UNIX,
 	[SYS_gettimeofday]	= PLEDGE_NONE,
 	[SYS_getrusage]	= PLEDGE_STDIO,
-	[SYS_getsockopt]	= PLEDGE_STDIO, // TODO?
+	[SYS_getsockopt]	= PLEDGE_INET | PLEDGE_UNIX,
 	/* 120: */
 	[SYS_readv]	= PLEDGE_STDIO,
 	[SYS_writev]	= PLEDGE_STDIO,
@@ -1077,7 +1078,7 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_flock]	= PLEDGE_FLOCK,
 	[SYS_mkfifo]	= PLEDGE_DPATH,
 	[SYS_sendto]	= PLEDGE_STDIO,
-	[SYS_shutdown]	= PLEDGE_PROC,
+	[SYS_shutdown]	= PLEDGE_INET | PLEDGE_UNIX,
 	[SYS_socketpair]	= PLEDGE_STDIO,
 	[SYS_mkdir]	= PLEDGE_CPATH,
 	[SYS_rmdir]	= PLEDGE_CPATH,
@@ -1085,12 +1086,12 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	/* 140: */
 	[SYS_adjtime]	= PLEDGE_SETTIME,
 	[SYS_setsid]	= PLEDGE_STDIO,
-	[SYS_quotactl]	= PLEDGE_STDIO, /* TODO */
+	[SYS_quotactl]	= PLEDGE_DEVICE,
 	[SYS_nlm_syscall] = PLEDGE_STDIO, /* TODO */
 	[SYS_nfssvc]	= PLEDGE_STDIO,
 	/* 160: */
-	[SYS_lgetfh]	= PLEDGE_WPATH | PLEDGE_RPATH, /* TODO */
-	[SYS_getfh]	= PLEDGE_WPATH | PLEDGE_RPATH, /* TODO */
+	[SYS_lgetfh]	= PLEDGE_RPATH,
+	[SYS_getfh]	= PLEDGE_RPATH,
 	[SYS_sysarch]	= PLEDGE_STDIO, /* TODO */
 	[SYS_rtprio]	= PLEDGE_STDIO,
 	[SYS_semsys]	= PLEDGE_STDIO,
@@ -1113,8 +1114,8 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	/* TODO what happened to 193? */
 	[SYS_getrlimit] = PLEDGE_STDIO,
 	[SYS_setrlimit] = PLEDGE_STDIO,
-	[SYS_freebsd11_getdirentries] = PLEDGE_STDIO,
-	[SYS___syscall] = PLEDGE_STDIO, // TODO does this allow bypass?
+	[SYS_freebsd11_getdirentries] = PLEDGE_RPATH,
+	[SYS___syscall] = PLEDGE_AND | PLEDGE_WILDCARD, /* requires unpledged process */
 
 	/* We treat this system call as a special case.
 	 * It is managed by kern_sysctl.c in the sysctl_root function.
@@ -1130,7 +1131,7 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_poll]	= PLEDGE_STDIO,
 	/* 220: */
 	[SYS_freebsd7___semctl] = PLEDGE_STDIO,
-	[SYS_semget]	= PLEDGE_UNIX,
+	[SYS_semget]	= PLEDGE_STDIO,
 	[SYS_semop]	= PLEDGE_STDIO,
 	[SYS_freebsd7_msgctl] = PLEDGE_STDIO,
 	[SYS_msgget]	= PLEDGE_STDIO,
@@ -1144,7 +1145,7 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_clock_gettime]	= PLEDGE_STDIO,
 	[SYS_clock_settime]	= PLEDGE_SETTIME,
 	[SYS_clock_getres]	= PLEDGE_STDIO,
-	[SYS_ktimer_create]	= PLEDGE_AND | PLEDGE_STDIO | PLEDGE_UNIX,
+	[SYS_ktimer_create]	= PLEDGE_STDIO,
 	[SYS_ktimer_delete]	= PLEDGE_STDIO,
 	[SYS_ktimer_settime]	= PLEDGE_STDIO,
 	[SYS_ktimer_gettime]	= PLEDGE_STDIO,
@@ -1175,10 +1176,10 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 #ifdef SYS_netbsd_msync
 	[SYS_netbsd_msync]	= PLEDGE_STDIO, // TODO
 #endif
-	[SYS_freebsd11_nstat]	= PLEDGE_STDIO,
-	[SYS_freebsd11_nfstat]	= PLEDGE_STDIO, // TODO
+	[SYS_freebsd11_nstat]	= PLEDGE_RPATH,
+	[SYS_freebsd11_nfstat]	= PLEDGE_RPATH,
 	/* 280: */
-	[SYS_freebsd11_nlstat]	= PLEDGE_STDIO,
+	[SYS_freebsd11_nlstat]	= PLEDGE_RPATH,
 	[SYS_preadv]	= PLEDGE_STDIO,
 	/* 290: */
 	[SYS_pwritev]	= PLEDGE_STDIO,
@@ -1235,7 +1236,7 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS___acl_delete_fd]	=  PLEDGE_AND | PLEDGE_CPATH | PLEDGE_FATTR,
 	[SYS___acl_aclcheck_file]	=  PLEDGE_AND | PLEDGE_RPATH | PLEDGE_FATTR,
 	[SYS___acl_aclcheck_fd]	=  PLEDGE_AND | PLEDGE_RPATH | PLEDGE_FATTR,
-	[SYS_extattrctl]	= PLEDGE_STDIO, // TODO
+	[SYS_extattrctl]	= PLEDGE_FATTR,
 	[SYS_extattr_set_file]	= PLEDGE_AND | PLEDGE_STDIO | PLEDGE_FATTR,
 	[SYS_extattr_get_file]	= PLEDGE_AND | PLEDGE_STDIO | PLEDGE_RPATH,
 	[SYS_extattr_delete_file]	= PLEDGE_CPATH,
@@ -1259,15 +1260,15 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS___mac_set_fd]	= PLEDGE_AND | PLEDGE_STDIO | PLEDGE_FATTR, /* TODO */
 	[SYS___mac_set_file]	= PLEDGE_FATTR, /* TODO */
 	/* 390: */
-	[SYS_kenv]	= PLEDGE_STDIO,
+	[SYS_kenv]	= PLEDGE_SYSCTL,
 	[SYS_lchflags]	= PLEDGE_FATTR,
 	[SYS_uuidgen]	= PLEDGE_STDIO, // leaks mac address so...
 	[SYS_sendfile]	= PLEDGE_STDIO,
 	[SYS_mac_syscall]	= PLEDGE_STDIO, /* TODO */
-	[SYS_freebsd11_getfsstat]	= PLEDGE_STDIO,
-	[SYS_freebsd11_statfs]	= PLEDGE_STDIO,
-	[SYS_freebsd11_fstatfs]	= PLEDGE_STDIO,
-	[SYS_freebsd11_fhstatfs]	= PLEDGE_STDIO,
+	[SYS_freebsd11_getfsstat]	= PLEDGE_RPATH,
+	[SYS_freebsd11_statfs]	= PLEDGE_RPATH,
+	[SYS_freebsd11_fstatfs]	= PLEDGE_RPATH,
+	[SYS_freebsd11_fhstatfs]	= PLEDGE_RPATH,
 	/* 400: */
 	[SYS_ksem_close]	= PLEDGE_STDIO,
 	[SYS_ksem_post]	= PLEDGE_STDIO, /* TODO */
@@ -1285,7 +1286,7 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_extattr_set_link]	= PLEDGE_CPATH,
 	[SYS_extattr_get_link]	= PLEDGE_RPATH,
 	[SYS_extattr_delete_link]	= PLEDGE_CPATH,
-	[SYS___mac_execve]	= PLEDGE_FATTR, /* TODO */
+	[SYS___mac_execve]	= PLEDGE_EXEC,
 	[SYS_sigaction]	= PLEDGE_STDIO,
 	[SYS_sigreturn]	= PLEDGE_STDIO,
 	[SYS_getcontext]	= PLEDGE_STDIO,
@@ -1301,10 +1302,10 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_thr_exit]	= PLEDGE_NONE,
 	[SYS_thr_self]	= PLEDGE_STDIO,
 	[SYS_thr_kill]	= PLEDGE_PROC,
-	[SYS_jail_attach]	= PLEDGE_STDIO, // TODO
-	[SYS_extattr_list_fd]	= PLEDGE_STDIO, /* TODO */
-	[SYS_extattr_list_file]	= PLEDGE_STDIO,
-	[SYS_extattr_list_link]	= PLEDGE_STDIO,
+	[SYS_jail_attach]	= PLEDGE_PROC,
+	[SYS_extattr_list_fd]	= PLEDGE_RPATH,
+	[SYS_extattr_list_file]	= PLEDGE_RPATH,
+	[SYS_extattr_list_link]	= PLEDGE_RPATH,
 	[SYS_ksem_timedwait]	= PLEDGE_STDIO,
 	[SYS_thr_suspend]	= PLEDGE_PROC,
 	[SYS_thr_wake]	= PLEDGE_PROC,
@@ -1359,13 +1360,13 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_faccessat]	= PLEDGE_RPATH | PLEDGE_WPATH | PLEDGE_CPATH | PLEDGE_NOLEARN, // TODO this should probably softfail?
 	/* 490: */
 	[SYS_fchmodat]	= PLEDGE_FATTR,
-	[SYS_fchownat]	= PLEDGE_CHOWN, // chown
-	[SYS_fexecve]	= PLEDGE_PROC, // TODO openbsd have PLEDGE_EXEC because they distinguish between fork an execve
+	[SYS_fchownat]	= PLEDGE_CHOWN, // chownbecause
+	[SYS_fexecve]	= PLEDGE_EXEC,
 #ifdef SYS_freebsd11_fstatat
 	/* this is a bit ugly, we have a definition for
 	 SYS_fstatat further below. would be nice to have
 	 them in the same place. TODO */
-	[SYS_freebsd11_fstatat]	= PLEDGE_RPATH, // TODO also STDIO
+	[SYS_freebsd11_fstatat]	= PLEDGE_RPATH,
 #endif
 	[SYS_futimesat]	= PLEDGE_FATTR,
 	[SYS_linkat]	= PLEDGE_CPATH,
@@ -1382,7 +1383,7 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_renameat]	= PLEDGE_CPATH,
 	[SYS_symlinkat]	= PLEDGE_CPATH,
 	[SYS_unlinkat]	= PLEDGE_CPATH,
-	[SYS_posix_openpt]	= PLEDGE_STDIO, // TODO pledge_TTY ?
+	[SYS_posix_openpt]	= PLEDGE_TTY,
 #ifdef SYS_gssd_syscall
 	[SYS_gssd_syscall]	= PLEDGE_STDIO, /* TODO */
 #endif
@@ -1476,7 +1477,7 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_getrandom] = PLEDGE_NONE, /* */
 #endif
 #ifdef SYS_getfhat
-	[SYS_getfhat] = PLEDGE_STDIO, /*  */
+	[SYS_getfhat] = PLEDGE_RPATH, /*  */
 #endif
 #ifdef SYS_fhlink
 	[SYS_fhlink] = PLEDGE_CPATH, /*  */
@@ -1530,7 +1531,7 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_aio_readv] = PLEDGE_AND |  PLEDGE_AIO, /* 579 */
 #endif
 #ifdef SYS_sched_getcpu
-	[SYS_sched_getcpu] = PLEDGE_STDIO, /* 581 */
+	[SYS_sched_getcpu] = PLEDGE_NONE, /* 581 */
 #endif
 #ifdef SYS_swapoff
 	[SYS_swapoff] = PLEDGE_KLD, /* 582 */
@@ -1557,19 +1558,19 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_getrlimitusage] = PLEDGE_NONE, /* 589 */
 #endif
 #ifdef SYS_fchroot
-	[SYS_fchroot] = PLEDGE_NONE, /* 590 */
+	[SYS_fchroot] = PLEDGE_DEVICE, /* 590 */
 #endif
 #ifdef SYS_setcred
-	[SYS_setcred] = PLEDGE_NONE, /* 591 */
+	[SYS_setcred] = PLEDGE_ID, /* 591 */
 #endif
 #ifdef SYS_exterrctl
-	[SYS_exterrctl] = PLEDGE_NONE, /* 592 */
+	[SYS_exterrctl] = PLEDGE_PROC, /* 592 */
 #endif
 #ifdef SYS_inotify_add_watch_at
-	[SYS_inotify_add_watch_at] = PLEDGE_NONE, /* 593 */
+	[SYS_inotify_add_watch_at] = PLEDGE_RPATH, /* 593 */
 #endif
 #ifdef SYS_inotify_rm_watch
-	[SYS_inotify_rm_watch] = PLEDGE_NONE, /* 594 */
+	[SYS_inotify_rm_watch] = PLEDGE_RPATH, /* 594 */
 #endif
 #ifdef SYS_getgroups
 	[SYS_getgroups] = PLEDGE_STDIO, /* 595 */
@@ -1578,22 +1579,22 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_setgroups] = PLEDGE_ID, /* 596 */
 #endif
 #ifdef SYS_jail_attach_jd
-	[SYS_jail_attach_jd] = PLEDGE_NONE, /* 597 */
+	[SYS_jail_attach_jd] = PLEDGE_PROC, /* 597 */
 #endif
 #ifdef SYS_jail_remove_jd
-	[SYS_jail_remove_jd] = PLEDGE_NONE, /* 598 */
+	[SYS_jail_remove_jd] = PLEDGE_PROC, /* 598 */
 #endif
 #ifdef SYS_kexec_load
-	[SYS_kexec_load] = PLEDGE_NONE, /* 599 */
+	[SYS_kexec_load] = PLEDGE_KLD | PLEDGE_DEVICE, /* 599 */
 #endif
 #ifdef SYS_pdrfork
-	[SYS_pdrfork] = PLEDGE_NONE, /* 600 */
+	[SYS_pdrfork] = PLEDGE_PROC, /* 600 */
 #endif
 #ifdef SYS_pdwait
-	[SYS_pdwait] = PLEDGE_NONE, /* 601 */
+	[SYS_pdwait] = PLEDGE_PROC, /* 601 */
 #endif
 #ifdef SYS_renameat2
-	[SYS_renameat2] = PLEDGE_NONE, /* 602 */
+	[SYS_renameat2] = PLEDGE_CPATH, /* 602 */
 #endif
 };
 _Static_assert(603 == SYS_MAXSYSCALL, "new syscalls added to sys/sys/syscall.h, hbsd_pledge.c needs to be updated. TODO would it make sense to remove this static assertion and instead display a helpful message on boot + allow the operator to declare/override the defaults via tunables to prevent situations where people can't boot after upgrading?");
