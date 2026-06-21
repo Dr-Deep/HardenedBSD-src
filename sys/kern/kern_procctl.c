@@ -41,6 +41,7 @@
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/procctl.h>
+#include <sys/ptrace.h>
 #include <sys/sx.h>
 #include <sys/syscallsubr.h>
 #include <sys/sysproto.h>
@@ -883,18 +884,23 @@ wxmap_ctl(struct thread *td, struct proc *p, void *data)
 
 	PROC_LOCK_ASSERT(p, MA_OWNED);
 	state = *(int *)data;
+	error = 0;
 
 	switch (state) {
 	case PROC_WX_MAPPINGS_PERMIT:
-		p->p_flag2 |= P2_WXORX_DISABLE;
 		PROC_UNLOCK(p);
-		vm = vmspace_acquire_ref(p);
-		if (vm != NULL) {
+		error = proc_vmspace_ref(td, p, PRVM_BLOCK_EXEC |
+		    PRVM_CHECK_DEBUG, &vm);
+		if (error == 0) {
 			map = &vm->vm_map;
 			vm_map_lock(map);
 			map->flags &= ~MAP_WXORX;
 			vm_map_unlock(map);
-			vmspace_free(vm);
+			PROC_LOCK(p);
+			p->p_flag2 |= P2_WXORX_DISABLE;
+			PROC_UNLOCK(p);
+			proc_vmspace_unref(td, p, PRVM_BLOCK_EXEC |
+			    PRVM_CHECK_DEBUG, vm);
 		}
 		PROC_LOCK(p);
 		break;
@@ -902,8 +908,11 @@ wxmap_ctl(struct thread *td, struct proc *p, void *data)
 		p->p_flag2 |= P2_WXORX_ENABLE_EXEC;
 		break;
 	default:
-		return (EINVAL);
+		error = EINVAL;
+		break;
 	}
+
+	return (error);
 #endif
 
 	return (0);
