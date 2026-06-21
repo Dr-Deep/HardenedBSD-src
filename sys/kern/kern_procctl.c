@@ -880,7 +880,7 @@ wxmap_ctl(struct thread *td, struct proc *p, void *data)
 #ifndef PAX
 	struct vmspace *vm;
 	vm_map_t map;
-	int error, state;
+	int state;
 
 	PROC_LOCK_ASSERT(p, MA_OWNED);
 	state = *(int *)data;
@@ -911,9 +911,11 @@ wxmap_ctl(struct thread *td, struct proc *p, void *data)
 		error = EINVAL;
 		break;
 	}
-#endif
 
 	return (error);
+#endif
+
+	return (0);
 }
 
 static int
