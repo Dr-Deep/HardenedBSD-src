@@ -574,7 +574,7 @@ interpret:
 	if (error)
 		goto exec_fail_dealloc;
 	if (td->td_pledge_exec != PLEDGE_WILDCARD) {
-		td->td_pledge &= td->td_pledge_exec;
+		td->td_pledge = td->td_pledge_exec;
 		td->td_pledge_exec = PLEDGE_WILDCARD;
 	}
 #endif
