@@ -18,7 +18,7 @@
  * Pledge to use a subset of system call functionality.
  */
 int
-pledge(const uint64_t _mask);
+pledge(const uint64_t, const uint64_t);
 
 /*
  * Convert a string policy to a mask.
@@ -46,7 +46,7 @@ pledge_string_to_bitmask(const char *_policy, uint64_t *_result_mask);
  * See pledge_string_to_bitmask().
  */
 int
-pledge_string(const char *_policy);
+pledge_string(const char*, const char*);
 
 
 /*

@@ -573,6 +573,10 @@ interpret:
 	error = pledge_apply_extattr(td, imgp->vp);
 	if (error)
 		goto exec_fail_dealloc;
+	if (td->td_pledge_exec != PLEDGE_WILDCARD) {
+		td->td_pledge &= td->td_pledge_exec;
+		td->td_pledge_exec = PLEDGE_WILDCARD;
+	}
 #endif
 
 #ifdef PAX_CONTROL_EXTATTR

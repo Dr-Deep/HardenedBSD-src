@@ -75,10 +75,6 @@
 #include <sys/vnode.h>
 #include <sys/unistd.h>
 
-#ifdef HBSD_PLEDGE
-#include <sys/pledge.h>
-#endif
-
 #include <security/audit/audit.h>
 #include <security/mac/mac_framework.h>
 
@@ -528,10 +524,6 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	td2->td_sigstk = td->td_sigstk;
 	td2->td_flags = TDF_INMEM;
 	td2->td_lend_user_pri = PRI_MAX;
-
-#ifdef HBSD_PLEDGE
-	td2->td_pledge = PLEDGE_WILDCARD;
-#endif
 
 #ifdef VIMAGE
 	td2->td_vnet = NULL;

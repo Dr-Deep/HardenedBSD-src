@@ -201,6 +201,13 @@ SYSCTL_PROC(_security_pledge, OID_AUTO, flags,
     sysctl_pledge_flags, "S,uint64_t", /* function, format*/
     "Reduce pledge flags for the calling thread and return previous flags.");
 
+SYSCTL_PROC(_security_pledge, OID_AUTO, exec_flags,
+		CTLFLAG_PLEDGE | CTLTYPE_U64 | CTLFLAG_RW | CTLFLAG_ANYBODY
+		| CTLFLAG_PRISON | CTLFLAG_CAPWR | CTLFLAG_CAPRD | CTLFLAG_MPSAFE,
+		NULL, 0,
+		sysctl_pledge_exec_flags, "S,uint64_t",
+		"Set exec-time pledge flags for the calling thread.");
+
 SYSCTL_NODE(_security_pledge, OID_AUTO, override, 0, 0,
     "Override required flags for a given syscall.");
 
@@ -222,6 +229,21 @@ sysctl_pledge_flags(SYSCTL_HANDLER_ARGS)
 	}
 
 	return error;
+}
+
+static int
+sysctl_pledge_exec_flags(SYSCTL_HANDLER_ARGS)
+{
+		int error = 0;
+		uint64_t new_flags = req->td->td_pledge_exec;
+
+		error = sysctl_handle_64(oidp, &new_flags, 0, req);
+
+		if (!error && req->newptr) {
+			kern_pledge_exec(req->td, new_flags);
+		}
+
+		return error;
 }
 
 static int
@@ -779,6 +801,15 @@ kern_pledge(struct thread *td, const uint64_t mask)
 	SDT_PROBE5(pledge, kern, kern_pledge, masks,
 	    td->td_proc->p_pid, 0, 0, td->td_pledge, mask);
 	td->td_pledge &= (mask & ~PLEDGE_AND);
+	return 0;
+}
+
+int
+kern_pledge_exec(struct thread *td, const uint64_t execmask)
+{
+	if (execmask != PLEDGE_WILDCARD) {
+		td->td_pledge_exec &= (execmask & ~PLEDGE_AND);
+	}
 	return 0;
 }
 

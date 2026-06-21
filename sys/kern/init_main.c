@@ -540,6 +540,7 @@ proc0_init(void *dummy __unused)
 	td->td_base_pri = PVM;
 #ifdef HBSD_PLEDGE
 	td->td_pledge = PLEDGE_WILDCARD;
+	td->td_pledge_exec = PLEDGE_WILDCARD;
 #endif
 	td->td_oncpu = curcpu;
 	td->td_flags = TDF_INMEM;

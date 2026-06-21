@@ -15,6 +15,7 @@
 
 /* Cached security.pledge.flags MIB */
 static int security_pledge_flags[3] = {0};
+static int security_pledge_exec_flags[3] = {0};
 
 __attribute__ ((constructor)) static void
 libpledge_initialize(void)
@@ -27,7 +28,15 @@ libpledge_initialize(void)
 	{
 		//perror("pledgectl");
 		fprintf(stderr,
-		    "libpledge: failed to resolve pledge sysctl MIB\n");
+		    "libpledge: failed to resolve pledge.flags sysctl MIB\n");
+		exit(1);
+	}
+	if (sysctlnametomib("security.pledge.exec_flags",
+		(int *) &security_pledge_exec_flags, &len))
+	{
+		//perror("pledgectl");
+		fprintf(stderr,
+		    "libpledge: failed to resolve pledge.exec_flags sysctl MIB\n");
 		exit(1);
 	}
 }
@@ -37,10 +46,20 @@ libpledge_initialize(void)
  * On error, errno is set to indicate the error.
  */
 int
-pledge(const uint64_t mask)
+pledge(const uint64_t mask, const  uint64_t execmask)
 {
-	return (sysctl(security_pledge_flags, 3, NULL, NULL,
+	int err;
+	err = (sysctl(security_pledge_flags, 3, NULL, NULL,
 		&mask, sizeof(mask)));
+	if (err) {
+		return (err);
+	}
+	err = (sysctl(security_pledge_exec_flags, 3, NULL, NULL,
+	&execmask, sizeof(execmask)));
+	if (err) {
+		return (err);
+	}
+	return (0);
 }
 
 /*
@@ -146,14 +165,23 @@ pledge_string_to_bitmask(const char *const policy, uint64_t *output_mask)
  * Returns 0 on success and an error otherwise.
  * See sys/pledge.h
  */
-int pledge_string(const char *policy)
+int pledge_string(const char *policy, const char *execpolicy)
 {
 	uint64_t mask = PLEDGE_NONE;
+	uint64_t execmask = PLEDGE_NONE;
 	int err = pledge_string_to_bitmask(policy, &mask);
 	if (err) {
 		return (err);
 	}
-	return (pledge(mask));
+	if (execpolicy == NULL) {
+		return pledge(mask, PLEDGE_WILDCARD);
+	} else {
+		err = pledge_string_to_bitmask(execpolicy, &execmask);
+		if (err) {
+			return (err);
+		}
+		return (pledge(mask, execmask));
+	}
 }
 
 /*

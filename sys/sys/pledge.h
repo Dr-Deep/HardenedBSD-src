@@ -95,6 +95,7 @@ int pledge_sysctl_check(struct thread*, struct sysctl_oid*);
 
 /* kernel-land function to restrict pledge permission mask for thread: */
 int kern_pledge(struct thread *thread, const uint64_t mask);
+int kern_pledge_exec(struct thread*, const uint64_t);
 
 /*
  * free all entries in the learning data tree,
