@@ -500,7 +500,7 @@ int main(int argc, char *argv[])
 	    | PLEDGE_DEVICE | PLEDGE_SYSCTL
 	    | PLEDGE_CAPSICUM /* We don't actually use capsicum,
 			       * need to investigate that.*/,
-				NULL
+				PLEDGE_WILDCARD
 		);
 
 	xo_set_flags(NULL, XOF_WARN | XOF_COLUMNS);
@@ -621,7 +621,7 @@ int main(int argc, char *argv[])
 	default: break;
 	}
 
-	if (pledge(action_mask, NULL)) {
+	if (pledge(action_mask, PLEDGE_WILDCARD)) {
 		xo_warnx("error: Unable to drop privileges for the "
 		    "requested action.");
 		goto finish;
