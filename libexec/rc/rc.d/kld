@@ -54,7 +54,7 @@ kld_start()
 	startmsg "."
 
 	if checkyesno hbsd_late_kld_prohibit; then
-		sysctl hardening.pax.kmod_load_disable=1
+		sysctl hardening.pax.kmod_load_disable=${hbsd_late_kld_prohibition_value}
 	fi
 }
 
