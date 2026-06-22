@@ -751,7 +751,7 @@ pledge_check_bitmap(struct thread * const thread, const uint64_t flags)
 			thread->td_proc->p_pid,
 			pname,
 			thread->td_sa.code
-		)
+		);
 
 		if (0 == (thread->td_pledge & PLEDGE_SOFTFAIL)) {
 			/* crash process:
