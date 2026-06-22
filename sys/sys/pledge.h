@@ -126,6 +126,7 @@ int pledge_apply_extattr(struct thread *td, struct vnode *ni_vp);
 #define PLEDGE_NONE			0ULL	/* empty mask */
 #define PLEDGE_AND		(1ULL <<  0)	/* match ALL flags */
 #define PLEDGE_SOFTFAIL	(1ULL <<  1)	/* return EPERM instead of crashing */
+#define PLEDGE_INHERIT ~0ULL ^ PLEDGE_AND /* inherit pledges across execve */
 
 /* These names (not the constants) are copied from OpenBSD,
  * maybe we can have some interopability to easy porting:
@@ -242,6 +243,7 @@ struct {
 	{ PLEDGE_SYSCTL,	"sysctl" },
 	{ PLEDGE_IOCTL,	"ioctl" },
 	{ PLEDGE_CAPSICUM,	"capsicum" },
+	{ PLEDGE_INHERIT, "inherit"},
 	{ PLEDGE_NONE,		"none"}
 };
 

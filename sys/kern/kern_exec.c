@@ -573,9 +573,38 @@ interpret:
 	error = pledge_apply_extattr(td, imgp->vp);
 	if (error)
 		goto exec_fail_dealloc;
-	if (td->td_pledge_exec != PLEDGE_WILDCARD) {
-		td->td_pledge = td->td_pledge_exec;
-		td->td_pledge_exec = PLEDGE_WILDCARD;
+
+	/*
+		In every case: 'td_pledge_exec' is inherited across
+		processes, and 'td_pledge' might be changed depending
+		on the value of 'td_pledge_exec'.
+	*/
+	switch(td->td_pledge_exec) {
+		/*
+			When given pledge(PLEDGE_STDIO, PLEDGE_INHERIT) the
+			new process inherits the pledges of its parent.
+			This is the default.
+		*/
+		case PLEDGE_INHERIT:
+			break;
+
+		/*
+			When given pledge(PLEDGE_STDIO, PLEDGE_WILDCARD) the
+			new process is created without pledges in place,
+			and hopefully it will make a new pledge soon.
+			Equivalent to OpenBSD's pledge("stdio", NULL).
+		*/
+		case PLEDGE_WILDCARD:
+			td->td_pledge = PLEDGE_WILDCARD;
+			break;
+
+		/*
+			When given any other execpolicy, it becomes the
+			pledge policy of the new process.
+		*/
+		default:
+			td->td_pledge = td->td_pledge_exec;
+			break;
 	}
 #endif
 

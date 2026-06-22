@@ -808,9 +808,7 @@ kern_pledge(struct thread *td, const uint64_t mask)
 int
 kern_pledge_exec(struct thread *td, const uint64_t execmask)
 {
-	if (execmask != PLEDGE_WILDCARD) {
-		td->td_pledge_exec &= (execmask & ~PLEDGE_AND);
-	}
+	td->td_pledge_exec &= (execmask & ~PLEDGE_AND);
 	return 0;
 }
 
