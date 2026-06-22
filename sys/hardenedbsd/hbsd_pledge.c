@@ -94,6 +94,8 @@ bool pledge_enforcing = 0; /* TODO: = HBSD_PLEDGE; */
 static int sysctl_pledge_flags(SYSCTL_HANDLER_ARGS);
 static int sysctl_pledge_exec_flags(SYSCTL_HANDLER_ARGS);
 static int sysctl_pledge_learning_data(SYSCTL_HANDLER_ARGS);
+static bool pledge_is_modifier(uint64_t);
+static int pledge_flags_to_string(uint64_t, char*, int);
 
 static unsigned int pledge_jail_osd_slot;
 static int pledge_jail_osd_create(void *_obj, void *_data);
@@ -739,13 +741,17 @@ pledge_check_bitmap(struct thread * const thread, const uint64_t flags)
 		/* return a permission error if the wanted syscall_no is not
 		 * permitted by the thread's current pledge bitmap: */
 
-		tprintf(thread->td_proc, 0,
-		    "pledge: %s pid %d syscall %d due to td_pledge=0x%0lx "
-		    "; relevant=0x%0lx\n",
-		    ((thread->td_pledge & PLEDGE_SOFTFAIL) ?
-			"soft-failing" : "crashing"),
-		    thread->td_proc->p_pid, thread->td_sa.code,
-		    thread->td_pledge, flags);
+		char pname[1024] = {0};
+		if(pledge_flags_to_string(violated, &pname[0], 1024))
+			strcpy(&pname[0], "(unknown)");
+
+		tprintf(
+			thread->td_proc, 0,
+			"[%d] pledge \"%s\", syscall %d",
+			thread->td_proc->p_pid,
+			pname,
+			thread->td_sa.code
+		)
 
 		if (0 == (thread->td_pledge & PLEDGE_SOFTFAIL)) {
 			/* crash process:
@@ -764,6 +770,53 @@ pledge_check_bitmap(struct thread * const thread, const uint64_t flags)
 	}
 
 	return 0;
+}
+
+static
+int pledge_flags_to_string(uint64_t flags, char *buf, int size) {
+	int error;
+	error = 0;
+
+	if (buf == NULL)
+		goto err;
+	buf[0] = '\0';
+
+	for (size_t i = 0; i < nitems(pledge_string_map); i++) {
+		const typeof(pledge_string_map[0]) *pledge;
+		pledge = &pledge_string_map[i];
+		if (flags & pledge->constant) {
+			if (pledge_is_modifier(pledge->constant))
+				continue;
+			size_t len;
+			len = strlen(buf);
+			if (len && len + 2 < size)
+				strcat(buf, " ");
+			len = strlen(buf);
+			if (len + strlen(pledge->name) + 1 < size) {
+				strcat(buf, pledge->name);
+			}
+		}
+	}
+	return error;
+
+err:
+	error = 1;
+	return error;
+}
+
+static
+bool pledge_is_modifier(uint64_t pledge) {
+	switch(pledge) {
+		case PLEDGE_AND:
+		case PLEDGE_WILDCARD:
+		case PLEDGE_NONE:
+		case PLEDGE_NOLEARN:
+		case PLEDGE_SOFTFAIL:
+		case PLEDGE_INHERIT:
+			return (true);
+		default:
+			return (false);
+	}
 }
 
 int
