@@ -86,7 +86,6 @@ SDT_PROBE_DEFINE5(pledge, learning, insert, masks,
 bool pledge_learning = 0;
 bool pledge_enforcing = 0; /* TODO: = HBSD_PLEDGE; */
 
-
 /*
  * Forward declarations for static functions and variables in this file:
  */
@@ -94,6 +93,8 @@ bool pledge_enforcing = 0; /* TODO: = HBSD_PLEDGE; */
 static int sysctl_pledge_flags(SYSCTL_HANDLER_ARGS);
 static int sysctl_pledge_exec_flags(SYSCTL_HANDLER_ARGS);
 static int sysctl_pledge_learning_data(SYSCTL_HANDLER_ARGS);
+static int sysctl_pledge_activated(SYSCTL_HANDLER_ARGS);
+
 static bool pledge_is_modifier(uint64_t);
 static int pledge_flags_to_string(uint64_t, char*, int);
 
@@ -198,18 +199,25 @@ SYSCTL_BOOL(_security_pledge, OID_AUTO, enforcing,
     "enforce pledge violations (0: off, 1: enforcing)");
 
 SYSCTL_PROC(_security_pledge, OID_AUTO, flags,
-		CTLFLAG_PLEDGE | CTLTYPE_U64 | CTLFLAG_RW | CTLFLAG_ANYBODY
+		 CTLTYPE_U64 | CTLFLAG_RW | CTLFLAG_ANYBODY
     | CTLFLAG_PRISON | CTLFLAG_CAPWR | CTLFLAG_CAPRD | CTLFLAG_MPSAFE,
     NULL, 0, /* arg1, arg2 */
     sysctl_pledge_flags, "S,uint64_t", /* function, format*/
     "Reduce pledge flags for the calling thread and return previous flags.");
 
 SYSCTL_PROC(_security_pledge, OID_AUTO, exec_flags,
-		CTLFLAG_PLEDGE | CTLTYPE_U64 | CTLFLAG_RW | CTLFLAG_ANYBODY
+		 CTLTYPE_U64 | CTLFLAG_RW | CTLFLAG_ANYBODY
 		| CTLFLAG_PRISON | CTLFLAG_CAPWR | CTLFLAG_CAPRD | CTLFLAG_MPSAFE,
 		NULL, 0,
 		sysctl_pledge_exec_flags, "S,uint64_t",
 		"Set exec-time pledge flags for the calling thread.");
+
+SYSCTL_PROC(_security_pledge, OID_AUTO, activated,
+		CTLTYPE_UINT | CTLFLAG_RW | CTLFLAG_ANYBODY | CTLFLAG_MPSAFE,
+		NULL, 0,
+		sysctl_pledge_activated, "IU",
+		"Set to 1 when a process has been fully initialized.");
+
 
 SYSCTL_NODE(_security_pledge, OID_AUTO, override, 0, 0,
     "Override required flags for a given syscall.");
@@ -247,6 +255,20 @@ sysctl_pledge_exec_flags(SYSCTL_HANDLER_ARGS)
 		}
 
 		return error;
+}
+
+static int
+sysctl_pledge_activated(SYSCTL_HANDLER_ARGS)
+{
+	int error = 0;
+	unsigned int val;
+	val = req->td->td_pledge_activated ? 1 : 0;
+	error = sysctl_handle_int(oidp, &val, sizeof(val), req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (val != 0)
+		req->td->td_pledge_activated = true;
+	return error;
 }
 
 static int
@@ -682,6 +704,10 @@ int
 pledge_check_bitmap(struct thread * const thread, const uint64_t flags)
 {
 
+	if (!thread->td_pledge_activated) {
+		return 0;
+	}
+
 	/* Assume we need to match ALL the flags: */
 	uint64_t violated =
 	    (flags & PLEDGE_WILDCARD)
@@ -818,30 +844,6 @@ bool pledge_is_modifier(uint64_t pledge) {
 		default:
 			return (false);
 	}
-}
-
-int
-pledge_sysctl_check(struct thread *thread, struct sysctl_oid *oid) {
-	/* allow: thread carries a wildcard */
-	if (thread->td_pledge == PLEDGE_WILDCARD) {
-		return (0);
-	}
-
-	/* allow: thread carries PLEDGE_SYSCTL */
-	if (thread->td_pledge & PLEDGE_SYSCTL) {
-		return (0);
-	}
-
-	/* allow: oid carries CTLFLAG_PLEDGE */
-	if (oid->oid_kind & CTLFLAG_PLEDGE) {
-		return (0);
-	}
-
-	/* deny: if we get here, let pledge_check_bitmap
-	         handle failure. It might crash the program,
-					 or softfail by setting errno to ENOTCAPABLE.
-	*/
-	return (pledge_check_bitmap(thread, PLEDGE_SYSCTL));
 }
 
 /*
@@ -1169,11 +1171,7 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_freebsd11_getdirentries] = PLEDGE_RPATH,
 	[SYS___syscall] = PLEDGE_AND | PLEDGE_WILDCARD, /* requires unpledged process */
 
-	/* We treat this system call as a special case.
-	 * It is managed by kern_sysctl.c in the sysctl_root function.
-	 * Covered by PLEDGE_SYSCTL. The kernel adds specific oids
-	 * to an auto-allow list as well.*/
-	[SYS___sysctl]	= PLEDGE_WILDCARD,
+	[SYS___sysctl]	= PLEDGE_SYSCTL,
 
 	[SYS_mlock]	= PLEDGE_STDIO,
 	[SYS_munlock]	= PLEDGE_STDIO,
@@ -1548,11 +1546,7 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 #endif
 /* 570: */
 #ifdef SYS___sysctlbyname
-	/* We treat this system call as a special case.
-	 * It is managed by kern_sysctl.c in the sysctl_root function.
-	 * Covered by PLEDGE_SYSCTL. The kernel adds specific oids
-	 * to an auto-allow list as well. */
-	[SYS___sysctlbyname] = PLEDGE_WILDCARD,
+	[SYS___sysctlbyname] = PLEDGE_SYSCTL,
 #endif
 #ifdef SYS_shm_open2
 	[SYS_shm_open2] = PLEDGE_STDIO, /*  */

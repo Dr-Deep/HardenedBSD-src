@@ -1132,6 +1132,19 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 	dbg("transferring control to program entry point = %p",
 	    obj_main->entry);
 
+	{
+		/* Activate pledge before control is passed to main() */
+		int pmib[3];
+		size_t psz;
+		int val = 1;
+		psz = nitems(mib);
+		if (rtld_sysctlnametomib("security.pledge.activated", pmib, &psz) != 0) {
+			dbg("pledge: unable to resolve security.pledge.activated");
+		} else if (sysctl(pmib, nitems(pmib), NULL, NULL, &val, sizeof(val)) == -1) {
+			dbg("pledge: unable to set security.pledge.activated");
+		}
+	}
+
 	/* Return the exit procedure and the program entry point. */
 	*exit_proc = rtld_exit_ptr;
 	*objp = obj_main;
