@@ -166,6 +166,7 @@ int pledge_apply_extattr(struct thread *td, struct vnode *ni_vp);
 #define PLEDGE_CHOWN		(1ULL << 32)	/* chown(2) family */
 #define PLEDGE_CHOWNUID	(1ULL << 33)	/* allow owner/group changes */
 #define PLEDGE_BPF		(1ULL << 34)	/* bpf ioctl */
+#define PLEDGE_SIGNAL (1ULL << 35)  /* sig* system calls */
 
 /* HardenedBSD-specific constants:*/
 
@@ -235,6 +236,7 @@ struct {
 	{ PLEDGE_CHOWN,	"chown" },
 	{ PLEDGE_CHOWNUID,	"chownuid" },
 	{ PLEDGE_BPF,		"bpf" },
+	{ PLEDGE_SIGNAL, "signal"},
 	{ PLEDGE_DEVICE,	"device" },
 	{ PLEDGE_KLD,		"kld" },
 	{ PLEDGE_AIO,		"aio" },

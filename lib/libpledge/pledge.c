@@ -1,6 +1,7 @@
 #include <sys/pledge.h>
 #include <sys/sysctl.h>
 #include <sys/types.h>
+#include <sys/param.h>
 
 #include <assert.h>
 #include <ctype.h>
@@ -96,16 +97,19 @@ pledge_string_to_bitmask(const char *const policy, uint64_t *output_mask)
 
 	const char *const stop = policy + strlen(policy);
 	for (const char *ptr = policy; ptr < stop; ptr++) {
-
 		switch (state) {
 		case NEGATED_TERM:
-			if (isspace(*ptr)) continue;
+			if (isspace(*ptr)) {
+				continue;
+			}
 			break;
 		case TERM:
 			if ('!' == *ptr) {
 				state = NEGATED_TERM;
 				continue;
-			} else if (isspace(*ptr)) continue;
+			} else if (isspace(*ptr)) {
+				continue;
+			}
 			break;
 		case LOOK_FOR_WHITESPACE:
 			if (isspace(ptr[0])) {
@@ -119,19 +123,17 @@ pledge_string_to_bitmask(const char *const policy, uint64_t *output_mask)
 			return (ptr - policy);
 		}
 
-		for (size_t idx = 0;
-		     idx < sizeof(pledge_string_map)
-			 / sizeof(pledge_string_map[0]); idx++) {
+		const char *end = ptr;
+		while (end < stop && !isspace((unsigned char)*end))
+			end++;
 
+		size_t tokenlen = end - ptr;
+		for (size_t idx = 0; idx < nitems(pledge_string_map); idx++) {
 			size_t namelen = strlen(pledge_string_map[idx].name);
-			// TODO locale-dependent, use C locale instead:
-			/*
-			 * Test for common prefix and termination with
-			 * either space or \0 :
-			 */
-			if (0 != strncasecmp(ptr,
-				pledge_string_map[idx].name, namelen)
-			    || (*(ptr + namelen) | ' ') != ' ')
+
+			if (namelen != tokenlen)
+				continue;
+			if (strncasecmp(ptr, pledge_string_map[idx].name, tokenlen) != 0)
 				continue;
 
 			if (NEGATED_TERM == state) {
@@ -140,12 +142,12 @@ pledge_string_to_bitmask(const char *const policy, uint64_t *output_mask)
 				assert(TERM == state);
 				whitelist |= pledge_string_map[idx].constant;
 			}
-			/* -1 because ptr++ at end of loop: */
-			ptr += namelen - 1;
+
+			/* -1 because ptr++ at end of loop. */
+			ptr = end - 1;
 			state = LOOK_FOR_WHITESPACE;
 			break;
 		}
-
 		/* If we are still looking for a term, we didn't find
 		 * a match in pledge_string_map: */
 		if (LOOK_FOR_WHITESPACE != state)
