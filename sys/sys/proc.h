@@ -345,8 +345,6 @@ struct thread {
 					     td_sigblock_ptr on kern entry */
 	uint64_t	td_pledge;	/* (k*) pledge(2) syscall whitelist bitmap.*/
 	uint64_t 	td_pledge_exec;
-	bool      td_pledge_activated;
-
 	void		*td_exterr_ptr;
 #define	td_endcopy td_pcb
 

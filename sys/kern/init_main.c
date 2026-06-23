@@ -541,7 +541,6 @@ proc0_init(void *dummy __unused)
 #ifdef HBSD_PLEDGE
 	td->td_pledge = PLEDGE_WILDCARD;
 	td->td_pledge_exec = PLEDGE_INHERIT;
-	td->td_pledge_activated = false;
 #endif
 	td->td_oncpu = curcpu;
 	td->td_flags = TDF_INMEM;

@@ -606,12 +606,6 @@ interpret:
 			td->td_pledge = td->td_pledge_exec;
 			break;
 	}
-
-	/*
-		We postpone the activation of pledge until a process
-		is fully initialized.
-	*/
-	td->td_pledge_activated = false;
 #endif
 
 #ifdef PAX_CONTROL_EXTATTR
