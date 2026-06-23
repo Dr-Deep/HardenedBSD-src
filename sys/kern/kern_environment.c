@@ -95,7 +95,7 @@ bool	dynamic_kenv;
 #define KENV_CHECK	if (!dynamic_kenv) \
 			    panic("%s: called before SI_SUB_KMEM", __func__)
 
-static int unprivileged_kenv_read = 1;
+static int unprivileged_kenv_read = 0;
 SYSCTL_INT(_security_bsd, OID_AUTO, unprivileged_kenv_read, CTLFLAG_RW,
     &unprivileged_kenv_read, 1,
     "Unprivileged processes can read the kernel environment");
