@@ -1095,7 +1095,7 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	/* 50: */
 	[SYS_setlogin]	= PLEDGE_ID,
 	[SYS_acct]	= PLEDGE_PROC,
-	[SYS_sigaltstack] = PLEDGE_SIGNAL,
+	[SYS_sigaltstack] = PLEDGE_STDIO,
 	[SYS_ioctl]	= PLEDGE_IOCTL,
 	[SYS_reboot]	= PLEDGE_PROC,
 	[SYS_revoke]	= PLEDGE_AND | PLEDGE_PROC | PLEDGE_RPATH,
@@ -1299,11 +1299,11 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_jail]	= PLEDGE_PROC,
 	[SYS_nnpfs_syscall]	= PLEDGE_KLD,
 	/* 340: */
-	[SYS_sigprocmask]	 = PLEDGE_SIGNAL,
-	[SYS_sigsuspend]	 = PLEDGE_SIGNAL,
-	[SYS_sigpending]	 = PLEDGE_SIGNAL,
-	[SYS_sigtimedwait] = PLEDGE_SIGNAL,
-	[SYS_sigwaitinfo]	 = PLEDGE_SIGNAL,
+	[SYS_sigprocmask]	 = PLEDGE_STDIO,
+	[SYS_sigsuspend]	 = PLEDGE_STDIO,
+	[SYS_sigpending]	 = PLEDGE_STDIO,
+	[SYS_sigtimedwait] = PLEDGE_STDIO,
+	[SYS_sigwaitinfo]	 = PLEDGE_STDIO,
 	[SYS___acl_get_file]	= PLEDGE_AND | PLEDGE_RPATH | PLEDGE_FATTR,
 	[SYS___acl_set_file]	= PLEDGE_AND | PLEDGE_WPATH | PLEDGE_FATTR,
 	[SYS___acl_get_fd]	= PLEDGE_FATTR,
@@ -1364,8 +1364,8 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_extattr_get_link]	= PLEDGE_RPATH,
 	[SYS_extattr_delete_link]	= PLEDGE_CPATH,
 	[SYS___mac_execve]	= PLEDGE_EXEC,
-	[SYS_sigaction]	= PLEDGE_SIGNAL,
-	[SYS_sigreturn]	= PLEDGE_SIGNAL,
+	[SYS_sigaction]	= PLEDGE_STDIO,
+	[SYS_sigreturn]	= PLEDGE_STDIO,
 	[SYS_getcontext]	= PLEDGE_STDIO,
 	[SYS_setcontext]	= PLEDGE_STDIO,
 	[SYS_swapcontext]	= PLEDGE_STDIO,
@@ -1373,7 +1373,7 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS___acl_set_link]	= PLEDGE_FATTR,
 	[SYS___acl_delete_link]	= PLEDGE_FATTR,
 	[SYS___acl_aclcheck_link]	= PLEDGE_FATTR,
-	[SYS_sigwait]	= PLEDGE_SIGNAL,
+	[SYS_sigwait]	= PLEDGE_STDIO,
 	/* 430: */
 	[SYS_thr_create]	= PLEDGE_PROC, // TODO
 	[SYS_thr_exit]	= PLEDGE_NONE,
@@ -1399,7 +1399,7 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_auditctl]	= PLEDGE_AND | PLEDGE_WPATH | PLEDGE_DEVICE, /* TODO */
 	[SYS__umtx_op]	= PLEDGE_STDIO,
 	[SYS_thr_new]	= PLEDGE_STDIO,
-	[SYS_sigqueue]	= PLEDGE_SIGNAL,
+	[SYS_sigqueue]	= PLEDGE_STDIO,
 	[SYS_kmq_open]	= PLEDGE_STDIO,
 	[SYS_kmq_setattr]	= PLEDGE_STDIO,
 	[SYS_kmq_timedreceive]	= PLEDGE_STDIO,
@@ -1582,7 +1582,7 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_shm_rename] = PLEDGE_STDIO, /*  */
 #endif
 #ifdef SYS_sigfastblock
-	[SYS_sigfastblock] = PLEDGE_SIGNAL, /*  */
+	[SYS_sigfastblock] = PLEDGE_STDIO, /*  */
 #endif
 /* 574: */
 #ifdef SYS___realpathat
