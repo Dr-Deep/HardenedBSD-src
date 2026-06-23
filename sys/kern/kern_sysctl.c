@@ -2382,6 +2382,14 @@ sysctl_root(SYSCTL_HANDLER_ARGS)
 	}
 #endif
 
+#ifdef HBSD_PLEDGE
+	error = pledge_sysctl_check(req->td, oid);
+	if (error) {
+		error = ENOTCAPABLE;
+		goto out;
+	}
+#endif
+
 #ifdef PAX_HARDENING
 	/* Is this sysctl available only to root? */
 	if (oid->oid_kind & CTLFLAG_ROOTONLY) {

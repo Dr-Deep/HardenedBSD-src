@@ -199,14 +199,14 @@ SYSCTL_BOOL(_security_pledge, OID_AUTO, enforcing,
     "enforce pledge violations (0: off, 1: enforcing)");
 
 SYSCTL_PROC(_security_pledge, OID_AUTO, flags,
-		 CTLTYPE_U64 | CTLFLAG_RW | CTLFLAG_ANYBODY
+		 CTLTYPE_U64 | CTLFLAG_PLEDGE | CTLFLAG_RW | CTLFLAG_ANYBODY
     | CTLFLAG_PRISON | CTLFLAG_CAPWR | CTLFLAG_CAPRD | CTLFLAG_MPSAFE,
     NULL, 0, /* arg1, arg2 */
     sysctl_pledge_flags, "S,uint64_t", /* function, format*/
     "Reduce pledge flags for the calling thread and return previous flags.");
 
 SYSCTL_PROC(_security_pledge, OID_AUTO, exec_flags,
-		 CTLTYPE_U64 | CTLFLAG_RW | CTLFLAG_ANYBODY
+		 CTLTYPE_U64 | CTLFLAG_PLEDGE | CTLFLAG_RW | CTLFLAG_ANYBODY
 		| CTLFLAG_PRISON | CTLFLAG_CAPWR | CTLFLAG_CAPRD | CTLFLAG_MPSAFE,
 		NULL, 0,
 		sysctl_pledge_exec_flags, "S,uint64_t",
@@ -799,6 +799,30 @@ pledge_check_bitmap(struct thread * const thread, const uint64_t flags)
 	return 0;
 }
 
+int
+pledge_sysctl_check(struct thread *thread, struct sysctl_oid *oid) {
+	/* allow: thread carries a wildcard */
+	if (thread->td_pledge == PLEDGE_WILDCARD) {
+		return (0);
+	}
+
+	/* allow: thread carries PLEDGE_SYSCTL */
+	if (thread->td_pledge & PLEDGE_SYSCTL) {
+		return (0);
+	}
+
+	/* allow: oid carries CTLFLAG_PLEDGE */
+	if (oid->oid_kind & CTLFLAG_PLEDGE) {
+		return (0);
+	}
+
+	/* deny: when we get here, let pledge_check_bitmap
+		 handle failure. It might crash the program,
+		 or softfail by setting errno to ENOTCAPABLE.
+	*/
+	return (pledge_check_bitmap(thread, PLEDGE_SYSCTL));
+}
+
 static
 int pledge_flags_to_string(uint64_t flags, char *buf, int size) {
 	int error;
@@ -1169,9 +1193,12 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	[SYS_getrlimit] = PLEDGE_STDIO,
 	[SYS_setrlimit] = PLEDGE_STDIO,
 	[SYS_freebsd11_getdirentries] = PLEDGE_RPATH,
-	[SYS___syscall] = PLEDGE_AND | PLEDGE_WILDCARD, /* requires unpledged process */
 
-	[SYS___sysctl]	= PLEDGE_SYSCTL,
+	/* requires unpledged process */
+	[SYS___syscall] = PLEDGE_AND | PLEDGE_WILDCARD,
+
+	/* requires PLEDGE_SYSCTL but it is enforced within kern_sysctl.c */
+	[SYS___sysctl]	= PLEDGE_WILDCARD,
 
 	[SYS_mlock]	= PLEDGE_STDIO,
 	[SYS_munlock]	= PLEDGE_STDIO,
@@ -1546,7 +1573,8 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 #endif
 /* 570: */
 #ifdef SYS___sysctlbyname
-	[SYS___sysctlbyname] = PLEDGE_SYSCTL,
+	/* requires PLEDGE_SYSCTL but it is enforced within kern_sysctl.c */
+	[SYS___sysctlbyname] = PLEDGE_WILDCARD,
 #endif
 #ifdef SYS_shm_open2
 	[SYS_shm_open2] = PLEDGE_STDIO, /*  */
