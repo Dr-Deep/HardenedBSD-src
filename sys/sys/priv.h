@@ -144,6 +144,8 @@
 #define	PRIV_KENV_DUMP		122	/* Dump kernel env. */
 #define	PRIV_KENV_GET		123	/* Get kernel env. variables. */
 
+#define	PRIV_KENV_READ		PRIV_KENV_DUMP	/* HBSD compat with FreeBSD */
+
 /*
  * Loadable kernel module privileges.
  */
