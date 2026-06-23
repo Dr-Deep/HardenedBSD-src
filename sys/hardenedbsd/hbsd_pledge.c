@@ -1198,8 +1198,7 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 	/* requires unpledged process */
 	[SYS___syscall] = PLEDGE_AND | PLEDGE_WILDCARD,
 
-	/* requires PLEDGE_SYSCTL but it is enforced within kern_sysctl.c */
-	[SYS___sysctl]	= PLEDGE_WILDCARD,
+	[SYS___sysctl]	= PLEDGE_SYSCTL,
 
 	[SYS_mlock]	= PLEDGE_STDIO,
 	[SYS_munlock]	= PLEDGE_STDIO,
@@ -1574,8 +1573,7 @@ uint64_t pledge_permission_map[SYS_MAXSYSCALL] = {
 #endif
 /* 570: */
 #ifdef SYS___sysctlbyname
-	/* requires PLEDGE_SYSCTL but it is enforced within kern_sysctl.c */
-	[SYS___sysctlbyname] = PLEDGE_WILDCARD,
+	[SYS___sysctlbyname] = PLEDGE_SYSCTL,
 #endif
 #ifdef SYS_shm_open2
 	[SYS_shm_open2] = PLEDGE_STDIO, /*  */
@@ -1690,6 +1688,9 @@ pledge_syscall(struct thread * thread, const int syscall_no)
 		return (pledge_check_bitmap(thread,
 			PLEDGE_AND | PLEDGE_WILDCARD));
 	}
+
+	if (syscall_no == SYS___sysctl || syscall_no == SYS___sysctlbyname)
+		return (0); /* checked in kern_sysctl.c */
 
 	return (pledge_check_bitmap(thread, pledge_permission_map[syscall_no]));
 }
