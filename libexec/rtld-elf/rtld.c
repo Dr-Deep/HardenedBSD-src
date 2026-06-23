@@ -1137,7 +1137,7 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 		int pmib[3];
 		size_t psz;
 		int val = 1;
-		psz = nitems(mib);
+		psz = nitems(pmib);
 		if (rtld_sysctlnametomib("security.pledge.activated", pmib, &psz) != 0) {
 			dbg("pledge: unable to resolve security.pledge.activated");
 		} else if (sysctl(pmib, nitems(pmib), NULL, NULL, &val, sizeof(val)) == -1) {
