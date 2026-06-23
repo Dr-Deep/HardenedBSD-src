@@ -769,15 +769,16 @@ pledge_check_bitmap(struct thread * const thread, const uint64_t flags)
 
 		char pname[1024] = {0};
 		if(pledge_flags_to_string(violated, &pname[0], 1024))
-			strcpy(&pname[0], "(unknown)");
+			strcpy(&pname[0], "unknown");
 
 		tprintf(
 			thread->td_proc, 0,
-			"%s[%d] pledge \"%s\", syscall %d\n",
+			"%s[%d] pledge \"%s\", syscall %d (\"%s\")\n",
 			thread->td_proc->p_comm,
 			thread->td_proc->p_pid,
 			pname,
-			thread->td_sa.code
+			thread->td_sa.code,
+			syscallname(thread->td_proc, thread->td_sa.code)
 		);
 
 		if (0 == (thread->td_pledge & PLEDGE_SOFTFAIL)) {
