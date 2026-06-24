@@ -50,14 +50,12 @@ kld_start()
 		load_kld $_kld
 		startmsg -n " ${_kld}"
 	done
-<<<<<<< HEAD
+
+	startmsg "."
 
 	if checkyesno hbsd_late_kld_prohibit; then
 		sysctl hardening.pax.kmod_load_disable=${hbsd_late_kld_prohibition_value}
 	fi
-=======
-	startmsg "."
->>>>>>> rad/freebsd/current/main
 }
 
 load_rc_config $name
