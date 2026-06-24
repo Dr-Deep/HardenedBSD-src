@@ -45,10 +45,13 @@ kld_start()
 
 	local _kld
 
-	startmsg "Loading kernel modules: ${kld_list}"
+	startmsg -n "Loading kernel modules:"
 	for _kld in $kld_list ; do
-		load_kld -e ${_kld}.ko $_kld
+		load_kld $_kld
+		startmsg -n " ${_kld}"
 	done
+
+	startmsg "."
 
 	if checkyesno hbsd_late_kld_prohibit; then
 		sysctl hardening.pax.kmod_load_disable=${hbsd_late_kld_prohibition_value}
