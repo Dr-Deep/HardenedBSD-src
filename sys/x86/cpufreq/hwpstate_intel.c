@@ -128,12 +128,12 @@ MODULE_VERSION(hwpstate_intel, 1);
 /*
  * Internal errors conveyed by code executing on another CPU.
  */
-#define HWP_ERROR_CPPC_ENABLE	     (1 << 0)
-#define HWP_ERROR_CPPC_CAPS	     (1 << 1)
-#define HWP_ERROR_CPPC_REQUEST	     (1 << 2)
-#define HWP_ERROR_CPPC_REQUEST_WRITE (1 << 3)
-#define HWP_ERROR_CPPC_REQUEST_PKG   (1 << 3)
-#define HWP_ERROR_CPPC_EPP_WRITE     (1 << 4)
+#define HWP_ERROR_CPPC_ENABLE		(1 << 0)
+#define HWP_ERROR_CPPC_CAPS		(1 << 1)
+#define HWP_ERROR_CPPC_REQUEST		(1 << 2)
+#define HWP_ERROR_CPPC_REQUEST_WRITE	(1 << 3)
+#define HWP_ERROR_CPPC_REQUEST_PKG	(1 << 4)
+#define HWP_ERROR_CPPC_EPP_WRITE	(1 << 5)
 
 static inline bool
 hwp_has_error(u_int res, u_int err)
@@ -154,6 +154,8 @@ static void
 dump_cppc_request_cb(void *args)
 {
 	struct dump_cppc_request_cb *const data = args;
+
+	data->err = 0;
 
 	if (rdmsr_safe(MSR_IA32_PM_ENABLE, &data->enabled))
 		data->err |= HWP_ERROR_CPPC_ENABLE;
