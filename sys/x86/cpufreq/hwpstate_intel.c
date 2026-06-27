@@ -99,7 +99,8 @@ static device_method_t intel_hwpstate_methods[] = {
 
 struct hwp_softc {
 	device_t		dev;
-	bool 			hwp_notifications;
+
+	bool			hwp_notifications;
 	bool			hwp_activity_window;
 	bool			hwp_pref_ctrl;
 	bool			hwp_pkg_ctrl;
@@ -107,8 +108,10 @@ struct hwp_softc {
 	bool			hwp_perf_bias;
 	bool			hwp_perf_bias_cached;
 
-	uint64_t		req; /* Cached copy of HWP_REQUEST */
-	uint64_t		hwp_energy_perf_bias;	/* Cache PERF_BIAS */
+	/* Cached copy of HWP_REQUEST/HWP_REQUEST_PKG. */
+	uint64_t		req;
+	/* Cache PERF_BIAS. */
+	uint64_t		hwp_energy_perf_bias;
 
 	uint8_t			high;
 	uint8_t			guaranteed;
@@ -141,42 +144,52 @@ hwp_has_error(u_int res, u_int err)
 	return ((res & err) != 0);
 }
 
-struct dump_cppc_request_cb {
+struct get_cppc_regs_data {
+	/* Inputs */
 	struct hwp_softc *sc;
+	/* Outputs */
 	uint64_t enabled;
 	uint64_t caps;
 	uint64_t request;
 	uint64_t request_pkg;
-	int err;
+	/* HWP_ERROR_CPPC_* except HWP_ERROR_*_WRITE */
+	u_int res;
 };
 
 static void
-dump_cppc_request_cb(void *args)
+get_cppc_regs_cb(void *args)
 {
-	struct dump_cppc_request_cb *const data = args;
+	struct get_cppc_regs_data *const data = args;
+	int error;
 
-	data->err = 0;
+	data->res = 0;
 
-	if (rdmsr_safe(MSR_IA32_PM_ENABLE, &data->enabled))
-		data->err |= HWP_ERROR_CPPC_ENABLE;
-	if (rdmsr_safe(MSR_IA32_HWP_CAPABILITIES, &data->caps))
-		data->err |= HWP_ERROR_CPPC_CAPS;
-	if (rdmsr_safe(MSR_IA32_HWP_REQUEST, &data->request))
-		data->err |= HWP_ERROR_CPPC_REQUEST;
+	error = rdmsr_safe(MSR_IA32_PM_ENABLE, &data->enabled);
+	if (error != 0)
+		data->res |= HWP_ERROR_CPPC_ENABLE;
 
-	if (data->sc->hwp_pkg_ctrl &&
-	    (data->request & IA32_HWP_REQUEST_PACKAGE_CONTROL)) {
-		if (rdmsr_safe(MSR_IA32_HWP_REQUEST_PKG, &data->request_pkg))
-			data->err |= HWP_ERROR_CPPC_REQUEST_PKG;
+	error = rdmsr_safe(MSR_IA32_HWP_CAPABILITIES, &data->caps);
+	if (error != 0)
+		data->res |= HWP_ERROR_CPPC_CAPS;
+
+	error = rdmsr_safe(MSR_IA32_HWP_REQUEST, &data->request);
+	if (error != 0)
+		data->res |= HWP_ERROR_CPPC_REQUEST;
+
+	if (data->sc->hwp_pkg_ctrl) {
+		error = rdmsr_safe(MSR_IA32_HWP_REQUEST_PKG,
+		    &data->request_pkg);
+		if (error != 0)
+			data->res |= HWP_ERROR_CPPC_REQUEST_PKG;
 	}
 }
 
 static inline void
-dump_cppc_request_one(struct hwp_softc *sc, struct dump_cppc_request_cb *req)
+get_cppc_regs_one(struct hwp_softc *sc, struct get_cppc_regs_data *req)
 {
 	req->sc = sc;
 	smp_rendezvous_cpu(cpu_get_pcpu(sc->dev)->pc_cpuid,
-	    smp_no_rendezvous_barrier, dump_cppc_request_cb,
+	    smp_no_rendezvous_barrier, get_cppc_regs_cb,
 	    smp_no_rendezvous_barrier, req);
 }
 
@@ -189,7 +202,7 @@ intel_hwp_dump_sysctl_handler(SYSCTL_HANDLER_ARGS)
 	struct pcpu *pc;
 	struct sbuf *sb;
 	struct hwp_softc *sc;
-	struct dump_cppc_request_cb data;
+	struct get_cppc_regs_data data;
 	int ret = 0;
 
 	sc = (struct hwp_softc *)arg1;
@@ -199,11 +212,11 @@ intel_hwp_dump_sysctl_handler(SYSCTL_HANDLER_ARGS)
 	if (pc == NULL)
 		return (ENXIO);
 
-	dump_cppc_request_one(sc, &data);
+	get_cppc_regs_one(sc, &data);
 	sb = sbuf_new(NULL, NULL, 1024, SBUF_FIXEDLEN | SBUF_INCLUDENUL);
 	sbuf_putc(sb, '\n');
 
-	if (hwp_has_error(data.err, HWP_ERROR_CPPC_ENABLE))
+	if (hwp_has_error(data.res, HWP_ERROR_CPPC_ENABLE))
 		sbuf_printf(sb, "CPU%u: IA32_PM_ENABLE: " MSR_NOT_READ_MSG "\n",
 		    pc->pc_cpuid);
 	else
@@ -212,7 +225,7 @@ intel_hwp_dump_sysctl_handler(SYSCTL_HANDLER_ARGS)
 
 	if (data.enabled == 0)
 		goto out;
-	if (hwp_has_error(data.err, HWP_ERROR_CPPC_CAPS)) {
+	if (hwp_has_error(data.res, HWP_ERROR_CPPC_CAPS)) {
 		sbuf_printf(sb,
 		    "IA32_HWP_CAPABILITIES: " MSR_NOT_READ_MSG "\n");
 	} else {
@@ -228,16 +241,16 @@ intel_hwp_dump_sysctl_handler(SYSCTL_HANDLER_ARGS)
 	}
 
 #define pkg_print(x, name, offset) do {					\
-	if (!sc->hwp_pkg_ctrl || (data.request & x) != 0) 			\
+	if (!sc->hwp_pkg_ctrl || (data.request & x) != 0)			\
 		sbuf_printf(sb, "\t%s: %03u\n", name,			\
 		    (unsigned)(data.request >> offset) & 0xff);			\
 	else								\
 		sbuf_printf(sb, "\t%s: %03u\n", name,			\
 		    (unsigned)(data.request_pkg >> offset) & 0xff);		\
 } while (0)
-	if (hwp_has_error(data.err, HWP_ERROR_CPPC_REQUEST)) {
+	if (hwp_has_error(data.res, HWP_ERROR_CPPC_REQUEST)) {
 		sbuf_printf(sb, "IA32_HWP_REQUEST: " MSR_NOT_READ_MSG "\n");
-	} else if (hwp_has_error(data.err, HWP_ERROR_CPPC_REQUEST_PKG)) {
+	} else if (hwp_has_error(data.res, HWP_ERROR_CPPC_REQUEST_PKG)) {
 		sbuf_printf(sb, "IA32_HWP_REQUEST_PKG: " MSR_NOT_READ_MSG "\n");
 	} else {
 		pkg_print(IA32_HWP_REQUEST_EPP_VALID,
