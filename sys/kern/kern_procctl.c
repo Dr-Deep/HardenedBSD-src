@@ -911,9 +911,10 @@ wxmap_ctl(struct thread *td, struct proc *p, void *data)
 		error = EINVAL;
 		break;
 	}
+	return (error);
 #endif
 
-	return (error);
+	return (0);
 }
 
 static int

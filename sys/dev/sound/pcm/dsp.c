@@ -1954,14 +1954,11 @@ dsp_mmap_single(struct cdev *cdev, vm_ooffset_t *offset,
 {
 	struct dsp_mmap_handle *handle;
 	struct dsp_cdevpriv *priv;
+	vm_ooffset_t offset_test;
 	struct snddev_info *d;
 	struct pcm_channel *c;
 	int err;
-<<<<<<< HEAD
-	vm_ooffset_t offset_test;
-=======
 	bool dealloc;
->>>>>>> rad/freebsd/15-stable/main
 
 	if (nprot & PROT_EXEC)
 		return (EINVAL);
