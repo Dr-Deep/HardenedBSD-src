@@ -34,12 +34,7 @@ linux_start()
 		load_kld -m linux64elf linux64
 		;;
 	amd64)
-<<<<<<< HEAD
-		load_kld -e 'linux64elf' linux64
-=======
-		load_kld -m linuxelf linux
 		load_kld -m linux64elf linux64
->>>>>>> rad/freebsd/15-stable/main
 		;;
 	i386)
 		load_kld -m linuxelf linux
