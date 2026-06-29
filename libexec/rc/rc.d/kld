@@ -45,14 +45,19 @@ kld_start()
 
 	local _kld
 
-	echo 'Loading kernel modules:' $kld_list
+	startmsg -n "Loading kernel modules:"
 	for _kld in $kld_list ; do
-		load_kld -e ${_kld}.ko $_kld
+		load_kld $_kld
+		startmsg -n " ${_kld}"
 	done
+<<<<<<< HEAD
 
 	if checkyesno hbsd_late_kld_prohibit; then
 		sysctl hardening.pax.kmod_load_disable=1
 	fi
+=======
+	startmsg "."
+>>>>>>> rad/freebsd/15-stable/main
 }
 
 load_rc_config $name
