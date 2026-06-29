@@ -281,6 +281,7 @@ when `PAX_HARDENING` is enabled in the kernel:
 | security.bsd.stack_guard_page         | Insert stack guard page ahead of the growable segments                         | Integer | 0              | 1                                       |
 | security.bsd.unprivileged_proc_debug  | Unprivileged processes may use process debugging and tracing facilities        | Integer | 1              | 0                                       |
 | security.bsd.unprivileged_read_msgbuf | Unprivileged processes may read the kernel message buffer                      | Integer | 1              | 0                                       |
+| security.bsd.unprivileged_kenv_read   | Unprivileged processes can read the kernel environment                         | Integer | 1              | 0                                       |
 | net.inet.ip.ttl                       | Maximum TTL on IP packets                                                      | Integer | 64             | Randomly set at boot                    |
 | vfs.lookup_cap_dotdot                 | enables ".." components in path lookup in capability mode                      | Integer | 1              | 0                                       |
 | vfs.lookup_cap_dotdot_nonlocal        | enables ".." components in path lookup in capability mode on non-local mount   | Integer | 1              | 0                                       |
