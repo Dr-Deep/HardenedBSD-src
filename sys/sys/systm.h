@@ -313,6 +313,24 @@ __nodiscard int copyout_nofault(
     const void * _Nonnull __restrict kaddr, void * __restrict udaddr,
     size_t len);
 
+#ifdef __CHERI__
+__nodiscard int copyinptr(const void * __restrict udaddr,
+    void * _Nonnull __restrict kaddr, size_t len);
+__nodiscard int copyinptr_nofault(const void * __restrict udaddr,
+    void * _Nonnull __restrict kaddr, size_t len);
+__nodiscard int copyoutptr(
+    const void * _Nonnull __restrict kaddr, void * __restrict udaddr,
+    size_t len);
+__nodiscard int copyoutptr_nofault(
+    const void * _Nonnull __restrict kaddr, void * __restrict udaddr,
+    size_t len);
+#else
+#define	copyinptr		copyin
+#define	copyinptr_nofault	copyin_nofault
+#define	copyoutptr		copyout
+#define	copyoutptr_nofault	copyout_nofault
+#endif
+
 #ifdef SAN_NEEDS_INTERCEPTORS
 int	SAN_INTERCEPTOR(copyin)(const void *, void *, size_t);
 int	SAN_INTERCEPTOR(copyinstr)(const void *, void *, size_t, size_t *);
@@ -332,11 +350,21 @@ int64_t	fuword64(volatile const void *base);
 __nodiscard int fueword(volatile const void *base, long *val);
 __nodiscard int fueword32(volatile const void *base, int32_t *val);
 __nodiscard int fueword64(volatile const void *base, int64_t *val);
+#ifdef __CHERI__
+__nodiscard int fueptr(volatile const void *base, intptr_t *val);
+#else
+#define	fueptr(base, val)	fueword((base), (long *)(val))
+#endif
 __nodiscard int subyte(volatile void *base, int byte);
 __nodiscard int suword(volatile void *base, long word);
 __nodiscard int suword16(volatile void *base, int word);
 __nodiscard int suword32(volatile void *base, int32_t word);
 __nodiscard int suword64(volatile void *base, int64_t word);
+#ifdef __CHERI__
+__nodiscard int suptr(volatile void *base, intptr_t ptr);
+#else
+#define	suptr(base, val)	suword((base), (val))
+#endif
 uint32_t casuword32(volatile uint32_t *base, uint32_t oldval, uint32_t newval);
 u_long	casuword(volatile u_long *p, u_long oldval, u_long newval);
 int	casueword32(volatile uint32_t *base, uint32_t oldval, uint32_t *oldvalp,
