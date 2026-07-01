@@ -237,7 +237,7 @@ load_config(const char *cfname)
 					    p->name);
 					goto bad_var;
 				}
-				s->s = erealloc(s->s, s->len + vs->len + 1);
+				s->s = erealloc(s->s, s->len, s->len + vs->len + 1, 1);
 				memmove(s->s + v->pos + vs->len,
 				    s->s + v->pos,
 				    s->len - v->pos + 1);
