@@ -54,12 +54,12 @@ void
 dep_setup(int docf)
 {
 	struct cfjail *j, *dj;
+	size_t oldplen, plen;
 	struct cfparam *p;
 	struct cfstring *s;
 	struct cfdepend *d;
 	const char *cs;
 	char *pname;
-	size_t plen;
 	int deps, ldeps;
 
 	if (!docf) {
@@ -91,6 +91,7 @@ dep_setup(int docf)
 	deps = 0;
 	ldeps = 0;
 	plen = 0;
+	oldplen = 0;
 	pname = NULL;
 	TAILQ_FOREACH(j, &cfjails, tq) {
 		if (j->flags & JF_FAILED)
@@ -113,8 +114,9 @@ dep_setup(int docf)
 		if ((cs = strrchr(j->name, '.')))
 		{
 			if (plen < (size_t)(cs - j->name + 1)) {
+				oldplen = plen;
 				plen = (cs - j->name) + 1;
-				pname = erealloc(pname, plen);
+				pname = erealloc(pname, oldplen, plen, 1);
 			}
 			strlcpy(pname, j->name, plen);
 			dj = find_jail(pname);
