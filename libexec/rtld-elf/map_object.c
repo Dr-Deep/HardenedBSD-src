@@ -113,13 +113,8 @@ map_object(int fd, const char *path, const struct stat *sb, bool ismain)
 	note_end = 0;
 	note_map = NULL;
 	note_map_len = 0;
-<<<<<<< HEAD
-	segs = alloca(sizeof(segs[0]) * hdr->e_phnum);
-	stack_flags = PF_R | PF_W;
-=======
 	segs = xcalloc(hdr->e_phnum, sizeof(segs[0]));
-	stack_flags = PF_X | PF_R | PF_W;
->>>>>>> rad/freebsd/15-stable/main
+	stack_flags = PF_R | PF_W;
 	text_end = 0;
 	while (phdr < phlimit) {
 		switch (phdr->p_type) {

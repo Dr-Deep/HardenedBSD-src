@@ -366,7 +366,6 @@ const char *ld_env_prefix = LD_;
 
 static void (*rtld_exit_ptr)(void);
 
-<<<<<<< HEAD
 #ifdef HARDENEDBSD
 /* Adapted from lib/libc/gen/sysctlnametomib.c */
 static int
@@ -427,8 +426,6 @@ cache_harden_rtld(void)
 	    assert((dlp)->objs != NULL), (dlp)->num_alloc = obj_count, \
 	    (dlp)->num_used = 0)
 
-=======
->>>>>>> rad/freebsd/15-stable/main
 #define LD_UTRACE(e, h, mb, ms, r, n)                      \
 	do {                                               \
 		if (ld_utrace != NULL)                     \
