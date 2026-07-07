@@ -201,6 +201,27 @@ sys_pdgetpid(struct thread *td, struct pdgetpid_args *uap)
 	return (error);
 }
 
+static struct procdesc *
+procdesc_alloc(int flags)
+{
+	struct procdesc *pd;
+
+	pd = malloc(sizeof(*pd), M_PROCDESC, M_WAITOK | M_ZERO);
+	pd->pd_flags = 0;
+	pd->pd_pid = -1;
+	PROCDESC_LOCK_INIT(pd);
+	knlist_init_mtx(&pd->pd_selinfo.si_note, &pd->pd_lock);
+
+	/*
+	 * Process descriptors start out with two references: one from their
+	 * struct file, and the other from their struct proc.
+	 */
+	refcount_init(&pd->pd_refcount, 2);
+	pd->pd_fpcount = 1;
+
+	return (pd);
+}
+
 /*
  * When a new process is forked by pdfork(), a file descriptor is allocated
  * by the fork code first, then the process is forked, and then we get a
@@ -212,21 +233,22 @@ procdesc_new(struct proc *p, int flags)
 {
 	struct procdesc *pd;
 
-	pd = malloc(sizeof(*pd), M_PROCDESC, M_WAITOK | M_ZERO);
+	pd = procdesc_alloc(flags);
 	pd->pd_proc = p;
 	pd->pd_pid = p->p_pid;
+	MPASS(p->p_procdesc == NULL);
 	p->p_procdesc = pd;
-	pd->pd_flags = 0;
-	if (flags & PD_DAEMON)
-		pd->pd_flags |= PDF_DAEMON;
-	PROCDESC_LOCK_INIT(pd);
-	knlist_init_mtx(&pd->pd_selinfo.si_note, &pd->pd_lock);
+}
 
-	/*
-	 * Process descriptors start out with two references: one from their
-	 * struct file, and the other from their struct proc.
-	 */
-	refcount_init(&pd->pd_refcount, 2);
+static int
+pdtofdflags(int flags)
+{
+	int fflags;
+
+	fflags = 0;
+	if (flags & PD_CLOEXEC)
+		fflags |= O_CLOEXEC;
+	return (fflags);
 }
 
 /*
@@ -236,13 +258,12 @@ int
 procdesc_falloc(struct thread *td, struct file **resultfp, int *resultfd,
     int flags, struct filecaps *fcaps)
 {
-	int fflags;
+	int error;
 
-	fflags = 0;
-	if (flags & PD_CLOEXEC)
-		fflags = O_CLOEXEC;
-
-	return (falloc_caps(td, resultfp, resultfd, fflags, fcaps));
+	error = falloc_caps(td, resultfp, resultfd, pdtofdflags(flags), fcaps);
+	if (error == 0 && (flags & PD_DAEMON) != 0)
+		(*resultfp)->f_pdflags |= F_PD_NOKILL;
+	return (error);
 }
 
 /*
@@ -253,6 +274,14 @@ procdesc_finit(struct procdesc *pdp, struct file *fp)
 {
 
 	finit(fp, FREAD | FWRITE, DTYPE_PROCDESC, pdp, &procdesc_ops);
+}
+
+static void
+procdesc_destroy(struct procdesc *pd)
+{
+	knlist_destroy(&pd->pd_selinfo.si_note);
+	PROCDESC_LOCK_DESTROY(pd);
+	free(pd, M_PROCDESC);
 }
 
 static void
@@ -268,16 +297,14 @@ procdesc_free(struct procdesc *pd)
 	if (refcount_release(&pd->pd_refcount)) {
 		KASSERT(pd->pd_proc == NULL,
 		    ("procdesc_free: pd_proc != NULL"));
-		KASSERT((pd->pd_flags & PDF_CLOSED),
-		    ("procdesc_free: !PDF_CLOSED"));
+		KASSERT(pd->pd_fpcount == 0,
+		    ("procdesc_free: not closed %p %d", pd, pd->pd_fpcount));
 
 		if (pd->pd_pid != -1)
 			proc_id_clear(PROC_ID_PID, pd->pd_pid);
 
 		seldrain(&pd->pd_selinfo);
-		knlist_destroy(&pd->pd_selinfo.si_note);
-		PROCDESC_LOCK_DESTROY(pd);
-		free(pd, M_PROCDESC);
+		procdesc_destroy(pd);
 	}
 }
 
@@ -294,11 +321,12 @@ procdesc_exit(struct proc *p)
 	sx_assert(&proctree_lock, SA_XLOCKED);
 	PROC_LOCK_ASSERT(p, MA_OWNED);
 	KASSERT(p->p_procdesc != NULL, ("procdesc_exit: p_procdesc NULL"));
+	MPASS((p->p_flag & P_WEXIT) != 0);
 
 	pd = p->p_procdesc;
 
 	PROCDESC_LOCK(pd);
-	KASSERT((pd->pd_flags & PDF_CLOSED) == 0 || p->p_pptr == p->p_reaper,
+	KASSERT(pd->pd_fpcount > 0 || p->p_pptr == p->p_reaper,
 	    ("procdesc_exit: closed && parent not reaper"));
 
 	pd->pd_flags |= PDF_EXITED;
@@ -310,7 +338,7 @@ procdesc_exit(struct proc *p)
 	 * Clean up the procdesc now rather than letting it happen during
 	 * that reap.
 	 */
-	if (pd->pd_flags & PDF_CLOSED) {
+	if (pd->pd_fpcount == 0) {
 		PROCDESC_UNLOCK(pd);
 		pd->pd_proc = NULL;
 		p->p_procdesc = NULL;
@@ -344,6 +372,15 @@ procdesc_reap(struct proc *p)
 	procdesc_free(pd);
 }
 
+static void
+procdesc_close_tail(struct file *fp, struct proc *p)
+{
+	if ((fp->f_pdflags & F_PD_NOKILL) == 0)
+		kern_psignal(p, SIGKILL);
+	PROC_UNLOCK(p);
+	sx_xunlock(&proctree_lock);
+}
+
 /*
  * procdesc_close() - last close on a process descriptor.  If the process is
  * still running, terminate with SIGKILL (unless PDF_DAEMON is set) and let
@@ -364,7 +401,8 @@ procdesc_close(struct file *fp, struct thread *td)
 
 	sx_xlock(&proctree_lock);
 	PROCDESC_LOCK(pd);
-	pd->pd_flags |= PDF_CLOSED;
+	MPASS(pd->pd_fpcount > 0);
+	pd->pd_fpcount--;
 	PROCDESC_UNLOCK(pd);
 	p = pd->pd_proc;
 	if (p == NULL) {
@@ -384,7 +422,7 @@ procdesc_close(struct file *fp, struct thread *td)
 			 * calls back into procdesc_reap().
 			 */
 			proc_reap(curthread, p, NULL, 0);
-		} else {
+		} else if (pd->pd_fpcount == 0) /* last procdesc */ {
 			/*
 			 * If the process is not yet dead, we need to kill it,
 			 * but we can't wait around synchronously for it to go
@@ -397,23 +435,26 @@ procdesc_close(struct file *fp, struct thread *td)
 			pd->pd_pid = -1;
 			procdesc_free(pd);
 
-			/*
-			 * Next, reparent it to its reaper (usually init(8)) so
-			 * that there's someone to pick up the pieces; finally,
-			 * terminate with prejudice.
-			 */
-			p->p_sigparent = SIGCHLD;
-			if ((p->p_flag & P_TRACED) == 0) {
-				proc_reparent(p, p->p_reaper, true);
-			} else {
-				proc_clear_orphan(p);
-				p->p_oppid = p->p_reaper->p_pid;
-				proc_add_orphan(p, p->p_reaper);
+			/* Failed finstall() should not cause reaping. */
+			if ((fp->f_pdflags & F_PD_NOFINSTALL) == 0) {
+				/*
+				 * Next, reparent it to its reaper
+				 * (usually init(8)) so that there's
+				 * someone to pick up the pieces;
+				 * finally, terminate with prejudice.
+				 */
+				p->p_sigparent = SIGCHLD;
+				if ((p->p_flag & P_TRACED) == 0) {
+					proc_reparent(p, p->p_reaper, true);
+				} else {
+					proc_clear_orphan(p);
+					p->p_oppid = p->p_reaper->p_pid;
+					proc_add_orphan(p, p->p_reaper);
+				}
 			}
-			if ((pd->pd_flags & PDF_DAEMON) == 0)
-				kern_psignal(p, SIGKILL);
-			PROC_UNLOCK(p);
-			sx_xunlock(&proctree_lock);
+			procdesc_close_tail(fp, p);
+		} else {
+			procdesc_close_tail(fp, p);
 		}
 	}
 
@@ -571,4 +612,93 @@ procdesc_cmp(struct file *fp1, struct file *fp2, struct thread *td)
 	pdp1 = fp1->f_data;
 	pdp2 = fp2->f_data;
 	return (kcmp_cmp((uintptr_t)pdp1->pd_pid, (uintptr_t)pdp2->pd_pid));
+}
+
+static int
+pdopenpid1(struct thread *td, pid_t pid, struct procdesc **pdf, struct file *fp)
+{
+	struct proc *p;
+	struct procdesc *pd;
+	int error;
+
+	sx_assert(&proctree_lock, SX_XLOCKED);
+
+	error = pget(pid, PGET_NOTID | PGET_CANDEBUG, &p);
+	if (error != 0)
+		return (error);
+	if ((p->p_flag & (P_SYSTEM | P_WEXIT)) != 0) {
+		PROC_UNLOCK(p);
+		return (EBUSY);
+	}
+	pd = p->p_procdesc;
+	if (pd != NULL) {
+		refcount_acquire(&pd->pd_refcount);
+		PROCDESC_LOCK(pd);
+		MPASS(pd->pd_fpcount > 0);
+		pd->pd_fpcount++;
+		PROCDESC_UNLOCK(pd);
+	} else {
+		pd = *pdf;
+		*pdf = NULL;
+		pd->pd_proc = p;
+		pd->pd_pid = p->p_pid;
+		p->p_procdesc = pd;
+	}
+	procdesc_finit(pd, fp);
+	PROC_UNLOCK(p);
+	return (0);
+}
+
+static int
+kern_pdopenpid(struct thread *td, pid_t pid, int flags)
+{
+	struct file *fp;
+	struct procdesc *pdf;
+	int error, fd, fflags;
+
+	error = falloc_noinstall(td, &fp);
+	if (error != 0)
+		return (error);
+	fflags = pdtofdflags(flags);
+	pdf = procdesc_alloc(flags);
+	if ((flags & PD_DAEMON) != 0)
+		fp->f_pdflags |= F_PD_NOKILL;
+
+	sx_xlock(&proctree_lock);
+	error = pdopenpid1(td, pid, &pdf, fp);
+	sx_xunlock(&proctree_lock);
+
+	if (error == 0) {
+		error = finstall(td, fp, &fd, fflags, NULL);
+		if (error == 0) {
+			td->td_retval[0] = fd;
+		} else {
+			/*
+			 * Not killing the target process if cannot
+			 * return file descriptor to userspace.
+			 */
+			fp->f_pdflags |= F_PD_NOKILL | F_PD_NOFINSTALL;
+		}
+	}
+	fdrop(fp, td);
+
+	if (pdf != NULL) {
+		MPASS(pdf->pd_refcount == 2);
+		MPASS(pdf->pd_fpcount == 1);
+		MPASS(pdf->pd_proc == NULL);
+		MPASS(pdf->pd_pid == -1);
+		procdesc_destroy(pdf);
+	}
+	return (error);
+}
+
+int
+sys_pdopenpid(struct thread *td, struct pdopenpid_args *args)
+{
+	AUDIT_ARG_PID(args->pid);
+	AUDIT_ARG_FFLAGS(args->flags);
+
+	if ((args->flags & ~(PD_ALLOWED_AT_FORK)) != 0)
+		return (EINVAL);
+	return (kern_pdopenpid(td, args->pid, args->flags));
 }
