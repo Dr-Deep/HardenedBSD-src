@@ -134,7 +134,7 @@ load_config(const char *cfname)
 	struct cfparams opp;
 	struct cfjail *j, *tj, *wj;
 	struct cfparam *p, *vp, *tp;
-	struct cfstring *s, *vs, *ns;
+	struct cfstring *s, *vs, *ns, *cs;
 	struct cfvar *v, *vv;
 	char *ep;
 	int did_self, jseq, pgen;
@@ -237,7 +237,7 @@ load_config(const char *cfname)
 					    p->name);
 					goto bad_var;
 				}
-				s->s = erealloc(s->s, s->len + vs->len + 1);
+				s->s = erealloc(s->s, s->len, s->len + vs->len + 1, 1);
 				memmove(s->s + v->pos + vs->len,
 				    s->s + v->pos,
 				    s->len - v->pos + 1);
@@ -246,13 +246,14 @@ load_config(const char *cfname)
 				while ((vv = STAILQ_NEXT(vv, tq)))
 					vv->pos += vs->len;
 				s->len += vs->len;
+				cs = s;
 				while ((vs = TAILQ_NEXT(vs, tq))) {
 					ns = emalloc(sizeof(struct cfstring));
 					ns->s = estrdup(vs->s);
 					ns->len = vs->len;
 					STAILQ_INIT(&ns->vars);
-					TAILQ_INSERT_AFTER(&p->val, s, ns, tq);
-					s = ns;
+					TAILQ_INSERT_AFTER(&p->val, cs, ns, tq);
+					cs = ns;
 				}
 			free_var:
 				free(v->name);
