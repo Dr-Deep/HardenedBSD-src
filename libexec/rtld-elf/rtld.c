@@ -416,16 +416,6 @@ cache_harden_rtld(void)
 }
 #endif
 
-/*
- * Fill in a DoneList with an allocation large enough to hold all of
- * the currently-loaded objects.  Keep this as a macro since it calls
- * alloca and we want that to occur within the scope of the caller.
- */
-#define donelist_init(dlp)                                             \
-	((dlp)->objs = alloca(obj_count * sizeof(dlp)->objs[0]),       \
-	    assert((dlp)->objs != NULL), (dlp)->num_alloc = obj_count, \
-	    (dlp)->num_used = 0)
-
 #define LD_UTRACE(e, h, mb, ms, r, n)                      \
 	do {                                               \
 		if (ld_utrace != NULL)                     \
