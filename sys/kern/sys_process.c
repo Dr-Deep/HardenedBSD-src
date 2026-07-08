@@ -31,24 +31,35 @@
  * SUCH DAMAGE.
  */
 
+<<<<<<< HEAD
 #include "opt_pax.h"
 
 #include <sys/param.h>
+=======
+>>>>>>> rad/freebsd/current/main
 #include <sys/systm.h>
+#include <sys/caprights.h>
+#include <sys/filedesc.h>
 #include <sys/imgact.h>
 #include <sys/ktr.h>
 #include <sys/limits.h>
 #include <sys/lock.h>
+#include <sys/malloc.h>
 #include <sys/mman.h>
 #include <sys/mutex.h>
+#include <sys/priv.h>
+#include <sys/proc.h>
+#include <sys/ptrace.h>
 #include <sys/reg.h>
+#include <sys/rwlock.h>
+#include <sys/signalvar.h>
 #include <sys/sleepqueue.h>
+#include <sys/sx.h>
 #include <sys/syscallsubr.h>
 #include <sys/sysent.h>
 #include <sys/sysproto.h>
-#include <sys/priv.h>
-#include <sys/proc.h>
 #include <sys/vnode.h>
+<<<<<<< HEAD
 #include <sys/pax.h>
 #include <sys/ptrace.h>
 #include <sys/rwlock.h>
@@ -58,6 +69,8 @@
 #include <sys/caprights.h>
 #include <sys/capsicum.h>
 #include <sys/filedesc.h>
+=======
+>>>>>>> rad/freebsd/current/main
 
 #include <security/audit/audit.h>
 

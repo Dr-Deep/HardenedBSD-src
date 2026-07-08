@@ -549,21 +549,16 @@ dofilewrite(struct thread *td, int fd, struct file *fp, struct uio *auio,
 {
 	ssize_t cnt;
 	int error;
-#ifdef KTRACE
-	struct uio *ktruio = NULL;
-#endif
 
 	AUDIT_ARG_FD(fd);
+
 	auio->uio_rw = UIO_WRITE;
 	auio->uio_td = td;
 	auio->uio_offset = offset;
-#ifdef KTRACE
-	if (KTRPOINT(td, KTR_GENIO))
-		ktruio = cloneuio(auio);
-#endif
-	cnt = auio->uio_resid;
-	error = fo_write(fp, auio, td->td_ucred, flags, td);
+	error = kern_filewrite(td, fd, fp, auio, offset, flags, &cnt);
+
 	/*
+	 * Handle short writes and generate SIGPIPE if needed.
 	 * Socket layer is responsible for special error handling,
 	 * see sousrsend().
 	 */
@@ -577,15 +572,39 @@ dofilewrite(struct thread *td, int fd, struct file *fp, struct uio *auio,
 			PROC_UNLOCK(td->td_proc);
 		}
 	}
-	cnt -= auio->uio_resid;
+
+	if (error == 0)
+		td->td_retval[0] = cnt;
+	return (error);
+}
+
+/*
+ * Write io request specified by auio into the file fp.  If fd != -1,
+ * might generate the ktrace io point.
+ */
+int
+kern_filewrite(struct thread *td, int fd, struct file *fp, struct uio *auio,
+    off_t offset, int flags, ssize_t *cntp)
+{
+	ssize_t cnt;
+	int error;
+#ifdef KTRACE
+	struct uio *ktruio;
+
+	ktruio = fd != -1 && KTRPOINT(td, KTR_GENIO) ? cloneuio(auio) : NULL;
+#endif
+	cnt = auio->uio_resid;
+	error = fo_write(fp, auio, td->td_ucred, flags, td);
 #ifdef KTRACE
 	if (ktruio != NULL) {
+		cnt -= auio->uio_resid;
 		if (error == 0)
 			ktruio->uio_resid = cnt;
 		ktrgenio(fd, UIO_WRITE, ktruio, error);
 	}
 #endif
-	td->td_retval[0] = cnt;
+
+	*cntp = cnt;
 	return (error);
 }
 
@@ -2185,9 +2204,9 @@ kern_kcmp(struct thread *td, pid_t pid1, pid_t pid2, int type,
 	switch (type) {
 	case KCMP_FILE:
 	case KCMP_FILEOBJ:
-		error = fget_remote(td, p1, idx1, &fp1);
+		error = fget_remote(td, p1, idx1, NULL, NULL, &fp1);
 		if (error == 0) {
-			error = fget_remote(td, p2, idx2, &fp2);
+			error = fget_remote(td, p2, idx2, NULL, NULL, &fp2);
 			if (error == 0) {
 				if (type == KCMP_FILEOBJ)
 					res = fo_cmp(fp1, fp2, td);
