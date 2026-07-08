@@ -149,31 +149,10 @@ fwcam_write_quadlet(struct fwcam_softc *sc, uint32_t offset, uint32_t val)
 	return (err);
 }
 
-#if 0
-static const char *
-fwcam_format_name(int format)
-{
-	static const char *names[] = {
-		"VGA (Format_0)",
-		"Super VGA 1 (Format_1)",
-		"Super VGA 2 (Format_2)",
-		"Reserved",
-		"Reserved",
-		"Reserved",
-		"Still Image (Format_6)",
-		"Partial Image (Format_7)",
-	};
-
-	if (format >= 0 && format <= 7)
-		return (names[format]);
-	return ("Unknown");
-}
-#endif
-
 static int
 fwcam_read_capabilities(struct fwcam_softc *sc)
 {
-	int err;
+	int err, f, m;
 
 	err = fwcam_read_quadlet(sc, IIDC_V_FORMAT_INQ, &sc->formats);
 	if (err) {
@@ -187,6 +166,30 @@ fwcam_read_capabilities(struct fwcam_softc *sc)
 		device_printf(sc->fd.dev,
 		    "failed to read BASIC_FUNC_INQ: %d\n", err);
 		return (err);
+	}
+
+	/* Read mode and rate inquiry registers for each supported format */
+	for (f = 0; f < 8; f++) {
+		if (!(sc->formats & (1 << (31 - f)))) {
+			sc->modes[f] = 0;
+			continue;
+		}
+		err = fwcam_read_quadlet(sc, IIDC_V_MODE_INQ(f),
+		    &sc->modes[f]);
+		if (err) {
+			sc->modes[f] = 0;
+			continue;
+		}
+		for (m = 0; m < 8; m++) {
+			if (!(sc->modes[f] & (1 << (31 - m)))) {
+				sc->rates[f][m] = 0;
+				continue;
+			}
+			err = fwcam_read_quadlet(sc, IIDC_V_RATE_INQ(f, m),
+			    &sc->rates[f][m]);
+			if (err)
+				sc->rates[f][m] = 0;
+		}
 	}
 
 	err = fwcam_read_quadlet(sc, IIDC_FEATURE_HI_INQ, &sc->features_hi);
@@ -381,6 +384,40 @@ fwcam_iso_start(struct fwcam_softc *sc)
 	sc->frame_offset = 0;
 	sc->frame_ready = 0;
 	sc->frame_dropped = 0;
+
+	/* IIDC spec s3.1: set video mode registers before ISO enable */
+	err = fwcam_write_quadlet(sc, IIDC_CUR_V_FORMAT,
+	    (uint32_t)sc->cur_format << IIDC_CUR_V_SHIFT);
+	if (err) {
+		device_printf(sc->fd.dev,
+		    "failed to set CUR_V_FORMAT: %d\n", err);
+		goto fail;
+	}
+	err = fwcam_write_quadlet(sc, IIDC_CUR_V_MODE,
+	    (uint32_t)sc->cur_mode << IIDC_CUR_V_SHIFT);
+	if (err) {
+		device_printf(sc->fd.dev,
+		    "failed to set CUR_V_MODE: %d\n", err);
+		goto fail;
+	}
+	err = fwcam_write_quadlet(sc, IIDC_CUR_V_FRM_RATE,
+	    (uint32_t)sc->cur_framerate << IIDC_CUR_V_SHIFT);
+	if (err) {
+		device_printf(sc->fd.dev,
+		    "failed to set CUR_V_FRM_RATE: %d\n", err);
+		goto fail;
+	}
+
+	/* Check Vmode_Error_Status - camera rejects ISO_EN on error */
+	err = fwcam_read_quadlet(sc, IIDC_VMODE_ERR_STATUS, &val);
+	if (err == 0 && (val & IIDC_VMODE_ERROR)) {
+		device_printf(sc->fd.dev,
+		    "Vmode_Error_Status set: format=%d mode=%d rate=%d "
+		    "speed=%d\n", sc->cur_format, sc->cur_mode,
+		    sc->cur_framerate, sc->iso_speed);
+		err = EINVAL;
+		goto fail;
+	}
 
 	val = ((uint32_t)sc->iso_channel << IIDC_ISO_CH_SHIFT) |
 	    ((uint32_t)sc->iso_speed << IIDC_ISO_SPEED_SHIFT);
@@ -815,9 +852,12 @@ fwcam_cdev_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		if (mode->format > 7 || mode->mode > 7 || mode->framerate > 7)
 			return (EINVAL);
 
-		if (mode->format != IIDC_FMT_VGA)
-			return (EINVAL);
 		if (!(sc->formats & (1 << (31 - mode->format))))
+			return (EINVAL);
+		if (!(sc->modes[mode->format] & (1 << (31 - mode->mode))))
+			return (EINVAL);
+		if (!(sc->rates[mode->format][mode->mode] &
+		    (1 << (31 - mode->framerate))))
 			return (EINVAL);
 
 		FWCAM_LOCK(sc);
@@ -836,13 +876,13 @@ fwcam_cdev_ioctl(struct cdev *dev, u_long cmd, caddr_t data,
 		FWCAM_UNLOCK(sc);
 
 		err = fwcam_write_quadlet(sc, IIDC_CUR_V_FORMAT,
-		    (uint32_t)mode->format << 29);
+		    (uint32_t)mode->format << IIDC_CUR_V_SHIFT);
 		if (err == 0)
 			err = fwcam_write_quadlet(sc, IIDC_CUR_V_MODE,
-			    (uint32_t)mode->mode << 29);
+			    (uint32_t)mode->mode << IIDC_CUR_V_SHIFT);
 		if (err == 0)
 			err = fwcam_write_quadlet(sc, IIDC_CUR_V_FRM_RATE,
-			    (uint32_t)mode->framerate << 29);
+			    (uint32_t)mode->framerate << IIDC_CUR_V_SHIFT);
 
 		if (err == 0) {
 			sc->cur_format = mode->format;
@@ -935,6 +975,7 @@ fwcam_post_explore(void *arg)
 			sc->fwdev = fwdev;
 			sc->cmd_hi = 0xffff;
 			sc->cmd_lo = 0xf0000000 | (cmd_base << 2);
+			sc->iso_speed = min(fwdev->speed, FWSPD_S400);
 
 			FWCAM_UNLOCK(sc);
 			err = taskqueue_enqueue(taskqueue_thread,
