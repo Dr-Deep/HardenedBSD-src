@@ -57,6 +57,14 @@
 #include <sys/sysproto.h>
 #include <sys/vnode.h>
 #include <sys/pax.h>
+#include <sys/ptrace.h>
+#include <sys/rwlock.h>
+#include <sys/sx.h>
+#include <sys/malloc.h>
+#include <sys/signalvar.h>
+#include <sys/caprights.h>
+#include <sys/capsicum.h>
+#include <sys/filedesc.h>
 
 #include <security/audit/audit.h>
 
