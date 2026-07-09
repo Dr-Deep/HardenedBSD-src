@@ -288,7 +288,7 @@ fwcam_probe_task(void *arg, int pending __unused)
 		sc->state = FWCAM_STATE_PROBED;
 		FWCAM_UNLOCK(sc);
 
-		if (sc->open_count > 0 &&
+		if (sc->dma_ch >= 0 &&
 		    sc->state != FWCAM_STATE_DETACHING)
 			fwcam_iso_start(sc);
 	}
@@ -429,7 +429,22 @@ fwcam_iso_start(struct fwcam_softc *sc)
 	}
 
 	err = fwcam_write_quadlet(sc, IIDC_ISO_EN, IIDC_ISO_EN_ON);
-	if (err) {
+	if (err == EIO) {
+		/*
+		 * Cameras with a lens cover might power down the sensor
+		 * when the cover is closed and reject streaming requests.
+		 * Try to re-power and retry once before giving up.
+		 */
+		err = fwcam_power_on(sc);
+		if (err == 0)
+			err = fwcam_write_quadlet(sc, IIDC_ISO_EN,
+			    IIDC_ISO_EN_ON);
+		if (err) {
+			device_printf(sc->fd.dev,
+			    "ISO enable refused (lens cover closed?)\n");
+			goto fail;
+		}
+	} else if (err) {
 		device_printf(sc->fd.dev,
 		    "failed to enable ISO: %d\n", err);
 		goto fail;
@@ -601,7 +616,6 @@ static int
 fwcam_cdev_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
 {
 	struct fwcam_softc *sc = dev->si_drv1;
-	int err = 0;
 
 	FWCAM_LOCK(sc);
 	if (sc->state == FWCAM_STATE_DETACHING) {
@@ -615,18 +629,8 @@ fwcam_cdev_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
 	}
 
 	sc->open_count++;
-	if (sc->open_count == 1 && sc->state == FWCAM_STATE_PROBED) {
-		FWCAM_UNLOCK(sc);
-		err = fwcam_iso_start(sc);
-		if (err) {
-			FWCAM_LOCK(sc);
-			sc->open_count--;
-			FWCAM_UNLOCK(sc);
-		}
-	} else {
-		FWCAM_UNLOCK(sc);
-	}
-	return (err);
+	FWCAM_UNLOCK(sc);
+	return (0);
 }
 
 static int
@@ -657,6 +661,13 @@ fwcam_cdev_read(struct cdev *dev, struct uio *uio, int ioflag)
 	int err;
 
 	FWCAM_LOCK(sc);
+	if (sc->state == FWCAM_STATE_PROBED) {
+		FWCAM_UNLOCK(sc);
+		err = fwcam_iso_start(sc);
+		if (err)
+			return (err);
+		FWCAM_LOCK(sc);
+	}
 	while (!sc->frame_ready) {
 		if (sc->state != FWCAM_STATE_STREAMING) {
 			FWCAM_UNLOCK(sc);
