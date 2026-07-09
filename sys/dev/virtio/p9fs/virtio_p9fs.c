@@ -76,13 +76,9 @@ struct vt9p_softc {
 /* Global channel list, Each channel will correspond to a mount point */
 static STAILQ_HEAD( ,vt9p_softc) global_chan_list =
     STAILQ_HEAD_INITIALIZER(global_chan_list);
-<<<<<<< HEAD
-struct mtx global_chan_list_mtx;
 int __insecure_kmod = 1;
 
-=======
 static struct mtx global_chan_list_mtx;
->>>>>>> rad/freebsd/15-stable/main
 MTX_SYSINIT(global_chan_list_mtx, &global_chan_list_mtx, "9pglobal", MTX_DEF);
 
 static struct virtio_feature_desc virtio_9p_feature_desc[] = {
