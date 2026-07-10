@@ -128,11 +128,8 @@ __DEFAULT_YES_OPTIONS = \
     LLVM_BINUTILS \
     LLVM_BINUTILS_BOOTSTRAP \
     LLVM_COV \
-<<<<<<< HEAD
     LLVM_LINK_STATIC_LIBRARIES \
-=======
     LOADER_BIOS \
->>>>>>> rad/freebsd/current/main
     LOADER_BIOS_TEXTONLY \
     LOADER_GELI \
     LOADER_IA32 \
