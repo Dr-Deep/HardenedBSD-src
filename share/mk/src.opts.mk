@@ -127,11 +127,7 @@ __DEFAULT_YES_OPTIONS = \
     LLVM_ASSERTIONS \
     LLVM_BINUTILS \
     LLVM_BINUTILS_BOOTSTRAP \
-<<<<<<< HEAD
-    LLVM_COV \
     LLVM_LINK_STATIC_LIBRARIES \
-=======
->>>>>>> rad/freebsd/current/main
     LOADER_BIOS \
     LOADER_BIOS_TEXTONLY \
     LOADER_GELI \
@@ -553,11 +549,7 @@ MK_LLVM_BINUTILS:=	no
 MK_CLANG_EXTRAS:= no
 MK_CLANG_FORMAT:= no
 MK_CLANG_FULL:= no
-<<<<<<< HEAD
-MK_LLVM_COV:= no
 MK_SAFESTACK:=	no
-=======
->>>>>>> rad/freebsd/current/main
 .endif
 
 .if ${MK_ASAN} == "yes"
