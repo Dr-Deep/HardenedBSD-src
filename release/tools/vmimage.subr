@@ -46,6 +46,36 @@ vm_create_base() {
 
 vm_copy_base() {
 	# Defunct
+<<<<<<< HEAD
+=======
+	return 0
+}
+
+vm_base_packages_list() {
+	# Output a list of package sets equivalent to what we get from
+	# "installworld installkernel distribution", aka. the full base
+	# system.
+	echo FreeBSD-set-base
+	[ -z "${WITHOUT_DEBUG_FILES}" ] && echo FreeBSD-set-base-dbg
+	echo FreeBSD-set-kernels
+	[ -z "${WITHOUT_KERNEL_SYMBOLS}" ] && echo FreeBSD-set-kernels-dbg
+	case ${TARGET_ARCH} in
+	amd64 | aarch64 | powerpc64)
+		echo FreeBSD-set-lib32
+		[ -z "${WITHOUT_DEBUG_FILES}" ] && echo FreeBSD-set-lib32-dbg
+	esac
+	[ -n "${WITH_SRC}" ] && echo FreeBSD-set-src
+	echo FreeBSD-set-tests
+	# Also install pkg, since systems with a packaged base system should
+	# have the tools to upgrade themselves.
+	echo pkg
+}
+
+vm_extra_filter_base_packages() {
+	# Prototype. When overridden, allows further filtering of base system
+	# packages, reading package names from stdin and writing to stdout.
+	cat
+>>>>>>> rad/freebsd/15-stable/main
 }
 
 vm_install_base() {
