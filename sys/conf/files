@@ -1733,6 +1733,7 @@ dev/firewire/fwcrom.c		optional firewire
 dev/firewire/fwdev.c		optional firewire
 dev/firewire/fwcam.c		optional fwcam
 dev/firewire/fwdma.c		optional firewire
+dev/firewire/fwdv.c		optional fwdv
 dev/firewire/fwisound.c		optional fwisound sound
 dev/firewire/fwisound_pcm.c	optional fwisound sound
 dev/firewire/fwmem.c		optional firewire
@@ -1797,6 +1798,7 @@ dev/hid/hidbus.c		optional hidbus
 dev/hid/hidmap.c		optional hidmap | hms
 dev/hid/hidquirk.c		optional hid
 dev/hid/hidraw.c		optional hidraw
+dev/hid/hidwacom.c		optional hidwacom
 dev/hid/hkbd.c			optional hkbd
 dev/hid/hms.c			optional hms
 dev/hid/hmt.c			optional hmt hconf
