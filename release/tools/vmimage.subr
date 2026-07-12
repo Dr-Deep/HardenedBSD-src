@@ -46,8 +46,6 @@ vm_create_base() {
 
 vm_copy_base() {
 	# Defunct
-<<<<<<< HEAD
-=======
 	return 0
 }
 
@@ -75,7 +73,6 @@ vm_extra_filter_base_packages() {
 	# Prototype. When overridden, allows further filtering of base system
 	# packages, reading package names from stdin and writing to stdout.
 	cat
->>>>>>> rad/freebsd/15-stable/main
 }
 
 vm_install_base() {
