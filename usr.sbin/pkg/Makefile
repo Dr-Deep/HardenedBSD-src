@@ -15,7 +15,7 @@ CONFSMODE=	644
 
 CFLAGS+=-I${SRCTOP}/contrib/libucl/include
 .PATH:	${SRCTOP}/contrib/libucl/include
-LIBADD=	archive der fetch jail pkgecc ucl crypto ssl util md
+LIBADD=	archive der fetch pkgecc ucl crypto ssl util md
 
 CFLAGS+=-I${SRCTOP}/contrib/libder/libder
 CFLAGS+=-I${SRCTOP}/crypto/libecc/include
