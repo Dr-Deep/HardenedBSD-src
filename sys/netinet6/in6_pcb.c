@@ -134,18 +134,19 @@ in6_pcbsetport_locked(struct in6_addr *laddr, struct inpcb *inp,
 	if ((so->so_options & (SO_REUSEADDR|SO_REUSEPORT|SO_REUSEPORT_LB)) == 0)
 		lookupflags = INPLOOKUP_WILDCARD;
 
-	inp->inp_flags |= INP_ANONPORT;
-
 	error = in_pcb_lport(inp, NULL, &lport, cred, lookupflags);
 	if (error != 0)
 		return (error);
 
 	inp->inp_lport = lport;
-	if (in_pcbinshash(inp) != 0) {
+	if (__predict_false((error = in_pcbinshash(inp)) != 0)) {
+		MPASS(inp->inp_socket->so_options & SO_REUSEPORT_LB);
 		inp->in6p_laddr = in6addr_any;
 		inp->inp_lport = 0;
-		return (EAGAIN);
+		return (error);
 	}
+
+	inp->inp_flags |= INP_ANONPORT;
 
 	return (0);
 }
@@ -363,12 +364,13 @@ in6_pcbbind(struct inpcb *inp, struct sockaddr_in6 *sin6, int flags,
 		}
 	} else {
 		inp->inp_lport = lport;
-		if (in_pcbinshash(inp) != 0) {
+		if (__predict_false((error = in_pcbinshash(inp)) != 0)) {
+			MPASS(inp->inp_socket->so_options & SO_REUSEPORT_LB);
 			INP_HASH_WUNLOCK(inp->inp_pcbinfo);
 			inp->inp_flags &= ~INP_BOUNDFIB;
 			inp->in6p_laddr = in6addr_any;
 			inp->inp_lport = 0;
-			return (EAGAIN);
+			return (error);
 		}
 	}
 	INP_HASH_WUNLOCK(inp->inp_pcbinfo);
