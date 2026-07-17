@@ -318,6 +318,9 @@ SBP_DEBUG(0)
 	printf("sbp_probe\n");
 END_DEBUG
 
+	if (fw_get_unit(dev) != NULL)
+		return (ENXIO);
+
 	device_set_desc(dev, "SBP-2/SCSI over FireWire");
 
 #if 0
@@ -1917,7 +1920,7 @@ END_DEBUG
 		sbp_cold++;
 	sbp = device_get_softc(dev);
 	sbp->fd.dev = dev;
-	sbp->fd.fc = fc = device_get_ivars(dev);
+	sbp->fd.fc = fc = fw_get_comm(dev);
 	mtx_init(&sbp->mtx, "sbp", NULL, MTX_DEF);
 
 	if (max_speed < 0)
