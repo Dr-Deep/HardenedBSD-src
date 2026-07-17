@@ -324,9 +324,6 @@ static int
 fwohci_pci_detach(device_t self)
 {
 	fwohci_softc_t *sc = device_get_softc(self);
-	int s;
-
-	s = splfw();
 
 	if (sc->bsr)
 		fwohci_stop(sc, self);
@@ -360,7 +357,6 @@ fwohci_pci_detach(device_t self)
 
 	fwohci_detach(sc, self);
 	mtx_destroy(FW_GMTX(&sc->fc));
-	splx(s);
 
 	return 0;
 }
@@ -428,11 +424,8 @@ fwohci_pci_add_child(device_t dev, u_int order, const char *name, int unit)
 	 * interrupt is disabled during the boot process.
 	 */
 	if (cold) {
-		int s;
 		DELAY(250); /* 2 cycles */
-		s = splfw();
 		fwohci_poll(&sc->fc, 0, -1);
-		splx(s);
 	}
 
 	return (child);
