@@ -54,12 +54,9 @@ SYSCTL_INT(_hw_firewire_fwdv, OID_AUTO, iso_channel, CTLFLAG_RWTUN,
 			printf("fwdv: " fmt, ## __VA_ARGS__);		\
 	} while (0)
 
-static void	fwdv_identify(driver_t *, device_t);
 static int	fwdv_probe(device_t);
 static int	fwdv_attach(device_t);
 static int	fwdv_detach(device_t);
-static void	fwdv_post_busreset(void *);
-static void	fwdv_post_explore(void *);
 static void	fwdv_probe_task(void *, int);
 
 static int	fwdv_avc_command(struct fwdv_softc *, const uint8_t *, int,
@@ -865,70 +862,6 @@ fwdv_parse_identity(struct fwdv_softc *sc)
 
 }
 
-static void
-fwdv_post_explore(void *arg)
-{
-	struct fwdv_softc *sc = (struct fwdv_softc *)arg;
-	struct fw_device *fwdev;
-	int was_streaming;
-
-	FWDV_LOCK(sc);
-
-	if (sc->state == FWDV_STATE_DETACHING) {
-		FWDV_UNLOCK(sc);
-		return;
-	}
-
-	if (sc->fwdev != NULL) {
-		STAILQ_FOREACH(fwdev, &sc->fd.fc->devices, link) {
-			if (fwdev == sc->fwdev &&
-			    fwdev->status == FWDEVATTACHED)
-				break;
-		}
-		if (fwdev == NULL) {
-			was_streaming = (sc->state == FWDV_STATE_STREAMING);
-			device_printf(sc->fd.dev, "AV/C device disconnected%s\n",
-			    was_streaming ? " (was streaming)" : "");
-			sc->fwdev = NULL;
-			sc->state = FWDV_STATE_IDLE;
-			wakeup(sc);
-			selwakeup(&sc->rsel);
-			FWDV_UNLOCK(sc);
-			if (was_streaming)
-				fwdv_iso_stop(sc);
-			FWDV_LOCK(sc);
-		}
-	}
-
-	if (sc->fwdev == NULL) {
-		STAILQ_FOREACH(fwdev, &sc->fd.fc->devices, link) {
-			if (fwdev->status != FWDEVATTACHED)
-				continue;
-
-			if (!crom_has_specver(fwdev->csrrom,
-			    CSRVAL_1394TA, CSR_PROTAVC))
-				continue;
-
-			sc->fwdev = fwdev;
-			sc->eui_hi = fwdev->eui.hi;
-			sc->eui_lo = fwdev->eui.lo;
-
-			FWDV_UNLOCK(sc);
-
-			if (taskqueue_enqueue(taskqueue_thread,
-			    &sc->probe_task) != 0) {
-				device_printf(sc->fd.dev,
-				    "probe task enqueue failed\n");
-				FWDV_LOCK(sc);
-				sc->fwdev = NULL;
-				FWDV_UNLOCK(sc);
-			}
-			return;
-		}
-	}
-
-	FWDV_UNLOCK(sc);
-}
 
 static void
 fwdv_probe_task(void *arg, int pending __unused)
@@ -963,26 +896,24 @@ fwdv_probe_task(void *arg, int pending __unused)
 		fwdv_iso_start(sc);
 }
 
-static void
-fwdv_post_busreset(void *arg __unused)
-{
 
-}
-
-static void
-fwdv_identify(driver_t *driver, device_t parent)
-{
-
-	if (device_find_child(parent, "fwdv", DEVICE_UNIT_ANY) == NULL)
-		BUS_ADD_CHILD(parent, 0, "fwdv", DEVICE_UNIT_ANY);
-}
 
 static int
 fwdv_probe(device_t dev)
 {
+	struct fw_unit *unit;
+
+	unit = fw_get_unit(dev);
+	if (unit == NULL)
+		return (ENXIO);
+
+	if (unit->spec_id != CSRVAL_1394TA)
+		return (ENXIO);
+	if (unit->sw_version != CSR_PROTAVC)
+		return (ENXIO);
 
 	device_set_desc(dev, "AV/C DV Capture over FireWire");
-	return (0);
+	return (BUS_PROBE_DEFAULT);
 }
 
 static int
@@ -990,15 +921,26 @@ fwdv_attach(device_t dev)
 {
 	struct fwdv_softc *sc;
 	struct firewire_comm *fc;
+	struct fw_unit *unit;
+	struct fw_device *fwdev;
 	int err;
+
+	unit = fw_get_unit(dev);
+	if (unit == NULL)
+		return (ENXIO);
+	fwdev = unit->fwdev;
+	if (fwdev == NULL)
+		return (ENXIO);
 
 	sc = device_get_softc(dev);
 	sc->fd.dev = dev;
-	sc->fd.fc = device_get_ivars(dev);
+	sc->fd.fc = fw_get_comm(dev);
 	fc = sc->fd.fc;
 	mtx_init(&sc->mtx, "fwdv", NULL, MTX_DEF);
 
-	sc->fwdev = NULL;
+	sc->fwdev = fwdev;
+	sc->eui_hi = fwdev->eui.hi;
+	sc->eui_lo = fwdev->eui.lo;
 	sc->state = FWDV_STATE_IDLE;
 	sc->dma_ch = -1;
 	sc->open_count = 0;
@@ -1044,10 +986,8 @@ fwdv_attach(device_t dev)
 		return (err);
 	}
 
-	sc->fd.post_busreset = fwdv_post_busreset;
-	sc->fd.post_explore = fwdv_post_explore;
-
-	fwdv_post_explore(sc);
+	if (taskqueue_enqueue(taskqueue_thread, &sc->probe_task) != 0)
+		device_printf(dev, "probe task enqueue failed\n");
 
 	return (0);
 }
@@ -1083,7 +1023,6 @@ fwdv_detach(device_t dev)
 }
 
 static device_method_t fwdv_methods[] = {
-	DEVMETHOD(device_identify,	fwdv_identify),
 	DEVMETHOD(device_probe,		fwdv_probe),
 	DEVMETHOD(device_attach,	fwdv_attach),
 	DEVMETHOD(device_detach,	fwdv_detach),

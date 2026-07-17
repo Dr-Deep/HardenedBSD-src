@@ -42,8 +42,6 @@ typedef	struct thread fw_proc;
 #include <sys/mutex.h>
 #include <sys/taskqueue.h>
 
-#define	splfw splimp
-
 STAILQ_HEAD(fw_xferlist, fw_xfer);
 
 struct fw_device {
@@ -58,12 +56,36 @@ struct fw_device {
 	int rommax;	/* offset from 0xffff f000 0000 */
 	uint32_t csrrom[CSRROMSIZE / 4];
 	int rcnt;
+	int rom_changed;
 	struct firewire_comm *fc;
 	uint32_t status;
 #define FWDEVINIT	1
 #define FWDEVATTACHED	2
 #define FWDEVINVAL	3
+	STAILQ_HEAD(, fw_unit) units;
 	STAILQ_ENTRY(fw_device) link;
+};
+
+struct fw_unit {
+	device_t dev;
+	struct fw_device *fwdev;
+	uint32_t spec_id;
+	uint32_t sw_version;
+	uint32_t dir_offset;
+	STAILQ_ENTRY(fw_unit) link;
+};
+
+enum fw_child_type {
+	FW_CHILD_BUS,
+	FW_CHILD_UNIT,
+};
+
+struct fw_child_ivars {
+	enum fw_child_type type;
+	union {
+		struct firewire_comm *fc;
+		struct fw_unit *unit;
+	} u;
 };
 
 struct firewire_softc {
@@ -293,6 +315,35 @@ int fw_open_isodma(struct firewire_comm *, int);
 extern int firewire_debug;
 extern devclass_t firewire_devclass;
 extern int firewire_phydma_enable;
+
+static __inline struct fw_child_ivars *
+fw_get_ivars(device_t dev)
+{
+
+	return ((struct fw_child_ivars *)device_get_ivars(dev));
+}
+
+static __inline struct firewire_comm *
+fw_get_comm(device_t dev)
+{
+	struct fw_child_ivars *iv;
+
+	iv = fw_get_ivars(dev);
+	if (iv->type == FW_CHILD_BUS)
+		return (iv->u.fc);
+	return (iv->u.unit->fwdev->fc);
+}
+
+static __inline struct fw_unit *
+fw_get_unit(device_t dev)
+{
+	struct fw_child_ivars *iv;
+
+	iv = fw_get_ivars(dev);
+	if (iv->type == FW_CHILD_UNIT)
+		return (iv->u.unit);
+	return (NULL);
+}
 
 #define	FWPRI		(PWAIT | PCATCH)
 

@@ -249,10 +249,12 @@ sbp_targ_probe(device_t dev)
 {
 	device_t pa;
 
-	pa = device_get_parent(dev);
-	if (device_get_unit(dev) != device_get_unit(pa)) {
+	if (fw_get_unit(dev) != NULL)
 		return (ENXIO);
-	}
+
+	pa = device_get_parent(dev);
+	if (device_get_unit(dev) != device_get_unit(pa))
+		return (ENXIO);
 
 	device_set_desc(dev, "SBP-2/SCSI over FireWire target mode");
 	return (0);
@@ -1400,11 +1402,8 @@ sbp_targ_action1(struct cam_sim *sim, union ccb *ccb)
 static void
 sbp_targ_action(struct cam_sim *sim, union ccb *ccb)
 {
-	int s;
 
-	s = splfw();
 	sbp_targ_action1(sim, ccb);
-	splx(s);
 }
 
 static void
@@ -1782,7 +1781,6 @@ static void
 sbp_targ_resp_callback(struct fw_xfer *xfer)
 {
 	struct sbp_targ_softc *sc;
-	int s;
 
 	if (debug)
 		printf("%s: xfer=%p\n", __func__, xfer);
@@ -1790,9 +1788,7 @@ sbp_targ_resp_callback(struct fw_xfer *xfer)
 	fw_xfer_unload(xfer);
 	xfer->recv.pay_len = SBP_TARG_RECV_LEN;
 	xfer->hand = sbp_targ_recv;
-	s = splfw();
 	STAILQ_INSERT_TAIL(&sc->fwb.xferlist, xfer, link);
-	splx(s);
 }
 
 static int
@@ -1899,10 +1895,9 @@ sbp_targ_recv(struct fw_xfer *xfer)
 	struct fw_pkt *fp, *sfp;
 	struct fw_device *fwdev;
 	uint32_t lo;
-	int s, rtcode;
+	int rtcode;
 	struct sbp_targ_softc *sc;
 
-	s = splfw();
 	sc = (struct sbp_targ_softc *)xfer->sc;
 	fp = &xfer->recv.hdr;
 	fwdev = fw_noderesolve_nodeid(sc->fd.fc, fp->mode.wreqb.src & 0x3f);
@@ -1935,7 +1930,6 @@ done:
 	sfp->mode.wres.pri = 0;
 
 	fw_asyreq(xfer->fc, -1, xfer);
-	splx(s);
 }
 
 static int
@@ -1949,7 +1943,7 @@ sbp_targ_attach(device_t dev)
 	bzero((void *)sc, sizeof(struct sbp_targ_softc));
 
 	mtx_init(&sc->mtx, "sbp_targ", NULL, MTX_DEF);
-	sc->fd.fc = fc = device_get_ivars(dev);
+	sc->fd.fc = fc = fw_get_comm(dev);
 	sc->fd.dev = dev;
 	sc->fd.post_explore = (void *) sbp_targ_post_explore;
 	sc->fd.post_busreset = (void *) sbp_targ_post_busreset;
