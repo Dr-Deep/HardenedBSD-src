@@ -149,6 +149,8 @@ static void		uvideo_vs_close(struct uvideo_softc *);
 static usb_error_t	uvideo_vs_init(struct uvideo_softc *);
 static void		uvideo_vs_decode_stream_header(struct uvideo_softc *,
 			    uint8_t *, int);
+static void		uvideo_vs_decode_stream_header_isight(
+			    struct uvideo_softc *, uint8_t *, int);
 static void		uvideo_isoc_decode(struct uvideo_softc *,
 			    struct usb_page_cache *, int, int);
 static uint8_t		*uvideo_mmap_getbuf(struct uvideo_softc *);
@@ -276,6 +278,8 @@ struct uvideo_softc {
 	int			sc_frames_ready;
 
 	struct selinfo		sc_selinfo;
+
+	const struct uvideo_quirk *sc_quirk;
 
 	void			(*sc_decode_stream_header)(
 				    struct uvideo_softc *, uint8_t *, int);
@@ -559,6 +563,74 @@ static const enum v4l2_ycbcr_encoding uvideo_matrix_coefficients[] = {
 };
 
 /*
+ * Quirk flags for devices needing special handling.
+ */
+#define	UVIDEO_FLAG_ISIGHT_STREAM_HEADER	0x01
+#define	UVIDEO_FLAG_REATTACH			0x02
+#define	UVIDEO_FLAG_VENDOR_CLASS		0x04
+#define	UVIDEO_FLAG_NOATTACH			0x08
+#define	UVIDEO_FLAG_FORMAT_INDEX_IN_BMHINT	0x10
+
+/*
+ * Devices which either fail to declare themselves as UICLASS_VIDEO,
+ * or which need firmware uploads or other quirk handling later on.
+ */
+static const struct uvideo_quirk {
+	struct usb_device_id	uv_dev;
+	const char		*ucode_name;
+	usb_error_t		(*ucode_loader)(struct uvideo_softc *);
+	int			flags;
+} uvideo_quirks[] = {
+	{ { USB_VP(0x05ca, 0x1835) }, "uvideo_r5u87x_05ca-1835",
+	  NULL, 0 },	/* Ricoh VGP VCC5 */
+	{ { USB_VP(0x05ca, 0x1836) }, "uvideo_r5u87x_05ca-1836",
+	  NULL, 0 },	/* Ricoh VGP VCC4 */
+	{ { USB_VP(0x05ca, 0x1837) }, "uvideo_r5u87x_05ca-1837",
+	  NULL, 0 },	/* Ricoh VGP VCC4 (2) */
+	{ { USB_VP(0x05ca, 0x1839) }, "uvideo_r5u87x_05ca-1839",
+	  NULL, 0 },	/* Ricoh VGP VCC6 */
+	{ { USB_VP(0x05ca, 0x183a) }, "uvideo_r5u87x_05ca-183a",
+	  NULL, 0 },	/* Ricoh VGP VCC7 */
+	{ { USB_VP(0x05ca, 0x183b) }, "uvideo_r5u87x_05ca-183b",
+	  NULL, 0 },	/* Ricoh VGP VCC8 */
+	{ { USB_VP(0x05ca, 0x183e) }, "uvideo_r5u87x_05ca-183e",
+	  NULL, 0 },	/* Ricoh VGP VCC9 */
+	{ { USB_VP(0x05ac, 0x8300) }, "uvideo_isight_05ac-8300",
+	  NULL, UVIDEO_FLAG_REATTACH },	/* Apple iSight (needs firmware) */
+	{ { USB_VP(0x05ac, 0x8501) }, NULL, NULL,
+	  UVIDEO_FLAG_ISIGHT_STREAM_HEADER },	/* Apple iSight (non-standard header) */
+	{ { USB_VP(0x046d, 0x08b0) }, NULL, NULL,
+	  UVIDEO_FLAG_VENDOR_CLASS },	/* Logitech QuickCam Fusion */
+	{ { USB_VP(0x046d, 0x08bc) }, NULL, NULL,
+	  UVIDEO_FLAG_VENDOR_CLASS },	/* Logitech QuickCam Orbit MP */
+	{ { USB_VP(0x046d, 0x08c1) }, NULL, NULL,
+	  UVIDEO_FLAG_VENDOR_CLASS },	/* Logitech QuickCam NB Pro */
+	{ { USB_VP(0x046d, 0x08c6) }, NULL, NULL,
+	  UVIDEO_FLAG_VENDOR_CLASS },	/* Logitech QuickCam Pro 5000 */
+	{ { USB_VP(0x046d, 0x08c7) }, NULL, NULL,
+	  UVIDEO_FLAG_VENDOR_CLASS },	/* Logitech QuickCam OEM */
+	{ { USB_VP(0x046d, 0x08c8) }, NULL, NULL,
+	  UVIDEO_FLAG_VENDOR_CLASS },	/* Logitech QuickCam OEM */
+	{ { USB_VP(0x04f2, 0xb2ea) }, NULL, NULL,
+	  UVIDEO_FLAG_NOATTACH },	/* Chicony IR camera (unsupported) */
+	{ { USB_VP(0x0fd9, 0x0066) }, NULL, NULL,
+	  UVIDEO_FLAG_FORMAT_INDEX_IN_BMHINT },	/* Elgato Game Capture HD60 */
+};
+
+static const struct uvideo_quirk *
+uvideo_lookup_quirk(struct usb_attach_arg *uaa)
+{
+	int i;
+
+	for (i = 0; i < nitems(uvideo_quirks); i++) {
+		if (uaa->info.idVendor == uvideo_quirks[i].uv_dev.idVendor &&
+		    uaa->info.idProduct == uvideo_quirks[i].uv_dev.idProduct)
+			return (&uvideo_quirks[i]);
+	}
+	return (NULL);
+}
+
+/*
  * USB device ID table - match standard UVC devices
  */
 static const STRUCT_USB_HOST_ID uvideo_devs[] = {
@@ -677,9 +749,21 @@ static int
 uvideo_probe(device_t dev)
 {
 	struct usb_attach_arg *uaa = device_get_ivars(dev);
+	const struct uvideo_quirk *quirk;
 
 	if (uaa->usb_mode != USB_MODE_HOST)
 		return (ENXIO);
+
+	/* Check quirks table first */
+	quirk = uvideo_lookup_quirk(uaa);
+	if (quirk != NULL) {
+		if (quirk->flags & UVIDEO_FLAG_REATTACH)
+			return (BUS_PROBE_DEFAULT);
+		if (quirk->flags & UVIDEO_FLAG_VENDOR_CLASS &&
+		    uaa->info.bInterfaceClass == UICLASS_VENDOR &&
+		    uaa->info.bInterfaceSubClass == UISUBCLASS_VIDEOCONTROL)
+			return (BUS_PROBE_DEFAULT);
+	}
 
 	if (uaa->info.bInterfaceClass != UICLASS_VIDEO)
 		return (ENXIO);
@@ -710,6 +794,15 @@ uvideo_attach(device_t dev)
 	device_set_usb_desc(dev);
 	mtx_init(&sc->sc_mtx, "uvideo", NULL, MTX_DEF);
 	knlist_init_mtx(&sc->sc_selinfo.si_note, &sc->sc_mtx);
+
+	/* Look up quirks for this device */
+	sc->sc_quirk = uvideo_lookup_quirk(uaa);
+
+	if (sc->sc_quirk != NULL &&
+	    sc->sc_quirk->flags & UVIDEO_FLAG_NOATTACH) {
+		device_printf(dev, "device not supported\n");
+		goto detach;
+	}
 
 	/* Get the config descriptor to iterate */
 	cdesc = usbd_get_config_descriptor(sc->sc_udev);
@@ -752,8 +845,14 @@ uvideo_attach(device_t dev)
 	sc->sc_iface_index = first_iface;
 	sc->sc_nifaces = nifaces;
 
-	/* Standard UVC stream header decode */
-	sc->sc_decode_stream_header = uvideo_vs_decode_stream_header;
+	/* Map stream header decode function based on quirks */
+	if (sc->sc_quirk != NULL &&
+	    sc->sc_quirk->flags & UVIDEO_FLAG_ISIGHT_STREAM_HEADER) {
+		sc->sc_decode_stream_header =
+		    uvideo_vs_decode_stream_header_isight;
+	} else {
+		sc->sc_decode_stream_header = uvideo_vs_decode_stream_header;
+	}
 
 	/* Parse video control descriptors */
 	error = uvideo_vc_parse_desc(sc);
@@ -2074,6 +2173,21 @@ uvideo_vs_get_probe(struct uvideo_softc *sc, uint8_t *probe_data,
 		bzero(probe_data + actlen,
 		    sizeof(struct usb_video_probe_commit) - actlen);
 
+	/*
+	 * Some devices (e.g. Elgato Cam Link 4K, Elgato Game Capture HD60)
+	 * return an invalid bmHint response which contains the bFormatIndex
+	 * in the second byte. Fix it up.
+	 */
+	if (sc->sc_quirk != NULL &&
+	    sc->sc_quirk->flags & UVIDEO_FLAG_FORMAT_INDEX_IN_BMHINT) {
+		struct usb_video_probe_commit *pc =
+		    (struct usb_video_probe_commit *)probe_data;
+		if (UGETW(pc->bmHint) > 255) {
+			pc->bFormatIndex = UGETW(pc->bmHint) >> 8;
+			USETW(pc->bmHint, 1);
+		}
+	}
+
 	DPRINTFN(1, "GET probe OK, length=%d\n", actlen);
 	return (USB_ERR_NORMAL_COMPLETION);
 }
@@ -2535,6 +2649,67 @@ uvideo_vs_decode_stream_header(struct uvideo_softc *sc, uint8_t *frame,
 		fb->fid = 0;
 		fb->error = 0;
 		fb->mmap_q_full = 0;
+	}
+}
+
+/*
+ * The iSight first generation device uses a non-standard streaming
+ * protocol. The stream header is sent once per image and looks like:
+ *
+ * uByte header length
+ * uByte flags
+ * uByte magic1[4] always "11223344"
+ * uByte magic2[8] always "deadbeefdeadface"
+ * uByte unknown[16]
+ *
+ * Sometimes the stream header is prefixed by an unknown byte.
+ */
+static void
+uvideo_vs_decode_stream_header_isight(struct uvideo_softc *sc,
+    uint8_t *frame, int frame_size)
+{
+	struct uvideo_frame_buffer *fb = &sc->sc_frame_buffer;
+	int sample_len, header = 0;
+	uint8_t *buf;
+	uint8_t magic[] = { 0x11, 0x22, 0x33, 0x44, 0xde, 0xad, 0xbe,
+	    0xef, 0xde, 0xad, 0xfa, 0xce };
+
+	if (frame_size > 13 && !memcmp(&frame[2], magic, 12))
+		header = 1;
+	if (frame_size > 14 && !memcmp(&frame[3], magic, 12))
+		header = 1;
+
+	if (header && fb->fid == 0) {
+		fb->fid = 1;
+		return;
+	}
+
+	if (header) {
+		if (sc->sc_mmap_flag) {
+			if (!fb->mmap_q_full)
+				uvideo_mmap_queue(sc, fb->offset, 0);
+		} else {
+			uvideo_read_frame(sc, fb->buf, fb->offset);
+		}
+		fb->offset = 0;
+		fb->mmap_q_full = 0;
+	} else {
+		if (sc->sc_mmap_flag) {
+			if (!fb->mmap_q_full) {
+				buf = uvideo_mmap_getbuf(sc);
+				if (buf == NULL)
+					fb->mmap_q_full = 1;
+			}
+		} else
+			buf = sc->sc_frame_buffer.buf;
+
+		/* Save sample */
+		sample_len = frame_size;
+		if (!fb->mmap_q_full &&
+		    (fb->offset + sample_len) < fb->buf_size) {
+			bcopy(frame, buf + fb->offset, sample_len);
+			fb->offset += sample_len;
+		}
 	}
 }
 
