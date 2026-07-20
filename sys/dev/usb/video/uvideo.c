@@ -246,12 +246,12 @@ struct uvideo_softc {
 	struct usb_video_header_desc_all sc_desc_vc_header;
 	struct usb_video_input_header_desc_all sc_desc_vs_input_header;
 
-#define	UVIDEO_MAX_PU		8
+#define	UVIDEO_MAX_PU		32
 	int			sc_desc_vc_pu_num;
 	struct usb_video_vc_processing_desc *sc_desc_vc_pu_cur;
 	struct usb_video_vc_processing_desc *sc_desc_vc_pu[UVIDEO_MAX_PU];
 
-#define	UVIDEO_MAX_CT		8
+#define	UVIDEO_MAX_CT		32
 	int			sc_desc_vc_ct_num;
 	struct usb_video_camera_terminal_desc *sc_desc_vc_ct_cur;
 	struct usb_video_camera_terminal_desc *sc_desc_vc_ct[UVIDEO_MAX_CT];
