@@ -9,6 +9,8 @@ Some of HardenedBSD's features can be toggled on a per-application and
 per-jail basis using secadm or hbsdcontrol. Documentation for both
 tools will be covered later.
 
+For copyright information, please refer to [this](FreeBSD-COPYRIGHT) file.
+
 # History
 
 Work on HardenedBSD began in 2013 when Oliver Pinter and Shawn Webb
@@ -178,6 +180,7 @@ Process tracing (`ptrace`) is hardened:
   (`security.bsd.unprivileged_proc_debug=0`).
 * Remote syscall functionality (`ptrace(PT_SC_REMOTE)`) is prohibited by
   default.
+* `ptrace(PT_SET_SC_RET)` is prohibited by default.
 * Capability mode-enabled processes are prohibited targets by default
   (`hardening.prohibit_ptrace_capsicum=2`).
 
