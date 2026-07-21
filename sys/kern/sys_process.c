@@ -1231,6 +1231,17 @@ kern_ptrace(struct thread *td, int req, pid_t pid, void *addr, int data)
 		/* OK */
 		break;
 
+#ifdef PAX_HARDENING
+	case PT_SET_SC_RET:
+		/* FALLTHROUGH */
+	case PT_SC_REMOTE:
+		error = pax_ptrace_syscall_prohibit(td);
+		if (error != 0) {
+			goto fail;
+		}
+		break;
+#endif
+
 	case PT_CLEARSTEP:
 		/* Allow thread to clear single step for itself */
 		if (td->td_tid == tid)
@@ -1934,12 +1945,6 @@ coredump_cleanup_nofp:
 		break;
 
 	case PT_SC_REMOTE:
-#ifdef PAX_HARDENING
-		error = pax_ptrace_syscall_prohibit(td);
-		if (error != 0) {
-			break;
-		}
-#endif
 		pscr = addr;
 		CTR2(KTR_PTRACE, "PT_SC_REMOTE: pid %d, syscall %d",
 		    p->p_pid, pscr->pscr_syscall);
