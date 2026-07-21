@@ -175,7 +175,7 @@ SYSCTL_OID(_vm, OID_AUTO, phys_segs,
 
 static int sysctl_vm_phys_fictitious_segs(SYSCTL_HANDLER_ARGS);
 SYSCTL_OID(_vm, OID_AUTO, phys_fictitious_segs,
-    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, 0,
+    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE | CTLFLAG_ROOTONLY, NULL, 0,
     sysctl_vm_phys_fictitious_segs, "A",
     "Fictitious Phys Seg Info");
 
