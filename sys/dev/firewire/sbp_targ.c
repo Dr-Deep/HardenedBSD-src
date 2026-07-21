@@ -82,6 +82,7 @@
 #define SBP_TARG_BIND_END	(((u_int64_t)SBP_TARG_BIND_HI << 32) | \
 				    SBP_TARG_BIND_LO(MAX_LOGINS))
 #define SBP_TARG_LOGIN_ID(lo)	(((lo) - SBP_TARG_BIND_LO(0))/0x20)
+#define SBP_TARG_MAX_CHUNK	2048	/* max DMA chunk per xfer */
 
 #define FETCH_MGM	0
 #define FETCH_CMD	1
@@ -526,12 +527,6 @@ static void
 sbp_targ_send_lstate_events(struct sbp_targ_softc *sc,
     struct sbp_targ_lstate *lstate)
 {
-#if 0
-	struct ccb_hdr *ccbh;
-	struct ccb_immediate_notify *inot;
-
-	printf("%s: not implemented yet\n", __func__);
-#endif
 }
 
 
@@ -707,24 +702,6 @@ process_scsi_status:
 		sbp_cmd_status->status = ccb->csio.scsi_status;
 		sense = &ccb->csio.sense_data;
 
-#if 0		/* XXX What we should do? */
-#if 0
-		sbp_targ_abort(orbi->sc, STAILQ_NEXT(orbi, link));
-#else
-		norbi = STAILQ_NEXT(orbi, link);
-		while (norbi) {
-			printf("%s: status=%d\n", __func__, norbi->state);
-			if (norbi->ccb != NULL) {
-				norbi->ccb->ccb_h.status = CAM_REQ_ABORTED;
-				xpt_done(norbi->ccb);
-				norbi->ccb = NULL;
-			}
-			sbp_targ_remove_orb_info_locked(orbi->login, norbi);
-			norbi = STAILQ_NEXT(norbi, link);
-			free(norbi, M_SBP_TARG);
-		}
-#endif
-#endif
 
 		sense_len = ccb->csio.sense_len - ccb->csio.sense_resid;
 		scsi_extract_sense_len(sense, sense_len, &error_code,
@@ -955,7 +932,7 @@ sbp_targ_xfer_buf(struct orb_info *orbi, u_int offset,
 
 	while (size > 0) {
 		/* XXX assume dst_lo + off doesn't overflow */
-		len = MIN(size, 2048 /* XXX */);
+		len = MIN(size, SBP_TARG_MAX_CHUNK);
 		size -= len;
 		orbi->refcount ++;
 		if (ccb_dir == CAM_DIR_OUT) {
@@ -1378,11 +1355,6 @@ sbp_targ_action1(struct cam_sim *sim, union ccb *ccb)
 		spi->flags = CTS_SPI_FLAGS_DISC_ENB;
 		scsi->valid = CTS_SCSI_VALID_TQ;
 		scsi->flags = CTS_SCSI_FLAGS_TAG_ENB;
-#if 0
-		printf("%s:%d:%d XPT_GET_TRAN_SETTINGS:\n",
-			device_get_nameunit(sc->fd.dev),
-			ccb->ccb_h.target_id, ccb->ccb_h.target_lun);
-#endif
 		cts->ccb_h.status = CAM_REQ_CMP;
 		xpt_done(ccb);
 		break;
@@ -1752,10 +1724,6 @@ sbp_targ_fetch_orb(struct sbp_targ_softc *sc, struct fw_device *fwdev,
 			printf("%s: no free atio\n", __func__);
 			login->lstate->flags |= F_ATIO_STARVED;
 			login->flags |= F_ATIO_STARVED;
-#if 0
-			/* XXX ?? */
-			login->fwdev = fwdev;
-#endif
 			break;
 		}
 		SLIST_REMOVE_HEAD(&login->lstate->accept_tios, sim_links.sle);
