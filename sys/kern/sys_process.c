@@ -1232,7 +1232,6 @@ kern_ptrace(struct thread *td, int req, pid_t pid, void *addr, int data)
 		/* OK */
 		break;
 
-<<<<<<< HEAD
 #ifdef PAX_HARDENING
 	case PT_SET_SC_RET:
 		/* FALLTHROUGH */
@@ -1244,20 +1243,6 @@ kern_ptrace(struct thread *td, int req, pid_t pid, void *addr, int data)
 		break;
 #endif
 
-	case PT_CLEARSTEP:
-		/* Allow thread to clear single step for itself */
-		if (td->td_tid == tid)
-			break;
-		goto default_check;
-
-	case PT_GET_CHILDREN:
-		if (p == curp)
-			break;
-		goto default_check;
-
-default_check:
-=======
->>>>>>> rad/freebsd/current/main
 	default:
 		/*
 		 * Allow thread to clear single step for itself.
