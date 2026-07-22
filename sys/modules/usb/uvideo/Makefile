@@ -7,4 +7,6 @@ SRCS=	opt_bus.h opt_usb.h device_if.h \
 	bus_if.h usb_if.h usbdevs.h \
 	uvideo.c
 
+TRIVIAL_VAR_AUTO_INIT_ZERO_SAFE=	yes
+
 .include <bsd.kmod.mk>
