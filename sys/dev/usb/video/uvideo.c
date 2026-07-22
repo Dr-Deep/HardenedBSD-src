@@ -46,10 +46,14 @@
 #include <sys/rwlock.h>
 
 #include <vm/vm.h>
-#include <vm/pmap.h>
-#include <vm/vm_page.h>
+#include <vm/vm_extern.h>
+#include <vm/vm_kern.h>
 #include <vm/vm_object.h>
+#include <vm/vm_page.h>
 #include <vm/vm_pager.h>
+#include <vm/vm_param.h>
+#include <vm/pmap.h>
+#include <vm/vm_map.h>
 
 #include <dev/usb/usb.h>
 #include <dev/usb/usbdi.h>
@@ -168,25 +172,6 @@ static d_ioctl_t	uvideo_cdev_ioctl;
 static d_poll_t		uvideo_cdev_poll;
 static d_kqfilter_t	uvideo_cdev_kqfilter;
 static d_mmap_single_t	uvideo_cdev_mmap_single;
-static int		uvideo_pg_ctor(void *, vm_ooffset_t, vm_prot_t,
-			    vm_ooffset_t, struct ucred *, u_short *);
-static void		uvideo_pg_dtor(void *);
-static int		uvideo_pg_fault(vm_object_t, vm_ooffset_t, int,
-			    vm_page_t *);
-
-/*
- * Per-buffer state for mmap lifetime management.  Allocated together
- * with the contig buffer at REQBUFS time and attached to a single
- * shared vm_object whose reference count tracks the active mappings.
- * The buffer is freed by cdev_pg_dtor() when the last reference (the
- * softc's own or a user mapping) is dropped.  Lives independently of
- * the softc so the pager dtor can safely free the buffer even after
- * device detach.
- */
-struct uvideo_mmap_state {
-	uint8_t				*ms_buffer;
-	size_t				ms_buffer_size;
-};
 
 static int	uvideo_querycap(struct uvideo_softc *, struct v4l2_capability *);
 static int	uvideo_enum_fmt(struct uvideo_softc *, struct v4l2_fmtdesc *);
@@ -248,7 +233,7 @@ struct uvideo_softc {
 	int			sc_streaming;
 
 	int			sc_max_ctrl_size;
-	int			sc_max_fbuf_size;
+	uint32_t		sc_max_fbuf_size;
 	int			sc_negotiated_flag;
 	int			sc_frame_rate;
 
@@ -258,9 +243,10 @@ struct uvideo_softc {
 	struct uvideo_mmap	*sc_mmap_cur;
 	uint8_t			*sc_mmap_buffer;
 	size_t			sc_mmap_buffer_size;
+	vm_offset_t		sc_mmap_kva;
 	int			sc_mmap_buffer_idx;
 	q_mmap			sc_mmap_q;
-	int			sc_mmap_count;
+	size_t			sc_mmap_count;
 	int			sc_mmap_flag;
 	vm_object_t			sc_mmap_object;
 
@@ -745,12 +731,6 @@ static const struct usb_config uvideo_bulk_config[1] = {
 	},
 };
 
-static const struct cdev_pager_ops uvideo_pager_ops = {
-	.cdev_pg_ctor = uvideo_pg_ctor,
-	.cdev_pg_dtor = uvideo_pg_dtor,
-	.cdev_pg_fault = uvideo_pg_fault,
-};
-
 /*
  * Character device switch
  */
@@ -940,6 +920,7 @@ uvideo_attach(device_t dev)
 	/* Init mmap queue */
 	STAILQ_INIT(&sc->sc_mmap_q);
 	sc->sc_mmap_count = 0;
+	sc->sc_mmap_kva = 0;
 	sc->sc_mmap_object = NULL;
 
 	/* Allocate unit number and create character device */
@@ -979,21 +960,20 @@ uvideo_detach(device_t dev)
 
 	sc->sc_dying = 1;
 
-	/* Stop any active streaming */
-	if (sc->sc_streaming) {
-		mtx_lock(&sc->sc_mtx);
-		sc->sc_streaming = 0;
-		mtx_unlock(&sc->sc_mtx);
-		uvideo_vs_close(sc);
-	}
-
 	/* Destroy character device */
 	if (sc->sc_cdev != NULL) {
 		destroy_dev(sc->sc_cdev);
 		sc->sc_cdev = NULL;
 	}
 
-	/* Unit number is implicitly freed when the cdev is destroyed */
+	/* Stop streaming if still active (e.g. detached while idle). */
+	mtx_lock(&sc->sc_mtx);
+	if (sc->sc_streaming) {
+		sc->sc_streaming = 0;
+		mtx_unlock(&sc->sc_mtx);
+		uvideo_vs_close(sc);
+	} else
+		mtx_unlock(&sc->sc_mtx);
 
 	/* Free frame buffers */
 	uvideo_vs_free_frame(sc);
@@ -1328,6 +1308,7 @@ uvideo_vs_parse_desc(struct uvideo_softc *sc,
 		return (error);
 
 	/* Parse video stream frame descriptors */
+	sc->sc_fmtgrp_idx = 0;
 	error = uvideo_vs_parse_desc_frame(sc);
 	if (error != USB_ERR_NORMAL_COMPLETION)
 		return (error);
@@ -1735,9 +1716,15 @@ uvideo_vs_parse_desc_frame_buffer_size(struct uvideo_softc *sc,
 	struct usb_video_frame_desc *fd =
 	    __DECONST(struct usb_video_frame_desc *, desc);
 	int fmtidx, frame_num;
-	uint32_t fbuf_size;
+	uint64_t fbuf_size;
 
 	fmtidx = sc->sc_fmtgrp_idx;
+	if (fmtidx >= UVIDEO_MAX_FORMAT ||
+	    sc->sc_fmtgrp[fmtidx].format == NULL) {
+		device_printf(sc->sc_dev,
+		    "frame descriptor without format!\n");
+		return (USB_ERR_INVAL);
+	}
 	frame_num = sc->sc_fmtgrp[fmtidx].frame_num;
 	if (frame_num >= UVIDEO_MAX_FRAME) {
 		device_printf(sc->sc_dev,
@@ -1764,7 +1751,7 @@ uvideo_vs_parse_desc_frame_buffer_size(struct uvideo_softc *sc,
 		fbuf_size = UGETDW(fd->u.uc.dwMaxVideoFrameBufferSize);
 
 	if (fbuf_size > sc->sc_max_fbuf_size)
-		sc->sc_max_fbuf_size = fbuf_size;
+		sc->sc_max_fbuf_size = (uint32_t)fbuf_size;
 
 	if (++sc->sc_fmtgrp[fmtidx].frame_num ==
 	    sc->sc_fmtgrp[fmtidx].format->bNumFrameDescriptors)
@@ -1781,9 +1768,16 @@ uvideo_vs_parse_desc_frame_max_rate(struct uvideo_softc *sc,
 	    __DECONST(struct usb_video_frame_desc *, desc);
 	uint8_t *p;
 	int i, fmtidx, frame_num, length, nivals;
-	uint32_t fbuf_size, frame_ival, next_frame_ival;
+	uint64_t fbuf_size;
+	uint32_t frame_ival, next_frame_ival;
 
 	fmtidx = sc->sc_fmtgrp_idx;
+	if (fmtidx >= UVIDEO_MAX_FORMAT ||
+	    sc->sc_fmtgrp[fmtidx].format == NULL) {
+		device_printf(sc->sc_dev,
+		    "frame descriptor without format!\n");
+		return (USB_ERR_INVAL);
+	}
 	frame_num = sc->sc_fmtgrp[fmtidx].frame_num;
 	if (frame_num >= UVIDEO_MAX_FRAME) {
 		device_printf(sc->sc_dev,
@@ -1810,7 +1804,7 @@ uvideo_vs_parse_desc_frame_max_rate(struct uvideo_softc *sc,
 	nivals = UVIDEO_FRAME_NUM_INTERVALS(fd);
 
 	for (i = 0; i < nivals; i++) {
-		if (length <= 0)
+		if (length < (int)sizeof(uDWord))
 			break;
 		next_frame_ival = UGETDW(p);
 		if (next_frame_ival > frame_ival)
@@ -1823,7 +1817,7 @@ uvideo_vs_parse_desc_frame_max_rate(struct uvideo_softc *sc,
 	fbuf_size /= 8 * 10000000;
 
 	if (fbuf_size > sc->sc_max_fbuf_size)
-		sc->sc_max_fbuf_size = fbuf_size;
+		sc->sc_max_fbuf_size = (uint32_t)fbuf_size;
 
 	if (++sc->sc_fmtgrp[fmtidx].frame_num ==
 	    sc->sc_fmtgrp[fmtidx].format->bNumFrameDescriptors)
@@ -2260,7 +2254,7 @@ uvideo_vs_alloc_frame(struct uvideo_softc *sc)
 
 	fb->buf_size = UGETDW(sc->sc_desc_probe.dwMaxVideoFrameSize);
 
-	if (sc->sc_max_fbuf_size < fb->buf_size && sc->sc_mmap_flag == 0) {
+	if (sc->sc_max_fbuf_size < fb->buf_size) {
 		device_printf(sc->sc_dev,
 		    "software video buffer too small!\n");
 		return (USB_ERR_NOMEM);
@@ -2296,18 +2290,14 @@ uvideo_vs_free_frame(struct uvideo_softc *sc)
 		fb->buf = NULL;
 	}
 
-	if (sc->sc_mmap_object != NULL) {
-		/*
-		 * Drop the softc's reference to the shared mmap object.
-		 * If user-space mappings still exist, the object and its
-		 * backing contig buffer stay alive until the last mapping
-		 * is dropped, at which point uvideo_pg_dtor() frees them.
-		 */
-		vm_object_deallocate(sc->sc_mmap_object);
-		sc->sc_mmap_object = NULL;
+	if (sc->sc_mmap_kva != 0) {
+		vm_map_remove(kernel_map, sc->sc_mmap_kva,
+		    sc->sc_mmap_kva + sc->sc_mmap_buffer_size);
 		sc->sc_mmap_buffer = NULL;
+		sc->sc_mmap_kva = 0;
 		sc->sc_mmap_buffer_size = 0;
 	}
+	sc->sc_mmap_object = NULL;
 
 	while (!STAILQ_EMPTY(&sc->sc_mmap_q))
 		STAILQ_REMOVE_HEAD(&sc->sc_mmap_q, q_frames);
@@ -2845,16 +2835,44 @@ uvideo_read_frame(struct uvideo_softc *sc, uint8_t *buf, int len)
 /*  Character Device Operations                                     */
 /* ---------------------------------------------------------------- */
 
+/*
+ * Per-fd state (via devfs cdevpriv).  Tracks whether this fd started
+ * streaming so that STREAMOFF or close from a non-streaming fd (e.g. a
+ * second tab that failed REQBUFS) does not tear down the active stream
+ * owned by another fd.
+ */
+struct uvideo_cdevpriv {
+	int			streaming;
+};
+
+static void	uvideo_cdevpriv_dtor(void *);
+
+static void
+uvideo_cdevpriv_dtor(void *data)
+{
+
+	free(data, M_USBDEV);
+}
+
 static int
 uvideo_cdev_open(struct cdev *dev, int flags, int fmt, struct thread *td)
 {
 	struct uvideo_softc *sc = dev->si_drv1;
+	struct uvideo_cdevpriv *priv;
+	int error;
 
 	if (sc == NULL || sc->sc_dying)
 		return (ENXIO);
 
 	if (sc->sc_vs_cur == NULL)
 		return (EIO);
+
+	priv = malloc(sizeof(*priv), M_USBDEV, M_WAITOK | M_ZERO);
+	error = devfs_set_cdevpriv(priv, uvideo_cdevpriv_dtor);
+	if (error != 0) {
+		free(priv, M_USBDEV);
+		return (error);
+	}
 
 	mtx_lock(&sc->sc_mtx);
 	if (sc->sc_open == 0) {
@@ -2876,9 +2894,26 @@ static int
 uvideo_cdev_close(struct cdev *dev, int flags, int fmt, struct thread *td)
 {
 	struct uvideo_softc *sc = dev->si_drv1;
+	struct uvideo_cdevpriv *priv;
 
 	if (sc == NULL)
 		return (0);
+
+	/*
+	 * If this fd started streaming, stop the stream and free the
+	 * buffers so that a new fd (e.g. a refreshed browser tab) can
+	 * re-acquire the camera.  Other fds sharing the stream will get
+	 * EPIPE on DQBUF and should re-open.
+	 */
+	if (devfs_get_cdevpriv((void **)&priv) == 0 && priv != NULL &&
+	    priv->streaming) {
+		priv->streaming = 0;
+		mtx_lock(&sc->sc_mtx);
+		sc->sc_streaming = 0;
+		mtx_unlock(&sc->sc_mtx);
+		uvideo_vs_close(sc);
+		uvideo_vs_free_frame(sc);
+	}
 
 	mtx_lock(&sc->sc_mtx);
 	sc->sc_open--;
@@ -2888,19 +2923,15 @@ uvideo_cdev_close(struct cdev *dev, int flags, int fmt, struct thread *td)
 	}
 	mtx_unlock(&sc->sc_mtx);
 
-	/* Last close: stop streaming if active */
+	/* Last close: stop streaming if still active (safety net) */
+	mtx_lock(&sc->sc_mtx);
 	if (sc->sc_streaming) {
-		mtx_lock(&sc->sc_mtx);
 		sc->sc_streaming = 0;
 		mtx_unlock(&sc->sc_mtx);
 		uvideo_vs_close(sc);
-	}
+	} else
+		mtx_unlock(&sc->sc_mtx);
 
-	/*
-	 * Release mmap buffer.  If there are still active mmap
-	 * mappings, the actual contigfree() is deferred to the
-	 * last uvideo_pg_dtor() invocation.
-	 */
 	uvideo_vs_free_frame(sc);
 
 	if (sc->sc_fbuffer != NULL) {
@@ -2920,8 +2951,9 @@ static int
 uvideo_cdev_read(struct cdev *dev, struct uio *uio, int ioflag)
 {
 	struct uvideo_softc *sc = dev->si_drv1;
+	struct uvideo_cdevpriv *priv;
 	usb_error_t error;
-	int ret;
+	int ret, fsize;
 
 	if (sc == NULL || sc->sc_dying)
 		return (ENXIO);
@@ -2930,63 +2962,85 @@ uvideo_cdev_read(struct cdev *dev, struct uio *uio, int ioflag)
 		return (EIO);
 
 	/* Start streaming in read mode if not already running */
-	if (sc->sc_vidmode == VIDMODE_NONE) {
-		sc->sc_mmap_flag = 0;
-		sc->sc_vidmode = VIDMODE_READ;
-
-		error = uvideo_vs_init(sc);
-		if (error != USB_ERR_NORMAL_COMPLETION) {
-			sc->sc_vidmode = VIDMODE_NONE;
-			return (EIO);
-		}
-
-		/* Allocate a separate read buffer for frame delivery */
-		sc->sc_fbufferlen = sc->sc_max_fbuf_size;
-		if (sc->sc_fbufferlen == 0)
-			sc->sc_fbufferlen =
-			    UGETDW(sc->sc_desc_probe.dwMaxVideoFrameSize);
-		if (sc->sc_fbuffer == NULL) {
-			sc->sc_fbuffer = malloc(sc->sc_fbufferlen, M_USBDEV,
-			    M_WAITOK | M_ZERO);
-			if (sc->sc_fbuffer == NULL) {
-				sc->sc_vidmode = VIDMODE_NONE;
-				return (ENOMEM);
-			}
-		}
-
-		mtx_lock(&sc->sc_mtx);
-		sc->sc_streaming = 1;
-		if (sc->sc_vs_cur->bulk_endpoint)
-			usbd_transfer_start(sc->sc_xfer[0]);
-		else {
-			int i;
-			for (i = 0; i < UVIDEO_IXFERS; i++)
-				usbd_transfer_start(sc->sc_xfer[i]);
-		}
+	mtx_lock(&sc->sc_mtx);
+	if (sc->sc_vidmode != VIDMODE_NONE) {
 		mtx_unlock(&sc->sc_mtx);
+		if (sc->sc_vidmode != VIDMODE_READ)
+			return (EBUSY);
+		goto read_wait;
+	}
+	if (devfs_get_cdevpriv((void **)&priv) != 0 || priv == NULL) {
+		mtx_unlock(&sc->sc_mtx);
+		return (EINVAL);
+	}
+	sc->sc_mmap_flag = 0;
+	sc->sc_vidmode = VIDMODE_READ;
+	mtx_unlock(&sc->sc_mtx);
+
+	error = uvideo_vs_init(sc);
+	if (error != USB_ERR_NORMAL_COMPLETION) {
+		mtx_lock(&sc->sc_mtx);
+		sc->sc_vidmode = VIDMODE_NONE;
+		mtx_unlock(&sc->sc_mtx);
+		return (EIO);
 	}
 
-	if (sc->sc_vidmode != VIDMODE_READ)
-		return (EBUSY);
+	/* Allocate a separate read buffer for frame delivery */
+	sc->sc_fbufferlen = sc->sc_max_fbuf_size;
+	if (sc->sc_fbufferlen == 0)
+		sc->sc_fbufferlen =
+		    UGETDW(sc->sc_desc_probe.dwMaxVideoFrameSize);
+	if (sc->sc_fbuffer == NULL) {
+		sc->sc_fbuffer = malloc(sc->sc_fbufferlen, M_USBDEV,
+		    M_WAITOK | M_ZERO);
+		if (sc->sc_fbuffer == NULL) {
+			mtx_lock(&sc->sc_mtx);
+			sc->sc_vidmode = VIDMODE_NONE;
+			mtx_unlock(&sc->sc_mtx);
+			return (ENOMEM);
+		}
+	}
+
+	mtx_lock(&sc->sc_mtx);
+	sc->sc_streaming = 1;
+	priv->streaming = 1;
+	if (sc->sc_vs_cur->bulk_endpoint)
+		usbd_transfer_start(sc->sc_xfer[0]);
+	else {
+		int i;
+		for (i = 0; i < UVIDEO_IXFERS; i++)
+			usbd_transfer_start(sc->sc_xfer[i]);
+	}
+	mtx_unlock(&sc->sc_mtx);
+
+read_wait:
 
 	/* Wait for a frame */
+	mtx_lock(&sc->sc_mtx);
 	while (sc->sc_frames_ready == 0) {
-		if (ioflag & IO_NDELAY)
+		if (ioflag & IO_NDELAY) {
+			mtx_unlock(&sc->sc_mtx);
 			return (EWOULDBLOCK);
-		ret = tsleep(sc, PCATCH, "uvread", hz * 10);
-		if (ret != 0)
+		}
+		ret = mtx_sleep(sc, &sc->sc_mtx, PCATCH, "uvread", hz * 10);
+		if (ret != 0) {
+			mtx_unlock(&sc->sc_mtx);
 			return (ret);
-		if (sc->sc_dying)
+		}
+		if (sc->sc_dying) {
+			mtx_unlock(&sc->sc_mtx);
 			return (ENXIO);
+		}
 	}
 
 	sc->sc_frames_ready--;
+	fsize = sc->sc_fsize;
+	mtx_unlock(&sc->sc_mtx);
 
-	if (sc->sc_fsize == 0)
+	if (fsize == 0)
 		return (0);
 
-	return (uiomove(sc->sc_fbuffer, MIN(uio->uio_resid, sc->sc_fsize),
-	    uio));
+	return (uiomove(sc->sc_fbuffer, MIN(uio->uio_resid, fsize), uio));
 }
 
 static int
@@ -3152,82 +3206,11 @@ uvideo_cdev_mmap_single(struct cdev *dev, vm_ooffset_t *offset,
 	vm_object_reference(sc->sc_mmap_object);
 	*object = sc->sc_mmap_object;
 
+	mtx_lock(&sc->sc_mtx);
 	sc->sc_mmap_flag = 1;
+	mtx_unlock(&sc->sc_mtx);
 
 	return (0);
-}
-
-static int
-uvideo_pg_ctor(void *handle, vm_ooffset_t size, vm_prot_t prot,
-    vm_ooffset_t foff, struct ucred *cred, u_short *color)
-{
-	struct uvideo_mmap_state *ms = handle;
-
-	if (ms->ms_buffer == NULL || foff + size > ms->ms_buffer_size)
-		return (EINVAL);
-
-	*color = 0;
-	return (0);
-}
-
-static void
-uvideo_pg_dtor(void *handle)
-{
-	struct uvideo_mmap_state *ms = handle;
-
-	/*
-	 * The last reference to the shared mmap object is gone (either the
-	 * softc released it, or the final user mapping was dropped).  Free
-	 * the backing contig buffer and the state.
-	 */
-	if (ms->ms_buffer != NULL)
-		contigfree(ms->ms_buffer, ms->ms_buffer_size, M_USBDEV);
-	free(ms, M_USBDEV);
-}
-
-static int
-uvideo_pg_fault(vm_object_t object, vm_ooffset_t offset, int prot,
-    vm_page_t *mres)
-{
-	struct uvideo_mmap_state *ms = object->un_pager.devp.handle;
-	vm_paddr_t paddr;
-	vm_page_t m;
-
-	if (ms->ms_buffer == NULL)
-		return (VM_PAGER_FAIL);
-
-	if (offset >= ms->ms_buffer_size)
-		return (VM_PAGER_FAIL);
-
-	paddr = vtophys(ms->ms_buffer + offset);
-	if (paddr == 0)
-		return (VM_PAGER_FAIL);
-
-	if (((*mres)->flags & PG_FICTITIOUS) != 0) {
-		/*
-		 * The passed-in page is already a fake page: just update
-		 * its physical address in place.
-		 */
-		m = *mres;
-		vm_page_updatefake(m, paddr, object->memattr);
-	} else {
-		/*
-		 * Replace the placeholder page allocated by the generic
-		 * fault path with our own fake page.  vm_page_getfake() can
-		 * allocate and must not be called with the object lock held;
-		 * vm_page_replace() then swaps the new page into the object
-		 * and frees the placeholder.  Without this the busy
-		 * placeholder stays in the object and dev_pager_dealloc()
-		 * dead-locks trying to acquire it.
-		 */
-		VM_OBJECT_WUNLOCK(object);
-		m = vm_page_getfake(paddr, object->memattr);
-		VM_OBJECT_WLOCK(object);
-		vm_page_replace(m, object, (*mres)->pindex, *mres);
-		*mres = m;
-	}
-	m->valid = VM_PAGE_BITS_ALL;
-	return (VM_PAGER_OK);
 }
 
 /* ---------------------------------------------------------------- */
@@ -3387,7 +3370,7 @@ uvideo_enum_fsizes(struct uvideo_softc *sc, struct v4l2_frmsizeenum *fsizes)
 static int
 uvideo_enum_fivals(struct uvideo_softc *sc, struct v4l2_frmivalenum *fivals)
 {
-	int idx;
+	int idx, ival_bytes;
 	struct uvideo_format_group *fmtgrp = NULL;
 	struct usb_video_frame_desc *frame = NULL;
 	uint8_t *p;
@@ -3420,6 +3403,9 @@ uvideo_enum_fivals(struct uvideo_softc *sc, struct v4l2_frmivalenum *fivals)
 		return (EINVAL);
 
 	p = (uint8_t *)frame + UVIDEO_FRAME_MIN_LEN(frame);
+	ival_bytes = (int)frame->bLength - (int)UVIDEO_FRAME_MIN_LEN(frame);
+	if (ival_bytes < 0)
+		return (EINVAL);
 
 	bzero(fivals, sizeof(*fivals));
 	fivals->index = fi_index;
@@ -3429,6 +3415,8 @@ uvideo_enum_fivals(struct uvideo_softc *sc, struct v4l2_frmivalenum *fivals)
 
 	if (UVIDEO_FRAME_NUM_INTERVALS(frame) == 0) {
 		if (fi_index != 0)
+			return (EINVAL);
+		if (ival_bytes < (int)(3 * sizeof(uDWord)))
 			return (EINVAL);
 		fivals->type = V4L2_FRMIVAL_TYPE_STEPWISE;
 		fivals->stepwise.min.numerator = UGETDW(p);
@@ -3442,12 +3430,9 @@ uvideo_enum_fivals(struct uvideo_softc *sc, struct v4l2_frmivalenum *fivals)
 	} else {
 		if (fi_index >= (uint32_t)UVIDEO_FRAME_NUM_INTERVALS(frame))
 			return (EINVAL);
-		p += sizeof(uDWord) * fi_index;
-		if (p > frame->bLength + (uint8_t *)frame) {
-			device_printf(sc->sc_dev,
-			    "frame desc too short?\n");
+		if (ival_bytes < (int)((fi_index + 1) * sizeof(uDWord)))
 			return (EINVAL);
-		}
+		p += sizeof(uDWord) * fi_index;
 		fivals->type = V4L2_FRMIVAL_TYPE_DISCRETE;
 		fivals->discrete.numerator = UGETDW(p);
 		fivals->discrete.denominator = 10000000;
@@ -3467,6 +3452,16 @@ uvideo_s_fmt(struct uvideo_softc *sc, struct v4l2_format *fmt)
 
 	if (fmt->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
 		return (EINVAL);
+
+	/* Reject format changes while streaming: re-negotiating the probe
+	 * and commit controls with the device would disrupt the active USB
+	 * transfers.  V4L2 mandates EBUSY in this case. */
+	mtx_lock(&sc->sc_mtx);
+	if (sc->sc_streaming || sc->sc_mmap_count > 0) {
+		mtx_unlock(&sc->sc_mtx);
+		return (EBUSY);
+	}
+	mtx_unlock(&sc->sc_mtx);
 
 	DPRINTFN(1, "s_fmt: requested %dx%d\n",
 	    fmt->fmt.pix.width, fmt->fmt.pix.height);
@@ -3548,6 +3543,15 @@ static int
 uvideo_s_parm(struct uvideo_softc *sc, struct v4l2_streamparm *parm)
 {
 	usb_error_t error;
+
+	/* Reject parameter changes while streaming for the same reason as
+	 * S_FMT: they re-negotiate with the device. */
+	mtx_lock(&sc->sc_mtx);
+	if (sc->sc_streaming || sc->sc_mmap_count > 0) {
+		mtx_unlock(&sc->sc_mtx);
+		return (EBUSY);
+	}
+	mtx_unlock(&sc->sc_mtx);
 
 	if (parm->type == V4L2_BUF_TYPE_VIDEO_CAPTURE) {
 		if (parm->parm.capture.timeperframe.numerator == 0 ||
@@ -3632,8 +3636,12 @@ uvideo_g_input(struct uvideo_softc *sc, int *input)
 static int
 uvideo_reqbufs(struct uvideo_softc *sc, struct v4l2_requestbuffers *rb)
 {
-	int i, buf_size, buf_size_total;
-	struct uvideo_mmap_state *ms;
+	size_t i;
+	uint32_t buf_size;
+	size_t buf_size_total;
+	vm_object_t obj;
+	vm_offset_t kva;
+	int error;
 
 	DPRINTFN(1, "reqbufs: count=%d\n", rb->count);
 
@@ -3651,42 +3659,55 @@ uvideo_reqbufs(struct uvideo_softc *sc, struct v4l2_requestbuffers *rb)
 		sc->sc_mmap_count = rb->count;
 
 	buf_size = UGETDW(sc->sc_desc_probe.dwMaxVideoFrameSize);
+	if (buf_size == 0 || buf_size > sc->sc_max_fbuf_size)
+		return (EINVAL);
+	if (SIZE_MAX / sc->sc_mmap_count < buf_size)
+		return (EINVAL);
 	buf_size_total = sc->sc_mmap_count * buf_size;
 	buf_size_total = round_page(buf_size_total);
 
-	sc->sc_mmap_buffer = contigmalloc(buf_size_total, M_USBDEV,
-	    M_WAITOK | M_ZERO, 0, ~0UL, PAGE_SIZE, 0);
-	if (sc->sc_mmap_buffer == NULL) {
-		device_printf(sc->sc_dev, "can't allocate mmap buffer!\n");
+	/*
+	 * Allocate a physical vm_object of the requested size.  Use
+	 * phys_pager_allocate() so that un_pager.phys.ops is properly
+	 * initialised: a bare vm_object_allocate(OBJT_PHYS, ...)
+	 * leaves ops NULL and causes a page fault when the VM system
+	 * calls phys_pager_getpages() during vm_map_wire() or a
+	 * userspace fault on the mmap mapping.
+	 */
+	obj = phys_pager_allocate(NULL, &default_phys_pg_ops, NULL,
+	    buf_size_total, VM_PROT_ALL, 0, curthread->td_ucred);
+	if (obj == NULL) {
+		device_printf(sc->sc_dev, "can't allocate mmap vm_object!\n");
 		sc->sc_mmap_count = 0;
 		return (ENOMEM);
 	}
+
+	kva = vm_map_min(kernel_map);
+	error = vm_map_find(kernel_map, obj, 0, &kva, buf_size_total, 0,
+	    VMFS_OPTIMAL_SPACE, VM_PROT_READ | VM_PROT_WRITE,
+	    VM_PROT_READ | VM_PROT_WRITE, 0);
+	if (error != KERN_SUCCESS) {
+		vm_object_deallocate(obj);
+		device_printf(sc->sc_dev, "vm_map_find failed: %d\n", error);
+		sc->sc_mmap_count = 0;
+		return (vm_mmap_to_errno(error));
+	}
+	error = vm_map_wire(kernel_map, kva, kva + buf_size_total,
+	    VM_MAP_WIRE_SYSTEM | VM_MAP_WIRE_NOHOLES);
+	if (error != KERN_SUCCESS) {
+		vm_map_remove(kernel_map, kva, kva + buf_size_total);
+		device_printf(sc->sc_dev, "vm_map_wire failed: %d\n", error);
+		sc->sc_mmap_count = 0;
+		return (vm_mmap_to_errno(error));
+	}
+
+	sc->sc_mmap_object = obj;
+	sc->sc_mmap_buffer = (uint8_t *)kva;
+	sc->sc_mmap_kva = kva;
 	sc->sc_mmap_buffer_size = buf_size_total;
 
-	/*
-	 * Create a single shared vm_object backing the whole mmap buffer.
-	 * Its reference count (bumped by each mmap() and held by the softc)
-	 * tracks the lifetime of the mappings; the contig buffer is freed
-	 * by uvideo_pg_dtor() when the last reference goes away, which may
-	 * be after device detach.
-	 */
-	ms = malloc(sizeof(*ms), M_USBDEV, M_WAITOK | M_ZERO);
-	ms->ms_buffer = sc->sc_mmap_buffer;
-	ms->ms_buffer_size = sc->sc_mmap_buffer_size;
-	sc->sc_mmap_object = cdev_pager_allocate(ms, OBJT_DEVICE,
-	    &uvideo_pager_ops, sc->sc_mmap_buffer_size, VM_PROT_ALL,
-	    0, curthread->td_ucred);
-	if (sc->sc_mmap_object == NULL) {
-		free(ms, M_USBDEV);
-		contigfree(sc->sc_mmap_buffer, sc->sc_mmap_buffer_size,
-		    M_USBDEV);
-		sc->sc_mmap_buffer = NULL;
-		sc->sc_mmap_buffer_size = 0;
-		sc->sc_mmap_count = 0;
-		return (ENOMEM);
-	}
-
-	DPRINTFN(1, "allocated %d bytes mmap buffer\n", buf_size_total);
+	DPRINTFN(1, "allocated %zu bytes mmap buffer at kva %#jx\n",
+	    buf_size_total, (uintmax_t)kva);
 
 	for (i = 0; i < sc->sc_mmap_count; i++) {
 		sc->sc_mmap[i].buf = sc->sc_mmap_buffer + (i * buf_size);
@@ -3734,8 +3755,11 @@ uvideo_qbuf(struct uvideo_softc *sc, struct v4l2_buffer *qb)
 	    qb->index >= sc->sc_mmap_count)
 		return (EINVAL);
 
+	/* Serialize with the USB transfer callbacks (producer). */
+	mtx_lock(&sc->sc_mtx);
 	sc->sc_mmap[qb->index].v4l2_buf.flags &= ~V4L2_BUF_FLAG_DONE;
 	sc->sc_mmap[qb->index].v4l2_buf.flags |= V4L2_BUF_FLAG_QUEUED;
+	mtx_unlock(&sc->sc_mtx);
 
 	DPRINTFN(2, "buffer %d ready for queueing\n", qb->index);
 
@@ -3752,24 +3776,45 @@ uvideo_dqbuf(struct uvideo_softc *sc, struct v4l2_buffer *dqb)
 	    dqb->memory != V4L2_MEMORY_MMAP)
 		return (EINVAL);
 
-	if (STAILQ_EMPTY(&sc->sc_mmap_q)) {
-		error = tsleep(sc, PCATCH, "uvdqbuf", hz * 10);
-		if (error)
+	/* Buffers were freed (e.g. the streaming fd closed); fail fast
+	 * so the caller can re-open instead of waiting for a timeout. */
+	if (sc->sc_mmap_count == 0 || sc->sc_mmap_buffer == NULL)
+		return (EPIPE);
+
+	/*
+	 * Serialize with the USB transfer callbacks (producer) that insert
+	 * completed buffers into sc_mmap_q under sc_mtx.  Use mtx_sleep so
+	 * the wait and the queue inspection are atomic.
+	 */
+	mtx_lock(&sc->sc_mtx);
+	while (STAILQ_EMPTY(&sc->sc_mmap_q)) {
+		error = mtx_sleep(sc, &sc->sc_mtx, PCATCH, "uvdqbuf", hz * 10);
+		if (error != 0) {
+			mtx_unlock(&sc->sc_mtx);
 			return (EINVAL);
+		}
+		if (sc->sc_dying) {
+			mtx_unlock(&sc->sc_mtx);
+			return (ENXIO);
+		}
 	}
 
 	mmap = STAILQ_FIRST(&sc->sc_mmap_q);
-	if (mmap == NULL)
+	if (mmap == NULL) {
+		mtx_unlock(&sc->sc_mtx);
 		return (EINVAL);
+	}
 
 	bcopy(&mmap->v4l2_buf, dqb, sizeof(struct v4l2_buffer));
 
 	mmap->v4l2_buf.flags &= ~V4L2_BUF_FLAG_DONE;
 	mmap->v4l2_buf.flags &= ~V4L2_BUF_FLAG_QUEUED;
 
+	STAILQ_REMOVE_HEAD(&sc->sc_mmap_q, q_frames);
+	mtx_unlock(&sc->sc_mtx);
+
 	DPRINTFN(2, "frame dequeued from index %d\n",
 	    mmap->v4l2_buf.index);
-	STAILQ_REMOVE_HEAD(&sc->sc_mmap_q, q_frames);
 
 	return (0);
 }
@@ -3777,13 +3822,21 @@ uvideo_dqbuf(struct uvideo_softc *sc, struct v4l2_buffer *dqb)
 static int
 uvideo_streamon(struct uvideo_softc *sc, int type)
 {
+	struct uvideo_cdevpriv *priv;
 	usb_error_t error;
 
 	if (type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
 		return (EINVAL);
 
-	if (sc->sc_streaming)
+	if (devfs_get_cdevpriv((void **)&priv) != 0 || priv == NULL)
+		return (EINVAL);
+
+	mtx_lock(&sc->sc_mtx);
+	if (priv->streaming || sc->sc_streaming) {
+		mtx_unlock(&sc->sc_mtx);
 		return (0);
+	}
+	mtx_unlock(&sc->sc_mtx);
 
 	sc->sc_vidmode = VIDMODE_MMAP;
 
@@ -3793,6 +3846,8 @@ uvideo_streamon(struct uvideo_softc *sc, int type)
 
 	mtx_lock(&sc->sc_mtx);
 	sc->sc_streaming = 1;
+	priv->streaming = 1;
+
 	if (sc->sc_vs_cur->bulk_endpoint)
 		usbd_transfer_start(sc->sc_xfer[0]);
 	else {
@@ -3808,18 +3863,27 @@ uvideo_streamon(struct uvideo_softc *sc, int type)
 static int
 uvideo_streamoff(struct uvideo_softc *sc, int type)
 {
+	struct uvideo_cdevpriv *priv;
 
 	if (type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
 		return (EINVAL);
 
-	if (!sc->sc_streaming)
+	if (devfs_get_cdevpriv((void **)&priv) != 0 || priv == NULL)
+		return (EINVAL);
+
+	/* Only the fd that started streaming may stop it. */
+	if (!priv->streaming) {
 		return (0);
+	}
+
+	priv->streaming = 0;
 
 	mtx_lock(&sc->sc_mtx);
 	sc->sc_streaming = 0;
 	mtx_unlock(&sc->sc_mtx);
 
 	uvideo_vs_close(sc);
+	uvideo_vs_free_frame(sc);
 
 	return (0);
 }
