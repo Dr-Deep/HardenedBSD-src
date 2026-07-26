@@ -326,7 +326,11 @@ intel_hwpstate_hybrid_cb(void *ctx)
 {
 	uint32_t *small_cores = ctx;
 
+#ifdef __i386__
+	(void)small_cores;
+#else
 	atomic_add_32(small_cores, PCPU_GET(small_core));
+#endif
 }
 
 void
