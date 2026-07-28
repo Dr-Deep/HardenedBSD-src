@@ -44,6 +44,7 @@ SUBDIR=	\
 	${_armv8_rng} \
 	${_asmc} \
 	ata \
+	${_aq} \
 	ath \
 	ath_dfs \
 	ath_hal \
@@ -741,6 +742,7 @@ _imx=		imx
 .endif
 
 .if ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "amd64"
+_aq=		aq
 _agp=		agp
 _bios=		bios
 .if ${MK_SOURCELESS_UCODE} != "no"
