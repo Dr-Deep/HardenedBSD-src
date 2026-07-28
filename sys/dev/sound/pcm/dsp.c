@@ -54,11 +54,6 @@ struct dsp_cdevpriv {
 	struct pcm_channel *wrch;
 };
 
-static int dsp_mmap_allow_prot_exec = -1;
-SYSCTL_INT(_hw_snd, OID_AUTO, compat_linux_mmap, CTLFLAG_RWTUN,
-    &dsp_mmap_allow_prot_exec, 0,
-    "linux mmap compatibility (-1=force-disable 0=auto)");
-
 static int dsp_basename_clone = 1;
 SYSCTL_INT(_hw_snd, OID_AUTO, basename_clone, CTLFLAG_RWTUN,
     &dsp_basename_clone, 0,

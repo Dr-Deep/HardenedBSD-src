@@ -29,6 +29,8 @@ EXPORT_SYMS=	YES
 
 IGNORE_PRAGMA=	1
 
+TRIVIAL_VAR_AUTO_INIT_ZERO_SAFE=	yes
+
 .include <bsd.kmod.mk>
 
 CFLAGS+=	-include ${SYSDIR}/cddl/compat/opensolaris/sys/debug_compat.h
