@@ -124,6 +124,9 @@ proc_realparent(struct proc *child)
 	}
 	parent = __containerof(p->p_orphan.le_prev, struct proc,
 	    p_orphans.lh_first);
+	KASSERT(child->p_pptr != parent,
+	    ("proc %d %p orphaned but parent %d %p is realparent",
+	    child->p_pid, child, parent->p_pid, parent));
 	return (parent);
 }
 
@@ -1569,12 +1572,12 @@ kern_pdwait(struct thread *td, int fd, int *status,
 		goto exit_unlocked;
 
 	for (;;) {
+		sx_xlock(&proctree_lock);
 		/* We own a reference on the procdesc file. */
 		KASSERT(pd->pd_fpcount > 0,
 		    ("closed proc %p procdesc %p pd flags %#x",
-		    p, pd, pd->pd_flags));
+		    pd->pd_proc, pd, pd->pd_flags));
 
-		sx_xlock(&proctree_lock);
 		p = pd->pd_proc;
 		if (p == NULL) {
 			error = ESRCH;
