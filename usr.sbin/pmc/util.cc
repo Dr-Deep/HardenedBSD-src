@@ -1,7 +1,10 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * Copyright (c) 2018, Matthew Macy
+ * Copyright (c) 2026, Netflix, Inc.
+ *
+ * This software was developed by Ali Mashtizadeh under the sponsorship from
+ * Netflix, Inc.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -25,37 +28,55 @@
  * SUCH DAMAGE.
  *
  */
-#ifndef _CMD_PMC_H_
-#define _CMD_PMC_H_
 
-#define	DEFAULT_DISPLAY_HEIGHT		256	/* file virtual height */
-#define	DEFAULT_DISPLAY_WIDTH		1024	/* file virtual width */
+#include <string>
+#include <unordered_set>
 
-extern int pmc_displayheight;
-extern int pmc_displaywidth;
-extern int pmc_kq;
-extern struct pmcstat_args pmc_args;
+#include "util.hh"
 
-typedef int (*cmd_disp_t)(int, char **);
+std::string
+basename(const std::string &path)
+{
+	size_t s;
 
-#if defined(__cplusplus)
-extern "C" {
-#endif
-	int	cmd_pmc_info(int, char **);
-	int	cmd_pmc_filter(int, char **);
-	int	cmd_pmc_frontend(int, char **);
-	int	cmd_pmc_list_events(int, char **);
-	int	cmd_pmc_record(int, char **);
-	int	cmd_pmc_stat(int, char **);
-	int	cmd_pmc_stat_system(int, char **);
-	int	cmd_pmc_summary(int, char **);
-#if defined(__cplusplus)
-};
-#endif
-int	pmc_util_get_pid(struct pmcstat_args *);
-void	pmc_util_start_pmcs(struct pmcstat_args *);
-void	pmc_util_cleanup(struct pmcstat_args *);
-void	pmc_util_shutdown_logging(struct pmcstat_args *args);
-void	pmc_util_kill_process(struct pmcstat_args *args);
+	s = path.rfind("/");
+	if (s == std::string::npos)
+		return (path);
+	else
+		return (path.substr(s + 1));
+}
 
-#endif
+void
+split_and_insert(std::unordered_set<int> *set, const std::string &str)
+{
+	size_t pos = 0;
+
+	while (pos < str.length()) {
+		size_t end = str.find(",", pos);
+		if (end == str.npos) {
+			set->insert(std::stoi(str.substr(pos)));
+			break;
+		}
+
+		set->insert(std::stoi(str.substr(pos, end - pos)));
+		pos = end + 1;
+	}
+}
+
+void
+split_and_insert(std::unordered_set<std::string> *set, const std::string &str)
+{
+	size_t pos = 0;
+
+	while (pos < str.length()) {
+		size_t end = str.find(",", pos);
+		if (end == str.npos) {
+			set->insert(str.substr(pos));
+			break;
+		}
+
+		set->insert(str.substr(pos, end - pos));
+		pos = end + 1;
+	}
+}
+

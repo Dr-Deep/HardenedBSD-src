@@ -1,7 +1,10 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * Copyright (c) 2018, Matthew Macy
+ * Copyright (c) 2026, Netflix, Inc.
+ *
+ * This software was developed by Ali Mashtizadeh under the sponsorship from
+ * Netflix, Inc.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -25,37 +28,56 @@
  * SUCH DAMAGE.
  *
  */
-#ifndef _CMD_PMC_H_
-#define _CMD_PMC_H_
 
-#define	DEFAULT_DISPLAY_HEIGHT		256	/* file virtual height */
-#define	DEFAULT_DISPLAY_WIDTH		1024	/* file virtual width */
+#ifndef __HEADERS_HH__
+#define __HEADERS_HH__
 
-extern int pmc_displayheight;
-extern int pmc_displaywidth;
-extern int pmc_kq;
-extern struct pmcstat_args pmc_args;
+#define PMC_HEADER_MAGIC	0x504D434C
+#define PMC_HEADER_VERSION	0x00
 
-typedef int (*cmd_disp_t)(int, char **);
+#define PMC_ARCH_AMD64		0x01
+#define PMC_ARCH_ARM64		0x02
+#define PMC_ARCH_PPC64		0x03
+#define PMC_ARCH_RISCV64	0x04
+#define PMC_ARCH_ARM		0x05
 
-#if defined(__cplusplus)
-extern "C" {
-#endif
-	int	cmd_pmc_info(int, char **);
-	int	cmd_pmc_filter(int, char **);
-	int	cmd_pmc_frontend(int, char **);
-	int	cmd_pmc_list_events(int, char **);
-	int	cmd_pmc_record(int, char **);
-	int	cmd_pmc_stat(int, char **);
-	int	cmd_pmc_stat_system(int, char **);
-	int	cmd_pmc_summary(int, char **);
-#if defined(__cplusplus)
+struct pmchdr_header
+{
+	uint32_t	magic;
+	uint16_t	version;
+	uint16_t	arch;
 };
-#endif
-int	pmc_util_get_pid(struct pmcstat_args *);
-void	pmc_util_start_pmcs(struct pmcstat_args *);
-void	pmc_util_cleanup(struct pmcstat_args *);
-void	pmc_util_shutdown_logging(struct pmcstat_args *args);
-void	pmc_util_kill_process(struct pmcstat_args *args);
+
+#define INFOHDR_TYPE_DONE	0x00
+#define INFOHDR_TYPE_SYSINFO	0x01
+#define INFOHDR_TYPE_PMCINFO	0x02
+#define INFOHDR_TYPE_CPUID	0x03
+
+struct pmchdr_infohdr
+{
+	uint8_t		type;
+	uint8_t		reserved0;
+	uint16_t	length;
+	uint32_t	_reserved1;
+};
+
+struct pmchdr_sysinfo
+{
+	char		cpumodel[64];
+	char		osrelease[64];
+	char		buildid[64];
+};
+
+struct pmchdr_pmcinfo
+{
+	uint64_t	rate;
+	char		pmc[];
+};
+
+struct pmchdr_cpuidinfo
+{
+	uint32_t	cpuid[];
+};
 
 #endif
+
