@@ -13,14 +13,9 @@ export OSVERSION=${OSVERSION}
 export WRKDIR=$(make -C ${PORTSDIR}/ports-mgmt/pkg -V WRKDIR)
 
 make -C ${PORTSDIR}/ports-mgmt/pkg TARGET=${TARGET} TARGET_ARCH=${TARGET_ARCH} \
-<<<<<<< HEAD
 	CONFIGURE_ARGS="--host=$(uname -m)-portbld-freebsd${REVISION}" \
-	stage create-manifest
-=======
-	PREFIX=${LOCALBASE} \
 	I_DONT_CARE_IF_MY_BUILDS_TARGET_THE_WRONG_RELEASE=YES \
 	BATCH=YES stage create-manifest
->>>>>>> rad/freebsd/15-stable/main
 
 ${PKG_CMD} -o ABI_FILE=${WSTAGEDIR}/bin/sh \
 	create -v -m ${WRKDIR}/.metadir/ \
