@@ -94,7 +94,6 @@ map_object(int fd, const char *path, const struct stat *sb, bool ismain)
 	Elf_Addr note_end;
 	char *note_map;
 	size_t note_map_len;
-	Elf_Addr text_end;
 
 	hdr = get_elf_header(fd, path, sb, &phdr);
 	if (hdr == NULL)
@@ -114,8 +113,12 @@ map_object(int fd, const char *path, const struct stat *sb, bool ismain)
 	note_map = NULL;
 	note_map_len = 0;
 	segs = xcalloc(hdr->e_phnum, sizeof(segs[0]));
+<<<<<<< HEAD
 	stack_flags = PF_R | PF_W;
 	text_end = 0;
+=======
+	stack_flags = PF_X | PF_R | PF_W;
+>>>>>>> rad/freebsd/current/main
 	while (phdr < phlimit) {
 		switch (phdr->p_type) {
 		case PT_INTERP:
@@ -129,11 +132,6 @@ map_object(int fd, const char *path, const struct stat *sb, bool ismain)
 				    "%s: PT_LOAD segment %d not page-aligned",
 				    path, nsegs);
 				goto error;
-			}
-			if ((segs[nsegs]->p_flags & PF_X) == PF_X) {
-				text_end = MAX(text_end,
-				    rtld_round_page(segs[nsegs]->p_vaddr +
-				    segs[nsegs]->p_memsz));
 			}
 			break;
 
