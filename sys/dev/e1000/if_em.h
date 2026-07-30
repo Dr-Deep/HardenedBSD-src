@@ -48,6 +48,7 @@
 #endif
 #include <sys/buf_ring.h>
 #include <sys/bus.h>
+#include <sys/callout.h>
 #include <sys/endian.h>
 #include <sys/kernel.h>
 #include <sys/kthread.h>
@@ -95,6 +96,9 @@
 #include "e1000_82571.h"
 #include "ifdi_if.h"
 
+struct igb_vf;
+struct igb_vf_mac_filter;
+
 /* Tunables */
 
 /*
@@ -133,6 +137,7 @@
 #define EM_DEFAULT_RXD		1024
 #define EM_DEFAULT_MULTI_RXD	4096
 #define IGB_MAX_RXD		4096
+#define IGB_MAX_FRAME_SIZE	9234
 
 /*
  * EM_TIDV - Transmit Interrupt Delay Value
@@ -384,11 +389,8 @@
 #define UPDATE_VF_REG(reg, last, cur)		\
 do {						\
 	u32 new = E1000_READ_REG(&sc->hw, reg);	\
-	if (new < last)				\
-		cur += 0x100000000LL;		\
+	cur += (u32)(new - last);		\
 	last = new;				\
-	cur &= 0xFFFFFFFF00000000LL;		\
-	cur |= new;				\
 } while (0)
 
 struct e1000_softc;
@@ -581,6 +583,10 @@ struct e1000_softc {
 	** to repopulate it.
 	*/
 	u32			shadow_vfta[EM_VFTA_SIZE];
+	u32			vf_vfta_stale[EM_VFTA_SIZE];
+	u32			vf_vfta_retry[EM_VFTA_SIZE];
+	sbintime_t		vf_vlan_retry_deadline;
+	u16			vf_vlan_retry_cursor;
 
 	/* Info about the interface */
 	enum em_link_state	link_state;
@@ -592,6 +598,29 @@ struct e1000_softc {
 	u32			pba;
 	int			link_mask;
 	int			tso_automasked;
+	u32			promisc_pending;
+	u32			stats_pending;
+
+#ifdef PCI_IOV
+	struct igb_vf		*vfs;
+	struct igb_vf_mac_filter *vf_mac_filters;
+	struct callout		iov_mbx_retry;
+	u32			iov_vfta[EM_VFTA_SIZE];
+	u32			iov_mdd_cause;
+	u32			iov_pending;
+	u32			iov_spoof_pending;
+	u32			iov_teardown;
+	struct timeval		iov_last_mdd_log;
+	u16			num_vfs;
+	u16			num_vf_mac_filters;
+	u16			pool;
+	bool			iov_hw_active;
+	bool			iov_mta_valid;
+	bool			iov_mbx_retry_initialized;
+	bool			iov_pf_mdd_blocked;
+	bool			iov_pf_vlan_promisc;
+	bool			iov_vfta_valid;
+#endif
 
 	u64			que_mask;
 
@@ -609,6 +638,8 @@ struct e1000_softc {
 	unsigned long		link_irq;
 	unsigned long		rx_overruns;
 	unsigned long		watchdog_events;
+	u64			rx_csum_good;
+	u64			rx_csum_errors;
 
 	union {
 		struct e1000_hw_stats	stats;		/* !sc->vf_ifp */
@@ -616,7 +647,38 @@ struct e1000_softc {
 	} ustats;
 
 	u16			vf_ifp;
+	bool			vf_reset_pending;
+	/* A PF can retain auxiliary filters across a VF reset. */
+	bool			vf_uc_filters_set;
 };
+
+/*
+ * Shared PF/VF mechanisms and VF policy entry points.  The latter live in
+ * if_igbv.c so the VF method table cannot accidentally select PF policy.
+ */
+int	em_if_attach_pre(if_ctx_t);
+int	em_if_attach_post(if_ctx_t);
+void	em_add_device_sysctls(struct e1000_softc *);
+int	em_if_set_promisc_impl(if_ctx_t, int);
+bool	em_is_valid_ether_addr(const u8 *);
+void	em_initialize_transmit_rings(if_ctx_t);
+void	em_update_stats_counters(struct e1000_softc *);
+void	igb_initialize_receive_rings(if_ctx_t, bool);
+
+int	igbv_get_regs(SYSCTL_HANDLER_ARGS);
+int	igbv_if_attach_pre(if_ctx_t);
+int	igbv_if_attach_post(if_ctx_t);
+int	igbv_if_media_change(if_ctx_t);
+void	igbv_if_intr_enable(if_ctx_t);
+void	igbv_if_intr_disable(if_ctx_t);
+void	igbv_if_update_admin_status(if_ctx_t);
+void	igbv_initialize_receive_unit(if_ctx_t);
+void	igbv_initialize_transmit_unit(if_ctx_t);
+void	igbv_reconcile_mac(struct e1000_softc *, if_t);
+bool	igbv_reset(if_ctx_t);
+void	igbv_update_uc_addr_list(struct e1000_softc *, if_t);
+void	igbv_vlan_retry_add(struct e1000_softc *, u16);
+void	igbv_vlan_retry_clear(struct e1000_softc *, u16);
 
 /********************************************************************************
  * vendor_info_array
