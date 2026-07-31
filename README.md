@@ -238,6 +238,10 @@ HardenedBSD and the ports tree both set the following `CFLAGS`/`CXXFLAGS`:
 1. `-fno-delete-null-pointer-checks`
 1. `-Werror=format-security`
 
+Various `geom(4)` devfs nodes have been hardened to by owned by `root:wheel`
+(rather than `root:operator`) and chmod `0600` (rather than `0640`). This closes
+various avenues for leaking data, including decrypted `geli(8)` storage devices.
+
 ## Shared Memory (SHM) Hardening
 
 Shared memory (SHM) hardening places restrictions on what can be done with the
