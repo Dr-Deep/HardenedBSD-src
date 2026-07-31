@@ -676,7 +676,6 @@ void *
 		return (va);
 #endif
 
-<<<<<<< HEAD
 #ifdef PAX_HARDENING
 #ifdef PAX_HARDEN_KMALLOC
 	if (__predict_true(kmalloc_zero)) {
@@ -689,10 +688,6 @@ void *
 #endif
 #endif
 
-	if (__predict_false(size > kmem_zmax))
-		return (malloc_large(size, mtp, DOMAINSET_RR(), flags
-		    DEBUG_REDZONE_ARG));
-=======
 	if (__predict_false(size > kmem_zmax)) {
 		va = malloc_large(&size, mtp, DOMAINSET_RR(), flags);
 	} else {
@@ -707,7 +702,6 @@ void *
 	}
 	KASSERT(va != NULL || (flags & M_WAITOK) == 0,
 	    ("malloc(M_WAITOK) returned NULL"));
->>>>>>> rad/freebsd/current/main
 
 #ifdef DEBUG_REDZONE
 	if (va != NULL)
@@ -758,9 +752,6 @@ malloc_domainset(size_t size, struct malloc_type *mtp, struct domainset *ds,
 	unsigned long osize = size;
 #endif
 
-<<<<<<< HEAD
-	MPASS((flags & M_EXEC) == 0);
-
 #ifdef PAX_HARDENING
 #ifdef PAX_HARDEN_KMALLOC
 	if (__predict_true(kmalloc_zero)) {
@@ -773,8 +764,6 @@ malloc_domainset(size_t size, struct malloc_type *mtp, struct domainset *ds,
 #endif
 #endif
 
-=======
->>>>>>> rad/freebsd/current/main
 #ifdef MALLOC_DEBUG
 	va = NULL;
 	if (malloc_dbg(&va, &size, mtp, flags) != 0)
@@ -830,14 +819,6 @@ void *
 malloc_domainset_exec(size_t size, struct malloc_type *mtp, struct domainset *ds,
     int flags)
 {
-<<<<<<< HEAD
-#if defined(DEBUG_REDZONE) || defined(KASAN)
-	unsigned long osize = size;
-#endif
-#ifdef MALLOC_DEBUG
-	caddr_t va;
-#endif
-
 #ifdef PAX_HARDENING
 #ifdef PAX_HARDEN_KMALLOC
 	if (__predict_true(kmalloc_zero)) {
@@ -850,18 +831,7 @@ malloc_domainset_exec(size_t size, struct malloc_type *mtp, struct domainset *ds
 #endif
 #endif
 
-	flags |= M_EXEC;
-
-#ifdef MALLOC_DEBUG
-	va = NULL;
-	if (malloc_dbg(&va, &size, mtp, flags) != 0)
-		return (va);
-#endif
-
-	return (malloc_large(size, mtp, ds, flags DEBUG_REDZONE_ARG));
-=======
 	return (malloc_domainset(size, mtp, ds, flags | M_EXEC));
->>>>>>> rad/freebsd/current/main
 }
 
 void *
