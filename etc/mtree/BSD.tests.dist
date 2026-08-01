@@ -826,6 +826,8 @@
         fs
             fusefs
             ..
+            pjdfstest
+            ..
             tarfs
             ..
             tmpfs
@@ -901,6 +903,8 @@
                 ..
             ..
             routing
+            ..
+            wg
             ..
         ..
         netgraph

@@ -53,6 +53,7 @@ MAN=	aac.4 \
 	${_bxe.4} \
 	${_aout.4} \
 	${_apic.4} \
+	aq.4 \
 	arcmsr.4 \
 	arswitch.4 \
 	aslr.4 \
@@ -437,6 +438,7 @@ MAN=	aac.4 \
 	${_ntb_hw_intel.4} \
 	${_ntb_hw_plx.4} \
 	${_ntb_transport.4} \
+	ntsync.4 \
 	${_nda.4} \
 	${_if_ntb.4} \
 	null.4 \
@@ -592,6 +594,7 @@ MAN=	aac.4 \
 	tarfs.4 \
 	targ.4 \
 	tcp.4 \
+	tcp_bblog.4 \
 	tcp_bbr.4 \
 	tcp_rack.4 \
 	tdfx.4 \

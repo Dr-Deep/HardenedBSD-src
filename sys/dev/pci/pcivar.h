@@ -340,7 +340,7 @@ struct pci_devinfo {
 #include "pci_if.h"
 
 enum pci_device_ivars {
-    PCI_IVAR_SUBVENDOR,
+    PCI_IVAR_SUBVENDOR = BUS_IVARS_PRIVATE,
     PCI_IVAR_SUBDEVICE,
     PCI_IVAR_VENDOR,
     PCI_IVAR_DEVICE,
@@ -414,7 +414,7 @@ pci_write_config(device_t dev, int reg, uint32_t val, int width)
 
 /*typedef enum pci_device_ivars pcib_device_ivars;*/
 enum pcib_device_ivars {
-	PCIB_IVAR_DOMAIN,
+	PCIB_IVAR_DOMAIN = BUS_IVARS_PRIVATE,
 	PCIB_IVAR_BUS
 };
 
@@ -676,6 +676,7 @@ pci_child_added(device_t dev)
     return (PCI_CHILD_ADDED(device_get_parent(dev), dev));
 }
 
+bool	is_pci_device(device_t dev);
 device_t pci_find_bsf(uint8_t, uint8_t, uint8_t);
 device_t pci_find_dbsf(uint32_t, uint8_t, uint8_t, uint8_t);
 device_t pci_find_device(uint16_t, uint16_t);

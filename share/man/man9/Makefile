@@ -315,6 +315,7 @@ MAN=	accept_filter.9 \
 	rtentry.9 \
 	runqueue.9 \
 	rwlock.9 \
+	sbintime.9 \
 	sbuf.9 \
 	scheduler.9 \
 	SDT.9 \
@@ -1796,7 +1797,8 @@ MLINKS+=osd.9 osd_call.9 \
 	osd.9 osd_set_reserved.9
 MLINKS+=panic.9 vpanic.9 \
 	panic.9 KERNEL_PANICKED.9
-MLINKS+=pci.9 pci_alloc_msi.9 \
+MLINKS+=pci.9 is_pci_device.9 \
+	pci.9 pci_alloc_msi.9 \
 	pci.9 pci_alloc_msix.9 \
 	pci.9 pci_clear_pme.9 \
 	pci.9 pci_disable_busmaster.9 \
@@ -1973,6 +1975,19 @@ MLINKS+=rwlock.9 rw_assert.9 \
 	rwlock.9 rw_wlock.9 \
 	rwlock.9 rw_wowned.9 \
 	rwlock.9 rw_wunlock.9
+MLINKS+=sbintime.9 bttosbt.9 \
+	sbintime.9 mstosbt.9 \
+	sbintime.9 nstosbt.9 \
+	sbintime.9 sbintime_getsec.9 \
+	sbintime.9 sbttobt.9 \
+	sbintime.9 sbttoms.9 \
+	sbintime.9 sbttons.9 \
+	sbintime.9 sbttots.9 \
+	sbintime.9 sbttotv.9 \
+	sbintime.9 sbttous.9 \
+	sbintime.9 tstosbt.9 \
+	sbintime.9 tvtosbt.9 \
+	sbintime.9 ustosbt.9
 MLINKS+=sbuf.9 sbuf_bcat.9 \
 	sbuf.9 sbuf_bcopyin.9 \
 	sbuf.9 sbuf_bcpy.9 \

@@ -133,8 +133,7 @@ struct vnode {
 	 * Fields which define the identity of the vnode.  These fields are
 	 * owned by the filesystem (XXX: and vgone() ?)
 	 */
-	__enum_uint8(vtype) v_type;		/* u vnode type */
-	__enum_uint8(vstate) v_state;		/* u vnode state */
+	short	v_v2flag;			/* v frequently read flag */
 	short	v_irflag;			/* i frequently read flags */
 	seqc_t	v_seqc;				/* i modification count */
 	uint32_t v_nchash;			/* u namecache hash */
@@ -203,6 +202,12 @@ struct vnode {
 						   (negative) text users */
 	int	v_seqc_users;			/* i modifications pending */
 };
+/*
+	__enum_uint8(vtype) v_type;
+	__enum_uint8(vstate) v_state;
+*/
+#define	v_type	v_rl.resv1			/* u vnode type */
+#define	v_state	v_rl.resv2			/* u vnode state */
 
 #define VN_ISDEV(vp)		VTYPE_ISDEV((vp)->v_type)
 
@@ -221,27 +226,23 @@ _Static_assert(sizeof(struct vnode) <= 448, "vnode size crosses 448 bytes");
 
 #define	bo2vnode(bo)	__containerof((bo), struct vnode, v_bufobj)
 
-/* XXX: These are temporary to avoid a source sweep at this time */
 #define v_object	v_bufobj.bo_object
 
-/* We don't need to lock the knlist */
-#define	VN_KNLIST_EMPTY(vp) ((vp)->v_pollinfo == NULL ||	\
-	    KNLIST_EMPTY(&(vp)->v_pollinfo->vpi_selinfo.si_note))
-
-#define VN_KNOTE(vp, b, a)					\
-	do {							\
-		if (!VN_KNLIST_EMPTY(vp))			\
-			KNOTE(&vp->v_pollinfo->vpi_selinfo.si_note, (b), \
-			    (a) | KNF_NOKQLOCK);		\
-	} while (0)
-#define	VN_KNOTE_LOCKED(vp, b)		VN_KNOTE(vp, b, KNF_LISTLOCKED)
-#define	VN_KNOTE_UNLOCKED(vp, b)	VN_KNOTE(vp, b, 0)
+#define VN_KNOTE(vp, b, a) do {                    			\
+	if ((vp->v_v2flag & V2_KNOTE) != 0) {			\
+		KNOTE(&vp->v_pollinfo->vpi_selinfo.si_note, (b),	\
+		    (a) | KNF_NOKQLOCK);				\
+	}								\
+} while (0)
+#define   VN_KNOTE_LOCKED(vp, b)     VN_KNOTE(vp, b, KNF_LISTLOCKED)
+#define   VN_KNOTE_UNLOCKED(vp, b)   VN_KNOTE(vp, b, 0)
 
 /*
  * Vnode flags.
  *	VI flags are protected by interlock and live in v_iflag
  *	VIRF flags are protected by interlock and live in v_irflag
  *	VV flags are protected by the vnode lock and live in v_vflag
+ *	V2 flags are protected by the vnode lock and live in v_v2flag
  *
  *	VIRF_DOOMED is doubly protected by the interlock and vnode lock.  Both
  *	are required for writing but the status may be checked with either.
@@ -260,6 +261,8 @@ _Static_assert(sizeof(struct vnode) <= 448, "vnode size crosses 448 bytes");
 #define	VIRF_INOTIFY	0x0080	/* This vnode is being watched */
 #define	VIRF_INOTIFY_PARENT 0x0100 /* A parent of this vnode may be being
 				      watched */
+
+#define	V2_KNOTE	0x0001	/* Has knlist */
 
 #define	VI_UNUSED0	0x0001	/* unused */
 #define	VI_MOUNT	0x0002	/* Mount in progress */
@@ -913,6 +916,7 @@ int	vop_stdpathconf(struct vop_pathconf_args *);
 int	vop_stdpoll(struct vop_poll_args *);
 int	vop_stdvptocnp(struct vop_vptocnp_args *ap);
 int	vop_stdvptofh(struct vop_vptofh_args *ap);
+int	vop_stdvput_pair(struct vop_vput_pair_args *ap);
 int	vop_stdunp_bind(struct vop_unp_bind_args *ap);
 int	vop_stdunp_connect(struct vop_unp_connect_args *ap);
 int	vop_stdunp_detach(struct vop_unp_detach_args *ap);
@@ -1062,7 +1066,7 @@ void	vop_rename_fail(struct vop_rename_args *ap);
 	off_t osize, ooffset, noffset;					\
 									\
 	osize = ooffset = noffset = 0;					\
-	if (!VN_KNLIST_EMPTY((ap)->a_vp)) {				\
+	if (((ap)->a_vp->v_v2flag & V2_KNOTE) != 0) {			\
 		error = VOP_GETATTR((ap)->a_vp, &va, (ap)->a_cred);	\
 		if (error)						\
 			return (error);					\
@@ -1073,10 +1077,8 @@ void	vop_rename_fail(struct vop_rename_args *ap);
 #define vop_write_post(ap, ret)						\
 	noffset = (ap)->a_uio->uio_offset;				\
 	if (noffset > ooffset) {					\
-		if (!VN_KNLIST_EMPTY((ap)->a_vp)) {			\
-			VFS_KNOTE_LOCKED((ap)->a_vp, NOTE_WRITE |	\
-			    (noffset > osize ? NOTE_EXTEND : 0));	\
-		}							\
+		VFS_KNOTE_LOCKED((ap)->a_vp, NOTE_WRITE |		\
+		    (noffset > osize ? NOTE_EXTEND : 0));		\
 		INOTIFY((ap)->a_vp, IN_MODIFY);				\
 	}
 

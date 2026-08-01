@@ -73,11 +73,11 @@ env_setup() {
 
 	# The default git checkout server, and branches for src/, doc/,
 	# and ports/.
-	GITROOT="https://git.hardenedbsd.org/hardenedbsd/"
+	GITROOT="https://rad.hardenedbsd.org/"
 	SRCBRANCH="hardened/current/master"
 	PORTBRANCH="hardenedbsd/main"
-	GITSRC="HardenedBSD.git"
-	GITPORTS="ports.git"
+	GITSRC="z2HLHXgL1xevBNQsf8BmQW7MpJmtm.git"
+	GITPORTS="z2XrdvALg77ycnuZRXgScb27yb3wM.git"
 
 	# Set for embedded device builds.
 	EMBEDDEDBUILD=

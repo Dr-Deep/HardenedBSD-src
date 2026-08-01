@@ -1562,6 +1562,10 @@ em_if_init(if_ctx_t ctx)
 
 	/* Initialize the hardware */
 	em_reset(ctx);
+	/* Re-arm a link-up transition deferred for this reset. */
+	if (sc->link_state == EM_LINK_STATE_DOWN_RESET_PENDING ||
+	    sc->link_state == EM_LINK_STATE_UP_RESET_PENDING)
+		sc->link_state = EM_LINK_STATE_DOWN;
 	em_if_update_admin_status(ctx);
 
 	for (i = 0, tx_que = sc->tx_queues; i < sc->tx_num_queues;
@@ -1788,7 +1792,8 @@ em_set_next_itr:
 
 		if (newitr != que->itr_setting) {
 			que->itr_setting = newitr;
-			if (hw->mac.type == e1000_82574 && que->msix) {
+			if (hw->mac.type == e1000_82574 &&
+			    sc->intr_type == IFLIB_INTR_MSIX) {
 				E1000_WRITE_REG(hw,
 				    E1000_EITR_82574(que->msix),
 				    que->itr_setting);
@@ -1999,7 +2004,8 @@ em_if_media_status(if_ctx_t ctx, struct ifmediareq *ifmr)
 	ifmr->ifm_status = IFM_AVALID;
 	ifmr->ifm_active = IFM_ETHER;
 
-	if (!sc->link_active) {
+	if (sc->link_state == EM_LINK_STATE_DOWN ||
+	    sc->link_state == EM_LINK_STATE_DOWN_RESET_PENDING) {
 		return;
 	}
 
@@ -2219,7 +2225,7 @@ em_if_update_admin_status(if_ctx_t ctx)
 	struct e1000_hw *hw = &sc->hw;
 	device_t dev = iflib_get_dev(ctx);
 	u32 link_check, thstat, ctrl;
-	bool automasked = false;
+	bool reset_requested = false;
 
 	link_check = thstat = ctrl = 0;
 	/* Get the cached link value or read phy for real */
@@ -2262,7 +2268,13 @@ em_if_update_admin_status(if_ctx_t ctx)
 	}
 
 	/* Now check for a transition */
-	if (link_check && (sc->link_active == 0)) {
+	if (link_check &&
+	    (sc->link_state == EM_LINK_STATE_DOWN ||
+	    sc->link_state == EM_LINK_STATE_DOWN_RESET_PENDING)) {
+		bool reset_pending;
+
+		reset_pending =
+		    sc->link_state == EM_LINK_STATE_DOWN_RESET_PENDING;
 		e1000_get_speed_and_duplex(hw, &sc->link_speed,
 		    &sc->link_duplex);
 		/* Check if we must disable SPEED_MODE bit on PCI-E */
@@ -2279,7 +2291,7 @@ em_if_update_admin_status(if_ctx_t ctx)
 			    sc->link_speed,
 			    ((sc->link_duplex == FULL_DUPLEX) ?
 			    "Full Duplex" : "Half Duplex"));
-		sc->link_active = 1;
+		sc->link_state = EM_LINK_STATE_UP;
 		sc->smartspeed = 0;
 		if ((ctrl & E1000_CTRL_EXT_LINK_MODE_MASK) ==
 		    E1000_CTRL_EXT_LINK_MODE_GMII &&
@@ -2299,17 +2311,33 @@ em_if_update_admin_status(if_ctx_t ctx)
 		}
 		/* Only do TSO on gigabit for older chips due to errata */
 		if (hw->mac.type < igb_mac_min)
-			automasked = em_automask_tso(ctx);
+			reset_requested = em_automask_tso(ctx);
 
-		/* Automasking resets the interface so don't mark it up yet */
-		if (!automasked)
+		if (reset_pending || reset_requested) {
+			/*
+			 * The PHY is up, but publish it only after the TSO
+			 * capability-change reset.
+			 */
+			sc->link_state = EM_LINK_STATE_UP_RESET_PENDING;
+		} else {
 			iflib_link_state_change(ctx, LINK_STATE_UP,
 			    IF_Mbps(sc->link_speed));
-	} else if (!link_check && (sc->link_active == 1)) {
+		}
+	} else if (!link_check &&
+	    (sc->link_state == EM_LINK_STATE_UP ||
+	    sc->link_state == EM_LINK_STATE_UP_RESET_PENDING)) {
+		bool link_was_published;
+		bool reset_pending;
+
+		link_was_published = sc->link_state == EM_LINK_STATE_UP;
+		reset_pending =
+		    sc->link_state == EM_LINK_STATE_UP_RESET_PENDING;
 		sc->link_speed = 0;
 		sc->link_duplex = 0;
-		sc->link_active = 0;
-		iflib_link_state_change(ctx, LINK_STATE_DOWN, 0);
+		sc->link_state = reset_pending ?
+		    EM_LINK_STATE_DOWN_RESET_PENDING : EM_LINK_STATE_DOWN;
+		if (link_was_published)
+			iflib_link_state_change(ctx, LINK_STATE_DOWN, 0);
 	}
 	em_update_stats_counters(sc);
 
@@ -2758,7 +2786,9 @@ lem_smartspeed(struct e1000_softc *sc)
 {
 	u16 phy_tmp;
 
-	if (sc->link_active || (sc->hw.phy.type != e1000_phy_igp) ||
+	if (sc->link_state == EM_LINK_STATE_UP ||
+	    sc->link_state == EM_LINK_STATE_UP_RESET_PENDING ||
+	    (sc->hw.phy.type != e1000_phy_igp) ||
 	    sc->hw.mac.autoneg == 0 ||
 	    (sc->hw.phy.autoneg_advertised & ADVERTISE_1000_FULL) == 0)
 		return;
@@ -3809,6 +3839,19 @@ em_initialize_receive_unit(if_ctx_t ctx)
 			/* Set the default interrupt throttling rate */
 			E1000_WRITE_REG(hw, E1000_ITR,
 			    EM_INTS_TO_ITR(em_max_interrupt_rate));
+
+			/*
+			 * The 82574 MSI-X EITR registers are programmed
+			 * with the same value further below.  Either way
+			 * the hardware now holds the default rate, so seed
+			 * the software copy to match; otherwise a stale
+			 * itr_setting left over from AIM makes em_newitr()
+			 * skip the write that would restore it.
+			 */
+			for (i = 0, que = sc->rx_queues; i < sc->rx_num_queues;
+			    i++, que++)
+				que->itr_setting =
+				    EM_INTS_TO_ITR(em_max_interrupt_rate);
 		}
 
 		/* XXX TEMPORARY WORKAROUND: on some systems with 82573
@@ -4346,6 +4389,8 @@ em_automask_tso(if_ctx_t ctx)
 	struct e1000_softc *sc = iflib_get_softc(ctx);
 	if_softc_ctx_t scctx = iflib_get_softc_ctx(ctx);
 	if_t ifp = iflib_get_ifp(ctx);
+	bool reset_needed;
+	int drvflags;
 
 	if (!em_unsupported_tso && sc->link_speed &&
 	    sc->link_speed != SPEED_1000 &&
@@ -4355,20 +4400,32 @@ em_automask_tso(if_ctx_t ctx)
 		sc->tso_automasked = scctx->isc_capenable & IFCAP_TSO;
 		scctx->isc_capenable &= ~IFCAP_TSO;
 		if_setcapenablebit(ifp, 0, IFCAP_TSO);
-		/* iflib_init_locked handles ifnet hwassistbits */
-		iflib_request_reset(ctx);
-		return true;
 	} else if (sc->link_speed == SPEED_1000 && sc->tso_automasked) {
 		device_printf(sc->dev, "Re-enabling TSO for GbE.\n");
 		scctx->isc_capenable |= sc->tso_automasked;
 		if_setcapenablebit(ifp, sc->tso_automasked, 0);
 		sc->tso_automasked = 0;
-		/* iflib_init_locked handles ifnet hwassistbits */
-		iflib_request_reset(ctx);
-		return true;
+	} else {
+		return (false);
 	}
 
-	return false;
+	/*
+	 * Reset a running interface, or one being initialized while
+	 * administratively up.  OACTIVE remains set after iflib_stop(), so
+	 * it alone cannot distinguish initialization from an interface that
+	 * is down.  In other states, the next initialization will apply the
+	 * updated capabilities.
+	 */
+	drvflags = if_getdrvflags(ifp);
+	reset_needed = (drvflags & IFF_DRV_RUNNING) != 0 ||
+	    ((drvflags & IFF_DRV_OACTIVE) != 0 &&
+	    (if_getflags(ifp) & IFF_UP) != 0);
+	if (!reset_needed)
+		return (false);
+
+	/* iflib_init_locked handles ifnet hwassistbits */
+	iflib_request_reset(ctx);
+	return (true);
 }
 
 /*
@@ -4917,8 +4974,9 @@ em_sysctl_interrupt_rate_handler(SYSCTL_HANDLER_ARGS)
 		hw = &tque->sc->hw;
 		if (hw->mac.type >= igb_mac_min)
 			reg = E1000_READ_REG(hw, E1000_EITR(tque->me));
-		else if (hw->mac.type == e1000_82574 && tque->msix)
-			reg = E1000_READ_REG(hw, E1000_EITR_82574(tque->me));
+		else if (hw->mac.type == e1000_82574 &&
+		    tque->sc->intr_type == IFLIB_INTR_MSIX)
+			reg = E1000_READ_REG(hw, E1000_EITR_82574(tque->msix));
 		else
 			reg = E1000_READ_REG(hw, E1000_ITR);
 	} else {
@@ -4926,7 +4984,8 @@ em_sysctl_interrupt_rate_handler(SYSCTL_HANDLER_ARGS)
 		hw = &rque->sc->hw;
 		if (hw->mac.type >= igb_mac_min)
 			reg = E1000_READ_REG(hw, E1000_EITR(rque->msix));
-		else if (hw->mac.type == e1000_82574 && rque->msix)
+		else if (hw->mac.type == e1000_82574 &&
+		    rque->sc->intr_type == IFLIB_INTR_MSIX)
 			reg = E1000_READ_REG(hw,
 			    E1000_EITR_82574(rque->msix));
 		else
