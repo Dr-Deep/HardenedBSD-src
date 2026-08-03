@@ -114,7 +114,7 @@ static bool	igc_if_needs_restart(if_ctx_t, enum iflib_restart_event);
 static void	igc_identify_hardware(if_ctx_t);
 static int	igc_allocate_pci_resources(if_ctx_t);
 static void	igc_free_pci_resources(if_ctx_t);
-static void	igc_disable_broken_aspm_l1_2(if_ctx_t);
+static void	igc_disable_broken_l1_2(if_ctx_t);
 static void	igc_reset(if_ctx_t);
 static int	igc_setup_interface(if_ctx_t);
 static int	igc_setup_msix(if_ctx_t);
@@ -128,6 +128,7 @@ static int	igc_if_rx_queue_intr_enable(if_ctx_t, uint16_t);
 static int	igc_if_tx_queue_intr_enable(if_ctx_t, uint16_t);
 static void	igc_if_multi_set(if_ctx_t);
 static void	igc_if_update_admin_status(if_ctx_t);
+static void	igc_apply_i225_ipg_workaround(struct igc_softc *);
 static void	igc_if_debug(if_ctx_t);
 static void	igc_update_stats_counters(struct igc_softc *);
 static void	igc_add_hw_stats(struct igc_softc *);
@@ -555,13 +556,8 @@ igc_if_attach_pre(if_ctx_t ctx)
 	/* Determine hardware and mac info */
 	igc_identify_hardware(ctx);
 
-	/*
-	 * I226 parts have an erratum where the PCIe ASPM L1.2 exit
-	 * latency can exceed what the packet buffer can absorb under
-	 * load, stalling the inbound packet stream.  Disable ASPM L1.2
-	 * on the device to work around it.
-	 */
-	igc_disable_broken_aspm_l1_2(ctx);
+	/* Apply device-specific PCIe L1.2 errata workarounds. */
+	igc_disable_broken_l1_2(ctx);
 
 	scctx->isc_tx_nsegments = IGC_MAX_SCATTER;
 	scctx->isc_nrxqsets_max =
@@ -806,10 +802,10 @@ static int
 igc_if_resume(if_ctx_t ctx)
 {
 	/*
-	 * PCIe config space, and with it ASPM L1.2, may have been reset
+	 * PCIe config space, and with it L1.2, may have been reset
 	 * across the suspend/resume cycle.
 	 */
-	igc_disable_broken_aspm_l1_2(ctx);
+	igc_disable_broken_l1_2(ctx);
 
 	igc_if_init(ctx);
 
@@ -1406,6 +1402,33 @@ igc_if_timer(if_ctx_t ctx, uint16_t qid)
 }
 
 static void
+igc_apply_i225_ipg_workaround(struct igc_softc *sc)
+{
+	struct igc_hw *hw = &sc->hw;
+	u32 ipgt, tipg;
+
+	/*
+	 * I225 v1 cannot receive the minimum IPG required at 2.5 Gb/s.
+	 * Intel's documented back-to-back workaround is for the transmitter
+	 * to use a 15-byte IPG instead of 12 bytes.  I225 v2 and later have
+	 * the receive-side fix and should retain the standard IPG.
+	 */
+	if (!igc_is_device_id_i225(hw) ||
+	    hw->revision_id >= IGC_REVISION_2)
+		return;
+
+	ipgt = sc->link_speed == SPEED_2500 ? IGC_I225_TIPG_IPGT_2P5 :
+	    DEFAULT_82543_TIPG_IPGT_COPPER;
+	tipg = IGC_READ_REG(hw, IGC_TIPG);
+	if ((tipg & IGC_TIPG_IPGT_MASK) == ipgt)
+		return;
+
+	tipg &= ~IGC_TIPG_IPGT_MASK;
+	tipg |= ipgt;
+	IGC_WRITE_REG(hw, IGC_TIPG, tipg);
+}
+
+static void
 igc_if_update_admin_status(if_ctx_t ctx)
 {
 	struct igc_softc *sc = iflib_get_softc(ctx);
@@ -1450,6 +1473,7 @@ igc_if_update_admin_status(if_ctx_t ctx)
 		sc->link_active = 0;
 		iflib_link_state_change(ctx, LINK_STATE_DOWN, 0);
 	}
+	igc_apply_i225_ipg_workaround(sc);
 	igc_update_stats_counters(sc);
 }
 
@@ -1514,30 +1538,37 @@ igc_identify_hardware(if_ctx_t ctx)
 
 /*********************************************************************
  *
- *  I226 devices advertise support for the PCIe L1.2 link substate, but
- *  due to a hardware erratum the exit latency from that low-power state
- *  can exceed what the packet buffer can tolerate under load, which
- *  stalls the inbound packet stream.  Disabling ASPM L1.2 on the device
- *  itself (as opposed to disabling ASPM/power management in the BIOS or
- *  at the OS level) works around the issue.
+ *  Intel's I225/I226 Specification Update, erratum 2, states that I225
+ *  devices can incorrectly enter L1 substates while CLKREQ# is asserted,
+ *  causing repeated L1-substate entry and exit.  Disable both ASPM and
+ *  PCI-PM L1.2, as the erratum can occur while idle or in D3.
+ *
+ *  I226 devices have a separate erratum where ASPM L1.2 exit latency can
+ *  exceed what the packet buffer can tolerate under load.  Disabling ASPM
+ *  L1.2 on the device itself works around the issue.
  *
  **********************************************************************/
 static void
-igc_disable_broken_aspm_l1_2(if_ctx_t ctx)
+igc_disable_broken_l1_2(if_ctx_t ctx)
 {
 	device_t dev = iflib_get_dev(ctx);
 	struct igc_softc *sc = iflib_get_softc(ctx);
 	int cap;
-	uint32_t ctl1;
+	uint32_t ctl1, mask;
 
-	if (!igc_is_device_id_i226(&sc->hw))
+	if (igc_is_device_id_i225(&sc->hw))
+		mask = PCIM_L1PM_CTL1_ASPM_L1_2 |
+		    PCIM_L1PM_CTL1_PCIPM_L1_2;
+	else if (igc_is_device_id_i226(&sc->hw))
+		mask = PCIM_L1PM_CTL1_ASPM_L1_2;
+	else
 		return;
 
 	if (pci_find_extcap(dev, PCIZ_L1PM, &cap) != 0)
 		return;
 
 	ctl1 = pci_read_config(dev, cap + PCIR_L1PM_CTL1, 4);
-	ctl1 &= ~PCIM_L1PM_CTL1_ASPM_L1_2;
+	ctl1 &= ~mask;
 	pci_write_config(dev, cap + PCIR_L1PM_CTL1, ctl1, 4);
 }
 
@@ -2568,6 +2599,7 @@ igc_update_stats_counters(struct igc_softc *sc)
 	u64 prev_xoffrxc = sc->stats.xoffrxc;
 
 	sc->stats.crcerrs += IGC_READ_REG(&sc->hw, IGC_CRCERRS);
+	sc->stats.rxerrc += IGC_READ_REG(&sc->hw, IGC_RXERRC);
 	sc->stats.mpc += IGC_READ_REG(&sc->hw, IGC_MPC);
 	sc->stats.scc += IGC_READ_REG(&sc->hw, IGC_SCC);
 	sc->stats.ecol += IGC_READ_REG(&sc->hw, IGC_ECOL);
@@ -2575,7 +2607,7 @@ igc_update_stats_counters(struct igc_softc *sc)
 	sc->stats.mcc += IGC_READ_REG(&sc->hw, IGC_MCC);
 	sc->stats.latecol += IGC_READ_REG(&sc->hw, IGC_LATECOL);
 	sc->stats.colc += IGC_READ_REG(&sc->hw, IGC_COLC);
-	sc->stats.colc += IGC_READ_REG(&sc->hw, IGC_RERC);
+	sc->stats.rerc += IGC_READ_REG(&sc->hw, IGC_RERC);
 	sc->stats.dc += IGC_READ_REG(&sc->hw, IGC_DC);
 	sc->stats.rlec += IGC_READ_REG(&sc->hw, IGC_RLEC);
 	sc->stats.xonrxc += IGC_READ_REG(&sc->hw, IGC_XONRXC);
@@ -2654,10 +2686,14 @@ igc_if_get_counter(if_ctx_t ctx, ift_counter cnt)
 	case IFCOUNTER_COLLISIONS:
 		return (sc->stats.colc);
 	case IFCOUNTER_IERRORS:
+		/*
+		 * RERC overlaps the counters below and, on I225, omits length
+		 * errors.  RFC covers bad-CRC runts that CRCERRS does not count.
+		 */
 		return (sc->dropped_pkts + sc->stats.rxerrc +
 		    sc->stats.crcerrs + sc->stats.algnerrc +
-		    sc->stats.ruc + sc->stats.roc +
-		    sc->stats.mpc + sc->stats.htdpmc);
+		    sc->stats.ruc + sc->stats.rfc + sc->stats.roc +
+		    sc->stats.mpc);
 	case IFCOUNTER_OERRORS:
 		return (if_get_counter_default(ifp, cnt) +
 		    sc->stats.ecol + sc->stats.latecol + sc->watchdog_events);
@@ -2880,6 +2916,9 @@ igc_add_hw_stats(struct igc_softc *sc)
 	SYSCTL_ADD_UQUAD(ctx, stat_list, OID_AUTO, "recv_errs",
 	    CTLFLAG_RD, &sc->stats.rxerrc,
 	    "Receive Errors");
+	SYSCTL_ADD_UQUAD(ctx, stat_list, OID_AUTO, "recv_error_count",
+	    CTLFLAG_RD, &sc->stats.rerc,
+	    "Receive Error Count (RERC)");
 	SYSCTL_ADD_UQUAD(ctx, stat_list, OID_AUTO, "crc_errs",
 	    CTLFLAG_RD, &sc->stats.crcerrs,
 	    "CRC errors");
@@ -2956,6 +2995,9 @@ igc_add_hw_stats(struct igc_softc *sc)
 	SYSCTL_ADD_UQUAD(ctx, stat_list, OID_AUTO, "good_pkts_txd",
 	    CTLFLAG_RD, &sc->stats.gptc,
 	    "Good Packets Transmitted");
+	SYSCTL_ADD_UQUAD(ctx, stat_list, OID_AUTO, "host_tx_discarded",
+	    CTLFLAG_RD, &sc->stats.htdpmc,
+	    "Host Packets Discarded by Transmit MAC");
 	SYSCTL_ADD_UQUAD(ctx, stat_list, OID_AUTO, "bcast_pkts_txd",
 	    CTLFLAG_RD, &sc->stats.bptc,
 	    "Broadcast Packets Transmitted");
