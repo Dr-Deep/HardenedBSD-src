@@ -312,9 +312,6 @@ typedef struct iflib_sw_tx_desc_array {
 /* The minimum descriptors per second before we start coalescing */
 #define IFLIB_MIN_DESC_SEC		16384
 #define IFLIB_DEFAULT_TX_UPDATE_FREQ	16
-#define IFLIB_QUEUE_IDLE		0
-#define IFLIB_QUEUE_HUNG		1
-#define IFLIB_QUEUE_WORKING		2
 /* maximum number of txqs that can share an rx interrupt */
 #define IFLIB_MAX_TX_SHARED_INTR	4
 
@@ -374,7 +371,7 @@ struct iflib_txq {
 	uint8_t		ift_txd_size[8];
 	uint64_t	ift_processed;
 	uint64_t	ift_cleaned;
-	uint64_t	ift_cleaned_prev;
+	uint64_t	ift_processed_prev;
 #if MEMORY_LOGGING
 	uint64_t	ift_enqueued;
 	uint64_t	ift_dequeued;
@@ -404,9 +401,19 @@ struct iflib_txq {
 #endif /* DEV_NETMAP */
 
 	if_txsd_vec_t	ift_sds;
-	uint8_t		ift_qstatus;
+	/*
+	 * TX watchdog state, updated once per iflib_timer period.  The
+	 * period count saturates instead of wrapping, and is 16 bits
+	 * wide so that it still reaches any value
+	 * net.iflib.tx_watchdog_periods is plausibly set to; an 8-bit
+	 * counter would silently disable the check for a threshold
+	 * above 255.
+	 */
+	qidx_t		ift_outstanding_prev;
+	uint16_t	ift_wdog_armed;
 	uint8_t		ift_closed;
 	uint8_t		ift_update_freq;
+	uint8_t		ift_spare0[2];	/* pad to the next pointer boundary */
 	struct iflib_filter_info ift_filter_info;
 	bus_dma_tag_t	ift_buf_tag;
 	bus_dma_tag_t	ift_tso_buf_tag;
@@ -569,6 +576,20 @@ SYSCTL_INT(_net_iflib, OID_AUTO, no_tx_batch, CTLFLAG_RW,
 static int iflib_timer_default = 1000;
 SYSCTL_INT(_net_iflib, OID_AUTO, timer_default, CTLFLAG_RW,
     &iflib_timer_default, 0, "number of ticks between iflib_timer calls");
+/*
+ * Consecutive timer periods a TX queue must stay frozen - see
+ * iflib_timer(), which defines that state - before the hardware is
+ * asked whether it has completions pending.  Four periods is roughly
+ * two seconds with the default timer interval: a healthy queue on
+ * hardware that coalesces completion reports (e.g. 8254x,
+ * TXDCTL.WTHRESH) stays frozen for at most two (measured on 82541PI),
+ * a wedged one until it is reset.
+ */
+static int iflib_tx_watchdog_periods = 4;
+SYSCTL_INT(_net_iflib, OID_AUTO, tx_watchdog_periods, CTLFLAG_RWTUN,
+    &iflib_tx_watchdog_periods, 0,
+    "consecutive frozen timer periods before a TX queue is checked for "
+    "a hang (0 disables the check)");
 
 
 #if IFLIB_DEBUG_COUNTERS
@@ -1906,8 +1927,6 @@ iflib_txq_setup(iflib_txq_t txq)
 	iflib_dma_info_t di;
 	int i;
 
-	/* Set number of descriptors available */
-	txq->ift_qstatus = IFLIB_QUEUE_IDLE;
 	/* XXX make configurable */
 	txq->ift_update_freq = IFLIB_DEFAULT_TX_UPDATE_FREQ;
 
@@ -2403,25 +2422,89 @@ iflib_timer(void *arg)
 		return;
 
 	/*
-	** Check on the state of the TX queue(s), this
-	** can be done without the lock because its RO
-	** and the HUNG state will be static if set.
-	*/
+	 * Check on the state of the TX queue(s); this can be done
+	 * without the lock: the counters the check reads are only
+	 * advanced by the queue's tx task and a stale read just
+	 * delays the verdict by one timer period.
+	 */
 	if (this_tick - txq->ift_last_timer_tick >= iflib_timer_default) {
+		qidx_t outstanding;
+		bool frozen;
+
 		txq->ift_last_timer_tick = this_tick;
 		IFDI_TIMER(ctx, txq->ift_id);
-		if ((txq->ift_qstatus == IFLIB_QUEUE_HUNG) &&
-		    ((txq->ift_cleaned_prev == txq->ift_cleaned) ||
-		     (sctx->isc_pause_frames == 0)))
-			goto hung;
 
-		if (txq->ift_qstatus != IFLIB_QUEUE_IDLE &&
-		    ifmp_ring_is_stalled(txq->ift_br)) {
-			KASSERT(ctx->ifc_link_state == LINK_STATE_UP,
-			    ("queue can't be marked as hung if interface is down"));
-			txq->ift_qstatus = IFLIB_QUEUE_HUNG;
+		/*
+		 * Descriptors the hardware has not reported as
+		 * completed: neither harvested as credits
+		 * (ift_processed) nor reclaimed (ift_cleaned accounts
+		 * the difference to ift_in_use).  The tail whose
+		 * report-status request is still deferred is never
+		 * reported and must not count (ift_rs_pending
+		 * over-counts it by one per packet).
+		 */
+		outstanding = txq->ift_in_use -
+		    (qidx_t)(txq->ift_processed - txq->ift_cleaned);
+
+		/*
+		 * The queue is frozen while it has descriptors the
+		 * hardware has not reported as completed and none
+		 * were reclaimed over the period; the link must be
+		 * up, with no pause frames and no pending doorbell
+		 * (the laggard check below rings it).
+		 *
+		 * Being frozen is not a fault - the hardware may
+		 * defer marking descriptors as completed
+		 * indefinitely, and 8254x hardware does so for a
+		 * quiet queue - therefore the check arms only when a
+		 * frozen queue also takes on new work, and acts only
+		 * once it has stayed frozen for
+		 * net.iflib.tx_watchdog_periods consecutive periods.
+		 */
+		frozen = outstanding > txq->ift_rs_pending &&
+		    txq->ift_processed == txq->ift_processed_prev &&
+		    txq->ift_db_pending == 0 &&
+		    sctx->isc_pause_frames == 0 &&
+		    ctx->ifc_link_state == LINK_STATE_UP;
+		if (!frozen)
+			txq->ift_wdog_armed = 0;
+		else if (txq->ift_wdog_armed > 0 ||
+		    outstanding > txq->ift_outstanding_prev) {
+			if (txq->ift_wdog_armed < UINT16_MAX)
+				txq->ift_wdog_armed++;
 		}
-		txq->ift_cleaned_prev = txq->ift_cleaned;
+
+		/*
+		 * Frozen long enough: ask the hardware.  Completions
+		 * ready but unharvested for this long mean the
+		 * completion interrupt went missing - kick the
+		 * queue's task.  Nothing ready, although the queue
+		 * kept taking on work, means it is hung.
+		 */
+		if (iflib_tx_watchdog_periods > 0 &&
+		    txq->ift_wdog_armed >= iflib_tx_watchdog_periods) {
+			bus_dmamap_sync(txq->ift_ifdi->idi_tag,
+			    txq->ift_ifdi->idi_map, BUS_DMASYNC_POSTREAD);
+			if (ctx->isc_txd_credits_update(ctx->ifc_softc,
+			    txq->ift_id, false) == 0) {
+				device_printf(ctx->ifc_dev,
+				    "Watchdog timeout (TX: %d desc "
+				    "avail: %d pidx: %d) -- resetting\n",
+				    txq->ift_id, TXQ_AVAIL(txq),
+				    txq->ift_pidx);
+				STATE_LOCK(ctx);
+				if_setdrvflagbits(ctx->ifc_ifp,
+				    IFF_DRV_OACTIVE, IFF_DRV_RUNNING);
+				ctx->ifc_flags |=
+				    (IFC_DO_WATCHDOG | IFC_DO_RESET);
+				iflib_admin_intr_deferred(ctx);
+				STATE_UNLOCK(ctx);
+				return;
+			}
+			GROUPTASK_ENQUEUE(&txq->ift_task);
+		}
+		txq->ift_outstanding_prev = outstanding;
+		txq->ift_processed_prev = txq->ift_processed;
 	}
 	/* handle any laggards */
 	if (txq->ift_db_pending)
@@ -2431,17 +2514,6 @@ iflib_timer(void *arg)
 	if (if_getdrvflags(ctx->ifc_ifp) & IFF_DRV_RUNNING)
 		callout_reset_on(&txq->ift_timer, iflib_timer_default, iflib_timer,
 		    txq, txq->ift_timer.c_cpu);
-	return;
-
- hung:
-	device_printf(ctx->ifc_dev,
-	    "Watchdog timeout (TX: %d desc avail: %d pidx: %d) -- resetting\n",
-	    txq->ift_id, TXQ_AVAIL(txq), txq->ift_pidx);
-	STATE_LOCK(ctx);
-	if_setdrvflagbits(ctx->ifc_ifp, IFF_DRV_OACTIVE, IFF_DRV_RUNNING);
-	ctx->ifc_flags |= (IFC_DO_WATCHDOG | IFC_DO_RESET);
-	iflib_admin_intr_deferred(ctx);
-	STATE_UNLOCK(ctx);
 }
 
 static uint16_t
@@ -2625,7 +2697,12 @@ iflib_stop(if_ctx_t ctx)
 			iflib_txsd_free(ctx, txq, j);
 		}
 		txq->ift_processed = txq->ift_cleaned = txq->ift_cidx_processed = 0;
+		txq->ift_processed_prev = 0;
+		txq->ift_outstanding_prev = 0;
+		txq->ift_wdog_armed = 0;
 		txq->ift_in_use = txq->ift_gen = txq->ift_no_desc_avail = 0;
+		txq->ift_npending = txq->ift_db_pending = 0;
+		txq->ift_rs_pending = 0;
 		if (sctx->isc_flags & IFLIB_PRESERVE_TX_INDICES)
 			txq->ift_cidx = txq->ift_pidx;
 		else
@@ -3897,7 +3974,6 @@ iflib_txq_drain(struct ifmp_ring *r, uint32_t cidx, uint32_t pidx)
 	}
 
 	if (__predict_false(if_getdrvflags(ctx->ifc_ifp) & IFF_DRV_OACTIVE)) {
-		txq->ift_qstatus = IFLIB_QUEUE_IDLE;
 		CALLOUT_LOCK(txq);
 		callout_stop(&txq->ift_timer);
 		CALLOUT_UNLOCK(txq);
@@ -3905,11 +3981,6 @@ iflib_txq_drain(struct ifmp_ring *r, uint32_t cidx, uint32_t pidx)
 		return (0);
 	}
 
-	/*
-	 * If we've reclaimed any packets this queue cannot be hung.
-	 */
-	if (reclaimed)
-		txq->ift_qstatus = IFLIB_QUEUE_IDLE;
 	consumed = mcast_sent = bytes_sent = pkt_sent = 0;
 	count = MIN(avail, TX_BATCH_SIZE);
 #ifdef INVARIANTS
@@ -3985,7 +4056,6 @@ iflib_txq_drain_free(struct ifmp_ring *r, uint32_t cidx, uint32_t pidx)
 
 	txq = r->cookie;
 
-	txq->ift_qstatus = IFLIB_QUEUE_IDLE;
 	CALLOUT_LOCK(txq);
 	callout_stop(&txq->ift_timer);
 	CALLOUT_UNLOCK(txq);
@@ -6481,18 +6551,12 @@ void
 iflib_link_state_change(if_ctx_t ctx, int link_state, uint64_t baudrate)
 {
 	if_t ifp = ctx->ifc_ifp;
-	iflib_txq_t txq = ctx->ifc_txqs;
 
 	if_setbaudrate(ifp, baudrate);
 	if (baudrate >= IF_Gbps(10)) {
 		STATE_LOCK(ctx);
 		ctx->ifc_flags |= IFC_PREFETCH;
 		STATE_UNLOCK(ctx);
-	}
-	/* If link down, disable watchdog */
-	if ((ctx->ifc_link_state == LINK_STATE_UP) && (link_state == LINK_STATE_DOWN)) {
-		for (int i = 0; i < ctx->ifc_softc_ctx.isc_ntxqsets; i++, txq++)
-			txq->ift_qstatus = IFLIB_QUEUE_IDLE;
 	}
 	ctx->ifc_link_state = link_state;
 	if_link_state_change(ifp, link_state);
