@@ -39,6 +39,7 @@ FEATURES=$( bsddialog --backtitle "$OSNAME Installer" \
     --title "System Hardening" --nocancel --separate-output \
     --checklist "Choose system security hardening options:" \
     0 0 0 \
+<<<<<<< HEAD
 	"0 hide_jail" "Hide processes running in jails" ${hide_jail:-off} \
 	"1 shm_use_phys" "Lock shared memory pages" ${shm_use_phys:-off} \
 	"2 unprivileged_mlock" "Do not allow non-root users to call mlock" ${unprivileged_mlock:-off} \
@@ -47,6 +48,19 @@ FEATURES=$( bsddialog --backtitle "$OSNAME Installer" \
 	"5 secure_console" "Enable console password prompt" ${secure_console:-off} \
 	"6 disable_ddtrace" "Disallow DTrace destructive-mode" ${disable_ddtrace:-off} \
 	"7 enable_firewall" "Enable a basic firewall (see: /etc/rc.conf)" ${enable_firewall:-off} \
+=======
+	"0 hide_uids" "Hide processes running as other users" ${hide_uids:-off} \
+	"1 hide_gids" "Hide processes running as other groups" ${hide_gids:-off} \
+	"2 hide_jail" "Hide processes running in jails" ${hide_jail:-off} \
+	"3 read_msgbuf" "Disable reading kernel message buffer for unprivileged users" ${read_msgbuf:-off} \
+	"4 proc_debug" "Disable process debugging facilities for unprivileged users" ${proc_debug:-off} \
+	"5 random_pid" "Randomize the PID of newly created processes" ${random_pid:-off} \
+	"6 clear_tmp" "Clean the /tmp filesystem on system startup" ${clear_tmp:-off} \
+	"7 disable_syslogd" "Disable opening Syslogd network socket (disables remote logging)" ${disable_syslogd:-off} \
+	"8 secure_console" "Enable console password prompt" ${secure_console:-off} \
+	"9 disable_ddtrace" "Disallow DTrace destructive-mode" ${disable_ddtrace:-off} \
+	"10 disable_unpriv_kenv" "Disable unprivileged reading of kenv" ${disable_unpriv_kenv:-off} \
+>>>>>>> rad/freebsd/current/main
 2>&1 1>&5 )
 retval=$?
 exec 5>&-
@@ -78,6 +92,7 @@ for feature in $FEATURES; do
 	disable_ddtrace)
 		echo 'security.bsd.allow_destructive_dtrace=0' >> $BSDINSTALL_TMPBOOT/loader.conf.hardening
 		;;
+<<<<<<< HEAD
 	enable_firewall)
 		cat >>$BSDINSTALL_TMPETC/rc.conf.hardening <<EOF
 firewall_enable="YES"
@@ -87,6 +102,10 @@ firewall_type="workstation"
 firewall_quiet="YES"
 firewall_logdeny="YES"
 EOF
+=======
+	disable_unpriv_kenv)
+		echo 'security.bsd.unprivileged_kenv_read=0' >> $BSDINSTALL_TMPBOOT/loader.conf.hardening
+>>>>>>> rad/freebsd/current/main
 		;;
 	esac
 done

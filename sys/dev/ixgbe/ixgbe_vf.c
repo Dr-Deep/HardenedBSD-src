@@ -210,8 +210,8 @@ s32 ixgbe_reset_hw_vf(struct ixgbe_hw *hw)
 	ixgbe_virt_clr_reg(hw);
 
 	/*
-	 * VFLR does not clear VFMAILBOX.VFU. Drop stale ownership and
-	 * cached read-to-clear status.
+	 * Some devices do not clear VFMAILBOX.VFU on VFLR.  Drop stale
+	 * ownership and cached read-to-clear status.
 	 */
 	IXGBE_WRITE_REG(hw, IXGBE_VFMAILBOX, 0);
 	hw->mbx.vf_mailbox = 0;
@@ -411,7 +411,7 @@ s32 ixgbe_update_mc_addr_list_vf(struct ixgbe_hw *hw, u8 *mc_addr_list,
 
 	DEBUGOUT1("MC Addr Count = %d\n", mc_addr_count);
 
-	cnt = (mc_addr_count > 30) ? 30 : mc_addr_count;
+	cnt = min(mc_addr_count, IXGBE_MAX_VF_MC);
 	msgbuf[0] = IXGBE_VF_SET_MULTICAST;
 	msgbuf[0] |= cnt << IXGBE_VT_MSGINFO_SHIFT;
 
