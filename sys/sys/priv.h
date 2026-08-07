@@ -141,8 +141,12 @@
  */
 #define	PRIV_KENV_SET		120	/* Set kernel env. variables. */
 #define	PRIV_KENV_UNSET		121	/* Unset kernel env. variables. */
+<<<<<<< HEAD
 #define	PRIV_KENV_DUMP		122	/* Dump kernel env. */
 #define	PRIV_KENV_GET		123	/* Get kernel env. variables. */
+=======
+#define	PRIV_KENV_READ		122	/* Get/dump kernel env. variables. */
+>>>>>>> rad/freebsd/15-stable/main
 
 /*
  * Loadable kernel module privileges.

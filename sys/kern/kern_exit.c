@@ -124,6 +124,9 @@ proc_realparent(struct proc *child)
 	}
 	parent = __containerof(p->p_orphan.le_prev, struct proc,
 	    p_orphans.lh_first);
+	KASSERT(child->p_pptr != parent,
+	    ("proc %d %p orphaned but parent %d %p is realparent",
+	    child->p_pid, child, parent->p_pid, parent));
 	return (parent);
 }
 
@@ -1663,9 +1666,8 @@ proc_reparent(struct proc *child, struct proc *parent, bool set_oppid)
 	LIST_INSERT_HEAD(&parent->p_children, child, p_sibling);
 
 	proc_clear_orphan(child);
-	if ((child->p_flag & P_TRACED) != 0) {
+	if ((child->p_flag & P_TRACED) != 0 && child->p_oppid != parent->p_pid)
 		proc_add_orphan(child, child->p_pptr);
-	}
 
 	child->p_pptr = parent;
 	if (set_oppid)
