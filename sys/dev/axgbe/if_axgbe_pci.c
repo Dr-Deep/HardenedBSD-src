@@ -1729,11 +1729,7 @@ axgbe_if_tx_queues_alloc(if_ctx_t ctx, caddr_t *va, uint64_t *pa, int ntxqs,
 			    (struct xgbe_ring_data*)malloc(scctx->isc_ntxd[j] *
 			    sizeof(struct xgbe_ring_data), M_AXGBE, M_NOWAIT);
 			if (tx_ring->rdata == NULL) {
-<<<<<<< HEAD
-				axgbe_error("Unable to allocate TX ring memory\n");
-=======
 				axgbe_error("Unable to allocate TX ring data\n");
->>>>>>> rad/freebsd/current/main
 				goto tx_ring_fail;
 			}
 
@@ -1801,11 +1797,7 @@ axgbe_if_rx_queues_alloc(if_ctx_t ctx, caddr_t *va, uint64_t *pa, int nrxqs,
 			    (struct xgbe_ring_data*)malloc(scctx->isc_nrxd[j] *
 			    sizeof(struct xgbe_ring_data), M_AXGBE, M_NOWAIT);
 			if (rx_ring->rdata == NULL) {
-<<<<<<< HEAD
-				axgbe_error("Unable to allocate RX ring memory\n");
-=======
 				axgbe_error("Unable to allocate RX ring data\n");
->>>>>>> rad/freebsd/current/main
 				goto rx_ring_fail;
 			}
 
