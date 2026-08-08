@@ -431,7 +431,6 @@ static int	em_if_mtu_set(if_ctx_t, uint32_t);
 static void	em_if_timer(if_ctx_t, uint16_t);
 static void	em_if_vlan_register(if_ctx_t, u16);
 static void	em_if_vlan_unregister(if_ctx_t, u16);
-static void	em_if_watchdog_reset(if_ctx_t);
 static bool	em_if_needs_restart(if_ctx_t, enum iflib_restart_event);
 
 static void	em_identify_hardware(if_ctx_t);
@@ -617,7 +616,6 @@ static device_method_t em_if_methods[] = {
 	DEVMETHOD(ifdi_mtu_set, em_if_mtu_set),
 	DEVMETHOD(ifdi_promisc_set, em_if_set_promisc),
 	DEVMETHOD(ifdi_timer, em_if_timer),
-	DEVMETHOD(ifdi_watchdog_reset, em_if_watchdog_reset),
 	DEVMETHOD(ifdi_vlan_register, em_if_vlan_register),
 	DEVMETHOD(ifdi_vlan_unregister, em_if_vlan_unregister),
 	DEVMETHOD(ifdi_get_counter, em_if_get_counter),
@@ -655,7 +653,6 @@ static device_method_t igb_if_methods[] = {
 	DEVMETHOD(ifdi_mtu_set, em_if_mtu_set),
 	DEVMETHOD(ifdi_promisc_set, em_if_set_promisc),
 	DEVMETHOD(ifdi_timer, em_if_timer),
-	DEVMETHOD(ifdi_watchdog_reset, em_if_watchdog_reset),
 	DEVMETHOD(ifdi_vlan_register, em_if_vlan_register),
 	DEVMETHOD(ifdi_vlan_unregister, em_if_vlan_unregister),
 	DEVMETHOD(ifdi_get_counter, em_if_get_counter),
@@ -698,7 +695,6 @@ static device_method_t igbv_if_methods[] = {
 	DEVMETHOD(ifdi_mtu_set, em_if_mtu_set),
 	DEVMETHOD(ifdi_promisc_set, em_if_set_promisc),
 	DEVMETHOD(ifdi_timer, em_if_timer),
-	DEVMETHOD(ifdi_watchdog_reset, em_if_watchdog_reset),
 	DEVMETHOD(ifdi_vlan_register, em_if_vlan_register),
 	DEVMETHOD(ifdi_vlan_unregister, em_if_vlan_unregister),
 	DEVMETHOD(ifdi_get_counter, em_if_get_counter),
@@ -2791,18 +2787,6 @@ em_if_update_admin_status(if_ctx_t ctx)
 		lem_smartspeed(sc);
 }
 
-static void
-em_if_watchdog_reset(if_ctx_t ctx)
-{
-	struct e1000_softc *sc = iflib_get_softc(ctx);
-
-	/*
-	 * Just count the event; iflib(4) will already trigger a
-	 * sufficient reset of the controller.
-	 */
-	sc->watchdog_events++;
-}
-
 /*********************************************************************
  *
  *  This routine disables all traffic on the adapter by issuing a
@@ -4153,6 +4137,104 @@ em_if_queues_free(if_ctx_t ctx)
 	}
 }
 
+static u32
+em_legacy_txdctl(struct e1000_hw *hw)
+{
+	u32 txdctl;
+
+	/*
+	 * Start with the established full-descriptor writeback policy.
+	 * Several generations have descriptor-queue errata for which it is
+	 * a documented workaround.  The unsafe early controllers are
+	 * overridden below.
+	 */
+	txdctl = EM_TX_PTHRESH | (EM_TX_HTHRESH << 8) |
+	    (EM_TX_WTHRESH << 16) | E1000_TXDCTL_GRAN;
+
+	switch (hw->mac.type) {
+	case e1000_82571:
+	case e1000_82572:
+	case e1000_82573:
+	case e1000_82574:
+	case e1000_82583:
+	case e1000_80003es2lan:
+		/* Match the Intel shared-code policy for these families. */
+		txdctl |= E1000_TXDCTL_COUNT_DESC;
+		break;
+	case e1000_ich8lan:
+	case e1000_ich9lan:
+	case e1000_ich10lan:
+	case e1000_pchlan:
+	case e1000_pch2lan:
+	case e1000_pch_lpt:
+	case e1000_pch_spt:
+	case e1000_pch_cnp:
+	case e1000_pch_tgp:
+	case e1000_pch_adp:
+	case e1000_pch_mtp:
+	case e1000_pch_ptp:
+		/* Preserve the required bit set by the integrated shared code. */
+		txdctl |= (1U << 22);
+		break;
+	case e1000_82542:
+	case e1000_82543:
+	case e1000_82544:
+		/*
+		 * 82543 erratum 35 and 82544 erratum 20 require
+		 * WTHRESH=0.  Leave all descriptor-control thresholds at
+		 * their reset values on these early controllers.
+		 */
+		txdctl = 0;
+		break;
+	case e1000_82540:
+	case e1000_82545:
+	case e1000_82545_rev_3:
+	case e1000_82546:
+	case e1000_82546_rev_3:
+	case e1000_82541:
+	case e1000_82541_rev_2:
+	case e1000_82547:
+	case e1000_82547_rev_2:
+		break;
+	default:
+		KASSERT(0, ("%s: unsupported MAC type %d", __func__,
+		    hw->mac.type));
+		break;
+	}
+
+	return (txdctl);
+}
+
+static u32
+igb_txdctl(struct e1000_hw *hw)
+{
+	u32 pthresh;
+
+	switch (hw->mac.type) {
+	case e1000_i354:
+		pthresh = I354_TX_PTHRESH;
+		break;
+	case e1000_82575:
+	case e1000_82576:
+	case e1000_82580:
+	case e1000_i350:
+	case e1000_i210:
+	case e1000_i211:
+	case e1000_vfadapt:
+	case e1000_vfadapt_i350:
+		pthresh = IGB_TX_PTHRESH;
+		break;
+	default:
+		KASSERT(0, ("%s: unsupported MAC type %d", __func__,
+		    hw->mac.type));
+		pthresh = IGB_TX_PTHRESH;
+		break;
+	}
+
+	return (pthresh | (IGB_TX_HTHRESH << 8) |
+	    E1000_TXDCTL_QUEUE_ENABLE);
+}
+
 /*********************************************************************
  *
  *  Enable transmit unit.
@@ -4203,16 +4285,10 @@ em_initialize_transmit_rings(if_ctx_t ctx)
 		    E1000_READ_REG(hw, E1000_TDBAL(qid)),
 		    E1000_READ_REG(hw, E1000_TDLEN(qid)));
 
-		txdctl = 0; /* clear txdctl */
-		txdctl |= 0x1f; /* PTHRESH */
-		txdctl |= 1 << 8; /* HTHRESH */
-		txdctl |= 1 << 16;/* WTHRESH */
-		if (hw->mac.type < igb_mac_min) {
-			txdctl |= 1 << 22; /* Reserved bit must always be 1 */
-			txdctl |= E1000_TXDCTL_GRAN;
-			txdctl |= 1 << 25; /* LWTHRESH */
-		} else
-			txdctl |= E1000_TXDCTL_QUEUE_ENABLE;
+		if (hw->mac.type < igb_mac_min)
+			txdctl = em_legacy_txdctl(hw);
+		else
+			txdctl = igb_txdctl(hw);
 
 		E1000_WRITE_REG(hw, E1000_TXDCTL(qid), txdctl);
 	}
@@ -4319,6 +4395,56 @@ em_initialize_transmit_unit(if_ctx_t ctx)
  **********************************************************************/
 #define BSIZEPKT_ROUNDUP ((1<<E1000_SRRCTL_BSIZEPKT_SHIFT)-1)
 
+static u32
+igb_rxdctl(struct e1000_softc *sc, u32 rxdctl)
+{
+	struct e1000_hw *hw;
+	u32 mask, pthresh, wthresh;
+
+	hw = &sc->hw;
+	mask = IGB_RXDCTL_THRESH_MASK;
+	switch (hw->mac.type) {
+	case e1000_82575:
+		mask = IGB_82575_RXDCTL_THRESH_MASK;
+		pthresh = IGB_RX_PTHRESH;
+		wthresh = IGB_RX_WTHRESH;
+		break;
+	case e1000_82576:
+		pthresh = IGB_RX_PTHRESH;
+		wthresh = sc->intr_type == IFLIB_INTR_MSIX ?
+		    IGB_82576_RX_WTHRESH : IGB_RX_WTHRESH;
+		break;
+	case e1000_vfadapt:
+		/* 82576 VFs always need the MSI-X writeback workaround. */
+		pthresh = IGB_RX_PTHRESH;
+		wthresh = IGB_82576_RX_WTHRESH;
+		break;
+	case e1000_i354:
+		pthresh = I354_RX_PTHRESH;
+		wthresh = IGB_RX_WTHRESH;
+		break;
+	case e1000_82580:
+	case e1000_i350:
+	case e1000_i210:
+	case e1000_i211:
+	case e1000_vfadapt_i350:
+		pthresh = IGB_RX_PTHRESH;
+		wthresh = IGB_RX_WTHRESH;
+		break;
+	default:
+		KASSERT(0, ("%s: unsupported MAC type %d", __func__,
+		    hw->mac.type));
+		pthresh = IGB_RX_PTHRESH;
+		wthresh = IGB_RX_WTHRESH;
+		break;
+	}
+
+	rxdctl &= ~mask;
+	rxdctl |= pthresh | (IGB_RX_HTHRESH << 8) |
+	    (wthresh << 16) | E1000_RXDCTL_QUEUE_ENABLE;
+	return (rxdctl);
+}
+
 void
 igb_initialize_receive_rings(if_ctx_t ctx, bool drop)
 {
@@ -4359,12 +4485,29 @@ igb_initialize_receive_rings(if_ctx_t ctx, bool drop)
 		E1000_WRITE_REG(hw, E1000_RDT(qid), 0);
 		E1000_WRITE_REG(hw, E1000_SRRCTL(qid), srrctl);
 
-		rxdctl |= E1000_RXDCTL_QUEUE_ENABLE;
-		rxdctl &= 0xFFF00000;
-		rxdctl |= IGB_RX_PTHRESH;
-		rxdctl |= IGB_RX_HTHRESH << 8;
-		rxdctl |= IGB_RX_WTHRESH << 16;
+		rxdctl = igb_rxdctl(sc, rxdctl);
 		E1000_WRITE_REG(hw, E1000_RXDCTL(qid), rxdctl);
+	}
+}
+
+static bool
+em_integrated_jumbo_rx(struct e1000_hw *hw)
+{
+	switch (hw->mac.type) {
+	case e1000_ich9lan:
+	case e1000_ich10lan:
+	case e1000_pchlan:
+	case e1000_pch2lan:
+	case e1000_pch_lpt:
+	case e1000_pch_spt:
+	case e1000_pch_cnp:
+	case e1000_pch_tgp:
+	case e1000_pch_adp:
+	case e1000_pch_mtp:
+	case e1000_pch_ptp:
+		return (true);
+	default:
+		return (false);
 	}
 }
 
@@ -4511,24 +4654,25 @@ em_initialize_receive_unit(if_ctx_t ctx)
 		E1000_WRITE_REG(hw, E1000_RDT(qid), 0);
 	}
 
-	/*
-	 * Set PTHRESH for improved jumbo performance
-	 * According to 10.2.5.11 of Intel 82574 Datasheet,
-	 * RXDCTL(1) is written whenever RXDCTL(0) is written.
-	 * Only write to RXDCTL(1) if there is a need for different
-	 * settings.
-	 */
-	if ((hw->mac.type == e1000_ich9lan || hw->mac.type == e1000_pch2lan ||
-	    hw->mac.type == e1000_ich10lan) && if_getmtu(ifp) > ETHERMTU) {
+	/* Increase receive-descriptor prefetching for integrated jumbo MACs. */
+	if (em_integrated_jumbo_rx(hw) && if_getmtu(ifp) > ETHERMTU) {
 		u32 rxdctl = E1000_READ_REG(hw, E1000_RXDCTL(0));
-		E1000_WRITE_REG(hw, E1000_RXDCTL(0), rxdctl | 3);
+
+		rxdctl &= ~(EM_RXDCTL_PTHRESH_MASK |
+		    EM_RXDCTL_HTHRESH_MASK);
+		rxdctl |= EM_JUMBO_RX_PTHRESH |
+		    (EM_JUMBO_RX_HTHRESH << 8);
+		E1000_WRITE_REG(hw, E1000_RXDCTL(0), rxdctl);
 	} else if (hw->mac.type == e1000_82574) {
+		/* RXDCTL(0) writes are mirrored to RXDCTL(1) on 82574. */
 		for (int i = 0; i < sc->rx_num_queues; i++) {
 			u32 rxdctl = E1000_READ_REG(hw, E1000_RXDCTL(i));
-			rxdctl |= 0x20; /* PTHRESH */
-			rxdctl |= 4 << 8; /* HTHRESH */
-			rxdctl |= 4 << 16;/* WTHRESH */
-			rxdctl |= 1 << 24; /* Switch to granularity */
+
+			rxdctl &= ~EM_RXDCTL_THRESH_MASK;
+			rxdctl |= EM_82574_RX_PTHRESH |
+			    (EM_82574_RX_HTHRESH << 8) |
+			    (EM_82574_RX_WTHRESH << 16) |
+			    E1000_RXDCTL_THRESH_UNIT_DESC;
 			E1000_WRITE_REG(hw, E1000_RXDCTL(i), rxdctl);
 		}
 	} else if (hw->mac.type >= igb_mac_min) {
@@ -5579,9 +5723,6 @@ em_if_get_vf_counter(if_ctx_t ctx, ift_counter cnt)
 	switch (cnt) {
 	case IFCOUNTER_IERRORS:
 		return sc->dropped_pkts;
-	case IFCOUNTER_OERRORS:
-		return (if_get_counter_default(ifp, cnt) +
-		    sc->watchdog_events);
 	default:
 		return (if_get_counter_default(ifp, cnt));
 	}
@@ -5609,7 +5750,7 @@ em_if_get_counter(if_ctx_t ctx, ift_counter cnt)
 		    stats->mpc + stats->cexterr);
 	case IFCOUNTER_OERRORS:
 		return (if_get_counter_default(ifp, cnt) +
-		    stats->ecol + stats->latecol + sc->watchdog_events);
+		    stats->ecol + stats->latecol);
 	default:
 		return (if_get_counter_default(ifp, cnt));
 	}
@@ -5762,9 +5903,6 @@ em_add_hw_stats(struct e1000_softc *sc)
 	SYSCTL_ADD_ULONG(ctx, child, OID_AUTO, "rx_overruns",
 	    CTLFLAG_RD, &sc->rx_overruns,
 	    "RX overruns");
-	SYSCTL_ADD_ULONG(ctx, child, OID_AUTO, "watchdog_timeouts",
-	    CTLFLAG_RD, &sc->watchdog_events,
-	    "Watchdog timeouts");
 	if (!sc->vf_ifp) {
 		SYSCTL_ADD_PROC(ctx, child, OID_AUTO, "device_control",
 		    CTLTYPE_UINT | CTLFLAG_RD,

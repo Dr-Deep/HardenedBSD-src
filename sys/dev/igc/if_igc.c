@@ -110,7 +110,6 @@ static int	igc_if_mtu_set(if_ctx_t, uint32_t);
 static void	igc_if_timer(if_ctx_t, uint16_t);
 static void	igc_if_vlan_register(if_ctx_t, u16);
 static void	igc_if_vlan_unregister(if_ctx_t, u16);
-static void	igc_if_watchdog_reset(if_ctx_t);
 static bool	igc_if_needs_restart(if_ctx_t, enum iflib_restart_event);
 
 static void	igc_identify_hardware(if_ctx_t);
@@ -225,7 +224,6 @@ static device_method_t igc_if_methods[] = {
 	DEVMETHOD(ifdi_mtu_set, igc_if_mtu_set),
 	DEVMETHOD(ifdi_promisc_set, igc_if_set_promisc),
 	DEVMETHOD(ifdi_timer, igc_if_timer),
-	DEVMETHOD(ifdi_watchdog_reset, igc_if_watchdog_reset),
 	DEVMETHOD(ifdi_vlan_register, igc_if_vlan_register),
 	DEVMETHOD(ifdi_vlan_unregister, igc_if_vlan_unregister),
 	DEVMETHOD(ifdi_get_counter, igc_if_get_counter),
@@ -1486,18 +1484,6 @@ igc_if_update_admin_status(if_ctx_t ctx)
 	igc_update_stats_counters(sc);
 }
 
-static void
-igc_if_watchdog_reset(if_ctx_t ctx)
-{
-	struct igc_softc *sc = iflib_get_softc(ctx);
-
-	/*
-	 * Just count the event; iflib(4) will already trigger a
-	 * sufficient reset of the controller.
-	 */
-	sc->watchdog_events++;
-}
-
 /*********************************************************************
  *
  *  This routine disables all traffic on the adapter by issuing a
@@ -2273,13 +2259,9 @@ igc_initialize_transmit_unit(if_ctx_t ctx)
 		    IGC_READ_REG(&sc->hw, IGC_TDBAL(i)),
 		    IGC_READ_REG(&sc->hw, IGC_TDLEN(i)));
 
-		txdctl = 0; /* clear txdctl */
-		txdctl |= 0x1f; /* PTHRESH */
-		txdctl |= 1 << 8; /* HTHRESH */
-		txdctl |= 1 << 16;/* WTHRESH */
-		txdctl |= 1 << 22; /* Reserved bit 22 must always be 1 */
-		txdctl |= IGC_TXDCTL_GRAN;
-		txdctl |= 1 << 25; /* LWTHRESH */
+		/* WTHRESH must be zero when iflib uses sparse RS. */
+		txdctl = IGC_TX_PTHRESH | (IGC_TX_HTHRESH << 8) |
+		    IGC_TXDCTL_QUEUE_ENABLE;
 
 		IGC_WRITE_REG(hw, IGC_TXDCTL(i), txdctl);
 	}
@@ -2407,11 +2389,10 @@ igc_initialize_receive_unit(if_ctx_t ctx)
 		IGC_WRITE_REG(hw, IGC_RDT(i), 0);
 		/* Enable this Queue */
 		rxdctl = IGC_READ_REG(hw, IGC_RXDCTL(i));
-		rxdctl |= IGC_RXDCTL_QUEUE_ENABLE;
-		rxdctl &= 0xFFF00000;
-		rxdctl |= IGC_RX_PTHRESH;
-		rxdctl |= IGC_RX_HTHRESH << 8;
-		rxdctl |= IGC_RX_WTHRESH << 16;
+		rxdctl &= ~(IGC_RXDCTL_PTHRESH | IGC_RXDCTL_HTHRESH |
+		    IGC_RXDCTL_WTHRESH);
+		rxdctl |= IGC_RX_PTHRESH | (IGC_RX_HTHRESH << 8) |
+		    (IGC_RX_WTHRESH << 16) | IGC_RXDCTL_QUEUE_ENABLE;
 		IGC_WRITE_REG(hw, IGC_RXDCTL(i), rxdctl);
 	}
 
@@ -2790,7 +2771,7 @@ igc_if_get_counter(if_ctx_t ctx, ift_counter cnt)
 		    sc->stats.mpc);
 	case IFCOUNTER_OERRORS:
 		return (if_get_counter_default(ifp, cnt) +
-		    sc->stats.ecol + sc->stats.latecol + sc->watchdog_events);
+		    sc->stats.ecol + sc->stats.latecol);
 	default:
 		return (if_get_counter_default(ifp, cnt));
 	}
@@ -2891,9 +2872,6 @@ igc_add_hw_stats(struct igc_softc *sc)
 	SYSCTL_ADD_ULONG(ctx, child, OID_AUTO, "rx_overruns",
 	    CTLFLAG_RD, &sc->rx_overruns,
 	    "RX overruns");
-	SYSCTL_ADD_ULONG(ctx, child, OID_AUTO, "watchdog_timeouts",
-	    CTLFLAG_RD, &sc->watchdog_events,
-	    "Watchdog timeouts");
 	SYSCTL_ADD_PROC(ctx, child, OID_AUTO, "device_control",
 	    CTLTYPE_UINT | CTLFLAG_RD | CTLFLAG_NEEDGIANT,
 	    sc, IGC_CTRL, igc_sysctl_reg_handler, "IU",
