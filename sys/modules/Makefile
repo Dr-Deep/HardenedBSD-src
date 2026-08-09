@@ -420,6 +420,7 @@ SUBDIR=	\
 	virtio \
 	vge \
 	${_viawd} \
+	video \
 	videomode \
 	vkbd \
 	${_vmd} \
