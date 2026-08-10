@@ -661,7 +661,7 @@ ixgbe_initialize_rss_mapping(struct ixgbe_softc *sc)
 {
 	struct ixgbe_hw *hw = &sc->hw;
 	u32 reta = 0, mrqc, rss_key[10];
-	int queue_id, table_size, index_mult;
+	int queue_id, reta_queues, table_size, index_mult;
 	int i, j;
 	u32 rss_hash_config;
 
@@ -690,19 +690,31 @@ ixgbe_initialize_rss_mapping(struct ixgbe_softc *sc)
 		break;
 	}
 
+	/*
+	 * The global RETA is shared by the PF and VFs on 82599 and X540.
+	 * Program all four queue indices while SR-IOV is active so a VF can
+	 * use its full queue grant even when the PF uses fewer queues.
+	 * PSRTYPE.RQPL limits the subset selected within each pool.
+	 */
+	reta_queues = sc->num_rx_queues;
+#ifdef PCI_IOV
+	if (sc->iov_mode != IXGBE_NO_VM)
+		reta_queues = MAX(reta_queues, 4);
+#endif
+
 	/* Set up the redirection table */
 	for (i = 0, j = 0; i < table_size; i++, j++) {
-		if (j == sc->num_rx_queues)
+		if (j == reta_queues)
 			j = 0;
 
 		if (sc->feat_en & IXGBE_FEATURE_RSS) {
 			/*
 			 * Fetch the RSS bucket id for the given indirection
-			 * entry. Cap it at the number of configured buckets
-			 * (which is num_rx_queues.)
+			 * entry.  Cap it at the number of queue indices that must
+			 * be represented in the shared table.
 			 */
 			queue_id = rss_get_indirection_to_bucket(i);
-			queue_id = queue_id % sc->num_rx_queues;
+			queue_id = queue_id % reta_queues;
 		} else
 			queue_id = (j * index_mult);
 
@@ -1755,6 +1767,10 @@ ixgbe_add_media_types(if_ctx_t ctx)
 			ifmedia_add(sc->media, IFM_ETHER | IFM_1000_LX, 0,
 			    NULL);
 	}
+	if (layer & IXGBE_PHYSICAL_LAYER_10GBASE_BX) {
+		device_printf(dev, "Media supported: 10Gbase-BX\n");
+		ifmedia_add(sc->media, IFM_ETHER | IFM_10G_BX, 0, NULL);
+	}
 	if (layer & IXGBE_PHYSICAL_LAYER_10GBASE_SR) {
 		ifmedia_add(sc->media, IFM_ETHER | IFM_10G_SR, 0, NULL);
 		if (hw->phy.multispeed_fiber)
@@ -1923,7 +1939,7 @@ ixgbe_update_stats_counters(struct ixgbe_softc *sc)
 {
 	struct ixgbe_hw *hw = &sc->hw;
 	struct ixgbe_hw_stats *stats = &sc->stats.pf;
-	u32 missed_rx = 0, bprc, lxon, lxoff;
+	u32 missed_rx = 0, mpc, bprc, lxon, lxoff;
 	u32 lxoffrxc;
 	u64 total_missed_rx = 0, total;
 
@@ -1931,7 +1947,13 @@ ixgbe_update_stats_counters(struct ixgbe_softc *sc)
 	stats->illerrc += IXGBE_READ_REG(hw, IXGBE_ILLERRC);
 	stats->errbc += IXGBE_READ_REG(hw, IXGBE_ERRBC);
 	stats->mspdc += IXGBE_READ_REG(hw, IXGBE_MSPDC);
-	stats->mpc[0] += IXGBE_READ_REG(hw, IXGBE_MPC(0));
+	for (int i = 0; i < nitems(stats->mpc); i++) {
+		mpc = IXGBE_READ_REG(hw, IXGBE_MPC(i));
+		missed_rx += mpc;
+		stats->mpc[i] += mpc;
+		total_missed_rx += stats->mpc[i];
+	}
+	stats->mpctotal = total_missed_rx;
 
 	for (int i = 0; i < 16; i++) {
 		stats->qprc[i] += IXGBE_READ_REG(hw, IXGBE_QPRC(i));
@@ -2031,6 +2053,12 @@ ixgbe_update_stats_counters(struct ixgbe_softc *sc)
 		stats->fcoedwtc += IXGBE_READ_REG(hw, IXGBE_FCOEDWTC);
 	}
 
+	/* TLPIC and RLPIC are clear-on-read. */
+	if (sc->feat_cap & IXGBE_FEATURE_EEE) {
+		stats->tlpic += IXGBE_READ_REG(hw, IXGBE_TLPIC);
+		stats->rlpic += IXGBE_READ_REG(hw, IXGBE_RLPIC);
+	}
+
 	/* Fill out the OS statistics structure */
 	IXGBE_SET_IPACKETS(sc, stats->gprc);
 	IXGBE_SET_OPACKETS(sc, stats->gptc);
@@ -2053,7 +2081,7 @@ ixgbe_update_stats_counters(struct ixgbe_softc *sc)
 	 * - jabber count.
 	 */
 	IXGBE_SET_IERRORS(sc, stats->crcerrs + stats->illerrc +
-	    stats->mpc[0] + stats->rlec + stats->ruc + stats->rfc +
+	    stats->mpctotal + stats->rlec + stats->ruc + stats->rfc +
 	    stats->roc + stats->rjc);
 } /* ixgbe_update_stats_counters */
 
@@ -2164,7 +2192,7 @@ ixgbe_add_hw_stats(struct ixgbe_softc *sc)
 	SYSCTL_ADD_UQUAD(ctx, stat_list, OID_AUTO, "rec_len_errs",
 	    CTLFLAG_RD, &stats->rlec, "Receive Length Errors");
 	SYSCTL_ADD_UQUAD(ctx, stat_list, OID_AUTO, "rx_missed_packets",
-	    CTLFLAG_RD, &stats->mpc[0], "RX Missed Packet Count");
+	    CTLFLAG_RD, &stats->mpctotal, "RX Missed Packet Count");
 
 	/* Flow Control stats */
 	SYSCTL_ADD_UQUAD(ctx, stat_list, OID_AUTO, "xon_txd",
@@ -2884,6 +2912,9 @@ ixgbe_if_media_status(if_ctx_t ctx, struct ifmediareq * ifmr)
 			ifmr->ifm_active |= IFM_1000_LX | IFM_FDX;
 			break;
 		}
+	if (layer & IXGBE_PHYSICAL_LAYER_10GBASE_BX &&
+	    sc->link_speed == IXGBE_LINK_SPEED_10GB_FULL)
+		ifmr->ifm_active |= IFM_10G_BX | IFM_FDX;
 	if (layer & IXGBE_PHYSICAL_LAYER_10GBASE_LRM)
 		switch (sc->link_speed) {
 		case IXGBE_LINK_SPEED_10GB_FULL:
@@ -3014,6 +3045,9 @@ ixgbe_if_media_change(if_ctx_t ctx)
 	case IFM_10G_T:
 		speed |= IXGBE_LINK_SPEED_100_FULL;
 		speed |= IXGBE_LINK_SPEED_1GB_FULL;
+		speed |= IXGBE_LINK_SPEED_10GB_FULL;
+		break;
+	case IFM_10G_BX:
 		speed |= IXGBE_LINK_SPEED_10GB_FULL;
 		break;
 	case IFM_10G_LRM:
@@ -3673,9 +3707,21 @@ ixgbe_add_device_sysctls(if_ctx_t ctx)
 	}
 
 	if (sc->feat_cap & IXGBE_FEATURE_EEE) {
+		struct sysctl_oid *eee_node;
+		struct sysctl_oid_list *eee_list;
+
 		SYSCTL_ADD_PROC(ctx_list, child, OID_AUTO, "eee_state",
 		    CTLTYPE_INT | CTLFLAG_RW, sc, 0,
 		    ixgbe_sysctl_eee_state, "I", "EEE Power Save State");
+
+		eee_node = SYSCTL_ADD_NODE(ctx_list, child, OID_AUTO, "eee",
+		    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL,
+		    "Energy Efficient Ethernet statistics");
+		eee_list = SYSCTL_CHILDREN(eee_node);
+		SYSCTL_ADD_UQUAD(ctx_list, eee_list, OID_AUTO, "tx_lpi_count",
+		    CTLFLAG_RD, &sc->stats.pf.tlpic, "TX LPI event count");
+		SYSCTL_ADD_UQUAD(ctx_list, eee_list, OID_AUTO, "rx_lpi_count",
+		    CTLFLAG_RD, &sc->stats.pf.rlpic, "RX LPI event count");
 	}
 
 	ixgbe_add_debug_sysctls(sc);
@@ -3973,6 +4019,10 @@ ixgbe_if_init(if_ctx_t ctx)
 
 	INIT_DEBUGOUT("ixgbe_if_init: begin");
 
+	/* Preserve the largest frame requested by the PF or an active VF. */
+	sc->max_frame_size = if_getmtu(ifp) + IXGBE_MTU_HDR;
+	ixgbe_recalculate_max_frame(sc);
+
 	/* Queue indices may change with IOV mode */
 	ixgbe_align_all_queue_indices(sc);
 
@@ -4010,7 +4060,7 @@ ixgbe_if_init(if_ctx_t ctx)
 	ixgbe_config_gpie(sc);
 
 	/* Set MTU size */
-	if (if_getmtu(ifp) > ETHERMTU) {
+	if (sc->max_frame_size > ETHER_MAX_LEN) {
 		/* aka IXGBE_MAXFRS on 82599 and newer */
 		mhadd = IXGBE_READ_REG(hw, IXGBE_MHADD);
 		mhadd &= ~IXGBE_MHADD_MFS_MASK;
@@ -5254,7 +5304,7 @@ ixgbe_sysctl_flowcntl(SYSCTL_HANDLER_ARGS)
 	/* Serialize the live register update with the administrative task. */
 	ctx_lock = iflib_ctx_lock_get(sc->ctx);
 	sx_xlock(ctx_lock);
-	if (fc == sc->hw.fc.current_mode)
+	if (fc == sc->hw.fc.requested_mode)
 		error = 0;
 	else
 		error = ixgbe_set_flowcntl(sc, fc);
