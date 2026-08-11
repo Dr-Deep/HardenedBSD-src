@@ -380,7 +380,6 @@ static device_method_t ixgbe_if_methods[] = {
 	DEVMETHOD(ifdi_iov_init, ixgbe_if_iov_init),
 	DEVMETHOD(ifdi_iov_uninit, ixgbe_if_iov_uninit),
 	DEVMETHOD(ifdi_iov_vf_add, ixgbe_if_iov_vf_add),
-	DEVMETHOD(ifdi_vf_status, ixgbe_if_vf_status),
 #endif /* PCI_IOV */
 	DEVMETHOD_END
 };
@@ -2240,7 +2239,7 @@ ixgbe_add_hw_stats(struct ixgbe_softc *sc)
 	SYSCTL_ADD_UQUAD(ctx, stat_list, OID_AUTO, "management_pkts_rcvd",
 	    CTLFLAG_RD, &stats->mngprc, "Management Packets Received");
 	SYSCTL_ADD_UQUAD(ctx, stat_list, OID_AUTO, "management_pkts_drpd",
-	    CTLFLAG_RD, &stats->mngptc, "Management Packets Dropped");
+	    CTLFLAG_RD, &stats->mngpdc, "Management Packets Dropped");
 	SYSCTL_ADD_UQUAD(ctx, stat_list, OID_AUTO, "checksum_errs",
 	    CTLFLAG_RD, &stats->xec, "Checksum Errors");
 
