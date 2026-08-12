@@ -200,6 +200,8 @@ static void ixgbe_if_vlan_register(if_ctx_t, u16);
 static void ixgbe_if_vlan_unregister(if_ctx_t, u16);
 static int  ixgbe_if_i2c_req(if_ctx_t, struct ifi2creq *);
 static bool ixgbe_if_needs_restart(if_ctx_t, enum iflib_restart_event);
+static void ixgbe_if_led_func(if_ctx_t, int);
+static void ixgbe_led_restore(struct ixgbe_softc *);
 int ixgbe_intr(void *);
 
 static int ixgbe_if_priv_ioctl(if_ctx_t ctx, u_long command, caddr_t data);
@@ -376,6 +378,7 @@ static device_method_t ixgbe_if_methods[] = {
 	DEVMETHOD(ifdi_i2c_req, ixgbe_if_i2c_req),
 	DEVMETHOD(ifdi_needs_restart, ixgbe_if_needs_restart),
 	DEVMETHOD(ifdi_priv_ioctl, ixgbe_if_priv_ioctl),
+	DEVMETHOD(ifdi_led_func, ixgbe_if_led_func),
 #ifdef PCI_IOV
 	DEVMETHOD(ifdi_iov_init, ixgbe_if_iov_init),
 	DEVMETHOD(ifdi_iov_uninit, ixgbe_if_iov_uninit),
@@ -3147,6 +3150,25 @@ ixgbe_if_promisc_set(if_ctx_t ctx, int flags)
 } /* ixgbe_if_promisc_set */
 
 /************************************************************************
+ * ixgbe_handle_ecc - Defer recovery from an ECC interrupt
+ ************************************************************************/
+static bool
+ixgbe_handle_ecc(struct ixgbe_softc *sc, u32 eicr)
+{
+	struct ixgbe_hw *hw = &sc->hw;
+
+	if ((eicr & IXGBE_EICR_ECC) == 0)
+		return (false);
+
+	IXGBE_WRITE_REG(hw, IXGBE_EIMC, IXGBE_EIMC_ECC);
+	if (!atomic_cmpset_int(&sc->ecc_reset_pending, 0, 1))
+		return (false);
+
+	device_printf(sc->dev, "Received ECC Err, initiating reset\n");
+	return (true);
+}
+
+/************************************************************************
  * ixgbe_msix_link - Link status change ISR (MSI/MSI-X)
  ************************************************************************/
 static int
@@ -3184,21 +3206,17 @@ ixgbe_msix_link(void *arg)
 		if ((sc->feat_en & IXGBE_FEATURE_FDIR) &&
 		    (eicr & IXGBE_EICR_FLOW_DIR)) {
 			/* This is probably overkill :) */
-			if (!atomic_cmpset_int(&sc->fdir_reinit, 0, 1))
-				return (FILTER_HANDLED);
-			/* Disable the interrupt */
-			IXGBE_WRITE_REG(hw, IXGBE_EIMC, IXGBE_EICR_FLOW_DIR);
-			atomic_set_32(&sc->task_requests, IXGBE_REQUEST_TASK_FDIR);
-		} else
-			if (eicr & IXGBE_EICR_ECC) {
-				device_printf(iflib_get_dev(sc->ctx),
-				    "Received ECC Err, initiating reset\n");
-				hw->mac.flags |=
-				    ~IXGBE_FLAGS_DOUBLE_RESET_REQUIRED;
-				ixgbe_reset_hw(hw);
-				IXGBE_WRITE_REG(hw, IXGBE_EICR,
-				    IXGBE_EICR_ECC);
+			if (atomic_cmpset_int(&sc->fdir_reinit, 0, 1)) {
+				/* Disable the interrupt */
+				IXGBE_WRITE_REG(hw, IXGBE_EIMC,
+				    IXGBE_EICR_FLOW_DIR);
+				atomic_set_32(&sc->task_requests,
+				    IXGBE_REQUEST_TASK_FDIR);
 			}
+		}
+		if (ixgbe_handle_ecc(sc, eicr))
+			atomic_set_32(&sc->task_requests,
+			    IXGBE_REQUEST_TASK_RESET);
 
 		/* Check for over temp condition */
 		if (sc->feat_en & IXGBE_FEATURE_TEMP_SENSOR) {
@@ -4017,6 +4035,16 @@ ixgbe_if_init(if_ctx_t ctx)
 	int i, j, err;
 
 	INIT_DEBUGOUT("ixgbe_if_init: begin");
+	if (atomic_load_acq_int(&sc->recovery_mode)) {
+		iflib_init_failed(ctx);
+		return;
+	}
+	/* Leave an overheated adapter stopped until an operator retries. */
+	if (sc->overtemp_shutdown_pending) {
+		sc->overtemp_shutdown_pending = false;
+		iflib_init_failed(ctx);
+		return;
+	}
 
 	/* Preserve the largest frame requested by the PF or an active VF. */
 	sc->max_frame_size = if_getmtu(ifp) + IXGBE_MTU_HDR;
@@ -4560,11 +4588,15 @@ ixgbe_fw_mode_timer(void *arg)
 			    " Adapters and Devices User Guide for details on"
 			    " firmware recovery mode.\n");
 
-			if (hw->adapter_stopped == FALSE)
-				ixgbe_if_stop(sc->ctx);
+			/* Stop and publish the failure from the iflib taskqueue. */
+			iflib_request_reset_if_up(sc->ctx);
+			iflib_admin_intr_deferred(sc->ctx);
 		}
-	} else
-		atomic_cmpset_acq_int(&sc->recovery_mode, 1, 0);
+	} else if (atomic_cmpset_acq_int(&sc->recovery_mode, 1, 0)) {
+		/* Reinitialize an interface which was up when recovery began. */
+		iflib_request_reset_if_up(sc->ctx);
+		iflib_admin_intr_deferred(sc->ctx);
+	}
 
 
 	callout_reset(&sc->fw_mode_timer, hz,
@@ -4787,11 +4819,14 @@ ixgbe_handle_fw_event(void *context)
 			break;
 
 		case ixgbe_aci_opc_temp_tca_event:
-			if (hw->adapter_stopped == FALSE)
-				ixgbe_if_stop(ctx);
-			device_printf(sc->dev,
-			    "CRITICAL: OVER TEMP!! PHY IS SHUT DOWN!!\n");
-			device_printf(sc->dev, "System shutdown required!\n");
+			if (!sc->overtemp_shutdown_pending) {
+				sc->overtemp_shutdown_pending = true;
+				requests |= IXGBE_REQUEST_TASK_RESET;
+				device_printf(sc->dev,
+				    "CRITICAL: OVER TEMP!! PHY IS SHUT DOWN!!\n");
+				device_printf(sc->dev,
+				    "System shutdown required!\n");
+			}
 			break;
 
 		default:
@@ -4820,11 +4855,13 @@ ixgbe_if_stop(if_ctx_t ctx)
 
 	INIT_DEBUGOUT("ixgbe_if_stop: begin\n");
 
+	ixgbe_led_restore(sc);
 	if (sc->feat_en & IXGBE_FEATURE_SRIOV) {
 		ixgbe_disable_mdd(hw);
 		ixgbe_quiesce_vfs(sc);
 	}
 	ixgbe_reset_hw(hw);
+	atomic_store_rel_int(&sc->ecc_reset_pending, 0);
 	hw->adapter_stopped = false;
 	ixgbe_stop_adapter(hw);
 	/* Turn off the laser - noop with no optics */
@@ -4844,6 +4881,56 @@ ixgbe_if_stop(if_ctx_t ctx)
 
 	return;
 } /* ixgbe_if_stop */
+
+/*
+ * Identify the physical port while retaining the NVM-selected LED mode.
+ * E610 exposes identification through firmware rather than LEDCTL.
+ */
+static void
+ixgbe_if_led_func(if_ctx_t ctx, int onoff)
+{
+	struct ixgbe_softc *sc;
+	struct ixgbe_hw *hw;
+
+	sc = iflib_get_softc(ctx);
+	hw = &sc->hw;
+	if (!onoff) {
+		ixgbe_led_restore(sc);
+		return;
+	}
+	if (sc->led_active)
+		return;
+
+	if (hw->mac.type == ixgbe_mac_E610) {
+		if (ixgbe_aci_set_port_id_led(hw, false) == IXGBE_SUCCESS)
+			sc->led_active = true;
+		return;
+	}
+
+	sc->ledctl_default = IXGBE_READ_REG(hw, IXGBE_LEDCTL);
+	if (ixgbe_led_on(hw, hw->mac.led_link_act) == IXGBE_SUCCESS)
+		sc->led_active = true;
+}
+
+static void
+ixgbe_led_restore(struct ixgbe_softc *sc)
+{
+	struct ixgbe_hw *hw;
+
+	if (!sc->led_active)
+		return;
+
+	hw = &sc->hw;
+	if (hw->mac.type == ixgbe_mac_E610) {
+		(void)ixgbe_aci_set_port_id_led(hw, true);
+	} else {
+		/* Clear any PHY manual override before restoring LEDCTL. */
+		(void)ixgbe_led_off(hw, hw->mac.led_link_act);
+		IXGBE_WRITE_REG(hw, IXGBE_LEDCTL, sc->ledctl_default);
+		IXGBE_WRITE_FLUSH(hw);
+	}
+	sc->led_active = false;
+}
 
 /************************************************************************
  * ixgbe_link_speed_to_str - Convert link speed to string
@@ -4921,6 +5008,11 @@ ixgbe_if_update_admin_status(if_ctx_t ctx)
 			ixgbe_handle_phy(ctx);
 		if (requests & IXGBE_REQUEST_TASK_LSC)
 			check_link = true;
+		if (requests & IXGBE_REQUEST_TASK_RESET) {
+			/* Re-enter the admin task so it observes IFC_DO_RESET. */
+			iflib_request_reset(ctx);
+			iflib_admin_intr_deferred(ctx);
+		}
 	}
 
 	/* Do not let a continuous producer monopolize the admin taskqueue. */
@@ -5066,6 +5158,8 @@ ixgbe_if_enable_intr(if_ctx_t ctx)
 	/* Enable Flow Director */
 	if (sc->feat_en & IXGBE_FEATURE_FDIR)
 		mask |= IXGBE_EIMS_FLOW_DIR;
+	if (atomic_load_acq_int(&sc->ecc_reset_pending))
+		mask &= ~IXGBE_EIMS_ECC;
 
 	IXGBE_WRITE_REG(hw, IXGBE_EIMS, mask);
 
@@ -5248,6 +5342,9 @@ ixgbe_intr(void *arg)
 	    (eicr & IXGBE_EICR_GPI_SDP0_X540)) {
 		requests |= IXGBE_REQUEST_TASK_PHY;
 	}
+	if (hw->mac.type != ixgbe_mac_82598EB &&
+	    ixgbe_handle_ecc(sc, eicr))
+		requests |= IXGBE_REQUEST_TASK_RESET;
 	if (requests != 0) {
 		atomic_set_32(&sc->task_requests, requests);
 		iflib_admin_intr_deferred(ctx);
