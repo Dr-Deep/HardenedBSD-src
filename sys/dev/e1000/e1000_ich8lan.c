@@ -202,6 +202,7 @@ static bool e1000_phy_is_accessible_pchlan(struct e1000_hw *hw)
 {
 	u16 phy_reg = 0;
 	u32 phy_id = 0;
+	u32 phy_retries;
 	s32 ret_val = 0;
 	u16 retry_count;
 	u32 mac_reg = 0;
@@ -210,7 +211,7 @@ static bool e1000_phy_is_accessible_pchlan(struct e1000_hw *hw)
 		ret_val = hw->phy.ops.read_reg_locked(hw, PHY_ID1, &phy_reg);
 		if (ret_val || (phy_reg == 0xFFFF))
 			continue;
-		phy_id = (u32)(phy_reg << 16);
+		phy_id = (u32)phy_reg << 16;
 
 		ret_val = hw->phy.ops.read_reg_locked(hw, PHY_ID2, &phy_reg);
 		if (ret_val || (phy_reg == 0xFFFF)) {
@@ -248,10 +249,17 @@ out:
 		/* Only unforce SMBus if ME is not active */
 		if (!(E1000_READ_REG(hw, E1000_FWSM) &
 		    E1000_ICH_FWSM_FW_VALID)) {
+			/* Switching the PHY interface returns an expected MDI
+			 * error.  Do not retry that transaction.
+			 */
+			e1000_disable_phy_retry_mechanism(hw, &phy_retries);
+
 			/* Unforce SMBus mode in PHY */
 			hw->phy.ops.read_reg_locked(hw, CV_SMB_CTRL, &phy_reg);
 			phy_reg &= ~CV_SMB_CTRL_FORCE_SMBUS;
 			hw->phy.ops.write_reg_locked(hw, CV_SMB_CTRL, phy_reg);
+
+			e1000_enable_phy_retry_mechanism(hw, phy_retries);
 
 			/* Unforce SMBus mode in MAC */
 			mac_reg = E1000_READ_REG(hw, E1000_CTRL_EXT);
@@ -308,6 +316,46 @@ static void e1000_toggle_lanphypc_pch_lpt(struct e1000_hw *hw)
 }
 
 /**
+ *  e1000_reconfigure_k1_exit_timeout - Reconfigure K1 parameters
+ *  @hw: pointer to the HW structure
+ *
+ *  Reconfigure the PHY power-down state and K1 exit timeout to avoid a
+ *  MAC/PHY clock synchronization problem on Meteor Lake and newer PCH.
+ *  The caller must hold the PHY semaphore.
+ **/
+static s32
+e1000_reconfigure_k1_exit_timeout(struct e1000_hw *hw)
+{
+	u32 fextnvm12;
+	u16 phy_timeout;
+	s32 ret_val;
+
+	DEBUGFUNC("e1000_reconfigure_k1_exit_timeout");
+
+	if (hw->mac.type < e1000_pch_mtp ||
+	    hw->mac.type >= e1000_82575)
+		return E1000_SUCCESS;
+
+	/* Change the K1 power-down state from P0s to P1. */
+	fextnvm12 = E1000_READ_REG(hw, E1000_FEXTNVM12);
+	fextnvm12 &= ~E1000_FEXTNVM12_PHYPD_CTRL_MASK;
+	fextnvm12 |= E1000_FEXTNVM12_PHYPD_CTRL_P1;
+	E1000_WRITE_REG(hw, E1000_FEXTNVM12, fextnvm12);
+
+	msec_delay_irq(1);
+
+	ret_val = hw->phy.ops.read_reg_locked(hw, E1000_PHY_TIMEOUTS_REG,
+	    &phy_timeout);
+	if (ret_val)
+		return ret_val;
+
+	phy_timeout &= ~E1000_PHY_TIMEOUTS_K1_EXIT_TO_MASK;
+	phy_timeout |= 0xF00;
+	return hw->phy.ops.write_reg_locked(hw, E1000_PHY_TIMEOUTS_REG,
+	    phy_timeout);
+}
+
+/**
  *  e1000_init_phy_workarounds_pchlan - PHY initialization workarounds
  *  @hw: pointer to the HW structure
  *
@@ -317,6 +365,7 @@ static void e1000_toggle_lanphypc_pch_lpt(struct e1000_hw *hw)
 static s32 e1000_init_phy_workarounds_pchlan(struct e1000_hw *hw)
 {
 	u32 mac_reg, fwsm = E1000_READ_REG(hw, E1000_FWSM);
+	u32 phy_retries;
 	s32 ret_val;
 
 	DEBUGFUNC("e1000_init_phy_workarounds_pchlan");
@@ -340,19 +389,28 @@ static s32 e1000_init_phy_workarounds_pchlan(struct e1000_hw *hw)
 		goto out;
 	}
 
+	/* The PHY might be inaccessible while its interface is changing. */
+	e1000_disable_phy_retry_mechanism(hw, &phy_retries);
+
 	/* The MAC-PHY interconnect may be in SMBus mode.  If the PHY is
 	 * inaccessible and resetting the PHY is not blocked, toggle the
 	 * LANPHYPC Value bit to force the interconnect to PCIe mode.
 	 */
 	switch (hw->mac.type) {
+	case e1000_pch_mtp:
+	case e1000_pch_ptp:
+	case e1000_pch_nvp:
+		/* The PHY might be inaccessible here, so do not propagate a
+		 * failure from this preliminary programming attempt.
+		 */
+		if (e1000_reconfigure_k1_exit_timeout(hw))
+			DEBUGOUT("Failed to reconfigure K1 exit timeout\n");
+		/* FALLTHROUGH */
 	case e1000_pch_lpt:
 	case e1000_pch_spt:
 	case e1000_pch_cnp:
 	case e1000_pch_tgp:
 	case e1000_pch_adp:
-	case e1000_pch_mtp:
-	case e1000_pch_ptp:
-	case e1000_pch_nvp:
 		if (e1000_phy_is_accessible_pchlan(hw))
 			break;
 
@@ -409,6 +467,7 @@ static s32 e1000_init_phy_workarounds_pchlan(struct e1000_hw *hw)
 		break;
 	}
 
+	e1000_enable_phy_retry_mechanism(hw, phy_retries);
 	hw->phy.ops.release(hw);
 	if (!ret_val) {
 
@@ -434,8 +493,21 @@ static s32 e1000_init_phy_workarounds_pchlan(struct e1000_hw *hw)
 		 *  the PHY is in.
 		 */
 		ret_val = hw->phy.ops.check_reset_block(hw);
-		if (ret_val)
+		if (ret_val) {
 			ERROR_REPORT("ME blocked access to PHY after reset\n");
+			goto out;
+		}
+
+		if (hw->mac.type >= e1000_pch_mtp &&
+		    hw->mac.type < e1000_82575) {
+			ret_val = hw->phy.ops.acquire(hw);
+			if (ret_val) {
+				DEBUGOUT("Failed to acquire PHY for K1 setup\n");
+				goto out;
+			}
+			ret_val = e1000_reconfigure_k1_exit_timeout(hw);
+			hw->phy.ops.release(hw);
+		}
 	}
 
 out:
@@ -484,6 +556,9 @@ static s32 e1000_init_phy_params_pchlan(struct e1000_hw *hw)
 	phy->autoneg_mask	= AUTONEG_ADVERTISE_SPEED_DEFAULT;
 
 	phy->id = e1000_phy_unknown;
+	if (hw->mac.type >= e1000_pch_mtp &&
+	    hw->mac.type < e1000_82575)
+		phy->current_retry_counter = 2;
 
 	ret_val = e1000_init_phy_workarounds_pchlan(hw);
 	if (ret_val)
@@ -996,6 +1071,8 @@ s32 e1000_set_eee_pchlan(struct e1000_hw *hw)
 		data &= ~I82579_LPI_100_PLL_SHUT;
 		ret_val = e1000_write_emi_reg_locked(hw, I82579_LPI_PLL_SHUT,
 						     data);
+		if (ret_val)
+			goto release;
 	}
 
 	/* R/Clr IEEE MMD 3.1 bits 11:10 - Tx/Rx LPI Received */
@@ -1143,6 +1220,7 @@ static s32 e1000_platform_pm_pch_lpt(struct e1000_hw *hw, bool link)
 		u16 speed, duplex, scale = 0;
 		u16 max_snoop, max_nosnoop;
 		u16 max_ltr_enc;	/* max LTR latency encoded */
+		u64 max_ltr_ns;
 		s64 lat_ns;
 		s64 value;
 		u32 rxa;
@@ -1191,10 +1269,11 @@ static s32 e1000_platform_pm_pch_lpt(struct e1000_hw *hw, bool link)
 		e1000_read_pci_cfg(hw, E1000_PCI_LTR_CAP_LPT, &max_snoop);
 		e1000_read_pci_cfg(hw, E1000_PCI_LTR_CAP_LPT + 2, &max_nosnoop);
 		max_ltr_enc = E1000_MAX(max_snoop, max_nosnoop);
+		max_ltr_ns = e1000_ltr2ns(max_ltr_enc);
 
-		if (lat_enc > max_ltr_enc) {
+		if (e1000_ltr2ns(lat_enc) > max_ltr_ns) {
 			lat_enc = max_ltr_enc;
-			lat_ns = e1000_ltr2ns(max_ltr_enc);
+			lat_ns = max_ltr_ns;
 		}
 
 		if (lat_ns) {
@@ -1275,6 +1354,7 @@ static s32 e1000_set_obff_timer_pch_lpt(struct e1000_hw *hw, u32 itr)
 s32 e1000_enable_ulp_lpt_lp(struct e1000_hw *hw, bool to_sx)
 {
 	u32 mac_reg;
+	u32 phy_retries;
 	s32 ret_val = E1000_SUCCESS;
 	u16 phy_reg;
 	u16 oem_reg = 0;
@@ -1321,6 +1401,9 @@ s32 e1000_enable_ulp_lpt_lp(struct e1000_hw *hw, bool to_sx)
 	ret_val = hw->phy.ops.acquire(hw);
 	if (ret_val)
 		goto out;
+
+	/* Switching the PHY interface returns an expected MDI error. */
+	e1000_disable_phy_retry_mechanism(hw, &phy_retries);
 
 	/* Force SMBus mode in PHY */
 	ret_val = e1000_read_phy_reg_hv_locked(hw, CV_SMB_CTRL, &phy_reg);
@@ -1394,6 +1477,7 @@ s32 e1000_enable_ulp_lpt_lp(struct e1000_hw *hw, bool to_sx)
 	}
 
 release:
+	e1000_enable_phy_retry_mechanism(hw, phy_retries);
 	hw->phy.ops.release(hw);
 out:
 	if (ret_val)
@@ -1422,8 +1506,9 @@ out:
 s32 e1000_disable_ulp_lpt_lp(struct e1000_hw *hw, bool force)
 {
 	s32 ret_val = E1000_SUCCESS;
-	u8 ulp_exit_timeout = 30;
+	u16 ulp_exit_timeout = 250;
 	u32 mac_reg;
+	u32 phy_retries;
 	u16 phy_reg;
 	int i = 0;
 
@@ -1443,9 +1528,6 @@ s32 e1000_disable_ulp_lpt_lp(struct e1000_hw *hw, bool force)
 			mac_reg |= E1000_H2ME_ENFORCE_SETTINGS;
 			E1000_WRITE_REG(hw, E1000_H2ME, mac_reg);
 		}
-
-		if (hw->mac.type == e1000_pch_cnp)
-			ulp_exit_timeout = 100;
 
 		while (E1000_READ_REG(hw, E1000_FWSM) &
 		       E1000_FWSM_ULP_CFG_DONE) {
@@ -1479,6 +1561,9 @@ s32 e1000_disable_ulp_lpt_lp(struct e1000_hw *hw, bool force)
 	if (force)
 		/* Toggle LANPHYPC Value bit */
 		e1000_toggle_lanphypc_pch_lpt(hw);
+
+	/* Switching the PHY interface returns an expected MDI error. */
+	e1000_disable_phy_retry_mechanism(hw, &phy_retries);
 
 	/* Unforce SMBus mode in PHY */
 	ret_val = e1000_read_phy_reg_hv_locked(hw, CV_SMB_CTRL, &phy_reg);
@@ -1538,6 +1623,7 @@ s32 e1000_disable_ulp_lpt_lp(struct e1000_hw *hw, bool force)
 	E1000_WRITE_REG(hw, E1000_FEXTNVM7, mac_reg);
 
 release:
+	e1000_enable_phy_retry_mechanism(hw, phy_retries);
 	hw->phy.ops.release(hw);
 	if (force) {
 		hw->phy.ops.reset(hw);
@@ -1636,6 +1722,9 @@ static s32 e1000_check_for_copper_link_ich8lan(struct e1000_hw *hw)
 			phy_reg &= ~I217_PLL_CLOCK_GATE_MASK;
 			if (speed == SPEED_100 || speed == SPEED_10)
 				phy_reg |= 0x3E8;
+			else if (hw->mac.type >= e1000_pch_mtp &&
+			    hw->mac.type < e1000_82575)
+				phy_reg |= 0x1D5;
 			else
 				phy_reg |= 0xFA;
 			hw->phy.ops.write_reg_locked(hw,
@@ -4436,13 +4525,20 @@ static s32 e1000_validate_nvm_checksum_ich8lan(struct e1000_hw *hw)
 		return ret_val;
 
 	if (!(data & valid_csum_mask)) {
-		data |= valid_csum_mask;
-		ret_val = hw->nvm.ops.write(hw, word, 1, &data);
-		if (ret_val)
-			return ret_val;
-		ret_val = hw->nvm.ops.update(hw);
-		if (ret_val)
-			return ret_val;
+		DEBUGOUT("NVM checksum valid bit not set\n");
+
+		if (hw->mac.type < e1000_pch_tgp) {
+			data |= valid_csum_mask;
+			ret_val = hw->nvm.ops.write(hw, word, 1, &data);
+			if (ret_val)
+				return ret_val;
+			ret_val = hw->nvm.ops.update(hw);
+			if (ret_val)
+				return ret_val;
+		} else if (hw->mac.type == e1000_pch_tgp) {
+			/* Transitional TGP images may omit the valid bit. */
+			return E1000_SUCCESS;
+		}
 	}
 
 	return e1000_validate_nvm_checksum_generic(hw);
@@ -5134,6 +5230,20 @@ static s32 e1000_init_hw_ich8lan(struct e1000_hw *hw)
 	DEBUGFUNC("e1000_init_hw_ich8lan");
 
 	e1000_initialize_hw_bits_ich8lan(hw);
+
+	if (hw->mac.type >= e1000_pch_mtp &&
+	    hw->mac.type < e1000_82575) {
+		ret_val = hw->phy.ops.acquire(hw);
+		if (ret_val)
+			return ret_val;
+
+		ret_val = e1000_reconfigure_k1_exit_timeout(hw);
+		hw->phy.ops.release(hw);
+		if (ret_val) {
+			DEBUGOUT("Failed to reconfigure K1 exit timeout\n");
+			return ret_val;
+		}
+	}
 
 	/* Initialize identification LED */
 	ret_val = mac->ops.id_led_init(hw);
