@@ -653,6 +653,8 @@ struct e1000_hw_stats {
 	u64 o2bspc;
 	u64 b2ospc;
 	u64 b2ogprc;
+	u64 tlpic;
+	u64 rlpic;
 };
 
 struct e1000_vf_stats {
@@ -886,6 +888,7 @@ struct e1000_phy_info {
 	u32 id;
 	u32 reset_delay_us; /* in usec */
 	u32 revision;
+	u32 current_retry_counter;
 
 	enum e1000_media_type media_type;
 
