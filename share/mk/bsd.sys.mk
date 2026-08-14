@@ -318,9 +318,19 @@ FORTIFY_SOURCE?=	2
 .else
 FORTIFY_SOURCE?=	0
 .endif # SSP
-.if ${FORTIFY_SOURCE} > 0
-CFLAGS+=	-D_FORTIFY_SOURCE=${FORTIFY_SOURCE}
-CXXFLAGS+=	-D_FORTIFY_SOURCE=${FORTIFY_SOURCE}
+
+# XXX This should be defaulted to 2 when WITH_SSP is in use after further
+# testing and soak time.
+FORTIFY_SOURCE?=	0
+
+# We want to avoid defining _FORTIFY_SOURCE if it's set to 0, but we rely on
+# deferred-evaluation for ${.IMPSRC} to expand.  The below construction
+# is, unfortunately, necessary.
+.if empty(CFLAGS:M-D_FORTIFY_SOURCE*)
+CFLAGS+=	${FORTIFY_SOURCE.${.IMPSRC:T}:U${FORTIFY_SOURCE}:S/^/-D_FORTIFY_SOURCE=/:N*=0}
+.endif
+.if empty(CXXFLAGS:M-D_FORTIFY_SOURCE*)
+CXXFLAGS+=	${FORTIFY_SOURCE.${.IMPSRC:T}:U${FORTIFY_SOURCE}:S/^/-D_FORTIFY_SOURCE=/:N*=0}
 .endif
 
 # HBSD: Various hardening flags that are good to force enable
