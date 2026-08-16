@@ -2242,6 +2242,8 @@ freebsd32_do_sendfile(struct thread *td,
 			    hdtr32.trl_cnt, &trl_uio);
 			if (error)
 				goto out;
+			trl_uio->uio_rw = UIO_WRITE;
+			trl_uio->uio_td = td;
 		}
 	}
 
