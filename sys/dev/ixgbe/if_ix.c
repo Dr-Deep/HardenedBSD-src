@@ -165,6 +165,9 @@ static int  ixgbe_if_detach(if_ctx_t);
 static int  ixgbe_if_shutdown(if_ctx_t);
 static int  ixgbe_if_suspend(if_ctx_t);
 static int  ixgbe_if_resume(if_ctx_t);
+#ifdef PCI_IOV
+static int  ixgbe_device_iov_init(device_t, uint16_t, const nvlist_t *);
+#endif
 
 static void ixgbe_if_stop(if_ctx_t);
 void ixgbe_if_enable_intr(if_ctx_t);
@@ -293,8 +296,8 @@ static device_method_t ix_methods[] = {
 	DEVMETHOD(device_suspend, iflib_device_suspend),
 	DEVMETHOD(device_resume, iflib_device_resume),
 #ifdef PCI_IOV
-	DEVMETHOD(pci_iov_init, iflib_device_iov_init),
-	DEVMETHOD(pci_iov_uninit, iflib_device_iov_uninit),
+	DEVMETHOD(pci_iov_init, ixgbe_device_iov_init),
+	DEVMETHOD(pci_iov_uninit, iflib_device_iov_uninit_restart),
 	DEVMETHOD(pci_iov_add_vf, iflib_device_iov_add_vf),
 #endif /* PCI_IOV */
 	DEVMETHOD_END
@@ -309,6 +312,24 @@ IFLIB_PNP_INFO(pci, ix_driver, ixgbe_vendor_info_array);
 MODULE_DEPEND(ix, pci, 1, 1, 1);
 MODULE_DEPEND(ix, ether, 1, 1, 1);
 MODULE_DEPEND(ix, iflib, 1, 1, 1);
+
+#ifdef PCI_IOV
+static int
+ixgbe_device_iov_init(device_t dev, uint16_t num_vfs,
+    const nvlist_t *params)
+{
+	struct ixgbe_softc *sc;
+	if_ctx_t ctx;
+	int error;
+
+	ctx = device_get_softc(dev);
+	sc = iflib_get_softc(ctx);
+	error = ixgbe_iov_validate(sc, num_vfs);
+	if (error != 0)
+		return (error);
+	return (iflib_device_iov_init_restart(dev, num_vfs, params));
+}
+#endif
 
 static device_method_t ixgbe_if_methods[] = {
 	DEVMETHOD(ifdi_attach_pre, ixgbe_if_attach_pre),
@@ -1209,6 +1230,7 @@ ixgbe_if_attach_post(if_ctx_t ctx)
 	dev = iflib_get_dev(ctx);
 	sc = iflib_get_softc(ctx);
 	hw = &sc->hw;
+	ixgbe_init_iov_recovery(sc);
 
 	if (sc->intr_type == IFLIB_INTR_LEGACY &&
 		(sc->feat_cap & IXGBE_FEATURE_LEGACY_IRQ) == 0) {
@@ -3524,6 +3546,25 @@ ixgbe_add_device_sysctls(if_ctx_t ctx)
 	    CTLTYPE_INT | CTLFLAG_RW,
 	    sc, 0, ixgbe_sysctl_advertise, "I",
 	    IXGBE_SYSCTL_DESC_ADV_SPEED);
+	if (hw->mac.type == ixgbe_mac_82599EB ||
+	    hw->mac.type == ixgbe_mac_X540) {
+		SYSCTL_ADD_U64(ctx_list, child, OID_AUTO,
+		    "iov_dma_abort_events", CTLFLAG_RD,
+		    &sc->iov_dma_abort_events, 0,
+		    "VF invalid-DMA events");
+		SYSCTL_ADD_U64(ctx_list, child, OID_AUTO,
+		    "iov_dma_abort_flr_failures", CTLFLAG_RD,
+		    &sc->iov_dma_abort_flr_failures, 0,
+		    "Failed VF reset attempts after invalid-DMA events");
+		SYSCTL_ADD_U64(ctx_list, child, OID_AUTO,
+		    "iov_dma_abort_quarantines", CTLFLAG_RD,
+		    &sc->iov_dma_abort_quarantines, 0,
+		    "VFs quarantined after repeated invalid-DMA events");
+		SYSCTL_ADD_U64(ctx_list, child, OID_AUTO,
+		    "iov_quarantined_vfs", CTLFLAG_RD,
+		    &sc->iov_quarantined_vfs, 0,
+		    "Bitmap of quarantined VF pools");
+	}
 
 	sc->enable_aim = ixgbe_enable_aim;
 	SYSCTL_ADD_INT(ctx_list, child, OID_AUTO, "enable_aim", CTLFLAG_RW,
@@ -3656,15 +3697,11 @@ static int
 ixgbe_if_detach(if_ctx_t ctx)
 {
 	struct ixgbe_softc *sc = iflib_get_softc(ctx);
-	device_t dev = iflib_get_dev(ctx);
 	u32 ctrl_ext;
 
 	INIT_DEBUGOUT("ixgbe_detach: begin");
 
-	if (ixgbe_pci_iov_detach(dev) != 0) {
-		device_printf(dev, "SR-IOV in use; detach first.\n");
-		return (EBUSY);
-	}
+	sc->iov_recovery_stop = true;
 
 	ixgbe_setup_low_power_mode(ctx);
 
@@ -3739,6 +3776,10 @@ ixgbe_setup_low_power_mode(if_ctx_t ctx)
 		/* Just stop for other adapters */
 		ixgbe_if_stop(ctx);
 	}
+
+	/* Disable the 82599 link only when actually entering D3. */
+	if (hw->mac.type == ixgbe_mac_82599EB)
+		ixgbe_stop_mac_link_on_d3_82599(hw);
 
 	return error;
 } /* ixgbe_setup_low_power_mode */
@@ -4055,6 +4096,11 @@ ixgbe_if_init(if_ctx_t ctx)
 
 	/* Setup DMA Coalescing */
 	ixgbe_config_dmac(sc);
+
+	if (sc->feat_en & IXGBE_FEATURE_SRIOV) {
+		ixgbe_enable_mdd(hw);
+		ixgbe_activate_vfs(sc);
+	}
 
 	/* And now turn on interrupts */
 	ixgbe_if_enable_intr(ctx);
@@ -4700,17 +4746,24 @@ ixgbe_if_stop(if_ctx_t ctx)
 
 	INIT_DEBUGOUT("ixgbe_if_stop: begin\n");
 
+	if (sc->feat_en & IXGBE_FEATURE_SRIOV) {
+		ixgbe_disable_mdd(hw);
+		ixgbe_quiesce_vfs(sc);
+	}
 	ixgbe_reset_hw(hw);
 	hw->adapter_stopped = false;
 	ixgbe_stop_adapter(hw);
-	if (hw->mac.type == ixgbe_mac_82599EB)
-		ixgbe_stop_mac_link_on_d3_82599(hw);
 	/* Turn off the laser - noop with no optics */
 	ixgbe_disable_tx_laser(hw);
 
 	/* Update the stack */
 	sc->link_up = false;
-	ixgbe_if_update_admin_status(ctx);
+	if (sc->link_active) {
+		if (bootverbose)
+			device_printf(sc->dev, "Link is Down\n");
+		iflib_link_state_change(ctx, LINK_STATE_DOWN, 0);
+		sc->link_active = false;
+	}
 
 	/* reprogram the RAR[0] in case user changed it. */
 	ixgbe_set_rar(&sc->hw, 0, sc->hw.mac.addr, 0, IXGBE_RAH_AV);
@@ -4807,13 +4860,21 @@ ixgbe_if_update_admin_status(if_ctx_t ctx)
 		ixgbe_handle_mod(ctx);
 	if (sc->task_requests & IXGBE_REQUEST_TASK_MSF)
 		ixgbe_handle_msf(ctx);
-	if (sc->task_requests & IXGBE_REQUEST_TASK_MBX)
+	/*
+	 * A reset request re-enables VF traffic, so do not service mailboxes
+	 * while the PF is stopped.  VFREQ, VFACK, and VFLR are hardware-latched
+	 * and ixgbe_mbx_pending() resamples them after the PF is running again.
+	 */
+	if ((if_getdrvflags(iflib_get_ifp(ctx)) & IFF_DRV_RUNNING) != 0 &&
+	    ((sc->task_requests & IXGBE_REQUEST_TASK_MBX) != 0 ||
+	    sc->iov_mbx_cleanup_pending || ixgbe_mbx_pending(sc)))
 		ixgbe_handle_mbx(ctx);
 	if (sc->task_requests & IXGBE_REQUEST_TASK_FDIR)
 		ixgbe_reinit_fdir(ctx);
 	if (sc->task_requests & IXGBE_REQUEST_TASK_PHY)
 		ixgbe_handle_phy(ctx);
 	sc->task_requests = 0;
+	ixgbe_schedule_iov_recovery(sc);
 
 	ixgbe_update_stats_counters(sc);
 } /* ixgbe_if_update_admin_status */
@@ -5125,6 +5186,7 @@ static int
 ixgbe_sysctl_flowcntl(SYSCTL_HANDLER_ARGS)
 {
 	struct ixgbe_softc *sc;
+	struct sx *ctx_lock;
 	int error, fc;
 
 	sc = (struct ixgbe_softc *)arg1;
@@ -5134,11 +5196,15 @@ ixgbe_sysctl_flowcntl(SYSCTL_HANDLER_ARGS)
 	if ((error) || (req->newptr == NULL))
 		return (error);
 
-	/* Don't bother if it's not changed */
+	/* Serialize the live register update with the administrative task. */
+	ctx_lock = iflib_ctx_lock_get(sc->ctx);
+	sx_xlock(ctx_lock);
 	if (fc == sc->hw.fc.current_mode)
-		return (0);
-
-	return ixgbe_set_flowcntl(sc, fc);
+		error = 0;
+	else
+		error = ixgbe_set_flowcntl(sc, fc);
+	sx_xunlock(ctx_lock);
+	return (error);
 } /* ixgbe_sysctl_flowcntl */
 
 /************************************************************************
@@ -5153,19 +5219,41 @@ ixgbe_sysctl_flowcntl(SYSCTL_HANDLER_ARGS)
 static int
 ixgbe_set_flowcntl(struct ixgbe_softc *sc, int fc)
 {
+	bool enable_drop, mdd_active;
+
 	switch (fc) {
 	case ixgbe_fc_rx_pause:
 	case ixgbe_fc_tx_pause:
 	case ixgbe_fc_full:
-		if (sc->num_rx_queues > 1)
-			ixgbe_disable_rx_drop(sc);
+		enable_drop = false;
 		break;
 	case ixgbe_fc_none:
-		if (sc->num_rx_queues > 1)
-			ixgbe_enable_rx_drop(sc);
+		enable_drop = true;
 		break;
 	default:
 		return (EINVAL);
+	}
+
+	/* Updating SRRCTL on a live queue is itself an MDD violation. */
+	mdd_active = sc->num_rx_queues > 1 &&
+	    (sc->feat_en & IXGBE_FEATURE_SRIOV) != 0 &&
+	    (if_getdrvflags(iflib_get_ifp(sc->ctx)) & IFF_DRV_RUNNING) != 0;
+	if (mdd_active)
+		ixgbe_disable_mdd(&sc->hw);
+	if (sc->num_rx_queues > 1) {
+		if (enable_drop)
+			ixgbe_enable_rx_drop(sc);
+		else
+			ixgbe_disable_rx_drop(sc);
+	}
+	if (mdd_active) {
+		ixgbe_enable_mdd(&sc->hw);
+		/* Service an event whose interrupt edge was lost while masked. */
+		if (ixgbe_mbx_pending(sc)) {
+			atomic_set_32(&sc->task_requests,
+			    IXGBE_REQUEST_TASK_MBX);
+			iflib_admin_intr_deferred(sc->ctx);
+		}
 	}
 
 	sc->hw.fc.requested_mode = fc;
@@ -5200,13 +5288,6 @@ ixgbe_enable_rx_drop(struct ixgbe_softc *sc)
 		IXGBE_WRITE_REG(hw, IXGBE_SRRCTL(rxr->me), srrctl);
 	}
 
-	/* enable drop for each vf */
-	for (int i = 0; i < sc->num_vfs; i++) {
-		IXGBE_WRITE_REG(hw, IXGBE_QDE,
-		    (IXGBE_QDE_WRITE |
-		    (i << IXGBE_QDE_IDX_SHIFT) |
-		    IXGBE_QDE_ENABLE));
-	}
 } /* ixgbe_enable_rx_drop */
 
 /************************************************************************
@@ -5226,11 +5307,6 @@ ixgbe_disable_rx_drop(struct ixgbe_softc *sc)
 		IXGBE_WRITE_REG(hw, IXGBE_SRRCTL(rxr->me), srrctl);
 	}
 
-	/* disable drop for each vf */
-	for (int i = 0; i < sc->num_vfs; i++) {
-		IXGBE_WRITE_REG(hw, IXGBE_QDE,
-		    (IXGBE_QDE_WRITE | (i << IXGBE_QDE_IDX_SHIFT)));
-	}
 } /* ixgbe_disable_rx_drop */
 
 /************************************************************************
