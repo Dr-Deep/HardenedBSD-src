@@ -43,7 +43,7 @@ usage() {
 
 setup_environment() {
 	REPO="https://rad.hardenedbsd.org/z2HLHXgL1xevBNQsf8BmQW7MpJmtm.git"
-	BRANCH="hardened/current/master"
+	BRANCH="hardened/15-stable/main"
 	UNSIGNED=0
 	PRIVKEY="/usr/share/keys/updater/private/updater.key"
 	PUBKEY="/usr/share/keys/updater/certs/updater.crt"
