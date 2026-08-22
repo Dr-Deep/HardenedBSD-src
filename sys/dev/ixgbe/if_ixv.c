@@ -104,6 +104,7 @@ static void     ixv_if_init(if_ctx_t);
 static void     ixv_if_local_timer(if_ctx_t, uint16_t);
 static void     ixv_if_stop(if_ctx_t);
 static int      ixv_negotiate_api(struct ixgbe_softc *);
+static int      ixv_queue_limit(struct ixgbe_softc *, bool);
 
 static void     ixv_initialize_transmit_units(if_ctx_t);
 static void     ixv_initialize_receive_units(if_ctx_t);
@@ -194,23 +195,6 @@ static device_method_t ixv_if_methods[] = {
 static driver_t ixv_if_driver = {
   "ixv_if", ixv_if_methods, sizeof(struct ixgbe_softc)
 };
-
-/*
- * TUNEABLE PARAMETERS:
- */
-
-/* Flow control setting, default to full */
-static int ixv_flow_control = ixgbe_fc_full;
-TUNABLE_INT("hw.ixv.flow_control", &ixv_flow_control);
-
-/*
- * Header split: this causes the hardware to DMA
- * the header into a separate mbuf from the payload,
- * it can be a performance win in some workloads, but
- * in others it actually hurts, its off by default.
- */
-static int ixv_header_split = false;
-TUNABLE_INT("hw.ixv.hdr_split", &ixv_header_split);
 
 #define	IXV_VLAN_RETRY_BATCH	4
 #define	IXV_VLAN_RETRY_WINDOW	(8 * SBT_1S)
@@ -406,6 +390,7 @@ ixv_if_attach_pre(if_ctx_t ctx)
 	device_t dev;
 	if_softc_ctx_t scctx;
 	struct ixgbe_hw *hw;
+	bool mailbox_ready;
 	int error = 0;
 
 	INIT_DEBUGOUT("ixv_attach: begin");
@@ -448,36 +433,40 @@ ixv_if_attach_pre(if_ctx_t ctx)
 	/* Setup the mailbox */
 	ixgbe_init_mbx_params_vf(hw);
 
+	mailbox_ready = false;
 	error = hw->mac.ops.reset_hw(hw);
-	if (error == IXGBE_ERR_RESET_FAILED)
-		device_printf(dev, "...reset_hw() failure: Reset Failed!\n");
-	else if (error)
-		device_printf(dev, "...reset_hw() failed with error %d\n",
-		    error);
-	if (error) {
-		error = EIO;
-		goto err_out;
-	}
-
-	error = hw->mac.ops.init_hw(hw);
-	if (error) {
-		device_printf(dev, "...init_hw() failed with error %d\n",
-		    error);
-		error = EIO;
-		goto err_out;
-	}
-
-	/* Negotiate mailbox API version */
-	error = ixv_negotiate_api(sc);
-	if (error) {
+	if (error != IXGBE_SUCCESS) {
+		/*
+		 * A PF may be resetting or servicing a slow link event while its
+		 * VFs are enumerated.  Keep the VF attached so a later if_init can
+		 * retry the mailbox handshake.
+		 */
 		device_printf(dev,
-		    "Mailbox API negotiation failed during attach!\n");
-		goto err_out;
+		    "PF did not respond to the reset handshake: %d; "
+		    "continuing attach\n", error);
+	} else {
+		error = hw->mac.ops.init_hw(hw);
+		if (error != IXGBE_SUCCESS) {
+			device_printf(dev, "...init_hw() failed with error %d\n",
+			    error);
+			error = EIO;
+			goto err_out;
+		}
+
+		/* Negotiate mailbox API version. */
+		error = ixv_negotiate_api(sc);
+		if (error != 0) {
+			device_printf(dev,
+			    "Mailbox API negotiation failed during attach; "
+			    "continuing attach\n");
+			hw->mac.ops.stop_adapter(hw);
+		} else
+			mailbox_ready = true;
 	}
 
-	/* Check if VF was disabled by PF */
-	error = hw->mac.ops.get_link_state(hw, &sc->link_enabled);
-	if (error) {
+	/* Check if VF was disabled by PF. */
+	if (!mailbox_ready ||
+	    hw->mac.ops.get_link_state(hw, &sc->link_enabled) != 0) {
 		/* PF is not capable of controlling VF state. Enable link. */
 		sc->link_enabled = true;
 	}
@@ -493,15 +482,8 @@ ixv_if_attach_pre(if_ctx_t ctx)
 	/* Most of the iflib initialization... */
 
 	iflib_set_mac(ctx, hw->mac.addr);
-	switch (sc->hw.mac.type) {
-	case ixgbe_mac_X550_vf:
-	case ixgbe_mac_X550EM_x_vf:
-	case ixgbe_mac_X550EM_a_vf:
-		scctx->isc_ntxqsets_max = scctx->isc_nrxqsets_max = 2;
-		break;
-	default:
-		scctx->isc_ntxqsets_max = scctx->isc_nrxqsets_max = 1;
-	}
+	scctx->isc_ntxqsets_max = scctx->isc_nrxqsets_max =
+	    ixv_queue_limit(sc, mailbox_ready);
 	scctx->isc_txqsizes[0] =
 	    roundup2(scctx->isc_ntxd[0] * sizeof(union ixgbe_adv_tx_desc) +
 	    sizeof(u32), DBA_ALIGN);
@@ -510,7 +492,8 @@ ixv_if_attach_pre(if_ctx_t ctx)
 	    DBA_ALIGN);
 	/* XXX */
 	scctx->isc_tx_csum_flags = CSUM_IP | CSUM_TCP | CSUM_UDP | CSUM_TSO |
-	    CSUM_IP6_TCP | CSUM_IP6_UDP | CSUM_IP6_TSO;
+	    CSUM_IP6_TCP | CSUM_IP6_UDP | CSUM_IP6_TSO | CSUM_SCTP |
+	    CSUM_IP6_SCTP;
 	scctx->isc_tx_nsegments = IXGBE_82599_SCATTER;
 	scctx->isc_msix_bar = pci_msix_table_bar(dev);
 	scctx->isc_tx_tso_segments_max = scctx->isc_tx_nsegments;
@@ -654,8 +637,13 @@ ixv_if_init(if_ctx_t ctx)
 	bcopy(if_getlladdr(ifp), hw->mac.addr, IXGBE_ETH_LENGTH_OF_ADDRESS);
 	hw->mac.ops.set_rar(hw, 0, hw->mac.addr, 0, 1);
 
-	/* Reset VF and renegotiate mailbox API version */
-	hw->mac.ops.reset_hw(hw);
+	/* Reset VF and renegotiate mailbox API version. */
+	error = hw->mac.ops.reset_hw(hw);
+	if (error != IXGBE_SUCCESS) {
+		device_printf(dev,
+		    "PF did not respond to the reset handshake: %d\n", error);
+		return;
+	}
 	hw->mac.ops.start_hw(hw);
 	hw->mac.ops.get_mac_addr(hw, hw->mac.addr);
 	ixv_reconcile_mac(sc, ifp);
@@ -663,6 +651,14 @@ ixv_if_init(if_ctx_t ctx)
 	if (error) {
 		device_printf(dev,
 		    "Mailbox API negotiation failed in if_init!\n");
+		/*
+		 * Leave the adapter stopped until an explicit or deferred retry.
+		 * Otherwise the admin-status callback immediately requests another
+		 * reset and can keep its taskqueue in a tight loop while the PF is
+		 * deliberately withholding mailbox CTS (for example, when the VF is
+		 * quarantined).
+		 */
+		hw->mac.ops.stop_adapter(hw);
 		return;
 	}
 
@@ -872,6 +868,64 @@ ixv_negotiate_api(struct ixgbe_softc *sc)
 
 	return (EINVAL);
 } /* ixv_negotiate_api */
+
+/************************************************************************
+ * ixv_queue_limit
+ *
+ *   Discover the number of symmetric RSS queue sets available to iflib.
+ ************************************************************************/
+static int
+ixv_queue_limit(struct ixgbe_softc *sc, bool mailbox_ready)
+{
+	struct ixgbe_hw *hw;
+	unsigned int default_tc, num_tcs;
+	int admin_vectors, limit, msix_vectors;
+
+	hw = &sc->hw;
+	/* Preserve the current family limit as the mailbox fallback. */
+	switch (hw->mac.type) {
+	case ixgbe_mac_82599_vf:
+	case ixgbe_mac_X540_vf:
+		limit = 1;
+		break;
+	case ixgbe_mac_X550_vf:
+	case ixgbe_mac_X550EM_x_vf:
+	case ixgbe_mac_X550EM_a_vf:
+		limit = 2;
+		break;
+	default:
+		return (1);
+	}
+
+	/* Replace the fallback with the queue grant reported by the PF. */
+	if (mailbox_ready) {
+		switch (hw->api_version) {
+		case ixgbe_mbox_api_11:
+		case ixgbe_mbox_api_12:
+		case ixgbe_mbox_api_13:
+			num_tcs = default_tc = 0;
+			if (ixgbevf_get_queues(hw, &num_tcs, &default_tc) == 0) {
+				limit = imin(hw->mac.max_tx_queues,
+				    hw->mac.max_rx_queues);
+				limit = imin(limit, 2);
+			}
+			break;
+		default:
+			break;
+		}
+	}
+
+	/*
+	 * iflib assigns one data vector to each queue set.  A VF has at most
+	 * three MSI-X vectors; reserve one of them for the mailbox interrupt.
+	 */
+	admin_vectors = iflib_get_sctx(sc->ctx)->isc_admin_intrcnt;
+	msix_vectors = pci_msix_count(sc->dev);
+	if (msix_vectors <= admin_vectors)
+		return (1);
+
+	return (imax(1, imin(limit, msix_vectors - admin_vectors)));
+} /* ixv_queue_limit */
 
 static int
 ixv_update_xcast_mode(struct ixgbe_softc *sc, int flags)
@@ -1347,9 +1401,9 @@ ixv_initialize_transmit_units(if_ctx_t ctx)
 		u32 txctrl, txdctl;
 		int j = txr->me;
 
-		/* Set WTHRESH to 8, burst writeback */
 		txdctl = IXGBE_READ_REG(hw, IXGBE_VFTXDCTL(j));
-		txdctl |= (8 << 16);
+		txdctl &= ~IXGBE_TXDCTL_THRESH_MASK;
+		txdctl |= IXGBE_TXDCTL_THRESH_DEFAULT;
 		IXGBE_WRITE_REG(hw, IXGBE_VFTXDCTL(j), txdctl);
 
 		/* Set the HW Tx Head and Tail indices */
@@ -1864,6 +1918,9 @@ ixv_if_enable_intr(if_ctx_t ctx)
 	struct ixgbe_hw *hw = &sc->hw;
 	struct ix_rx_queue *que = sc->rx_queues;
 	u32 mask = (IXGBE_EIMS_ENABLE_MASK & ~IXGBE_EIMS_RTX_QUEUE);
+
+	if (hw->adapter_stopped)
+		return;
 
 	IXGBE_WRITE_REG(hw, IXGBE_VTEIMS, mask);
 
