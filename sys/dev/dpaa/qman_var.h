@@ -7,6 +7,8 @@
 #ifndef	QMAN_VAR_H
 #define	QMAN_VAR_H
 
+#include <sys/queue.h>
+
 #include "dpaa_common.h"
 #include "portals.h"
 
@@ -178,7 +180,11 @@ struct qman_mc {
 };
 
 struct qman_fq {
-	uint32_t fqid;
+	uint32_t fqid;			/* base FQID of the range */
+	uint32_t fqid_count;		/* length of the range (>=1) */
+	bool	 force_fqid;		/* caller owns the FQID allocation */
+	bool	 dirty;			/* on a portal's dirty list this poll */
+	SLIST_ENTRY(qman_fq) dirty_next;/* DQRR loop dirty list. */
 	struct qman_cb cb;
 };
 

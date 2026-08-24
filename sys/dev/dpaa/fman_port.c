@@ -159,18 +159,6 @@ struct fman_port_softc {
 
 #define	PORT_MAX_FRAME_LENGTH	9600
 
-#define	NIA_ORDER_RESTORE	0x00800000
-#define	NIA_ENG_BMI		0x00500000
-#define	NIA_ENG_QMI_DEQ		0x00580000
-#define	NIA_ENG_QMI_ENQ		0x00540000
-#define	NIA_ENG_HWP		0x00440000
-#define	NIA_ENG_HWK		0x00480000
-#define	NIA_BMI_AC_TX_RELEASE	0x000002c0
-#define	NIA_BMI_AC_TX		0x00000274
-#define	NIA_BMI_AC_RELEASE	0x000000c0
-#define	NIA_BMI_AC_ENQ_FRAME	0x00000002
-#define	NIA_BMI_AC_FETCH_ALLFRAME	0x0000020c
-
 #define	BMI_RX_ERR		(FM_FD_ERR_DMA | FM_FD_ERR_FPE | \
 				 FM_FD_ERR_FSE | FM_FD_ERR_DIS | \
 				 FM_FD_ERR_EOF | FM_FD_ERR_NSS | \
@@ -677,6 +665,29 @@ fman_port_enable(device_t dev)
 	}
 
 	return (0);
+}
+
+int
+fman_port_get_id(device_t dev)
+{
+	struct fman_port_softc *sc = device_get_softc(dev);
+
+	return (sc->sc_port_id);
+}
+
+/*
+ * Runtime toggle for whether the praser sends frames to KeyGen (HWK)
+ * or straight to BMI-enqueue.  Called by dpaa_eth after successfully
+ * binding a KG scheme to this port -- flipping this without a bound scheme
+ * drops all Rx traffic on the port.
+ */
+void
+fman_port_rx_use_kg(device_t dev, bool enable)
+{
+	struct fman_port_softc *sc = device_get_softc(dev);
+
+	bus_write_4(sc->sc_mem, FMBM_RFPNE,
+	    enable ? NIA_ENG_HWK : (NIA_ENG_BMI | NIA_BMI_AC_ENQ_FRAME));
 }
 
 static device_method_t fman_port_methods[] = {
