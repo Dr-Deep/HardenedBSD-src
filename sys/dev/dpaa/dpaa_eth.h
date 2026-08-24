@@ -27,6 +27,8 @@
 #ifndef DPAA_ETH_H_
 #define DPAA_ETH_H_
 
+#include <netinet/tcp_lro.h>
+
 /* * TX csum-offload hwassist mask for dTSEC and mEMAC. */
 #define	DPAA_CSUM_TX_OFFLOAD	\
 	(CSUM_IP | CSUM_DELAY_DATA | CSUM_DELAY_DATA_IPV6)
@@ -34,6 +36,38 @@
 struct dpaa_pcpu_cnt {
 	u_int	cnt;
 } __aligned(CACHE_LINE_SIZE);
+
+struct dpaa_eth_softc;
+
+/*
+ * Per RX Frame Queue state.  Today there is exactly one of these per
+ * port; a follow-on adds FMan KeyGen-driven hash distribution across
+ * N per-CPU FQs and this struct becomes the per-CPU RX slot.  The
+ * back-pointer keeps the RX callback signature single-argument.
+ */
+struct dpaa_eth_rx_fq {
+	struct qman_fq			*fq;
+	uint32_t			 fqid;
+	int				 cpu;	/* CPU pin, or -1 if unpinned */
+	struct dpaa_eth_softc		*sc;
+	/*
+	 * Frame count.  Written by the RX callback which is affine to
+	 * one CPU per FQ, so plain uint64 without atomics is safe.
+	 * Sysctl readers get advisory (torn on 32-bit hosts) values.
+	 */
+	uint64_t			 frames_in;
+
+	/*
+	 * Batched-input state.  The RX callback appends non-LRO mbufs
+	 * onto rx_head via m_nextpkt; the per-FQ flush hook hands the
+	 * whole chain to if_input() and then runs tcp_lro_flush_all().
+	 * Both fields are only touched from the affine CPU.
+	 */
+	struct mbuf			*rx_head;
+	struct mbuf			**rx_tailp;
+	struct lro_ctrl			 lro;
+	bool				 lro_inited;
+};
 
 struct dpaa_eth_softc {
 	/* XXX MII bus requires that struct ifnet is first!!! */
@@ -52,9 +86,10 @@ struct dpaa_eth_softc {
 	char				sc_rx_zname[64];
 	struct dpaa_pcpu_cnt		*sc_rx_pool_check_cnt;	/* per-CPU */
 
-	/* RX Frame Queue */
-	struct qman_fq			*sc_rx_fq;
-	uint32_t			sc_rx_fqid;
+	/* RX Frame Queues (array of sc_nrxfqs entries). */
+	struct dpaa_eth_rx_fq		*sc_rx_fqs;
+	int				sc_nrxfqs;
+	uint32_t			sc_rx_fqid_base;
 
 	/* TX Frame Queue */
 	struct qman_fq			*sc_tx_fq;
