@@ -251,6 +251,12 @@ SYSCTL_INT(_hw_ixl, OID_AUTO, enable_vf_loopback, CTLFLAG_RDTUN,
     &ixl_enable_vf_loopback, 0,
     IXL_SYSCTL_HELP_VF_LOOPBACK);
 
+static int ixl_mdd_auto_reset_vf;
+TUNABLE_INT("hw.ixl.mdd_auto_reset_vf", &ixl_mdd_auto_reset_vf);
+SYSCTL_INT(_hw_ixl, OID_AUTO, mdd_auto_reset_vf, CTLFLAG_RDTUN,
+    &ixl_mdd_auto_reset_vf, 0,
+    "Automatically reset VFs blocked by malicious-driver detection");
+
 /*
  * Different method for processing TX descriptor
  * completion.
@@ -959,7 +965,7 @@ ixl_if_init(if_ctx_t ctx)
 	int		ret;
 
 	if (IXL_PF_IN_RECOVERY_MODE(pf))
-		return;
+		goto fail;
 	/*
 	 * If the aq is dead here, it probably means something outside of the driver
 	 * did something to the adapter, like a PF reset.
@@ -967,23 +973,25 @@ ixl_if_init(if_ctx_t ctx)
 	 */
 	if (!i40e_check_asq_alive(&pf->hw)) {
 		device_printf(dev, "Admin Queue is down; resetting...\n");
-		ixl_teardown_hw_structs(pf);
-		ixl_rebuild_hw_structs_after_reset(pf, false);
+		(void)ixl_teardown_hw_structs(pf);
+		ret = ixl_rebuild_hw_structs_after_reset(pf, false);
+		if (ret != 0)
+			goto fail;
 	}
 
 	/* Get the latest mac address... User might use a LAA */
 	bcopy(if_getlladdr(vsi->ifp), tmpaddr, ETH_ALEN);
 	if (!ixl_ether_is_equal(hw->mac.addr, tmpaddr) &&
 	    (i40e_validate_mac_addr(tmpaddr) == I40E_SUCCESS)) {
-		ixl_del_all_vlan_filters(vsi, hw->mac.addr);
-		bcopy(tmpaddr, hw->mac.addr, ETH_ALEN);
 		ret = i40e_aq_mac_address_write(hw,
 		    I40E_AQC_WRITE_TYPE_LAA_ONLY,
-		    hw->mac.addr, NULL);
+		    tmpaddr, NULL);
 		if (ret) {
 			device_printf(dev, "LLA address change failed!!\n");
-			return;
+			goto fail;
 		}
+		ixl_del_all_vlan_filters(vsi, hw->mac.addr);
+		bcopy(tmpaddr, hw->mac.addr, ETH_ALEN);
 		/*
 		 * New filters are configured by ixl_reconfigure_filters
 		 * at the end of ixl_init_locked.
@@ -995,7 +1003,7 @@ ixl_if_init(if_ctx_t ctx)
 	/* Prepare the VSI: rings, hmc contexts, etc... */
 	if (ixl_initialize_vsi(vsi)) {
 		device_printf(dev, "initialize vsi failed!!\n");
-		return;
+		goto fail;
 	}
 
 	ixl_set_link(pf, true);
@@ -1018,7 +1026,12 @@ ixl_if_init(if_ctx_t ctx)
 	else
 		ixl_init_tx_rsqs(vsi);
 
-	ixl_enable_rings(vsi);
+	ret = ixl_enable_rings(vsi);
+	if (ret != 0) {
+		device_printf(dev, "enable rings failed: %d\n", ret);
+		ixl_disable_rings(pf, vsi, &pf->qtag);
+		goto fail;
+	}
 
 	i40e_aq_set_default_vsi(hw, vsi->seid, NULL);
 
@@ -1036,6 +1049,10 @@ ixl_if_init(if_ctx_t ctx)
 			    "initialize iwarp failed, code %d\n", ret);
 	}
 #endif
+	return;
+
+fail:
+	iflib_init_failed(ctx);
 }
 
 void
@@ -1927,6 +1944,7 @@ ixl_save_pf_tunables(struct ixl_pf *pf)
 	pf->hw.debug_mask = ixl_shared_debug_mask;
 	pf->vsi.enable_head_writeback = !!(ixl_enable_head_writeback);
 	pf->enable_vf_loopback = !!(ixl_enable_vf_loopback);
+	pf->mdd_auto_reset_vf = !!(ixl_mdd_auto_reset_vf);
 #if 0
 	pf->dynamic_rx_itr = ixl_dynamic_rx_itr;
 	pf->dynamic_tx_itr = ixl_dynamic_tx_itr;

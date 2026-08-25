@@ -318,13 +318,13 @@ typedef struct iflib_sw_tx_desc_array {
 #define	IFC_LEGACY		0x001
 #define	IFC_QFLUSH		0x002
 #define	IFC_MULTISEG		0x004
-#define	IFC_SPARE1		0x008
+#define	IFC_INIT_FAILED		0x008
 #define	IFC_SC_ALLOCATED	0x010
 #define	IFC_INIT_DONE		0x020
 #define	IFC_PREFETCH		0x040
 #define	IFC_DO_RESET		0x080
 #define	IFC_DO_WATCHDOG		0x100
-#define	IFC_SPARE0		0x200
+#define	IFC_DO_RESET_IF_UP	0x200
 #define	IFC_SPARE2		0x400
 #define	IFC_IN_DETACH		0x800
 
@@ -2442,6 +2442,7 @@ iflib_init_locked(if_ctx_t ctx)
 	iflib_txq_t txq;
 	iflib_rxq_t rxq;
 	int i, j, tx_ip_csum_flags, tx_ip6_csum_flags;
+	bool init_failed;
 
 	if_setdrvflagbits(ifp, IFF_DRV_OACTIVE, IFF_DRV_RUNNING);
 	IFDI_INTR_DISABLE(ctx);
@@ -2485,8 +2486,16 @@ iflib_init_locked(if_ctx_t ctx)
 #ifdef INVARIANTS
 	i = if_getdrvflags(ifp);
 #endif
+	STATE_LOCK(ctx);
+	ctx->ifc_flags &= ~IFC_INIT_FAILED;
+	STATE_UNLOCK(ctx);
 	IFDI_INIT(ctx);
 	MPASS(if_getdrvflags(ifp) == i);
+	STATE_LOCK(ctx);
+	init_failed = (ctx->ifc_flags & IFC_INIT_FAILED) != 0;
+	STATE_UNLOCK(ctx);
+	if (init_failed)
+		return;
 	for (i = 0, rxq = ctx->ifc_rxqs; i < scctx->isc_nrxqsets; i++, rxq++) {
 		if (iflib_netmap_rxq_init(ctx, rxq) > 0) {
 			/* This rxq is in netmap mode. Skip normal init. */
@@ -4057,15 +4066,18 @@ _task_fn_admin(void *context, int pending)
 	if_softc_ctx_t sctx = &ctx->ifc_softc_ctx;
 	iflib_txq_t txq;
 	int i;
-	bool oactive, running, do_reset, do_watchdog, in_detach;
+	bool oactive, running, do_reset, do_reset_if_up, do_watchdog;
+	bool in_detach;
 
 	STATE_LOCK(ctx);
 	running = (if_getdrvflags(ctx->ifc_ifp) & IFF_DRV_RUNNING);
 	oactive = (if_getdrvflags(ctx->ifc_ifp) & IFF_DRV_OACTIVE);
 	do_reset = (ctx->ifc_flags & IFC_DO_RESET);
+	do_reset_if_up = (ctx->ifc_flags & IFC_DO_RESET_IF_UP);
 	do_watchdog = (ctx->ifc_flags & IFC_DO_WATCHDOG);
 	in_detach = (ctx->ifc_flags & IFC_IN_DETACH);
-	ctx->ifc_flags &= ~(IFC_DO_RESET | IFC_DO_WATCHDOG);
+	ctx->ifc_flags &= ~(IFC_DO_RESET | IFC_DO_RESET_IF_UP |
+	    IFC_DO_WATCHDOG);
 	STATE_UNLOCK(ctx);
 
 	if ((!running && !oactive) && !(ctx->ifc_sctx->isc_flags & IFLIB_ADMIN_ALWAYS_RUN))
@@ -4074,6 +4086,9 @@ _task_fn_admin(void *context, int pending)
 		return;
 
 	CTX_LOCK(ctx);
+	if (!do_reset && do_reset_if_up &&
+	    (if_getflags(ctx->ifc_ifp) & IFF_UP) != 0)
+		do_reset = true;
 	for (txq = ctx->ifc_txqs, i = 0; i < sctx->isc_ntxqsets; i++, txq++) {
 		CALLOUT_LOCK(txq);
 		callout_stop(&txq->ift_timer);
@@ -4395,7 +4410,9 @@ iflib_if_ioctl(if_t ifp, u_long command, caddr_t data)
 		}
 		iflib_init_locked(ctx);
 		STATE_LOCK(ctx);
-		if_setdrvflags(ifp, bits);
+		/* Preserve the stopped state reported by iflib_init_failed(). */
+		if ((ctx->ifc_flags & IFC_INIT_FAILED) == 0)
+			if_setdrvflags(ifp, bits);
 		STATE_UNLOCK(ctx);
 		CTX_UNLOCK(ctx);
 		break;
@@ -4495,7 +4512,8 @@ iflib_if_ioctl(if_t ifp, u_long command, caddr_t data)
 			if (bits & IFF_DRV_RUNNING && setmask & ~IFCAP_WOL)
 				iflib_init_locked(ctx);
 			STATE_LOCK(ctx);
-			if_setdrvflags(ifp, bits);
+			if ((ctx->ifc_flags & IFC_INIT_FAILED) == 0)
+				if_setdrvflags(ifp, bits);
 			STATE_UNLOCK(ctx);
 			CTX_UNLOCK(ctx);
 		}
@@ -5445,6 +5463,37 @@ iflib_device_iov_init(device_t dev, uint16_t num_vfs, const nvlist_t *params)
 	return (error);
 }
 
+int
+iflib_device_iov_init_restart(device_t dev, uint16_t num_vfs,
+    const nvlist_t *params)
+{
+	if_ctx_t ctx;
+	if_t ifp;
+	bool restart, running;
+	int error;
+
+	ctx = device_get_softc(dev);
+	ifp = ctx->ifc_ifp;
+
+	CTX_LOCK(ctx);
+	/*
+	 * Drivers which change the PF queue layout need the complete iflib
+	 * stop/init sequence around their IOV callback when the interface is
+	 * active.  An administratively-down interface has no live queues to
+	 * quiesce, and must remain down after the new layout is installed.
+	 * Keep the transition within one context-lock critical section.
+	 */
+	restart = (if_getflags(ifp) & IFF_UP) != 0;
+	running = (if_getdrvflags(ifp) & IFF_DRV_RUNNING) != 0;
+	if (restart || running)
+		iflib_stop(ctx);
+	error = IFDI_IOV_INIT(ctx, num_vfs, params);
+	if (restart)
+		iflib_init_locked(ctx);
+	CTX_UNLOCK(ctx);
+	return (error);
+}
+
 void
 iflib_device_iov_uninit(device_t dev)
 {
@@ -5452,6 +5501,28 @@ iflib_device_iov_uninit(device_t dev)
 
 	CTX_LOCK(ctx);
 	IFDI_IOV_UNINIT(ctx);
+	CTX_UNLOCK(ctx);
+}
+
+void
+iflib_device_iov_uninit_restart(device_t dev)
+{
+	if_ctx_t ctx;
+	bool restart;
+
+	ctx = device_get_softc(dev);
+
+	CTX_LOCK(ctx);
+	/*
+	 * RUNNING can be clear while a watchdog reset is pending but the
+	 * hardware is still live.  Always stop before the driver changes its
+	 * queue layout, and use IFF_UP only to preserve administrative state.
+	 */
+	restart = (if_getflags(ctx->ifc_ifp) & IFF_UP) != 0;
+	iflib_stop(ctx);
+	IFDI_IOV_UNINIT(ctx);
+	if (restart)
+		iflib_init_locked(ctx);
 	CTX_UNLOCK(ctx);
 }
 
@@ -6866,6 +6937,25 @@ iflib_request_reset(if_ctx_t ctx)
 
 	STATE_LOCK(ctx);
 	ctx->ifc_flags |= IFC_DO_RESET;
+	STATE_UNLOCK(ctx);
+}
+
+void
+iflib_request_reset_if_up(if_ctx_t ctx)
+{
+
+	STATE_LOCK(ctx);
+	ctx->ifc_flags |= IFC_DO_RESET_IF_UP;
+	STATE_UNLOCK(ctx);
+}
+
+void
+iflib_init_failed(if_ctx_t ctx)
+{
+
+	sx_assert(&ctx->ifc_ctx_sx, SA_XLOCKED);
+	STATE_LOCK(ctx);
+	ctx->ifc_flags |= IFC_INIT_FAILED;
 	STATE_UNLOCK(ctx);
 }
 

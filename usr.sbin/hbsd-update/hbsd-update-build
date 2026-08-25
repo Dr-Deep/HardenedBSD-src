@@ -1,6 +1,6 @@
 #!/bin/sh
 #-
-# Copyright (c) 2015-2021 HardenedBSD
+# Copyright (c) 2015-2026 HardenedBSD
 # Author: Shawn Webb <shawn.webb@hardenedbsd.org>
 #
 # This work originally sponsored by G2, Inc
@@ -43,7 +43,7 @@ usage() {
 
 setup_environment() {
 	REPO="https://rad.hardenedbsd.org/z2HLHXgL1xevBNQsf8BmQW7MpJmtm.git"
-	BRANCH="hardened/current/master"
+	BRANCH="hardened/15-stable/main"
 	UNSIGNED=0
 	PRIVKEY="/usr/share/keys/updater/private/updater.key"
 	PUBKEY="/usr/share/keys/updater/certs/updater.crt"
