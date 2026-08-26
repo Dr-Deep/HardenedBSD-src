@@ -1,0 +1,61 @@
+name: Generate Branch Index
+
+on:
+  workflow_run:
+    workflows: ["mirror"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-index:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Iterate Branches
+        shell: bash
+        run: |
+          set -e
+
+          {
+            echo "# Branch index"
+            echo
+
+            for branch in $(git branch -r --format='%(refname:strip=3)'); do
+              [ "$branch" = "HEAD" ] && continue
+              [ "$branch" = "__mirror" ] && continue
+
+              version=$(
+                git show "origin/$branch:sys/sys/param.h" 2>/dev/null |
+                grep '^#define __FreeBSD_version ' |
+                awk '{print $3}'
+              )
+
+              echo "[$branch](../../tree/$branch): $version"
+            done
+          } > README.md
+
+      - name: Commit Index
+        shell: bash
+        run: |
+          set -e
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet -- README.md; then
+            echo "README.md is already up to date."
+            exit 0
+          fi
+
+          git add README.md
+          git commit -m "ci: update branch index"
+          git push
