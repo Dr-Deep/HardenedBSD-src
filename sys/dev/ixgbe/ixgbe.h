@@ -441,9 +441,11 @@ struct ixgbe_softc {
 	u32			link_speed;
 	bool			link_up;
 	bool			link_enabled;
+	bool			led_active;
 	u32			vector;
 	u16			dmac;
 	u32			phy_layer;
+	u32			ledctl_default;
 
 	/* Power management-related */
 	bool			wol_support;
@@ -457,6 +459,7 @@ struct ixgbe_softc {
 
 	/* Flow Director */
 	int			fdir_reinit;
+	u_int			ecc_reset_pending;
 
 	u32			task_requests;
 
@@ -499,6 +502,7 @@ struct ixgbe_softc {
 
 	/* Firmware error check */
 	int			recovery_mode;
+	bool			overtemp_shutdown_pending;
 	struct callout		fw_mode_timer;
 
 	/* Misc stats maintained by the driver */
