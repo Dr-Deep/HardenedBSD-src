@@ -4,7 +4,6 @@ on:
     branches:
         - __mirror
   schedule:
-    # Run everyday at 3 AM UTC
     - cron: '0 */4 * * *'
   workflow_dispatch:
 
@@ -21,4 +20,4 @@ jobs:
         uses: bridgelightcloud/github-mirror-action@v3
         with:
           origin: 'https://git.dpxlab.de/rad:z2HLHXgL1xevBNQsf8BmQW7MpJmtm.git'
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.MIRROR_TOKEN }}
