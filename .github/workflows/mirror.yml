@@ -1,8 +1,5 @@
 name: 'mirror'
 on:
-  push:
-    branches:
-        - __mirror
   schedule:
     - cron: '0 */4 * * *'
   workflow_dispatch:
