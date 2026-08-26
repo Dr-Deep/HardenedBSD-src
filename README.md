@@ -1045,6 +1045,11 @@ Situations that would require the use of force pushing (`git push --force` or
 `git push --force-with-lease`) require explicit approval by the HardenedBSD Core
 Team (`core@hardenedbsd.org`).
 
+HardenedBSD does not willfully accept AI/LLM/etc generated patches, including
+for documentation, for any project we maintain. If the project has an upstream,
+like our src and ports repos have FreeBSD as their upstream, we cannot control
+what that upstream accepts (or doesn't accept.)
+
 # Ports and Packages Collection
 
 The HardenedBSD Ports and Packages offers a simple way to install applications.
