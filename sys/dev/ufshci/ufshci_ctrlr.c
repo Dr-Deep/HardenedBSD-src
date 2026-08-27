@@ -15,7 +15,13 @@
 static void
 ufshci_ctrlr_fail(struct ufshci_controller *ctrlr)
 {
-	ctrlr->is_failed = true;
+	/*
+	 * The attach thread and the reset task can both fail the
+	 * controller. A second queue walk would complete the same
+	 * trackers again.
+	 */
+	if (atomic_swap_32(&ctrlr->is_failed, 1) != 0)
+		return;
 
 	ufshci_req_queue_fail(ctrlr, &ctrlr->task_mgmt_req_queue);
 	ufshci_req_queue_fail(ctrlr, &ctrlr->transfer_req_queue);
@@ -145,10 +151,11 @@ ufshci_ctrlr_start(struct ufshci_controller *ctrlr, bool resetting)
 	/* TODO: Configure Background Operations */
 
 	/*
-	 * If the reset is due to a timeout, it is already attached to the SIM
-	 * and does not need to be attached again.
+	 * A reset normally arrives after the SIM is attached. But if the
+	 * first start attempt failed early, the reset path runs without a
+	 * SIM. Attach it whenever it does not exist yet.
 	 */
-	if (!resetting && ufshci_sim_attach(ctrlr) != 0) {
+	if (ctrlr->ufshci_sim == NULL && ufshci_sim_attach(ctrlr) != 0) {
 		ufshci_ctrlr_fail(ctrlr);
 		return;
 	}
@@ -311,6 +318,10 @@ ufshci_ctrlr_reset_task(void *arg, int pending)
 {
 	struct ufshci_controller *ctrlr = arg;
 	int error;
+
+	/* A failed controller must not be re-enabled. */
+	if (ctrlr->is_failed)
+		return;
 
 	/* Release resources */
 	ufshci_utmr_req_queue_disable(ctrlr);
