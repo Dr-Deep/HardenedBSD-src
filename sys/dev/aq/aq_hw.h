@@ -38,6 +38,8 @@
 #include <sys/types.h>
 #include <sys/cdefs.h>
 #include <sys/bus.h>
+#include <sys/lock.h>
+#include <sys/mutex.h>
 #include <machine/atomic.h>
 #include <machine/cpufunc.h>
 #include <machine/bus.h>
@@ -160,6 +162,12 @@ struct aq_hw_fc_info {
 	bool fc_tx;
 };
 
+struct aq_hw_link_info {
+	bool full_duplex;
+	bool eee;
+	uint8_t state;
+};
+
 struct aq_hw {
 	void *aq_dev;
 	device_t dev;
@@ -193,6 +201,10 @@ struct aq_hw {
 	uint32_t chip_features;
 	uint64_t fw_caps;
 
+	/* Atlantic 1: MDIO port address of the PHY, discovered once. */
+	uint8_t phy_id;
+	bool phy_id_valid;
+
 	bool lro_enabled;
 
 	uint32_t mbox_addr;
@@ -201,6 +213,18 @@ struct aq_hw {
 	u_long flags;
 
 	uint32_t tx_rings_count;
+
+	/* Atlantic 2: base row added to every action-resolver-table index. */
+	uint32_t art_filter_base_index;
+
+	/* Atlantic 2: firmware statistics interface version (A0/B0). */
+	uint32_t aq2_iface;
+
+	/* Atlantic 2: firmware banner already announced for this attach. */
+	bool fw_announced;
+
+	/* Serialises the F/W MPI control register and mailbox. */
+	struct mtx fw_mtx;
 };
 
 #define AQ_HW_MAC      0U
@@ -254,6 +278,7 @@ struct aq_hw {
 #define AQ_HW_CHIP_REVISION_A0  0x01000000U
 #define AQ_HW_CHIP_REVISION_B0  0x02000000U
 #define AQ_HW_CHIP_REVISION_B1  0x04000000U
+#define AQ_HW_CHIP_ATLANTIC2    0x08000000U
 #define IS_CHIP_FEATURE(HW, _F_) (AQ_HW_CHIP_##_F_ & \
 	(HW)->chip_features)
 
@@ -357,7 +382,7 @@ int aq_hw_set_link_speed(struct aq_hw *hw, uint32_t speed);
 
 int aq_hw_fw_downld_dwords(struct aq_hw *hw, uint32_t a, uint32_t *p, uint32_t cnt);
 
-int aq_hw_reset(struct aq_hw *hw);
+int aq_hw_reset(struct aq_hw *hw, bool reboot);
 
 int aq_hw_mpi_create(struct aq_hw *hw);
 
@@ -376,7 +401,7 @@ int aq_hw_deinit(struct aq_hw *hw);
 int aq_hw_ver_match(const struct aq_hw_fw_version* ver_expected,
     const struct aq_hw_fw_version* ver_actual);
 
-void aq_hw_set_promisc(struct aq_hw *hw, bool l2_promisc, bool vlan_promisc,
+int aq_hw_set_promisc(struct aq_hw *hw, bool l2_promisc, bool vlan_promisc,
     bool mc_promisc);
 
 int aq_hw_set_power(struct aq_hw *hw, unsigned int power_state);
