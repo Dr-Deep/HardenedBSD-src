@@ -5,7 +5,7 @@
 | [hardened/15-stable/main](../../tree/hardened/15-stable/main) | 1501502 | 02.09.26 12:00 |
 | [hardened/15-stable/pledge](../../tree/hardened/15-stable/pledge) | 1501502 | 02.09.26 12:01 |
 | [hardened/current/cross-dso-cfi](../../tree/hardened/current/cross-dso-cfi) | 1600019 | 27.07.26 18:01 |
-| [hardened/current/master](../../tree/hardened/current/master) | 1600021 | 02.09.26 06:01 |
+| [hardened/current/master](../../tree/hardened/current/master) | 1600021 | 02.09.26 20:44 |
 | [hardened/current/pledge](../../tree/hardened/current/pledge) | 1600021 | 02.09.26 06:01 |
 | [quarterly/hardened/15-stable/main-2026q2](../../tree/quarterly/hardened/15-stable/main-2026q2) | 1500507 | 10.06.26 21:53 |
 | [quarterly/hardened/15-stable/main-2026q3](../../tree/quarterly/hardened/15-stable/main-2026q3) | 1501501 | 29.08.26 17:32 |
