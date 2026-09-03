@@ -481,6 +481,9 @@ get_inuse(int size, qidx_t cidx, qidx_t pidx, uint8_t gen)
 #define TXQ_AVAIL(txq) ((txq->ift_size - txq->ift_pad) -\
 	    get_inuse(txq->ift_size, txq->ift_cidx, txq->ift_pidx, txq->ift_gen))
 
+#define	MAX_TX_DESC(ctx) MAX((ctx)->ifc_softc_ctx.isc_tx_tso_segments_max, \
+    (ctx)->ifc_softc_ctx.isc_tx_nsegments)
+
 #define IDXDIFF(head, tail, wrap) \
 	((head) >= (tail) ? (head) - (tail) : (wrap) - (tail) + (head))
 
@@ -596,19 +599,19 @@ static int iflib_timer_default = 1000;
 SYSCTL_INT(_net_iflib, OID_AUTO, timer_default, CTLFLAG_RW,
     &iflib_timer_default, 0, "number of ticks between iflib_timer calls");
 /*
- * Consecutive timer periods a TX queue must stay frozen - see
- * iflib_timer(), which defines that state - before the hardware is
- * asked whether it has completions pending.  Four periods is roughly
- * two seconds with the default timer interval: a healthy queue on
- * hardware that coalesces completion reports (e.g. 8254x,
- * TXDCTL.WTHRESH) stays frozen for at most two (measured on 82541PI),
- * a wedged one until it is reset.
+ * Consecutive timer periods a TX queue must stay frozen while demand
+ * persists - see iflib_timer(), which defines those states - before the
+ * hardware is asked whether it has completions pending.  Four periods is
+ * roughly two seconds with the default timer interval: a healthy queue on
+ * hardware that coalesces completion reports (e.g. 8254x, TXDCTL.WTHRESH)
+ * stays frozen for at most two (measured on 82541PI), a wedged one until it
+ * is reset.
  */
 static int iflib_tx_watchdog_periods = 4;
 SYSCTL_INT(_net_iflib, OID_AUTO, tx_watchdog_periods, CTLFLAG_RWTUN,
     &iflib_tx_watchdog_periods, 0,
-    "consecutive frozen timer periods before a TX queue is checked for "
-    "a hang (0 disables the check)");
+    "consecutive frozen timer periods under demand before a TX queue is "
+    "checked for a hang (0 disables the check)");
 
 
 #if IFLIB_DEBUG_COUNTERS
@@ -2447,8 +2450,8 @@ iflib_timer(void *arg)
 	 * delays the verdict by one timer period.
 	 */
 	if (this_tick - txq->ift_last_timer_tick >= iflib_timer_default) {
-		qidx_t outstanding;
-		bool frozen;
+		qidx_t in_use, outstanding;
+		bool demand, frozen;
 
 		txq->ift_last_timer_tick = this_tick;
 		IFDI_TIMER(ctx, txq->ift_id);
@@ -2462,7 +2465,8 @@ iflib_timer(void *arg)
 		 * reported and must not count (ift_rs_pending
 		 * over-counts it by one per packet).
 		 */
-		outstanding = txq->ift_in_use -
+		in_use = txq->ift_in_use;
+		outstanding = in_use -
 		    (qidx_t)(txq->ift_processed - txq->ift_cleaned);
 
 		/*
@@ -2472,12 +2476,17 @@ iflib_timer(void *arg)
 		 * up, with no pause frames and no pending doorbell
 		 * (the laggard check below rings it).
 		 *
-		 * Being frozen is not a fault - the hardware may
-		 * defer marking descriptors as completed
-		 * indefinitely, and 8254x hardware does so for a
-		 * quiet queue - therefore the check arms only when a
-		 * frozen queue also takes on new work, and acts only
-		 * once it has stayed frozen for
+		 * Being frozen is not a fault - the hardware may defer
+		 * marking descriptors as completed indefinitely, and
+		 * 8254x hardware does so for a quiet queue.  Continue
+		 * arming only while demand persists: the outstanding
+		 * count grows, the software ring is stalled, or the
+		 * hardware ring has reached iflib's backpressure
+		 * threshold.  The last condition covers simple-TX, which
+		 * does not use the software ring.  This also prevents one
+		 * mixed lockless counter sample from arming a quiet queue
+		 * until the verdict.  Act only once it has stayed frozen
+		 * under demand for
 		 * net.iflib.tx_watchdog_periods consecutive periods.
 		 */
 		frozen = outstanding > txq->ift_rs_pending &&
@@ -2485,10 +2494,12 @@ iflib_timer(void *arg)
 		    txq->ift_db_pending == 0 &&
 		    sctx->isc_pause_frames == 0 &&
 		    ctx->ifc_link_state == LINK_STATE_UP;
-		if (!frozen)
+		demand = outstanding > txq->ift_outstanding_prev ||
+		    ifmp_ring_is_stalled(txq->ift_br) ||
+		    in_use + MAX_TX_DESC(ctx) >= txq->ift_size - txq->ift_pad;
+		if (!frozen || !demand)
 			txq->ift_wdog_armed = 0;
-		else if (txq->ift_wdog_armed > 0 ||
-		    outstanding > txq->ift_outstanding_prev) {
+		else {
 			if (txq->ift_wdog_armed < UINT16_MAX)
 				txq->ift_wdog_armed++;
 		}
@@ -2497,8 +2508,8 @@ iflib_timer(void *arg)
 		 * Frozen long enough: ask the hardware.  Completions
 		 * ready but unharvested for this long mean the
 		 * completion interrupt went missing - kick the
-		 * queue's task.  Nothing ready, although the queue
-		 * kept taking on work, means it is hung.
+		 * queue's task.  Nothing ready while demand persisted
+		 * means it is hung.
 		 */
 		if (iflib_tx_watchdog_periods > 0 &&
 		    txq->ift_wdog_armed >= iflib_tx_watchdog_periods) {
@@ -3191,9 +3202,6 @@ txq_max_rs_deferred(iflib_txq_t txq)
 #define NRXQSETS(ctx) ((ctx)->ifc_softc_ctx.isc_nrxqsets)
 #define QIDX(ctx, m) ((((m)->m_pkthdr.flowid & ctx->ifc_softc_ctx.isc_rss_table_mask) % NTXQSETS(ctx)) + FIRST_QSET(ctx))
 #define DESC_RECLAIMABLE(q) ((int)((q)->ift_processed - (q)->ift_cleaned - (q)->ift_ctx->ifc_softc_ctx.isc_tx_nsegments))
-
-#define	MAX_TX_DESC(ctx) MAX((ctx)->ifc_softc_ctx.isc_tx_tso_segments_max, \
-    (ctx)->ifc_softc_ctx.isc_tx_nsegments)
 
 static inline bool
 iflib_txd_db_check(iflib_txq_t txq, int ring)
@@ -5303,7 +5311,6 @@ iflib_device_register(device_t dev, void *sc, if_shared_ctx_t sctx, if_ctx_t *ct
 #endif
 	}
 	iflib_reset_qvalues(ctx);
-	IFNET_WLOCK();
 	CTX_LOCK(ctx);
 	IFLIB_REGISTER_FAIL_POINT(dev, register_before_attach_pre, err,
 	    fail_cleanup);
@@ -5536,7 +5543,6 @@ iflib_device_register(device_t dev, void *sc, if_shared_ctx_t sctx, if_ctx_t *ct
 	iflib_add_pfil(ctx);
 	ctx->ifc_flags |= IFC_INIT_DONE;
 	CTX_UNLOCK(ctx);
-	IFNET_WUNLOCK();
 
 	/* Create led(4) devices if the driver defined the method */
 	kobj_desc = &ifdi_led_func_desc;
@@ -5551,9 +5557,8 @@ fail_detach:
 	STATE_LOCK(ctx);
 	ctx->ifc_flags |= IFC_IN_DETACH;
 	STATE_UNLOCK(ctx);
-	/* Tasks may need either lock; ether_ifdetach() takes ifnet_detach_sx. */
+	/* Tasks may need the context lock; ether_ifdetach() may sleep. */
 	CTX_UNLOCK(ctx);
-	IFNET_WUNLOCK();
 	taskqueue_drain_all(ctx->ifc_tq);
 #ifdef PCI_IOV
 	/*
@@ -5570,7 +5575,6 @@ fail_detach:
 	}
 #endif
 	ether_ifdetach(ctx->ifc_ifp);
-	IFNET_WLOCK();
 	CTX_LOCK(ctx);
 	goto fail_cleanup_detaching;
 
@@ -5591,14 +5595,12 @@ fail_cleanup_detaching:
 
 	if (ctx->ifc_tq != NULL) {
 		/*
-		 * Drain without holding the ifnet or context locks so configuration
-		 * tasks can run to completion.  On fail_detach a second drain also
-		 * catches tasks queued during the first drain.
+		 * Drain without holding the context lock so configuration tasks can
+		 * run to completion.  On fail_detach a second drain also catches
+		 * tasks queued during the first drain.
 		 */
 		CTX_UNLOCK(ctx);
-		IFNET_WUNLOCK();
 		taskqueue_drain_all(ctx->ifc_tq);
-		IFNET_WLOCK();
 		CTX_LOCK(ctx);
 	}
 
@@ -5611,18 +5613,12 @@ fail_cleanup_detaching:
 	/*
 	 * A successful IFDI_ATTACH_PRE must be matched by IFDI_DETACH, even
 	 * when registration fails before queue allocation.  Match
-	 * iflib_device_deregister by detaching before taskqueue_free, and avoid
-	 * holding IFNET_WLOCK across driver detach (LinuxKPI workqueue drain).
+	 * iflib_device_deregister by detaching before taskqueue_free.
 	 */
 	if (attach_pre_succeeded) {
-		IFNET_WUNLOCK();
 		IFDI_DETACH(ctx);
 		if (queues_allocated)
 			IFDI_QUEUES_FREE(ctx);
-		/* Reacquire the global lock before the context lock. */
-		CTX_UNLOCK(ctx);
-		IFNET_WLOCK();
-		CTX_LOCK(ctx);
 	}
 	if (ctx->ifc_tq != NULL) {
 		taskqueue_free(ctx->ifc_tq);
@@ -5632,7 +5628,6 @@ fail_cleanup_detaching:
 		iflib_free_intr_mem(ctx);
 
 	CTX_UNLOCK(ctx);
-	IFNET_WUNLOCK();
 	iflib_deregister(ctx);
 	device_set_softc(ctx->ifc_dev, NULL);
 	if (ctx->ifc_flags & IFC_SC_ALLOCATED)
