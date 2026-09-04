@@ -31,24 +31,6 @@ dumpon_try()
 	return 1
 }
 
-<<<<<<< HEAD
-=======
-dumpon_warn_unencrypted()
-{
-	local flag
-
-	if [ -n "${dumppubkey}" ]; then
-		return
-	fi
-	for flag in ${dumpon_flags}; do
-		if [ "$flag" = -k ]; then
-			return
-		fi
-	done
-	warn "Kernel dumps will be written to the swap partition without encryption."
-}
-
->>>>>>> rad/freebsd/15-stable/main
 dumpon_start()
 {
 	local dev mp type more
