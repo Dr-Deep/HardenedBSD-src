@@ -16,5 +16,5 @@ jobs:
         id: mirror
         uses: bridgelightcloud/github-mirror-action@v3
         with:
-          origin: 'https://git.dpxlab.de/rad:z2HLHXgL1xevBNQsf8BmQW7MpJmtm.git'
+          origin: 'https://rad.hardenedbsd.org/src.git'
           GITHUB_TOKEN: ${{ secrets.MIRROR_TOKEN }}
